@@ -1117,6 +1117,7 @@ def _run_one_arm(
     resume_from_step_id: Optional[str] = None,
     stop_after_step_id: Optional[str] = None,
     force_writer_probe: bool = False,
+    provider_hard_stop: Optional[Any] = None,
 ) -> Dict[str, Any]:
     from easyicu.research_agent import ResearchAgentPipeline  # type: ignore
     from easyicu.research_agent.cohort.schema import register_cohort_concept_ids
@@ -1152,6 +1153,7 @@ def _run_one_arm(
     pipeline = ResearchAgentPipeline(
         workdir=workdir,
         llm=llm,
+        provider_hard_stop=provider_hard_stop,
         disable_icu_context=disable_icu_context,
         **opts,
     )
@@ -1230,6 +1232,7 @@ def _run_one_item(
     resume_from_step_id: Optional[str] = None,
     stop_after_step_id: Optional[str] = None,
     force_writer_probe: bool = False,
+    provider_hard_stop: Optional[Any] = None,
 ) -> Dict[str, Any]:
     if verbose:
         print(f"\n=== {item.key} — {item.name} ===")
@@ -1251,6 +1254,7 @@ def _run_one_item(
             resume_from_step_id=resume_from_step_id,
             stop_after_step_id=stop_after_step_id,
             force_writer_probe=force_writer_probe,
+            provider_hard_stop=provider_hard_stop,
         )
     if "aware" in selected:
         aware = _run_one_arm(
@@ -1265,6 +1269,7 @@ def _run_one_item(
             resume_from_step_id=resume_from_step_id,
             stop_after_step_id=stop_after_step_id,
             force_writer_probe=force_writer_probe,
+            provider_hard_stop=provider_hard_stop,
         )
     payload = {
         "item_key": item.key,
@@ -1646,6 +1651,7 @@ def _run_one_item_with_reuse(
     resume_from_step_id: Optional[str] = None,
     stop_after_step_id: Optional[str] = None,
     force_writer_probe: bool = False,
+    provider_hard_stop: Optional[Any] = None,
 ) -> Dict[str, Any]:
     if verbose:
         print(f"\n=== {item.key} — {item.name} ===")
@@ -1690,6 +1696,7 @@ def _run_one_item_with_reuse(
             resume_from_step_id=resume_from_step_id,
             stop_after_step_id=stop_after_step_id,
             force_writer_probe=force_writer_probe,
+            provider_hard_stop=provider_hard_stop,
         )
     if "aware" in selected and not _arm_was_run(aware):
         aware = _run_one_arm(
@@ -1704,6 +1711,7 @@ def _run_one_item_with_reuse(
             resume_from_step_id=resume_from_step_id,
             stop_after_step_id=stop_after_step_id,
             force_writer_probe=force_writer_probe,
+            provider_hard_stop=provider_hard_stop,
         )
 
     payload = {
@@ -2062,6 +2070,9 @@ def _make_llm(
     model: str,
     request_timeout: float,
     reasoning_effort_profile: str = "provider_default",
+    transport_max_attempts: int = 1,
+    stream_enabled: bool = False,
+    provider_environment: Optional[Mapping[str, str]] = None,
 ):
     _bootstrap_imports()
     from easyicu.research_agent import (  # type: ignore
@@ -2086,6 +2097,10 @@ def _make_llm(
                 request_timeout=request_timeout,
                 title="EasyICU research-agent benchmark",
                 client_cls=OpenAIClient,
+                environment=provider_environment,
+                max_retries=int(transport_max_attempts),
+                stream_enabled=bool(stream_enabled),
+                allow_environment_overrides=False,
             )
         clients_by_effort = {
             effort: build_provider_client(
@@ -2094,7 +2109,11 @@ def _make_llm(
                 request_timeout=request_timeout,
                 title="EasyICU research-agent benchmark",
                 client_cls=OpenAIClient,
+                environment=provider_environment,
                 extra_body={"reasoning": {"effort": effort}},
+                max_retries=int(transport_max_attempts),
+                stream_enabled=bool(stream_enabled),
+                allow_environment_overrides=False,
             )
             for effort in sorted(set(effort_by_role.values()))
         }
@@ -2134,12 +2153,91 @@ def _resolve_backend_base_url(provider: str) -> str:
     return resolve_provider_base_url(provider)
 
 
+def _provider_environment_snapshot(
+    *, provider: str, provider_base_url: str
+) -> Dict[str, str]:
+    """Freeze endpoint semantics while retaining only required credentials."""
+
+    keys = {
+        "OPENAI_API_KEY",
+        "OPENROUTER_API_KEY",
+        "EASYICU_ALLOW_EXTERNAL_LLM",
+        "EASYICU_TRUST_LOOPBACK_PROXY_KEY",
+    }
+    snapshot = {key: os.environ[key] for key in keys if key in os.environ}
+    if provider == "openai":
+        snapshot["OPENAI_BASE_URL"] = str(provider_base_url)
+    elif provider == "openrouter":
+        snapshot["OPENROUTER_BASE_URL"] = str(provider_base_url)
+    return snapshot
+
+
+def _provider_hard_stop_limits(
+    pipeline_options: Mapping[str, Any],
+):
+    from easyicu.research_agent.authority.provider_hard_stop import (
+        ProviderHardStopLimits,
+    )
+
+    required = {
+        "max_provider_attempts_per_run",
+        "max_provider_attempts_per_batch",
+        "max_total_tokens_per_run",
+        "max_total_tokens_per_batch",
+        "max_estimated_cost_usd_per_batch",
+        "max_wall_clock_seconds_per_task",
+        "provider_input_cost_usd_per_million_tokens",
+        "provider_output_cost_usd_per_million_tokens",
+    }
+    present = required.intersection(pipeline_options)
+    if not present:
+        return None
+    if present != required:
+        missing = ", ".join(sorted(required - present))
+        raise ValueError(f"Incomplete Provider hard-stop options: {missing}")
+    return ProviderHardStopLimits(
+        max_provider_attempts_per_run=int(
+            pipeline_options["max_provider_attempts_per_run"]
+        ),
+        max_provider_attempts_per_batch=int(
+            pipeline_options["max_provider_attempts_per_batch"]
+        ),
+        max_total_tokens_per_run=int(
+            pipeline_options["max_total_tokens_per_run"]
+        ),
+        max_total_tokens_per_batch=int(
+            pipeline_options["max_total_tokens_per_batch"]
+        ),
+        max_estimated_cost_usd_per_batch=float(
+            pipeline_options["max_estimated_cost_usd_per_batch"]
+        ),
+        max_wall_clock_seconds_per_task=float(
+            pipeline_options["max_wall_clock_seconds_per_task"]
+        ),
+        input_cost_usd_per_million_tokens=float(
+            pipeline_options["provider_input_cost_usd_per_million_tokens"]
+        ),
+        output_cost_usd_per_million_tokens=float(
+            pipeline_options["provider_output_cost_usd_per_million_tokens"]
+        ),
+    )
+
+
 def _benchmark_pipeline_options(
     *,
     max_total_steps: Optional[int],
     disable_replanning: bool,
     max_code_repair_attempts: Optional[int],
     max_step_llm_repair_attempts: Optional[int] = None,
+    max_step_provider_calls: int = 9,
+    max_provider_attempts_per_run: int = 192,
+    max_provider_attempts_per_batch: int = 1_728,
+    max_total_tokens_per_run: int = 2_000_000,
+    max_total_tokens_per_batch: int = 18_000_000,
+    max_estimated_cost_usd_per_batch: float = 100.0,
+    max_wall_clock_seconds_per_task: float = 21_600.0,
+    provider_input_cost_usd_per_million_tokens: float = 10.0,
+    provider_output_cost_usd_per_million_tokens: float = 30.0,
     timeout_seconds: float = 900.0,
     standard_executor_timeout_seconds: float = 3_600.0,
     enable_repro_envelope: bool = True,
@@ -2202,6 +2300,27 @@ def _benchmark_pipeline_options(
         options["max_code_repair_attempts"] = int(max_code_repair_attempts)
     if max_step_llm_repair_attempts is not None:
         options["max_step_llm_repair_attempts"] = int(max_step_llm_repair_attempts)
+    options["max_step_provider_calls"] = int(max_step_provider_calls)
+    options["max_provider_attempts_per_run"] = int(
+        max_provider_attempts_per_run
+    )
+    options["max_provider_attempts_per_batch"] = int(
+        max_provider_attempts_per_batch
+    )
+    options["max_total_tokens_per_run"] = int(max_total_tokens_per_run)
+    options["max_total_tokens_per_batch"] = int(max_total_tokens_per_batch)
+    options["max_estimated_cost_usd_per_batch"] = float(
+        max_estimated_cost_usd_per_batch
+    )
+    options["max_wall_clock_seconds_per_task"] = float(
+        max_wall_clock_seconds_per_task
+    )
+    options["provider_input_cost_usd_per_million_tokens"] = float(
+        provider_input_cost_usd_per_million_tokens
+    )
+    options["provider_output_cost_usd_per_million_tokens"] = float(
+        provider_output_cost_usd_per_million_tokens
+    )
     if strict_evidence:
         options["evidence_enforcement_mode"] = "strict"
     if enable_repro_envelope:
@@ -2215,6 +2334,11 @@ def _benchmark_pipeline_options(
         # cost_summary.{md,json} and ``manifest.cost_records`` — the token
         # totals + estimated USD that become Fig.3 / cost-table source data.
         options["enable_cost_tracking"] = True
+    # Benchmark runs never make an implicit second Provider channel merely
+    # because a model name happens to look vision-capable. Deterministic visual
+    # QA remains enabled; paid image upload requires a separate, explicitly
+    # reviewed experiment outside Canonical9.
+    options["enable_vlm_visual_qa"] = False
     if writer_digest_widened:
         options["writer_digest_widened"] = True
     if llm_seed is not None:
@@ -2387,6 +2511,10 @@ def _run_suite(
     force_writer_probe: bool = False,
     allow_mock_aware: bool = False,
     reasoning_effort_profile: str = "provider_default",
+    transport_max_attempts: int = 1,
+    stream_enabled: bool = False,
+    provider_environment: Optional[Mapping[str, str]] = None,
+    provider_base_url: Optional[str] = None,
 ) -> Dict[str, Any]:
     selected_arms = _normalize_arms(arms)
     _enforce_mock_aware_provider(
@@ -2394,11 +2522,27 @@ def _run_suite(
         provider=provider,
         allow_mock_aware=allow_mock_aware,
     )
+    hard_stop_ledger = None
+    hard_stop_limits = _provider_hard_stop_limits(pipeline_options or {})
+    if hard_stop_limits is not None:
+        from easyicu.research_agent.authority.provider_hard_stop import (
+            ProviderHardStopLedger,
+        )
+
+        hard_stop_ledger = ProviderHardStopLedger(
+            path=(out_root / "bench_progress.json").resolve(),
+            task_ids=[str(item.key) for item in items],
+            limits=hard_stop_limits,
+            resume_existing=bool(reuse_existing),
+        )
     llm = _make_llm(
         provider=provider,
         model=model,
         request_timeout=request_timeout,
         reasoning_effort_profile=reasoning_effort_profile,
+        transport_max_attempts=transport_max_attempts,
+        stream_enabled=stream_enabled,
+        provider_environment=provider_environment,
     )
     from easyicu.research_agent import (  # type: ignore
         default_icu_agent_bench_suite,
@@ -2407,8 +2551,13 @@ def _run_suite(
 
     scores: List[Dict[str, Any]] = []
     for item in items:
-        scores.append(
-            _run_one_item_with_reuse(
+        task_hard_stop = (
+            hard_stop_ledger.start_task(str(item.key))
+            if hard_stop_ledger is not None
+            else None
+        )
+        try:
+            score = _run_one_item_with_reuse(
                 item=item,
                 seed=seed,
                 out_root=out_root,
@@ -2421,8 +2570,17 @@ def _run_suite(
                 stop_after_step_id=stop_after_step_id,
                 force_writer_probe=force_writer_probe,
                 verbose=verbose,
+                provider_hard_stop=task_hard_stop,
             )
-        )
+        except BaseException as exc:
+            if task_hard_stop is not None:
+                task_hard_stop.finish(
+                    error=f"{type(exc).__name__}: {str(exc)[:1800]}"
+                )
+            raise
+        scores.append(score)
+        if task_hard_stop is not None:
+            task_hard_stop.finish(score=score)
 
     totals = _aggregate(scores)
     payload = {
@@ -2433,7 +2591,11 @@ def _run_suite(
         "provider": provider,
         "model": model,
         "reasoning_effort_profile": reasoning_effort_profile,
-        "backend_base_url": _resolve_backend_base_url(provider),
+        "backend_base_url": (
+            str(provider_base_url)
+            if provider_base_url is not None
+            else _resolve_backend_base_url(provider)
+        ),
         "arms": selected_arms,
         "case_registration": case_registration,
         "force_writer_probe": bool(force_writer_probe),
@@ -2547,6 +2709,41 @@ def _canonical_execution_config_from_args(args):
         max_step_llm_repair_attempts=getattr(
             args, "max_step_llm_repair_attempts", None
         ),
+        max_step_provider_calls=int(
+            getattr(args, "max_step_provider_calls", 9)
+        ),
+        max_provider_attempts_per_run=int(
+            getattr(args, "max_provider_attempts_per_run", 192)
+        ),
+        max_provider_attempts_per_batch=int(
+            getattr(args, "max_provider_attempts_per_batch", 1_728)
+        ),
+        max_total_tokens_per_run=int(
+            getattr(args, "max_total_tokens_per_run", 2_000_000)
+        ),
+        max_total_tokens_per_batch=int(
+            getattr(args, "max_total_tokens_per_batch", 18_000_000)
+        ),
+        max_estimated_cost_usd_per_batch=float(
+            getattr(args, "max_estimated_cost_usd_per_batch", 100.0)
+        ),
+        max_wall_clock_seconds_per_task=float(
+            getattr(args, "max_wall_clock_seconds_per_task", 21_600.0)
+        ),
+        provider_input_cost_usd_per_million_tokens=float(
+            getattr(
+                args,
+                "provider_input_cost_usd_per_million_tokens",
+                10.0,
+            )
+        ),
+        provider_output_cost_usd_per_million_tokens=float(
+            getattr(
+                args,
+                "provider_output_cost_usd_per_million_tokens",
+                30.0,
+            )
+        ),
         enable_repro_envelope=not bool(getattr(args, "no_repro_envelope", False)),
         enable_cost_tracking=not bool(getattr(args, "no_cost_tracking", False)),
         strict_evidence=bool(getattr(args, "strict_evidence", False)),
@@ -2559,6 +2756,14 @@ def _canonical_execution_config_from_args(args):
         reasoning_effort_profile=str(
             getattr(args, "reasoning_effort_profile", "provider_default")
         ),
+        transport_max_attempts=int(
+            getattr(args, "transport_max_attempts", 1)
+        ),
+        provider_base_url=(
+            str(getattr(args, "provider_base_url", "") or "").strip()
+            or _resolve_backend_base_url(str(getattr(args, "provider", "mock")))
+        ),
+        llm_stream_enabled=bool(getattr(args, "llm_stream", False)),
     )
 
 
@@ -2907,6 +3112,85 @@ def main() -> int:
         help="Per-request timeout for real LLM providers.",
     )
     parser.add_argument(
+        "--transport-max-attempts",
+        type=int,
+        default=1,
+        help=(
+            "Maximum raw transport attempts for one logical Provider call "
+            "(default: 1; retries are charged to the same global ledger)."
+        ),
+    )
+    parser.add_argument(
+        "--provider-base-url",
+        default=None,
+        help=(
+            "Explicit non-secret Provider endpoint for a frozen run. When "
+            "omitted, it is resolved once from the Provider environment."
+        ),
+    )
+    parser.add_argument(
+        "--llm-stream",
+        action="store_true",
+        help=(
+            "Use streaming transport. Off by default and frozen into Canonical9 "
+            "execution authority; EASYICU_LLM_STREAM cannot override it."
+        ),
+    )
+    parser.add_argument(
+        "--max-step-provider-calls",
+        type=int,
+        default=9,
+        help="Maximum Provider transport attempts charged to one analysis step.",
+    )
+    parser.add_argument(
+        "--max-provider-attempts-per-run",
+        type=int,
+        default=192,
+        help="Hard Provider transport-attempt ceiling for one benchmark task.",
+    )
+    parser.add_argument(
+        "--max-provider-attempts-per-batch",
+        type=int,
+        default=1_728,
+        help="Hard Provider transport-attempt ceiling for the complete batch.",
+    )
+    parser.add_argument(
+        "--max-total-tokens-per-run",
+        type=int,
+        default=2_000_000,
+        help="Hard reserved/reported token ceiling for one benchmark task.",
+    )
+    parser.add_argument(
+        "--max-total-tokens-per-batch",
+        type=int,
+        default=18_000_000,
+        help="Hard reserved/reported token ceiling for the complete batch.",
+    )
+    parser.add_argument(
+        "--max-estimated-cost-usd-per-batch",
+        type=float,
+        default=100.0,
+        help="Hard estimated USD ceiling for the complete batch.",
+    )
+    parser.add_argument(
+        "--max-wall-clock-seconds-per-task",
+        type=float,
+        default=21_600.0,
+        help="Hard wall-clock ceiling for one task (default: 6 hours).",
+    )
+    parser.add_argument(
+        "--provider-input-cost-usd-per-million-tokens",
+        type=float,
+        default=10.0,
+        help="Frozen conservative input-token price used by the pre-call stop-loss.",
+    )
+    parser.add_argument(
+        "--provider-output-cost-usd-per-million-tokens",
+        type=float,
+        default=30.0,
+        help="Frozen conservative output-token price used by the pre-call stop-loss.",
+    )
+    parser.add_argument(
         "--reasoning-effort-profile",
         choices=["provider_default", "adaptive_v1"],
         default="provider_default",
@@ -3232,9 +3516,19 @@ def main() -> int:
         ),
     )
     args = parser.parse_args()
+    # Resolve once. The authorization digest and every subsequently created
+    # client receive this exact endpoint; later environment mutation is inert.
+    args.provider_base_url = (
+        str(args.provider_base_url or "").strip()
+        or _resolve_backend_base_url(str(args.provider))
+    )
     _realrun_gate_rc, _figure2_batch_binding = _figure2_realrun_authorization_gate(args)
     if _realrun_gate_rc is not None:
         return _realrun_gate_rc
+    provider_environment = _provider_environment_snapshot(
+        provider=str(args.provider),
+        provider_base_url=str(args.provider_base_url),
+    )
     case_registration = _register_case_patterns(args.case)
     submission_profile = (
         _resolve_submission_profile(args.profile)
@@ -3294,6 +3588,23 @@ def main() -> int:
         disable_replanning=bool(args.disable_replanning),
         max_code_repair_attempts=args.max_code_repair_attempts,
         max_step_llm_repair_attempts=max_step_llm_repair_attempts,
+        max_step_provider_calls=int(args.max_step_provider_calls),
+        max_provider_attempts_per_run=int(args.max_provider_attempts_per_run),
+        max_provider_attempts_per_batch=int(args.max_provider_attempts_per_batch),
+        max_total_tokens_per_run=int(args.max_total_tokens_per_run),
+        max_total_tokens_per_batch=int(args.max_total_tokens_per_batch),
+        max_estimated_cost_usd_per_batch=float(
+            args.max_estimated_cost_usd_per_batch
+        ),
+        max_wall_clock_seconds_per_task=float(
+            args.max_wall_clock_seconds_per_task
+        ),
+        provider_input_cost_usd_per_million_tokens=float(
+            args.provider_input_cost_usd_per_million_tokens
+        ),
+        provider_output_cost_usd_per_million_tokens=float(
+            args.provider_output_cost_usd_per_million_tokens
+        ),
         timeout_seconds=float(args.timeout),
         standard_executor_timeout_seconds=float(args.standard_executor_timeout),
         enable_repro_envelope=not bool(getattr(args, "no_repro_envelope", False)),
@@ -3388,6 +3699,10 @@ def main() -> int:
                 ),
                 batch_binding=_figure2_batch_binding,
                 reasoning_effort_profile=str(args.reasoning_effort_profile),
+                transport_max_attempts=int(args.transport_max_attempts),
+                stream_enabled=bool(args.llm_stream),
+                provider_environment=provider_environment,
+                provider_base_url=str(args.provider_base_url),
             )
 
         if n_repeat == 1:
@@ -3462,6 +3777,10 @@ def main() -> int:
             force_writer_probe=bool(args.force_writer_probe),
             allow_mock_aware=bool(args.allow_mock_aware),
             reasoning_effort_profile=str(args.reasoning_effort_profile),
+            transport_max_attempts=int(args.transport_max_attempts),
+            stream_enabled=bool(args.llm_stream),
+            provider_environment=provider_environment,
+            provider_base_url=str(args.provider_base_url),
         )
         all_runs.append(payload)
         totals = payload["totals"]
@@ -4019,6 +4338,10 @@ def _run_ehrflowbench_jsonl(
     expected_execution_identity_path: Path | None = None,
     batch_binding: Optional[Any] = None,
     reasoning_effort_profile: str = "provider_default",
+    transport_max_attempts: int = 1,
+    stream_enabled: bool = False,
+    provider_environment: Optional[Mapping[str, str]] = None,
+    provider_base_url: Optional[str] = None,
 ) -> int:
     """Run an external EHRFlowBench-style JSONL export when available."""
     import pandas as pd
@@ -4092,6 +4415,40 @@ def _run_ehrflowbench_jsonl(
         str(row.get("key") or row.get("id") or f"ehrflowbench_{idx:03d}")
         for idx, row in enumerate(rows)
     ]
+    hard_stop_limits = _provider_hard_stop_limits(pipeline_options or {})
+    if batch_binding is not None and hard_stop_limits is None:
+        raise ValueError(
+            "A formal Canonical9 batch requires frozen run/batch Provider ceilings"
+        )
+    hard_stop_ledger = None
+    if hard_stop_limits is not None:
+        from easyicu.research_agent.authority.provider_hard_stop import (
+            ProviderHardStopLedger,
+        )
+
+        hard_stop_ledger = ProviderHardStopLedger(
+            path=(
+                out_root
+                / (
+                    "figure2_batch_progress.json"
+                    if batch_binding is not None
+                    else "ehrflowbench_progress.json"
+                )
+            ).resolve(),
+            task_ids=input_task_ids,
+            limits=hard_stop_limits,
+            batch_id=(
+                str(batch_binding.batch_id)
+                if batch_binding is not None
+                else None
+            ),
+            declaration_sha256=(
+                str(batch_binding.declaration_sha256)
+                if batch_binding is not None
+                else None
+            ),
+            resume_existing=bool(reuse_existing and batch_binding is None),
+        )
     formal_canary_task_id: Optional[str] = None
     if batch_binding is not None:
         from benchmarks.figure2_canonical9.evaluator.rubric_v1 import (
@@ -4103,8 +4460,34 @@ def _run_ehrflowbench_jsonl(
             raise ValueError(
                 "A formal Canonical9 batch must start with its locked E1 canary."
             )
+    task_hard_stops: Dict[str, Any] = {}
+
+    def _sync_pending_hard_stops() -> None:
+        if hard_stop_ledger is None:
+            return
+        statuses = {
+            str(task.get("task_id")): str(task.get("status"))
+            for task in hard_stop_ledger.snapshot().get("tasks", [])
+            if isinstance(task, Mapping)
+        }
+        for entry in pending:
+            pending_key = str(entry.get("key") or "")
+            if statuses.get(pending_key) != "running":
+                continue
+            handle = task_hard_stops.get(pending_key)
+            if handle is not None:
+                handle.finish(error=str(entry.get("status") or "pending"))
+
     for idx, row in enumerate(rows):
+        _sync_pending_hard_stops()
         key = str(row.get("key") or row.get("id") or f"ehrflowbench_{idx:03d}")
+        task_hard_stop = (
+            hard_stop_ledger.start_task(key)
+            if hard_stop_ledger is not None
+            else None
+        )
+        if task_hard_stop is not None:
+            task_hard_stops[key] = task_hard_stop
         if idx in invalid_row_indices:
             pending.append({"key": key, **row})
             continue
@@ -4401,8 +4784,14 @@ def _run_ehrflowbench_jsonl(
                 stop_after_step_id=stop_after_step_id,
                 force_writer_probe=force_writer_probe,
                 reasoning_effort_profile=reasoning_effort_profile,
+                transport_max_attempts=transport_max_attempts,
+                stream_enabled=stream_enabled,
+                provider_environment=provider_environment,
+                provider_hard_stop=task_hard_stop,
             )
             scores.append(score)
+            if task_hard_stop is not None:
+                task_hard_stop.finish(score=score)
             if formal_canary_task_id is not None and key == formal_canary_task_id:
                 canary_passed = _figure2_canary_passed(score)
                 _write_figure2_canary_gate(
@@ -4426,6 +4815,12 @@ def _run_ehrflowbench_jsonl(
                         }
                         for later_key in input_task_ids[idx + 1 :]
                     )
+                    if hard_stop_ledger is not None:
+                        for later_key in input_task_ids[idx + 1 :]:
+                            hard_stop_ledger.mark_task_blocked(
+                                later_key,
+                                blocked_by=key,
+                            )
                     break
         except Exception as exc:  # noqa: BLE001 — keep batch alive on 502/etc.
             import traceback as _tb
@@ -4449,6 +4844,10 @@ def _run_ehrflowbench_jsonl(
                     "error": f"{type(exc).__name__}: {str(exc)[:300]}",
                 }
             )
+            if task_hard_stop is not None:
+                task_hard_stop.finish(
+                    error=f"{type(exc).__name__}: {str(exc)[:1800]}"
+                )
             if formal_canary_task_id is not None and key == formal_canary_task_id:
                 _write_figure2_canary_gate(
                     out_root=out_root,
@@ -4465,9 +4864,16 @@ def _run_ehrflowbench_jsonl(
                     }
                     for later_key in input_task_ids[idx + 1 :]
                 )
+                if hard_stop_ledger is not None:
+                    for later_key in input_task_ids[idx + 1 :]:
+                        hard_stop_ledger.mark_task_blocked(
+                            later_key,
+                            blocked_by=key,
+                        )
                 break
             continue
 
+    _sync_pending_hard_stops()
     totals = _aggregate(scores) if scores else {"naive": {}, "aware": {}}
     payload = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -4475,6 +4881,11 @@ def _run_ehrflowbench_jsonl(
         "seed": seed,
         "arms": _normalize_arms(arms),
         "reasoning_effort_profile": reasoning_effort_profile,
+        "backend_base_url": (
+            str(provider_base_url)
+            if provider_base_url is not None
+            else _resolve_backend_base_url(provider)
+        ),
         "pipeline_options": dict(pipeline_options or {}),
         "force_writer_probe": bool(force_writer_probe),
         "items": input_task_ids,
@@ -4606,6 +5017,10 @@ def _run_one_item_from_cohort(
     stop_after_step_id: Optional[str] = None,
     force_writer_probe: bool = False,
     reasoning_effort_profile: str = "provider_default",
+    transport_max_attempts: int = 1,
+    stream_enabled: bool = False,
+    provider_environment: Optional[Mapping[str, str]] = None,
+    provider_hard_stop: Optional[Any] = None,
 ) -> Dict[str, Any]:
     item_root = out_root / item.key
     selected = set(_normalize_arms(arms))
@@ -4645,6 +5060,9 @@ def _run_one_item_from_cohort(
             model=model,
             request_timeout=request_timeout,
             reasoning_effort_profile=reasoning_effort_profile,
+            transport_max_attempts=transport_max_attempts,
+            stream_enabled=stream_enabled,
+            provider_environment=provider_environment,
         )
         if run_naive or run_aware
         else None
@@ -4663,6 +5081,7 @@ def _run_one_item_from_cohort(
             resume_from_step_id=resume_from_step_id,
             stop_after_step_id=stop_after_step_id,
             force_writer_probe=force_writer_probe,
+            provider_hard_stop=provider_hard_stop,
         )
     if run_aware:
         aware = _run_one_arm(
@@ -4678,6 +5097,7 @@ def _run_one_item_from_cohort(
             resume_from_step_id=resume_from_step_id,
             stop_after_step_id=stop_after_step_id,
             force_writer_probe=force_writer_probe,
+            provider_hard_stop=provider_hard_stop,
         )
     cohort_size = getattr(item, "cohort_size", None)
     if cohort_size is None:

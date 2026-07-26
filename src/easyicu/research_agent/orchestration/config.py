@@ -246,6 +246,18 @@ class PipelineConfig:
     # --- cost / reproducibility ------------------------------------------
     enable_cost_tracking: bool = False
     cost_price_table: Optional[Dict[str, Any]] = None
+    # Optional outer stop-loss. These eight fields are all-or-none and are
+    # enforced by a live ``TaskProviderHardStop`` service. They live in the
+    # declarative config as well so run identity/checkpoints cannot omit the
+    # exact limits or price assumptions used for a paid benchmark.
+    max_provider_attempts_per_run: Optional[int] = None
+    max_provider_attempts_per_batch: Optional[int] = None
+    max_total_tokens_per_run: Optional[int] = None
+    max_total_tokens_per_batch: Optional[int] = None
+    max_estimated_cost_usd_per_batch: Optional[float] = None
+    max_wall_clock_seconds_per_task: Optional[float] = None
+    provider_input_cost_usd_per_million_tokens: Optional[float] = None
+    provider_output_cost_usd_per_million_tokens: Optional[float] = None
     enable_reproducibility_envelope: bool = False
     llm_seed: Optional[int] = None
     execution_data_seed: Optional[int] = None
@@ -429,6 +441,31 @@ class PipelineConfig:
             llm_concept_audit_enabled=self.enable_llm_concept_audit is True,
             allow_underfunded=self.allow_underfunded_step_provider_calls,
         )
+        hard_stop_values = {
+            "max_provider_attempts_per_run": self.max_provider_attempts_per_run,
+            "max_provider_attempts_per_batch": self.max_provider_attempts_per_batch,
+            "max_total_tokens_per_run": self.max_total_tokens_per_run,
+            "max_total_tokens_per_batch": self.max_total_tokens_per_batch,
+            "max_estimated_cost_usd_per_batch": (
+                self.max_estimated_cost_usd_per_batch
+            ),
+            "max_wall_clock_seconds_per_task": self.max_wall_clock_seconds_per_task,
+            "input_cost_usd_per_million_tokens": (
+                self.provider_input_cost_usd_per_million_tokens
+            ),
+            "output_cost_usd_per_million_tokens": (
+                self.provider_output_cost_usd_per_million_tokens
+            ),
+        }
+        if any(value is not None for value in hard_stop_values.values()):
+            if any(value is None for value in hard_stop_values.values()):
+                raise ValueError(
+                    "Provider hard-stop configuration is all-or-none; declare "
+                    "run/batch attempts, tokens, cost, wall clock, and both prices"
+                )
+            from ..authority.provider_hard_stop import ProviderHardStopLimits
+
+            ProviderHardStopLimits(**hard_stop_values)  # type: ignore[arg-type]
 
     def with_overrides(self, **overrides: Any) -> "PipelineConfig":
         """Return a new :class:`PipelineConfig` with the given fields

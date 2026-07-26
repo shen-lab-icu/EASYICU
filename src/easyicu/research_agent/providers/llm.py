@@ -349,25 +349,41 @@ class OpenAIClient:
         extra_headers: Optional[Dict[str, str]] = None,
         extra_body: Optional[Dict[str, Any]] = None,
         supports_vision: Optional[bool] = None,
+        stream_enabled: Optional[bool] = None,
+        allow_environment_overrides: bool = True,
     ) -> None:
         # 🔧 2026-07-10: allow env overrides so a flaky SHARED local proxy (the
         # cli-proxy-api / Codex Tools instance that intermittently rotates its key
         # or drops the connection) can be given a longer per-call timeout and a
         # bigger retry budget without a code change:
         #   EASYICU_LLM_TIMEOUT=<seconds>   EASYICU_LLM_MAX_RETRIES=<attempts>
-        request_timeout = float(
-            os.environ.get("EASYICU_LLM_TIMEOUT") or request_timeout
-        )
-        max_retries = int(os.environ.get("EASYICU_LLM_MAX_RETRIES") or max_retries)
+        if allow_environment_overrides:
+            request_timeout = float(
+                os.environ.get("EASYICU_LLM_TIMEOUT") or request_timeout
+            )
+            max_retries = int(
+                os.environ.get("EASYICU_LLM_MAX_RETRIES") or max_retries
+            )
+        if stream_enabled is None:
+            stream_enabled = (
+                str(os.environ.get("EASYICU_LLM_STREAM", "") or "")
+                .strip()
+                .lower()
+                in {"1", "true", "yes", "on"}
+                if allow_environment_overrides
+                else False
+            )
         kwargs: Dict[str, Any] = {}
         # Accept either OPENAI_API_KEY (vanilla) or OPENROUTER_API_KEY so
         # users don't have to alias the variable themselves.
-        env_key = (
-            api_key
-            or os.environ.get("OPENAI_API_KEY")
-            or os.environ.get("OPENROUTER_API_KEY")
+        env_key = api_key
+        if not env_key and allow_environment_overrides:
+            env_key = os.environ.get("OPENAI_API_KEY") or os.environ.get(
+                "OPENROUTER_API_KEY"
+            )
+        resolved_base_url = base_url or (
+            os.environ.get("OPENAI_BASE_URL") if allow_environment_overrides else None
         )
-        resolved_base_url = base_url or os.environ.get("OPENAI_BASE_URL")
         if env_key:
             kwargs["api_key"] = env_key
         # macOS system proxies (Clash, Surge, etc.) silently break
@@ -447,6 +463,8 @@ class OpenAIClient:
         self._model = model
         self._timeout = request_timeout
         self._max_retries = int(max_retries)
+        self._stream_enabled = bool(stream_enabled)
+        self._allow_environment_overrides = bool(allow_environment_overrides)
         self._extra_body = dict(extra_body or {})
         self.supports_vision = (
             bool(supports_vision)
@@ -636,7 +654,13 @@ class OpenAIClient:
         import json as _json
 
         def _do_call():
-            consume_active_transport_attempt()
+            hard_stop_remaining = consume_active_transport_attempt()
+            transport_kwargs = dict(create_kwargs)
+            if hard_stop_remaining is not None:
+                transport_kwargs["timeout"] = min(
+                    float(transport_kwargs["timeout"]),
+                    float(hard_stop_remaining),
+                )
             if getattr(self, "_local_noauth_mode", False):
                 if self._local_http_client is None:
                     raise RuntimeError("Local no-auth HTTP client was not initialized.")
@@ -652,26 +676,29 @@ class OpenAIClient:
                     payload["top_p"] = float(top_p)
                 if self._extra_body:
                     payload.update(self._extra_body)
-                resp = self._local_http_client.post("/chat/completions", json=payload)
+                post_kwargs: Dict[str, Any] = {"json": payload}
+                if hard_stop_remaining is not None:
+                    post_kwargs["timeout"] = transport_kwargs["timeout"]
+                resp = self._local_http_client.post(
+                    "/chat/completions",
+                    **post_kwargs,
+                )
                 resp.raise_for_status()
                 data = resp.json()
                 return _response_namespace_from_payload(data)
-            stream_enabled = str(
-                os.environ.get("EASYICU_LLM_STREAM", "") or ""
-            ).strip().lower() in {"1", "true", "yes", "on"}
-            if stream_enabled:
+            if self._stream_enabled:
                 # Do not send ``stream_options`` unconditionally: several local
                 # OpenAI-compatible proxies accept SSE streaming but reject the
                 # optional include-usage extension.  Usage is still collected
                 # when a provider includes it in any chunk; otherwise the
                 # existing MeteredClient heuristic remains the fallback.
                 stream = self._client.chat.completions.create(  # type: ignore[union-attr,arg-type]
-                    **create_kwargs,
+                    **transport_kwargs,
                     stream=True,
                 )
                 resp = _response_namespace_from_stream(stream)
             else:
-                resp = self._client.chat.completions.create(**create_kwargs)  # type: ignore[union-attr,arg-type]
+                resp = self._client.chat.completions.create(**transport_kwargs)  # type: ignore[union-attr,arg-type]
             # Eager validation of the envelope so transient null-choices/null-
             # message responses surface here and are caught by the retry loop
             # below, rather than crashing the caller with `'NoneType' object
@@ -1035,7 +1062,7 @@ def _retryable_provider_error(exc: Exception) -> bool:
     )
 
 
-def _client_counts_transport_attempts(client: Any) -> bool:
+def client_counts_transport_attempts(client: Any) -> bool:
     """Detect transport-aware clients through common transparent wrappers."""
 
     seen: set[int] = set()
@@ -1046,6 +1073,11 @@ def _client_counts_transport_attempts(client: Any) -> bool:
             return True
         current = getattr(current, "_inner", None)
     return False
+
+
+# Private compatibility alias for older call sites and tests. New wrappers use
+# the public name so the pre-transport accounting contract is explicit.
+_client_counts_transport_attempts = client_counts_transport_attempts
 
 
 class FallbackLLMClient:
@@ -1116,7 +1148,7 @@ class FallbackLLMClient:
         last_exc: Optional[Exception] = None
         for client in self._clients:
             try:
-                if not _client_counts_transport_attempts(client):
+                if not client_counts_transport_attempts(client):
                     consume_active_transport_attempt()
                 # Forward top_p only to clients that accept it (OpenAI-
                 # compatible); legacy clients keep their previous

@@ -1706,12 +1706,19 @@ def provider_call_scope(
         _ACTIVE_PROVIDER_CALL.reset(token)
 
 
-def consume_active_transport_attempt() -> None:
+def consume_active_transport_attempt() -> Optional[float]:
     """Charge retries for a budget-scoped transport call, if one is active."""
 
+    # The run/batch stop-loss is independent from the per-step allowance.
+    # Reserve it first so a paid transport cannot start unless the outer
+    # ceilings were durably recorded.
+    from .provider_hard_stop import consume_active_provider_hard_stop_attempt
+
+    hard_stop_remaining = consume_active_provider_hard_stop_attempt()
     state = _ACTIVE_PROVIDER_CALL.get()
     if state is not None:
         state.consume_transport_attempt()
+    return hard_stop_remaining
 
 
 def active_provider_retry_available() -> bool:

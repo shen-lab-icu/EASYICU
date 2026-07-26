@@ -81,6 +81,7 @@ from .authority.figure_renderer import (
     _sealed_renderer_figure_step_matches_parent,
 )
 from .providers.cost import CostMeter, metered_role_resolver
+from .providers.hard_stop import HardStopClient
 from .figures.distribution_availability import (
     _distribution_availability_figure_step_matches_parent,
 )
@@ -1509,6 +1510,43 @@ class ResearchAgentPipeline:
         self.workdir = Path(config.workdir).resolve()
         self.workdir.mkdir(parents=True, exist_ok=True)
         self._llm = services.llm
+        self._provider_hard_stop = services.provider_hard_stop
+        hard_stop_config = {
+            "max_provider_attempts_per_run": config.max_provider_attempts_per_run,
+            "max_provider_attempts_per_batch": config.max_provider_attempts_per_batch,
+            "max_total_tokens_per_run": config.max_total_tokens_per_run,
+            "max_total_tokens_per_batch": config.max_total_tokens_per_batch,
+            "max_estimated_cost_usd_per_batch": (
+                config.max_estimated_cost_usd_per_batch
+            ),
+            "max_wall_clock_seconds_per_task": (
+                config.max_wall_clock_seconds_per_task
+            ),
+            "input_cost_usd_per_million_tokens": (
+                config.provider_input_cost_usd_per_million_tokens
+            ),
+            "output_cost_usd_per_million_tokens": (
+                config.provider_output_cost_usd_per_million_tokens
+            ),
+        }
+        hard_stop_configured = any(
+            value is not None for value in hard_stop_config.values()
+        )
+        if hard_stop_configured != (self._provider_hard_stop is not None):
+            raise ValueError(
+                "Provider hard-stop limits and live enforcement service must "
+                "be supplied together"
+            )
+        if self._provider_hard_stop is not None:
+            from .authority.provider_hard_stop import ProviderHardStopLimits
+
+            expected_hard_stop = ProviderHardStopLimits(
+                **hard_stop_config  # type: ignore[arg-type]
+            )
+            if self._provider_hard_stop.ledger.limits != expected_hard_stop:
+                raise ValueError(
+                    "Provider hard-stop service limits differ from PipelineConfig"
+                )
         self._timeout_seconds = config.timeout_seconds
         self._standard_executor_timeout_seconds = (
             config.standard_executor_timeout_seconds
@@ -1526,6 +1564,19 @@ class ResearchAgentPipeline:
         # separate decision from authorizing the provider.
         self._allow_external_figure_upload = bool(config.allow_external_figure_upload)
         self._llm_concept_auditor_client = services.llm_concept_auditor_client
+        if (
+            self._provider_hard_stop is not None
+            and self._llm_concept_auditor_client is not None
+            and not isinstance(self._llm_concept_auditor_client, HardStopClient)
+        ):
+            # An explicitly injected concept auditor bypasses the normal role
+            # resolver in execution/phase.py. Wrap it here so a paid audit
+            # cannot escape the same durable run/batch stop-loss.
+            self._llm_concept_auditor_client = HardStopClient(
+                self._llm_concept_auditor_client,
+                role="concept_auditor",
+                task=self._provider_hard_stop,
+            )
         if config.enable_vlm_visual_qa is None:
             self._enable_vlm_visual_qa = bool(
                 services.visual_qa_adapter is not None
@@ -2017,6 +2068,10 @@ class ResearchAgentPipeline:
         effective_timeout_seconds = (
             self._timeout_seconds if timeout_seconds is None else float(timeout_seconds)
         )
+        if self._provider_hard_stop is not None:
+            effective_timeout_seconds = self._provider_hard_stop.cap_timeout(
+                effective_timeout_seconds
+            )
         if self._runner_factory is not None:
             # A user-supplied factory (OpenHands, firecracker, ...) also needs
             # the run's outcome column so deterministic repairs resolve it from
@@ -2698,6 +2753,32 @@ class ResearchAgentPipeline:
                 seed=self._llm_seed,
                 include_previews=self._envelope_include_previews,
             )
+        if repro_envelope is not None:
+            base_role_resolver = envelope_role_resolver(
+                llm,
+                repro_envelope,
+                seed=self._llm_seed,
+            )
+        else:
+
+            def base_role_resolver(role: str):
+                return resolve_role_client(llm, role)
+
+        if self._provider_hard_stop is not None:
+
+            def stopped_role_resolver(role: str):
+                base = base_role_resolver(role)
+                if base is None or isinstance(base, HardStopClient):
+                    return base
+                return HardStopClient(
+                    base,
+                    role=role,
+                    task=self._provider_hard_stop,
+                )
+
+        else:
+            stopped_role_resolver = base_role_resolver
+
         if self._enable_cost_tracking:
             cost_meter = (
                 CostMeter(
@@ -2709,57 +2790,29 @@ class ResearchAgentPipeline:
                 if self._cost_price_table is not None
                 else CostMeter(runtime_dir=run_dir / ".runtime")
             )
-            # Order: envelope wraps the innermost client so prompt /
-            # response hashes are computed on the exact strings the
-            # agent sent / received; the metered layer then receives usage
-            # owned by that same response through ``complete_with_usage``.
-            if repro_envelope is not None:
-                env_resolver = envelope_role_resolver(
-                    llm,
-                    repro_envelope,
-                    seed=self._llm_seed,
-                )
+            # Order: envelope -> hard stop -> meter. The hard-stop wrapper
+            # reserves every raw transport retry before delivery; the meter
+            # receives usage from that same call for the normal run manifest.
+            class _RoleResolverShim:
+                name = "role_resolver_shim"
 
-                class _EnvelopeShim:
-                    """Bridges a ``role -> client`` resolver back into an LLMClient-like object.
+                def __init__(self, resolver):
+                    self._resolver = resolver
 
-                    ``metered_role_resolver`` expects an object it can
-                    call ``resolve_role_client`` on. The shim exposes
-                    ``for_role`` so the downstream resolver takes our
-                    envelope-wrapped client as the inner client.
-                    """
+                def for_role(self, role: str):
+                    return self._resolver(role)
 
-                    name = "envelope_shim"
+                def complete(self, *args, **kwargs):  # pragma: no cover
+                    raise RuntimeError(
+                        "RoleResolverShim is a dispatcher; call for_role() first."
+                    )
 
-                    def __init__(self, resolver):
-                        self._resolver = resolver
-
-                    def for_role(self, role: str):
-                        return self._resolver(role)
-
-                    # A no-op ``complete`` so static checks don't trip;
-                    # the real call always goes through ``for_role``.
-                    def complete(self, *args, **kwargs):  # pragma: no cover
-                        raise RuntimeError(
-                            "EnvelopeShim is a role dispatcher; call for_role() first."
-                        )
-
-                role_resolver = metered_role_resolver(
-                    _EnvelopeShim(env_resolver),
-                    cost_meter,
-                )
-            else:
-                role_resolver = metered_role_resolver(llm, cost_meter)
-        elif repro_envelope is not None:
-            role_resolver = envelope_role_resolver(
-                llm,
-                repro_envelope,
-                seed=self._llm_seed,
+            role_resolver = metered_role_resolver(
+                _RoleResolverShim(stopped_role_resolver),
+                cost_meter,
             )
         else:
-
-            def role_resolver(role: str):
-                return resolve_role_client(llm, role)
+            role_resolver = stopped_role_resolver
 
         # Resume: reuse the locked plan from the prior run instead of
         # re-planning. A non-deterministic planner would otherwise emit a

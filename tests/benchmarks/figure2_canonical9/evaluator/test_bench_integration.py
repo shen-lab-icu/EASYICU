@@ -42,6 +42,9 @@ _LEGACY_ARM_SCORE_KEYS = {
     "gate_status",
     "manuscript_ready",
     "publication_ready",
+    "publication_artifacts_ready",
+    "execution_paper_eligible",
+    "paper_authorized",
     "writer_attempts",
     "superseded_error_count",
     "evidence_count",
@@ -847,6 +850,7 @@ def test_aborted_manifest_is_not_reused_and_arm_runs(
         model: str,
         request_timeout: float,
         reasoning_effort_profile: str,
+        **_kwargs: Any,
     ) -> object:
         assert request_timeout == 180.0
         assert reasoning_effort_profile == "provider_default"
