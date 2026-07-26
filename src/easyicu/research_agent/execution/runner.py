@@ -2041,6 +2041,8 @@ class DockerRunner:
 
             distribution_script = (
                 "import hashlib\n"
+                "import os\n"
+                "import sys\n"
                 "from pathlib import Path\n"
                 "import easyicu.research_agent as research_agent\n"
                 "from importlib.metadata import distributions\n"
@@ -2065,7 +2067,12 @@ class DockerRunner:
                 "    version = str(dist.version or '').strip()\n"
                 "    if name and version:\n"
                 "        rows[name.casefold()] = f'{name}=={version}'\n"
-                "print('\\n'.join(rows[key] for key in sorted(rows)))\n"
+                "sys.stdout.write('\\n'.join(rows[key] for key in sorted(rows)) + '\\n')\n"
+                "sys.stdout.flush()\n"
+                "# This read-only metadata probe has no cleanup contract inside the\n"
+                "# container.  Exit directly after flushing so third-party atexit\n"
+                "# handlers cannot strand an otherwise completed probe.\n"
+                "os._exit(0)\n"
             )
             capture_proc: Optional[subprocess.CompletedProcess[str]] = None
             for attempt_index in range(self.RUNTIME_PROVENANCE_MAX_ATTEMPTS):

@@ -614,7 +614,10 @@ def test_run_invokes_subprocess_and_writes_log(
     metadata_cmd = next(
         cmd for cmd in captured if "importlib.metadata" in " ".join(cmd)
     )
-    assert "EasyICU research-agent source mismatch" in " ".join(metadata_cmd)
+    metadata_script = " ".join(metadata_cmd)
+    assert "EasyICU research-agent source mismatch" in metadata_script
+    assert "sys.stdout.flush()" in metadata_script
+    assert "os._exit(0)" in metadata_script
     assert "--rm" not in metadata_cmd
     immutable_id = "sha256:" + "a" * 64
     assert immutable_id in metadata_cmd
