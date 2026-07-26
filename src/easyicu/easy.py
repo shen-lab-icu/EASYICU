@@ -169,58 +169,27 @@ def quick_summary(
     """Return the legacy best-effort summary plus explicit failure metadata."""
     _warn("quick_summary", "explicit easyicu.load_*() calls")
     errors: dict[str, str] = {}
-
-    def attempt(label: str, loader, default):
+    loaded: dict[str, pd.DataFrame] = {}
+    for label, concepts in {
+        "vitals": ["hr"],
+        "labs": ["wbc"],
+        "sofa": "sofa",
+        "sepsis": "sep3",
+    }.items():
         try:
-            return loader()
-        except Exception as exc:  # compatibility summary is intentionally best effort
+            loaded[label] = load_concepts(
+                concepts,
+                patient_ids=patient_ids,
+                database=database,
+                data_path=data_path,
+                verbose=False,
+            )
+        except Exception as exc:  # legacy summary is intentionally best effort
             errors[label] = type(exc).__name__
-            return default
+            loaded[label] = pd.DataFrame()
 
-    vitals = attempt(
-        "vitals",
-        lambda: load_concepts(
-            ["hr"],
-            patient_ids=patient_ids,
-            database=database,
-            data_path=data_path,
-            verbose=False,
-        ),
-        pd.DataFrame(),
-    )
-    labs = attempt(
-        "labs",
-        lambda: load_concepts(
-            ["wbc"],
-            patient_ids=patient_ids,
-            database=database,
-            data_path=data_path,
-            verbose=False,
-        ),
-        pd.DataFrame(),
-    )
-    sofa = attempt(
-        "sofa",
-        lambda: load_concepts(
-            "sofa",
-            patient_ids=patient_ids,
-            database=database,
-            data_path=data_path,
-            verbose=False,
-        ),
-        pd.DataFrame(),
-    )
-    sepsis = attempt(
-        "sepsis",
-        lambda: load_concepts(
-            "sep3",
-            patient_ids=patient_ids,
-            database=database,
-            data_path=data_path,
-            verbose=False,
-        ),
-        pd.DataFrame(),
-    )
+    vitals, labs = loaded["vitals"], loaded["labs"]
+    sofa, sepsis = loaded["sofa"], loaded["sepsis"]
     return {
         "patients": len(patient_ids) if patient_ids else "all",
         "vitals_records": len(vitals),

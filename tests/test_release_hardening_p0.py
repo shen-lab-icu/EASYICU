@@ -47,12 +47,12 @@ def test_sofa2_import_state_is_consistent() -> None:
     from easyicu import sofa2_score
 
     assert callable(sofa2_score)
-    assert easyicu._HAS_SOFA2 is True
     assert "sofa2_score" in easyicu.__all__
     assert easyicu.sofa2_score is sofa2_score
-    assert easyicu._HAS_SEPSIS_SOFA2 is True
     assert "sep3_sofa2" in easyicu.__all__
     assert "label_sep3_sofa2" in easyicu.__all__
+    assert callable(easyicu.sep3_sofa2)
+    assert callable(easyicu.label_sep3_sofa2)
 
 
 def test_data_env_imports_with_datasource_config_alias() -> None:

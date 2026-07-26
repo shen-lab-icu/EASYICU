@@ -19,6 +19,11 @@ from __future__ import annotations
 
 import importlib
 import inspect
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
 import warnings
 
 import pandas as pd
@@ -580,6 +585,64 @@ def test_the_package_still_imports_without_deprecation_noise() -> None:
 
     noisy = [w for w in caught if issubclass(w.category, DeprecationWarning)]
     assert not noisy, [str(w.message) for w in noisy]
+
+
+def test_package_import_is_a_small_lazy_facade() -> None:
+    """A plain import must not initialize data, plotting, cache, or agent code."""
+
+    repo_root = Path(__file__).resolve().parents[1]
+    env = {
+        **os.environ,
+        "PYTHONPATH": str(repo_root / "src"),
+    }
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import easyicu, json, sys; "
+                "print(json.dumps(sorted("
+                "m for m in sys.modules if m.startswith('easyicu')"
+                ")))"
+            ),
+        ],
+        cwd=repo_root,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    loaded = json.loads(result.stdout)
+
+    assert loaded == ["easyicu", "easyicu._public_api"]
+
+
+def test_lazy_facade_preserves_1x_exports_without_duplicates() -> None:
+    import easyicu
+
+    assert len(easyicu.__all__) == len(set(easyicu.__all__))
+    assert set(easyicu.__all__) <= set(dir(easyicu))
+    assert easyicu.load_concepts is importlib.import_module(
+        "easyicu.api"
+    ).load_concepts
+    assert easyicu.ResearchAgentPipeline.__module__ == (
+        "easyicu.research_agent.pipeline"
+    )
+
+
+def test_every_declared_top_level_target_resolves_from_its_owner() -> None:
+    """The lazy table must not turn misspelled targets into delayed failures."""
+
+    import easyicu
+
+    failures = []
+    for name in easyicu.__all__:
+        try:
+            getattr(easyicu, name)
+        except (AttributeError, ImportError) as exc:
+            failures.append(f"{name}: {type(exc).__name__}: {exc}")
+
+    assert failures == []
 
 
 def test_import_does_not_install_process_wide_warning_filters() -> None:
