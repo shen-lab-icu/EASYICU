@@ -1,4 +1,6 @@
-"""Behaviour tests for the 2026-07-27 external review (sixth pass).
+"""Human-review resume, egress authority, numeric and table-contract tests.
+
+Origin: 2026-07-27 external review (sixth pass).
 
 Same discipline as the previous rounds: every test drives the **production**
 entry point. The recurring lesson from round five was that a test which calls a

@@ -1,4 +1,6 @@
-"""Regressions for the 2026-07-29 external review of the data layer.
+"""Data time, identity, row-alignment and precision contract regressions.
+
+Origin: 2026-07-29 external review of the data layer.
 
 Every test here drives the real public function against a real
 ``DataSourceConfig`` from ``data-sources.json``, so the id-system wiring under

@@ -1,7 +1,8 @@
-"""Regressions for the 2026-07-24 external code review.
+"""Cross-layer data, runner, relay and Web runtime safety regressions.
 
-One test per confirmed finding, named after it, so a future refactor that
-reintroduces the defect fails with the finding id in the test name.
+Origin: 2026-07-24 external code review. One test per confirmed finding,
+named after it, so a future refactor that reintroduces the defect fails with
+the finding id in the test name.
 """
 
 from __future__ import annotations

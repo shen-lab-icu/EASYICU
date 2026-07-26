@@ -1,4 +1,6 @@
-"""Behaviour tests for the 2026-07-28 external review (seventh pass).
+"""Artifact clearance, resume and transport-authority contract tests.
+
+Origin: 2026-07-28 external review (seventh pass).
 
 The through-line of the last three rounds, in order: the gate was right but
 nothing called it; the test called the gate but fed it a shape production never

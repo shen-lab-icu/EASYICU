@@ -1,4 +1,6 @@
-"""Regression tests for the 2026-05-17 converter consolidation pass.
+"""Converter consolidation and concurrent manifest-write regressions.
+
+Origin: 2026-05-17 converter consolidation pass.
 
 The webapp and the extraction API now share a single converter
 (``DataConverter``); ``DuckDBConverter`` / ``bucket_converter`` were

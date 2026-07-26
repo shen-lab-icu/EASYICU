@@ -1,4 +1,6 @@
-"""Regression tests for bugs fixed during the 2026-05-16 cross-DB audit.
+"""Cross-database conversion and research-agent execution bug regressions.
+
+Origin: 2026-05-16 cross-database audit.
 
 Each test pins a specific failure mode so the fix can't quietly regress:
 
