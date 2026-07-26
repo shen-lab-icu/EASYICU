@@ -193,6 +193,13 @@ _COMPACT_ADJUSTED_CLINICAL_GUIDANCE = """ADJUSTED-MODEL CLINICAL INPUT CONTRACT:
 - Preserve ordinal variables as declared ordered categories or an explicitly justified rank-preserving representation; do not average an ordinal score merely to make a model fit.
 - Numeric coercion must count newly invalid values and fail closed on any lossy or non-finite non-missing input before model fitting or scientific output."""
 
+_COMPACT_QUALITY_AUDIT_GUIDANCE = """WIDE DATA-QUALITY AUDIT CONTRACT:
+- Build each declared table as flat row dictionaries and state every count or percentage denominator. Closed categorical/source-status outputs are complete partitions: retain zero-frequency levels, include an explicit invalid state when required, and make emitted counts reconcile exactly to the named denominator.
+- Planner-declared measured/count/status companions are audit-only. Run the exact host `measurement_provenance_receipt` API for every declared measured/count pair, publish the unchanged receipts, and fail the whole step on discordance; never use a companion to mask, filter, relabel, impute, or change the authoritative value denominator.
+- Validate declared closed ordered/integer domains before output and fail closed on non-finite, non-integer, or out-of-domain non-missing values. Report ordinal distributions and median/IQR or declared thresholds; do not average ordinal components or treat a valid zero as unmeasured.
+- Preserve missingness. Never use silent `fillna(0)`, drop newly invalid coercions, reinterpret unavailable source data as a normal value, or turn a plausibility/audit range into exclusion or capping. A derivation mismatch may be claimed only where comparable source and supplied values both exist.
+- Source-status fractions use the locked cohort as denominator; value-level distributions use their explicitly named valid-observed denominator. Keep these populations distinct and record any numeric-coercion or range flags without silently changing either population."""
+
 
 def normalised_method_head(method: object) -> str:
     """Return the exact scientific method head before an optional rider."""
@@ -620,6 +627,35 @@ def compact_rendering_coder_guide_for_step(
         _exclude_sections=frozenset({"figure", "visual"}),
     )
     return "\n\n".join((base, _COMPACT_RENDER_ONLY_GUIDANCE)).strip()
+
+
+def compact_quality_audit_coder_guide_for_step(
+    full_guide: str,
+    step: AnalysisStep,
+) -> str:
+    """Compact repeated teaching prose for a structurally wide quality audit.
+
+    Initial generation still carries the exact Planner step, typed input/output
+    contracts, host authority, and complete step-scoped scientific context.
+    This projection replaces only generic table/source/clinical tutorials whose
+    binding rules are already represented by those contracts and deterministic
+    validators.
+    """
+
+    method = normalised_method_head(step.method)
+    if not (
+        _quality_control_contract_applies(step)
+        or canonical_analysis_family(method) == "data_quality_audit"
+    ):
+        return coder_guide_for_step(full_guide, step)
+    base = coder_guide_for_step(
+        full_guide,
+        step,
+        _exclude_sections=frozenset(
+            {"source", "table", "clinical", "clinical_tail"}
+        ),
+    )
+    return "\n\n".join((base, _COMPACT_QUALITY_AUDIT_GUIDANCE)).strip()
 
 
 def coder_context_requires_method_constraints(step: AnalysisStep) -> bool:
@@ -1185,6 +1221,7 @@ def scoped_coder_context(
 
 
 __all__ = [
+    "compact_quality_audit_coder_guide_for_step",
     "compact_rendering_coder_guide_for_step",
     "coder_context_requires_method_constraints",
     "coder_guide_for_step",

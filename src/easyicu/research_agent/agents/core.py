@@ -80,6 +80,7 @@ from ..authority.secret_redaction import (
     redact_text_secrets,
 )
 from ..research_context.prompt_scope import (
+    compact_quality_audit_coder_guide_for_step,
     compact_rendering_coder_guide_for_step,
     coder_context_requires_method_constraints,
     coder_guide_for_step,
@@ -2491,13 +2492,17 @@ class CoderAgent:
             ),
             LLMMessage(role="user", content=user_content),
         ]
-        if _coder_prompt_payload_bytes(
-            messages
-        ) > _CODER_INITIAL_PROMPT_TARGET_BYTES and _step_expects_figure(step):
-            scoped_guide = compact_rendering_coder_guide_for_step(
-                _CODER_GUIDE,
-                step,
-            )
+        if _coder_prompt_payload_bytes(messages) > _CODER_INITIAL_PROMPT_TARGET_BYTES:
+            if _step_expects_figure(step):
+                scoped_guide = compact_rendering_coder_guide_for_step(
+                    _CODER_GUIDE,
+                    step,
+                )
+            else:
+                scoped_guide = compact_quality_audit_coder_guide_for_step(
+                    _CODER_GUIDE,
+                    step,
+                )
             messages = [
                 *_coder_system_messages(
                     scoped_guide=scoped_guide,
