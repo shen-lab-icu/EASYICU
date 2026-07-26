@@ -1026,14 +1026,23 @@ def _safe_csv_rows(
     raw: bytes,
     *,
     product_id: str,
+    profile_required: bool,
     issues: list[NormalizationIssue],
 ) -> tuple[tuple[str, ...], list[dict[str, str]]] | None:
     if len(raw) > _MAX_TABLE_BYTES:
         issues.append(
             NormalizationIssue(
-                severity="error",
+                severity="error" if profile_required else "warning",
                 code="registered_table_too_large",
-                message="A registered table exceeded the canonical byte limit.",
+                message=(
+                    "A registered result table exceeded the canonical byte limit."
+                    if profile_required
+                    else (
+                        "An opaque data artifact exceeded the canonical table "
+                        "profiling byte limit; its digest-bound artifact reference "
+                        "was retained without expanding row-level content."
+                    )
+                ),
                 product_id=product_id,
             )
         )
@@ -1092,9 +1101,17 @@ def _safe_csv_rows(
     if len(body) > _MAX_TABLE_ROWS:
         issues.append(
             NormalizationIssue(
-                severity="error",
+                severity="error" if profile_required else "warning",
                 code="registered_table_row_limit_exceeded",
-                message="A registered table exceeded the canonical row limit.",
+                message=(
+                    "A registered result table exceeded the canonical row limit."
+                    if profile_required
+                    else (
+                        "An opaque data artifact exceeded the canonical table "
+                        "profiling row limit; its digest-bound artifact reference "
+                        "was retained without expanding row-level content."
+                    )
+                ),
                 product_id=product_id,
             )
         )
@@ -1364,7 +1381,12 @@ def _compile_registered_table(
     issues: list[NormalizationIssue],
 ) -> _CompiledRegisteredOutputs:
     compiled = _CompiledRegisteredOutputs()
-    parsed = _safe_csv_rows(raw, product_id=artifact.product_id, issues=issues)
+    parsed = _safe_csv_rows(
+        raw,
+        product_id=artifact.product_id,
+        profile_required=artifact.kind == "table",
+        issues=issues,
+    )
     if parsed is None:
         return compiled
     header, rows = parsed

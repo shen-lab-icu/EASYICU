@@ -41,6 +41,7 @@ from easyicu.research_agent.contracts.result_envelope import (
     verify_step_result_envelope,
     write_shadow_step_result_envelope,
 )
+from easyicu.research_agent.contracts import result_envelope as result_envelope_module
 from easyicu.research_agent.schema import AnalysisStep
 
 
@@ -745,6 +746,125 @@ def test_registered_tables_compile_typed_population_missingness_and_estimate(
     assert not [
         issue for issue in envelope.normalization_issues if issue.severity == "error"
     ]
+
+
+@pytest.mark.parametrize(
+    ("limit_name", "limit_value", "payload", "issue_code"),
+    (
+        (
+            "_MAX_TABLE_BYTES",
+            7,
+            "value\n1\n",
+            "registered_table_too_large",
+        ),
+        (
+            "_MAX_TABLE_ROWS",
+            1,
+            "value\n1\n2\n",
+            "registered_table_row_limit_exceeded",
+        ),
+    ),
+)
+def test_opaque_data_artifact_profile_overflow_does_not_block_fraction_shadow(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    limit_name: str,
+    limit_value: int,
+    payload: str,
+    issue_code: str,
+) -> None:
+    monkeypatch.setattr(result_envelope_module, limit_name, limit_value)
+    artifact_path = tmp_path / "analysis_cohort.csv"
+    artifact_path.write_text(payload, encoding="utf-8")
+    summary = {
+        "observed_fraction": {"retained": 1.0},
+        "output_files": {"artifact:analysis_cohort": artifact_path.name},
+    }
+    step = AnalysisStep(step_id="01_cohort", intent="Bind the analysis cohort.")
+
+    envelope = normalize_step_result_shadow(
+        step_id=step.step_id,
+        step_summary=summary,
+        output_dir=tmp_path,
+        status="ok",
+    )
+    issues = [
+        issue
+        for issue in envelope.normalization_issues
+        if issue.code == issue_code
+    ]
+    findings = StepSummaryFractionEnvelopeDualReader().audit(
+        step=step,
+        step_summary=summary,
+        envelope=envelope,
+        current_status="ok",
+    )
+
+    assert len(issues) == 1
+    assert issues[0].severity == "warning"
+    assert [artifact.product_id for artifact in envelope.artifacts] == [
+        "artifact:analysis_cohort"
+    ]
+    assert envelope.tables == ()
+    assert findings == []
+
+
+@pytest.mark.parametrize(
+    ("limit_name", "limit_value", "payload", "issue_code"),
+    (
+        (
+            "_MAX_TABLE_BYTES",
+            7,
+            "value\n1\n",
+            "registered_table_too_large",
+        ),
+        (
+            "_MAX_TABLE_ROWS",
+            1,
+            "value\n1\n2\n",
+            "registered_table_row_limit_exceeded",
+        ),
+    ),
+)
+def test_result_table_profile_overflow_remains_fail_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    limit_name: str,
+    limit_value: int,
+    payload: str,
+    issue_code: str,
+) -> None:
+    monkeypatch.setattr(result_envelope_module, limit_name, limit_value)
+    table_path = tmp_path / "primary_result.csv"
+    table_path.write_text(payload, encoding="utf-8")
+    summary = {
+        "observed_fraction": {"retained": 1.0},
+        "output_files": {"table:primary_result": table_path.name},
+    }
+    step = AnalysisStep(step_id="05_result", intent="Report the primary result.")
+
+    envelope = normalize_step_result_shadow(
+        step_id=step.step_id,
+        step_summary=summary,
+        output_dir=tmp_path,
+        status="ok",
+    )
+    issues = [
+        issue
+        for issue in envelope.normalization_issues
+        if issue.code == issue_code
+    ]
+    findings = StepSummaryFractionEnvelopeDualReader().audit(
+        step=step,
+        step_summary=summary,
+        envelope=envelope,
+        current_status="ok",
+    )
+
+    assert len(issues) == 1
+    assert issues[0].severity == "error"
+    assert len(findings) == 1
+    assert findings[0].detail["mismatch_codes"] == ["normalization_error"]
 
 
 def test_registered_model_contract_is_typed_without_free_text(
