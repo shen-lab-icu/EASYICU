@@ -852,6 +852,89 @@ def test_resolved_inputs_manifest_keeps_untyped_inputs_out_of_bindings(
     assert payload["inputs"] == {}
 
 
+def _host_verified_cohort_execution_receipt() -> dict[str, object]:
+    return {
+        "schema_version": "easyicu.primary_cohort_execution_prompt/1",
+        "cohort_definition_sha256": "c" * 64,
+        "raw_universe": {"rows": 10, "sha256": "a" * 64},
+        "authoritative_analysis_cohort": {
+            "rows": 8,
+            "sha256": "b" * 64,
+            "identity_column": "stay_id",
+            "row_identity_sha256": "d" * 64,
+            "authority_sha256": "e" * 64,
+        },
+        "ordered_predicate_flow": [
+            {
+                "step_order": 0,
+                "predicate_kind": "universe",
+                "n_before": 10,
+                "n_excluded": 0,
+                "n_remaining": 10,
+            },
+            {
+                "step_order": 1,
+                "predicate_kind": "inclusion",
+                "resolved_column": "eligibility_flag",
+                "op": "not_missing",
+                "n_before": 10,
+                "n_excluded": 2,
+                "n_remaining": 8,
+            },
+        ],
+    }
+
+
+def test_resolved_inputs_manifest_binds_host_cohort_execution_receipt(
+    tmp_path: Path,
+) -> None:
+    receipt = _host_verified_cohort_execution_receipt()
+
+    manifest_path = _write_resolved_inputs_manifest(
+        run_dir=tmp_path,
+        step_id="01_cohort",
+        planner_declared_inputs=["eligibility_flag"],
+        bindings={},
+        host_verified_cohort_execution_receipt=receipt,
+    )
+
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert payload["host_verified_cohort_execution_receipt"] == receipt
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (
+            lambda receipt: receipt.update({"schema_version": "untrusted"}),
+            "schema is invalid",
+        ),
+        (
+            lambda receipt: receipt["ordered_predicate_flow"][1].update(
+                {"n_before": 9, "n_excluded": 1}
+            ),
+            "flow is discontinuous",
+        ),
+    ],
+)
+def test_resolved_inputs_manifest_rejects_invalid_host_cohort_execution_receipt(
+    tmp_path: Path,
+    mutate,
+    message: str,
+) -> None:
+    receipt = _host_verified_cohort_execution_receipt()
+    mutate(receipt)
+
+    with pytest.raises(ValueError, match=message):
+        _write_resolved_inputs_manifest(
+            run_dir=tmp_path,
+            step_id="01_cohort",
+            planner_declared_inputs=["eligibility_flag"],
+            bindings={},
+            host_verified_cohort_execution_receipt=receipt,
+        )
+
+
 def test_resolved_inputs_manifest_rejects_tampered_raw_input_contract(
     tmp_path: Path,
 ) -> None:
