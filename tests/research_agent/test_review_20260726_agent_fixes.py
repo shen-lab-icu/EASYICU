@@ -879,10 +879,11 @@ def test_p1_2_profile_can_pin_external_figure_upload():
 # ---------------------------------------------------------------------------
 
 
-def test_p1_3_as_kwargs_preserves_live_object_identity(tmp_path):
+def test_p1_3_services_preserve_live_object_identity(tmp_path):
     import threading
 
     from easyicu.research_agent.orchestration.config import PipelineConfig
+    from easyicu.research_agent.orchestration.services import PipelineServices
 
     class _LiveClient:
         def __init__(self) -> None:
@@ -891,17 +892,20 @@ def test_p1_3_as_kwargs_preserves_live_object_identity(tmp_path):
             self._lock = threading.Lock()
 
     client = _LiveClient()
-    config = PipelineConfig(workdir=tmp_path, llm=client)
+    config = PipelineConfig(workdir=tmp_path)
+    services = PipelineServices(llm=client)
 
     kwargs = config.as_kwargs()
 
-    assert kwargs["llm"] is client
+    assert "llm" not in kwargs
+    assert services.llm is client
 
 
 def test_p1_3_from_config_survives_a_client_holding_a_lock(tmp_path):
     import threading
 
     from easyicu.research_agent.orchestration.config import PipelineConfig
+    from easyicu.research_agent.orchestration.services import PipelineServices
     from easyicu.research_agent.pipeline import ResearchAgentPipeline
 
     class _LiveClient:
@@ -913,9 +917,11 @@ def test_p1_3_from_config_survives_a_client_holding_a_lock(tmp_path):
 
     client = _LiveClient()
     agent = ResearchAgentPipeline.from_config(
-        PipelineConfig(workdir=tmp_path, llm=client)
+        PipelineConfig(workdir=tmp_path),
+        PipelineServices(llm=client),
     )
 
+    assert agent._services.llm is client
     assert agent._llm is client
 
 

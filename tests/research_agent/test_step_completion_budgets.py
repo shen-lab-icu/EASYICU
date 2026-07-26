@@ -512,15 +512,18 @@ def test_a_truncation_that_named_no_products_is_not_treated_as_repaired() -> Non
 def test_pipeline_default_wall_clock_matches_the_config_default(
     tmp_path: Path,
 ) -> None:
-    """PipelineConfig and the ResearchAgentPipeline signature carry the same
-    defaults in two places; they must not drift apart."""
+    """The pipeline consumes its defaults from PipelineConfig exactly once."""
 
-    from easyicu.research_agent import MockLLMClient, ResearchAgentPipeline
+    from easyicu.research_agent import (
+        MockLLMClient,
+        PipelineServices,
+        ResearchAgentPipeline,
+    )
 
-    config = PipelineConfig(workdir="./unused")
-    pipeline = ResearchAgentPipeline(
-        workdir=tmp_path / "wd",
-        llm=MockLLMClient(),
+    config = PipelineConfig(workdir=tmp_path / "wd")
+    pipeline = ResearchAgentPipeline.from_config(
+        config,
+        PipelineServices(llm=MockLLMClient()),
     )
     assert pipeline._timeout_seconds == config.timeout_seconds
     assert pipeline._max_step_provider_calls == config.max_step_provider_calls

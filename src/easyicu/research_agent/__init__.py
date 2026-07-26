@@ -31,11 +31,18 @@ Public API
 ----------
 ``ResearchAgentPipeline`` is the single end-to-end entry point::
 
-    from easyicu.research_agent import ResearchAgentPipeline, MockLLMClient
+    from easyicu.research_agent import (
+        MockLLMClient,
+        PipelineConfig,
+        PipelineServices,
+        ResearchAgentPipeline,
+    )
 
     pipeline = ResearchAgentPipeline(
-        workdir="./research_output",
-        llm=MockLLMClient(),  # tests/demo only; use a real client for research runs
+        config=PipelineConfig(workdir="./research_output"),
+        services=PipelineServices(
+            llm=MockLLMClient(),  # tests/demo only; use a real client for research runs
+        ),
     )
     result = pipeline.run(
         question="Is admission SOFA score associated with ICU mortality?",
@@ -429,6 +436,8 @@ __all__ = [
     "build_execution_replay",
     # Pipeline
     "ResearchAgentPipeline",
+    "PipelineConfig",
+    "PipelineServices",
     "SubmissionProfile",
     "NPJ_DM_2026_05",
     "NPJ_DM_2026_06",
@@ -1043,6 +1052,10 @@ def __getattr__(name: str):
         from .orchestration.config import PipelineConfig
 
         return PipelineConfig
+    if name == "PipelineServices":
+        from .orchestration.services import PipelineServices
+
+        return PipelineServices
     if name in {
         "SubmissionProfile",
         "NPJ_DM_2026_05",

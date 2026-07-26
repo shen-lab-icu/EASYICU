@@ -14,6 +14,7 @@ import pytest
 
 ORCHESTRATION_MODULES = (
     "orchestration.config",
+    "orchestration.services",
     "orchestration.profiles",
     "orchestration.experiment_spec",
     "orchestration.resume",
@@ -84,12 +85,14 @@ def test_retired_orchestration_module_is_absent(leaf: str) -> None:
 def test_root_orchestration_api_resolves_to_canonical_modules() -> None:
     root = importlib.import_module("easyicu.research_agent")
     config = importlib.import_module("easyicu.research_agent.orchestration.config")
+    services = importlib.import_module("easyicu.research_agent.orchestration.services")
     profiles = importlib.import_module("easyicu.research_agent.orchestration.profiles")
     experiment_spec = importlib.import_module(
         "easyicu.research_agent.orchestration.experiment_spec"
     )
 
     assert root.PipelineConfig is config.PipelineConfig
+    assert root.PipelineServices is services.PipelineServices
     for name in PROFILE_EXPORTS:
         assert getattr(root, name) is getattr(profiles, name)
     for name in EXPERIMENT_SPEC_EXPORTS:

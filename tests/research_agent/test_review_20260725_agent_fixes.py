@@ -55,6 +55,7 @@ from easyicu.research_agent.mcp_policy import (
     summarise_frame,
 )
 from easyicu.research_agent.orchestration.config import PipelineConfig
+from easyicu.research_agent.orchestration.services import PipelineServices
 from easyicu.research_agent.reporting.write_phase import (
     demote_cosmetic_publication_visual_findings,
 )
@@ -1060,15 +1061,19 @@ def test_p1_6_canonical_digest_is_stable_and_json_safe(tmp_path):
     class _Client:
         pass
 
-    config = PipelineConfig(workdir=tmp_path, llm=_Client())
+    config = PipelineConfig(workdir=tmp_path)
+    services = PipelineServices(llm=_Client())
     payload = config.canonical_payload()
+    service_payload = services.canonical_payload()
 
     json.dumps(payload)  # must not raise
-    assert payload["llm"].startswith("<")
+    json.dumps(service_payload)  # must not raise
+    assert "llm" not in payload
+    assert service_payload["llm"].endswith("._Client")
     assert (
-        config.canonical_digest()
-        == PipelineConfig(workdir=tmp_path, llm=_Client()).canonical_digest()
+        config.canonical_digest() == PipelineConfig(workdir=tmp_path).canonical_digest()
     )
+    assert service_payload == PipelineServices(llm=_Client()).canonical_payload()
 
 
 def test_p2_1_mcp_server_reports_the_installed_package_version():
