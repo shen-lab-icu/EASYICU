@@ -102,7 +102,10 @@ from .import_repair import (
     insert_after_imports,
     patch_known_host_helper_import,
 )
-from .input_scope import patch_raw_input_physical_superset_guard
+from .input_scope import (
+    patch_raw_contract_mapping_iteration,
+    patch_raw_input_physical_superset_guard,
+)
 from .reasons import RepairReason
 from .typed_input import (
     patch_all_rows_outcome_coordinate_filter,
@@ -6118,6 +6121,12 @@ def _deterministic_runner_repair(
         repaired = patch_raw_input_physical_superset_guard(code, run_log)
         if repaired != code:
             return input_scope_repair, repaired
+
+    raw_contract_mapping_repair = "raw_contract_mapping_iteration_v1"
+    if previous_repair != raw_contract_mapping_repair:
+        repaired = patch_raw_contract_mapping_iteration(code, run_log)
+        if repaired != code:
+            return raw_contract_mapping_repair, repaired
 
     receipt_source_repair = "host_receipt_source_envelope_v1"
     if previous_repair != receipt_source_repair:

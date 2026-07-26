@@ -918,6 +918,42 @@ def _planner_materialized_cohort_prompt_payload(
     )
 
 
+def _raw_contract_inputs_for_step(
+    *,
+    planner_declared_inputs: Sequence[str],
+    primary_cohort_execution_receipt: Optional[Mapping[str, Any]],
+) -> tuple[str, ...]:
+    """Include only host-resolved cohort predicates beyond Planner inputs."""
+
+    names = [str(value) for value in planner_declared_inputs]
+    if primary_cohort_execution_receipt is None:
+        return tuple(names)
+    flow = primary_cohort_execution_receipt.get("ordered_predicate_flow")
+    if not isinstance(flow, list):
+        raise MaterializedMetadataError(
+            "primary cohort execution receipt lacks ordered predicate flow"
+        )
+    for row in flow:
+        if not isinstance(row, Mapping):
+            raise MaterializedMetadataError(
+                "primary cohort execution receipt contains an invalid predicate"
+            )
+        resolved_column = row.get("resolved_column")
+        if resolved_column is None:
+            continue
+        if not (
+            isinstance(resolved_column, str)
+            and resolved_column.strip()
+            and ":" not in resolved_column
+        ):
+            raise MaterializedMetadataError(
+                "primary cohort execution receipt has an invalid resolved column"
+            )
+        if resolved_column not in names:
+            names.append(resolved_column)
+    return tuple(names)
+
+
 def _failed_contract_code_can_be_reused_before_coder(
     *,
     prior_step_record: Optional[Mapping[str, Any]],
@@ -5646,7 +5682,12 @@ def run_execute_phase(
             context_path=plan_result.context_path,
             raw_input_contracts=resolved_raw_input_contracts(
                 coder_context,
-                step.inputs,
+                _raw_contract_inputs_for_step(
+                    planner_declared_inputs=step.inputs,
+                    primary_cohort_execution_receipt=(
+                        primary_cohort_execution_receipt
+                    ),
+                ),
             ),
             host_verified_cohort_execution_receipt=(
                 primary_cohort_execution_receipt

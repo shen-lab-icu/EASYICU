@@ -11,6 +11,7 @@ from easyicu.research_agent.repair_registry import (
     automatic_repair_allowed,
     repair_metadata_for,
 )
+from easyicu.research_agent.execution.phase import _untrusted_runtime_repair_allowed
 from easyicu.research_agent.repairs.source import _deterministic_runner_repair
 
 _ERROR = """
@@ -98,3 +99,72 @@ def test_raw_input_superset_repair_is_structural_and_automatic() -> None:
     assert metadata.introduces_numbers is False
     assert metadata.requires_disclosure is False
     assert automatic_repair_allowed(metadata.repair_id)
+
+
+def test_runner_repair_iterates_column_keyed_raw_contract_values() -> None:
+    code = """
+def find_contract(manifest, column_name):
+    contracts_root = manifest.get("raw_input_contracts", {})
+    contracts = contracts_root.get("contracts", [])
+    for contract in contracts:
+        if contract.get("column") == column_name:
+            return contract
+    return None
+"""
+    run_log = "AttributeError: 'str' object has no attribute 'get'"
+
+    repair = _deterministic_runner_repair(code=code, run_log=run_log)
+
+    assert repair is not None
+    repair_id, repaired = repair
+    assert repair_id == "raw_contract_mapping_iteration_v1"
+    assert "for contract in contracts.values():" in repaired
+    namespace: dict[str, object] = {}
+    exec(repaired, namespace)  # noqa: S102 - generated-code regression
+    manifest = {
+        "raw_input_contracts": {
+            "contracts": {
+                "eligibility_max": {
+                    "column": "eligibility_max",
+                    "allowed_values": [0, 1],
+                }
+            }
+        }
+    }
+    assert namespace["find_contract"](manifest, "eligibility_max") == {
+        "column": "eligibility_max",
+        "allowed_values": [0, 1],
+    }
+    metadata = repair_metadata_for(repair_id)
+    assert metadata.repair_class is RepairClass.SYNTACTIC
+    assert _untrusted_runtime_repair_allowed(
+        repair_id=repair_id,
+        source="deterministic_runner_repair",
+    )
+
+
+def test_raw_contract_mapping_repair_is_traceback_and_shape_bound() -> None:
+    code = """
+contracts = manifest.get("contracts", {})
+for contract in contracts:
+    print(contract.get("column"))
+"""
+    error = "AttributeError: 'str' object has no attribute 'get'"
+
+    assert _deterministic_runner_repair(code=code, run_log="") is None
+    assert (
+        _deterministic_runner_repair(
+            code=code.replace('"contracts"', '"other_records"'),
+            run_log=error,
+        )
+        is None
+    )
+    ambiguous = (
+        code
+        + """
+more_contracts = other_manifest.get("contracts", {})
+for more_contract in more_contracts:
+    print(more_contract.get("column"))
+"""
+    )
+    assert _deterministic_runner_repair(code=ambiguous, run_log=error) is None
