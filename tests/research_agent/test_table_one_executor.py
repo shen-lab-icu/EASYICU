@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 
 import pandas as pd
@@ -84,6 +85,49 @@ def _frame() -> pd.DataFrame:
     )
 
 
+def _bind_typed_cohort(
+    tmp_path,
+    monkeypatch,
+    *,
+    input_key: str = "artifact:analysis_cohort",
+    bound_frame: pd.DataFrame | None = None,
+    raw_frame: pd.DataFrame | None = None,
+):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    bound_path = run_dir / "bound_cohort.parquet"
+    raw_path = run_dir / "raw_cohort.parquet"
+    (bound_frame if bound_frame is not None else _frame()).to_parquet(
+        bound_path,
+        index=False,
+    )
+    (raw_frame if raw_frame is not None else _frame()).to_parquet(
+        raw_path,
+        index=False,
+    )
+    bound = pd.read_parquet(bound_path)
+    manifest = {
+        "inputs": {
+            input_key: {
+                "relative_path": bound_path.relative_to(run_dir).as_posix(),
+                "sha256": hashlib.sha256(bound_path.read_bytes()).hexdigest(),
+                "product_contract": {
+                    "columns": list(bound.columns),
+                    "row_count": len(bound),
+                },
+            }
+        }
+    }
+    manifest_path = run_dir / "resolved_inputs.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    out_dir = tmp_path / "outputs"
+    monkeypatch.setenv("EASYICU_RUN_DIR", str(run_dir))
+    monkeypatch.setenv("EASYICU_RESOLVED_INPUTS_JSON", str(manifest_path))
+    monkeypatch.setenv("COHORT_PARQUET", str(raw_path))
+    monkeypatch.setenv("STEP_OUT_DIR", str(out_dir))
+    return bound_path, out_dir
+
+
 def test_table_one_executor_owns_only_the_closed_table_contract():
     assert table_one_executor_owns_step(_step())
     assert not table_one_executor_owns_step(
@@ -110,7 +154,6 @@ def test_table_one_executor_does_not_ignore_a_second_typed_artifact():
     [
         "artifact:validated_measurement_analysis_set",
         "dataset:validated_measurement_analysis_set",
-        "cohort:validated_measurement_analysis_set",
         "table:validated_measurement_analysis_set",
     ],
 )
@@ -136,6 +179,21 @@ def test_table_one_executor_refuses_subset_only_typed_input(typed_input: str):
     )
 
 
+def test_table_one_executor_consumes_one_declared_cohort_product():
+    step = _step()
+    step.inputs[0] = "cohort:validated_measurement_analysis_set"
+
+    assert table_one_executor_owns_step(step)
+    selection = select_standard_executor(
+        step,
+        plan=AnalysisPlan(research_question="Test", steps=[step]),
+    )
+    assert selection is not None
+    assert selection.consumed_input_keys == (
+        "cohort:validated_measurement_analysis_set",
+    )
+
+
 def test_standard_executor_selects_table_one_before_any_coder_path():
     step = _step()
     selection = select_standard_executor(
@@ -153,11 +211,7 @@ def test_table_one_executor_code_passes_preflight_and_executes_exact_spec(
     tmp_path, monkeypatch
 ):
     step = _step()
-    cohort_path = tmp_path / "cohort.parquet"
-    out_dir = tmp_path / "outputs"
-    _frame().to_parquet(cohort_path, index=False)
-    monkeypatch.setenv("COHORT_PARQUET", str(cohort_path))
-    monkeypatch.setenv("STEP_OUT_DIR", str(out_dir))
+    _, out_dir = _bind_typed_cohort(tmp_path, monkeypatch)
 
     code = table_one_executor_code(step)
     assert audit_mechanical_code_contracts(code, step) == []
@@ -190,11 +244,7 @@ def test_host_seals_standard_executor_input_and_measurement_receipts(
     tmp_path, monkeypatch
 ):
     step = _step()
-    cohort_path = tmp_path / "cohort.parquet"
-    out_dir = tmp_path / "outputs"
-    _frame().to_parquet(cohort_path, index=False)
-    monkeypatch.setenv("COHORT_PARQUET", str(cohort_path))
-    monkeypatch.setenv("STEP_OUT_DIR", str(out_dir))
+    cohort_path, out_dir = _bind_typed_cohort(tmp_path, monkeypatch)
     exec(compile(table_one_executor_code(step), "<table-one-executor>", "exec"), {})
 
     binding = {
@@ -218,6 +268,51 @@ def test_host_seals_standard_executor_input_and_measurement_receipts(
         )
         == []
     )
+
+
+def test_table_one_executor_uses_bound_cohort_instead_of_raw_frame(
+    tmp_path,
+    monkeypatch,
+):
+    step = _step()
+    step.inputs[0] = "cohort:analysis_set"
+    bound = _frame().iloc[[0, 1, 3, 4]].reset_index(drop=True)
+    _, out_dir = _bind_typed_cohort(
+        tmp_path,
+        monkeypatch,
+        input_key="cohort:analysis_set",
+        bound_frame=bound,
+        raw_frame=_frame(),
+    )
+
+    selection = select_standard_executor(
+        step,
+        plan=AnalysisPlan(research_question="Test", steps=[step]),
+    )
+    assert selection is not None
+    exec(compile(selection.code, "<table-one-executor>", "exec"), {})
+
+    summary = json.loads((out_dir / "step_summary.json").read_text("utf-8"))
+    assert summary["cohort_input_key"] == "cohort:analysis_set"
+    assert summary["cohort_n"] == len(bound)
+    assert selection.consumed_input_keys == ("cohort:analysis_set",)
+
+
+def test_table_one_executor_rejects_tampered_bound_cohort(tmp_path, monkeypatch):
+    step = _step()
+    bound_path, _ = _bind_typed_cohort(tmp_path, monkeypatch)
+    tampered = _frame().iloc[:-1].reset_index(drop=True)
+    tampered.to_parquet(bound_path, index=False)
+
+    with pytest.raises(RuntimeError, match="digest verification failed"):
+        exec(
+            compile(
+                table_one_executor_code(step),
+                "<table-one-executor>",
+                "exec",
+            ),
+            {},
+        )
 
 
 def test_host_receipt_never_marks_an_unconsumed_binding_loaded(tmp_path):
