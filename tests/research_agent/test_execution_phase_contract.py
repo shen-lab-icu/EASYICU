@@ -85,6 +85,49 @@ def test_primary_cohort_predicate_contract_rejects_typed_or_invalid_coordinate()
         )
 
 
+def test_primary_cohort_contract_uses_full_authority_without_widening_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easyicu.research_agent.execution import phase
+
+    base_context = object()
+    scoped_context = object()
+    calls: list[tuple[object, tuple[str, ...]]] = []
+
+    def fake_resolver(
+        context: object,
+        names: tuple[str, ...],
+    ) -> dict[str, object]:
+        calls.append((context, names))
+        return {"contracts": {name: {} for name in names if ":" not in name}}
+
+    monkeypatch.setattr(phase, "resolved_raw_input_contracts", fake_resolver)
+    receipt = {
+        "ordered_predicate_flow": [
+            {"resolved_column": None},
+            {"resolved_column": "eligibility_max"},
+        ]
+    }
+
+    result = phase._resolved_raw_input_contracts_for_step(
+        coder_base_context=base_context,
+        coder_context=scoped_context,
+        planner_declared_inputs=["table:parent"],
+        primary_cohort_execution_receipt=receipt,
+    )
+
+    assert result == {"contracts": {"eligibility_max": {}}}
+    assert calls == [(base_context, ("table:parent", "eligibility_max"))]
+
+    phase._resolved_raw_input_contracts_for_step(
+        coder_base_context=base_context,
+        coder_context=scoped_context,
+        planner_declared_inputs=["age"],
+        primary_cohort_execution_receipt=None,
+    )
+    assert calls[-1] == (scoped_context, ("age",))
+
+
 def test_llm_authority_signature_binds_endpoint_options_and_fallback_order() -> None:
     from easyicu.research_agent.authority.pipeline_cache import llm_signature
 
