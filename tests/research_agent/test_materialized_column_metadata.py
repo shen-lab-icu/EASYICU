@@ -301,6 +301,80 @@ def test_resolved_raw_input_contracts_bind_domain_and_range_policy(
     assert payload["raw_input_contracts"] == contracts
 
 
+def test_resolved_raw_input_contracts_bind_sealed_observed_levels(
+    tmp_path: Path,
+) -> None:
+    context = _build_v2_context(tmp_path)
+    variables = [
+        (
+            variable.model_copy(
+                update={
+                    "observed_domain": {
+                        "n_unique": 2,
+                        "is_constant": False,
+                        "is_binary": False,
+                        "levels": ["Female", "Male"],
+                    }
+                }
+            )
+            if variable.name == "age"
+            else variable
+        )
+        for variable in context.variables
+    ]
+    context = ResearchContextV2.model_validate(
+        context.model_dump(mode="python") | {"variables": variables}
+    )
+
+    contracts = resolved_raw_input_contracts(context, ["age"])
+
+    assert contracts is not None
+    assert contracts["contracts"]["age"]["allowed_values"] == [
+        "Female",
+        "Male",
+    ]
+    assert contracts["contracts"]["age"]["allowed_values_basis"] == (
+        "sealed_research_context_observed_domain"
+    )
+
+
+def test_resolved_raw_input_contracts_reject_unbounded_or_malformed_levels(
+    tmp_path: Path,
+) -> None:
+    context = _build_v2_context(tmp_path)
+
+    def with_domain(domain: dict[str, object]) -> ResearchContextV2:
+        variables = [
+            (
+                variable.model_copy(update={"observed_domain": domain})
+                if variable.name == "age"
+                else variable
+            )
+            for variable in context.variables
+        ]
+        return ResearchContextV2.model_validate(
+            context.model_dump(mode="python") | {"variables": variables}
+        )
+
+    for domain in (
+        {
+            "n_unique": 2,
+            "is_constant": False,
+            "is_binary": False,
+            "levels": ["Female", "Female"],
+        },
+        {
+            "n_unique": 9,
+            "is_constant": False,
+            "is_binary": False,
+            "levels": [f"level_{index}" for index in range(9)],
+        },
+    ):
+        contracts = resolved_raw_input_contracts(with_domain(domain), ["age"])
+        assert contracts is not None
+        assert "allowed_values" not in contracts["contracts"]["age"]
+
+
 def test_materialized_cohort_publishes_exact_typed_sidecar(tmp_path: Path) -> None:
     source = _typed_export(tmp_path / "export")
     output = tmp_path / "materialized"
