@@ -30,8 +30,12 @@ authority** covering the exact nine tasks in fixed order with per-task input and
 provenance digests.  Its ``authority_digest`` (the nine-task mapping-table summary)
 must equal both the operator pin and ``ExecutionIdentity.input_authority_sha256``;
 and each task's *real* cohort file must hash to that task's frozen ``input_sha256``.
-No such production authority exists yet, so against the current repository the gate
-always blocks — which is the honest state.
+
+Before any of those cohort bytes are read, the gate also requires an ordered,
+digest-bound scientific-protocol authority for E2, H2, and H3.  Each selected
+KnowHow card must carry a real clinical-and-methods review attestation bound to
+its exact reviewable content.  This module verifies those approvals but never
+creates them or promotes the current ``curated_mvp`` cards.
 
 The one operation this gate never performs is launching the real run.
 """
@@ -60,8 +64,8 @@ from .evaluator.input_freeze_v1 import (
 )
 from .evaluator.rubric_v1 import FIGURE2_TASK_IDS
 
-REALRUN_AUTHORIZATION_SCHEMA = "easyicu.figure2_realrun_authorization/1"
-OPERATOR_FREEZE_DECLARATION_SCHEMA = "easyicu.figure2_operator_freeze_declaration/1"
+REALRUN_AUTHORIZATION_SCHEMA = "easyicu.figure2_realrun_authorization/2"
+OPERATOR_FREEZE_DECLARATION_SCHEMA = "easyicu.figure2_operator_freeze_declaration/2"
 PRODUCTION_INPUT_AUTHORITY_SCHEMA = "easyicu.figure2_production_input_authority/1"
 AUTHORIZED_ARMS: tuple[str, ...] = ("aware",)
 _MAX_DOC_BYTES = 8 * 1024 * 1024
@@ -524,9 +528,10 @@ def build_canonical_execution_config(
 class OperatorFreezeDeclaration(_StrictFrozenModel):
     """Operator-frozen pins fixed BEFORE the run; the gate only verifies them."""
 
-    schema_version: Literal["easyicu.figure2_operator_freeze_declaration/1"]
+    schema_version: Literal["easyicu.figure2_operator_freeze_declaration/2"]
     expected_execution_identity_sha256: Sha256
     input_authority_digest: Sha256
+    scientific_protocol_authority_digest: Sha256
     input_freeze_manifest_sha256: Sha256
     rubric_sha256: Sha256
     execution_config_sha256: Sha256
@@ -619,11 +624,15 @@ class RealRunAuthorizationIssue(_StrictFrozenModel):
 
 
 class RealRunAuthorization(_StrictFrozenModel):
-    schema_version: Literal["easyicu.figure2_realrun_authorization/1"]
+    schema_version: Literal["easyicu.figure2_realrun_authorization/2"]
     status: Literal["authorized", "blocked"]
     expected_task_ids: tuple[str, ...]
     declaration_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     input_authority_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    scientific_protocol_authority_digest: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
     batch_id: str | None = None
     frozen_input_by_task: dict[str, Sha256] = Field(default_factory=dict)
     issues: tuple[RealRunAuthorizationIssue, ...] = ()
@@ -635,8 +644,15 @@ class RealRunAuthorization(_StrictFrozenModel):
         if self.status == "authorized":
             if self.issues:
                 raise ValueError("authorized receipt cannot carry issues")
-            if self.declaration_sha256 is None or self.input_authority_digest is None:
-                raise ValueError("authorized receipt must bind declaration + authority")
+            if (
+                self.declaration_sha256 is None
+                or self.input_authority_digest is None
+                or self.scientific_protocol_authority_digest is None
+            ):
+                raise ValueError(
+                    "authorized receipt must bind declaration, input authority, "
+                    "and scientific protocol authority"
+                )
             if self.batch_id is None or not self.batch_id.startswith("batch_"):
                 raise ValueError("authorized receipt must bind a batch id")
             if tuple(self.frozen_input_by_task) != tuple(FIGURE2_TASK_IDS):
@@ -656,6 +672,7 @@ class RealRunAuthorizationRequest:
     rubric_path: Path
     invocation: RealRunInvocation
     production_input_authority_path: Optional[Path] = None
+    scientific_protocol_authority_path: Optional[Path] = None
     # The LIVE checkout state (git_sha / git_dirty). ``None`` means "measure it now"
     # via ``capture_code_version()`` — the real launcher leaves it None; tests inject
     # a value so the running-tree binding is exercised without a real git tree.
@@ -1082,6 +1099,45 @@ def _verify_production_input_authority(
     return issues, authority
 
 
+def _verify_scientific_protocol_authority(
+    request: RealRunAuthorizationRequest,
+    declaration: OperatorFreezeDeclaration,
+) -> tuple[list[RealRunAuthorizationIssue], Optional[str]]:
+    """Verify E2/H2/H3 review authority before any cohort bytes are read."""
+
+    if request.scientific_protocol_authority_path is None:
+        return [
+            _issue(
+                "SCIENTIFIC_PROTOCOL_AUTHORITY_ABSENT",
+                "no digest-bound, dual-reviewed E2/H2/H3 protocol authority was "
+                "supplied; formal Canonical9 execution remains blocked",
+            )
+        ], None
+    try:
+        from .scientific_protocol_authority import (
+            load_verified_scientific_protocol_authority,
+        )
+
+        authority, _file_sha256 = load_verified_scientific_protocol_authority(
+            request.scientific_protocol_authority_path
+        )
+        if (
+            authority.authority_digest
+            != declaration.scientific_protocol_authority_digest
+        ):
+            raise ValueError(
+                "scientific protocol authority digest differs from the operator pin"
+            )
+        return [], authority.authority_digest
+    except Exception as exc:  # noqa: BLE001
+        return [
+            _issue(
+                "SCIENTIFIC_PROTOCOL_AUTHORITY_INVALID",
+                f"{type(exc).__name__}: {exc}",
+            )
+        ], None
+
+
 def verify_realrun_authorization(
     request: RealRunAuthorizationRequest,
 ) -> RealRunAuthorization:
@@ -1114,6 +1170,24 @@ def verify_realrun_authorization(
             schema_version=REALRUN_AUTHORIZATION_SCHEMA,
             status="blocked",
             expected_task_ids=tuple(FIGURE2_TASK_IDS),
+            issues=tuple(issues),
+        )
+
+    # Scientific decisions are the first post-declaration hard stop.  Missing or
+    # tampered E2/H2/H3 review evidence returns immediately so the gate cannot
+    # continue into production-cohort digest or sidecar verification.
+    protocol_issues, protocol_digest = _verify_scientific_protocol_authority(
+        request,
+        declaration,
+    )
+    issues.extend(protocol_issues)
+    if protocol_issues:
+        return RealRunAuthorization(
+            schema_version=REALRUN_AUTHORIZATION_SCHEMA,
+            status="blocked",
+            expected_task_ids=tuple(FIGURE2_TASK_IDS),
+            declaration_sha256=declaration_sha,
+            input_authority_digest=declaration.input_authority_digest,
             issues=tuple(issues),
         )
 
@@ -1230,6 +1304,7 @@ def verify_realrun_authorization(
         expected_task_ids=tuple(FIGURE2_TASK_IDS),
         declaration_sha256=declaration_sha,
         input_authority_digest=declaration.input_authority_digest,
+        scientific_protocol_authority_digest=protocol_digest,
         batch_id=(declaration.batch_id if status == "authorized" else None),
         frozen_input_by_task=(
             production_authority.frozen_input_by_task()
@@ -1255,8 +1330,8 @@ def enforce_realrun_authorization(
 # Batch identity: pre-run receipt + post-run child ledger
 # ---------------------------------------------------------------------------
 
-BATCH_RECEIPT_SCHEMA = "easyicu.figure2_batch_authorization_receipt/1"
-BATCH_LEDGER_SCHEMA = "easyicu.figure2_batch_ledger/1"
+BATCH_RECEIPT_SCHEMA = "easyicu.figure2_batch_authorization_receipt/2"
+BATCH_LEDGER_SCHEMA = "easyicu.figure2_batch_ledger/2"
 
 
 @dataclass(frozen=True)
@@ -1266,6 +1341,7 @@ class RealRunBatchBinding:
     batch_id: str
     declaration_sha256: str
     input_authority_digest: str
+    scientific_protocol_authority_digest: str
     frozen_input_by_task: Mapping[str, str]
     batch_root: Path | None = None
     receipt_sha256: str | None = None
@@ -1305,6 +1381,9 @@ def _batch_receipt_bytes(binding: RealRunBatchBinding, *, generated_at: str) -> 
                 "batch_id": binding.batch_id,
                 "declaration_sha256": binding.declaration_sha256,
                 "input_authority_digest": binding.input_authority_digest,
+                "scientific_protocol_authority_digest": (
+                    binding.scientific_protocol_authority_digest
+                ),
                 "expected_task_ids": list(FIGURE2_TASK_IDS),
                 "generated_at": generated_at,
             },
@@ -1344,6 +1423,9 @@ def reserve_authorized_batch_root(
             batch_id=binding.batch_id,
             declaration_sha256=binding.declaration_sha256,
             input_authority_digest=binding.input_authority_digest,
+            scientific_protocol_authority_digest=(
+                binding.scientific_protocol_authority_digest
+            ),
             frozen_input_by_task=dict(binding.frozen_input_by_task),
             batch_root=reserved_root,
         )
@@ -1357,6 +1439,9 @@ def reserve_authorized_batch_root(
             batch_id=provisional.batch_id,
             declaration_sha256=provisional.declaration_sha256,
             input_authority_digest=provisional.input_authority_digest,
+            scientific_protocol_authority_digest=(
+                provisional.scientific_protocol_authority_digest
+            ),
             frozen_input_by_task=provisional.frozen_input_by_task,
             batch_root=reserved_root,
             receipt_sha256=receipt_sha,
@@ -1414,6 +1499,9 @@ def verify_batch_authorization_receipt(binding: RealRunBatchBinding) -> Path:
         "batch_id": binding.batch_id,
         "declaration_sha256": binding.declaration_sha256,
         "input_authority_digest": binding.input_authority_digest,
+        "scientific_protocol_authority_digest": (
+            binding.scientific_protocol_authority_digest
+        ),
         "expected_task_ids": list(FIGURE2_TASK_IDS),
         "generated_at": (
             receipt.get("generated_at") if isinstance(receipt, dict) else None
@@ -1526,6 +1614,9 @@ def build_batch_ledger(
         "schema_version": BATCH_LEDGER_SCHEMA,
         "batch_id": binding.batch_id,
         "declaration_sha256": binding.declaration_sha256,
+        "scientific_protocol_authority_digest": (
+            binding.scientific_protocol_authority_digest
+        ),
         "expected_task_ids": list(FIGURE2_TASK_IDS),
         "complete": complete,
         "children": children,
@@ -1619,6 +1710,7 @@ def _cli(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--input-freeze", required=True)
     parser.add_argument("--rubric", required=True)
     parser.add_argument("--production-input-authority", default=None)
+    parser.add_argument("--scientific-protocol-authority", required=True)
     # The real invocation flags (mirrors the launcher; never self-derived).
     parser.add_argument("--ehrflowbench-jsonl", required=True)
     parser.add_argument("--arms", nargs="+", required=True)
@@ -1683,6 +1775,9 @@ def _cli(argv: Optional[Sequence[str]] = None) -> int:
             Path(args.production_input_authority)
             if args.production_input_authority
             else None
+        ),
+        scientific_protocol_authority_path=Path(
+            args.scientific_protocol_authority
         ),
     )
     authorization = verify_realrun_authorization(request)

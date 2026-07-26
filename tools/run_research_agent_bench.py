@@ -2949,7 +2949,8 @@ def _figure2_realrun_authorization_gate(args):
                 "[realrun-authority] a Canonical9 / paper-acceptance run REQUIRES "
                 "--figure2-realrun-authorization (plus "
                 "--figure2-expected-execution-identity and "
-                "--figure2-production-input-authority); refusing to launch.",
+                "--figure2-production-input-authority and "
+                "--figure2-scientific-protocol-authority); refusing to launch.",
                 file=sys.stderr,
             )
             return 2, None
@@ -2966,6 +2967,11 @@ def _figure2_realrun_authorization_gate(args):
 
     repo_root = Path(__file__).resolve().parents[1]
     production = getattr(args, "figure2_production_input_authority", None)
+    scientific_protocols = getattr(
+        args,
+        "figure2_scientific_protocol_authority",
+        None,
+    )
 
     # Effective model + runner, exactly as the launcher will resolve them downstream.
     provider = str(getattr(args, "provider", "mock"))
@@ -3017,6 +3023,9 @@ def _figure2_realrun_authorization_gate(args):
         ),
         invocation=invocation,
         production_input_authority_path=(Path(production) if production else None),
+        scientific_protocol_authority_path=(
+            Path(scientific_protocols) if scientific_protocols else None
+        ),
     )
     authorization = verify_realrun_authorization(request)
     print(authorization.model_dump_json(indent=2))
@@ -3036,6 +3045,9 @@ def _figure2_realrun_authorization_gate(args):
         batch_id=authorization.batch_id,
         declaration_sha256=authorization.declaration_sha256,
         input_authority_digest=authorization.input_authority_digest,
+        scientific_protocol_authority_digest=(
+            authorization.scientific_protocol_authority_digest
+        ),
         frozen_input_by_task=authorization.frozen_input_by_task,
     )
     try:
@@ -3498,6 +3510,15 @@ def main() -> int:
             "Path to a typed full-9 production input authority JSON. Absent means "
             "the input is not yet frozen for a real run (the v1 assessment stays "
             "blocked), so the gate fails closed."
+        ),
+    )
+    parser.add_argument(
+        "--figure2-scientific-protocol-authority",
+        default=None,
+        help=(
+            "Absolute path to the operator-pinned, digest-bound E2/H2/H3 "
+            "clinical-and-methods protocol authority. Missing or invalid review "
+            "evidence blocks before any cohort data is read."
         ),
     )
     parser.add_argument(

@@ -74,6 +74,15 @@ The existing `KnowHowCard` mechanism binds a clinical/methods review
 attestation to exact card content.  Do not set `clinical_reviewed` without a
 real reviewer decision.
 
+The real-run launcher now enforces this boundary before reading any cohort
+bytes.  The operator must supply
+`--figure2-scientific-protocol-authority <absolute-path>`; that authority must
+bind the exact ordered E2/H2/H3 cards, their file SHA-256 values, their reviewed
+content SHA-256 values, and their versions.  The freeze declaration pins the
+authority digest.  Missing, reordered, unsigned, `curated_mvp`, or modified
+cards fail closed.  The verifier never generates an attestation, so this
+control cannot substitute for the three real review decisions.
+
 ### Owner-delegated defaults awaiting formal attestation
 
 These choices let implementation and data-quality work proceed without
@@ -94,6 +103,7 @@ existing `OperatorFreezeDeclaration`:
 - exact ordered Canonical9 JSONL (`E1`, `E2`, `E3`, `M1`, `M2`, `M3`, `H1`,
   `H2`, `H3`) and its SHA-256;
 - full-nine production input authority and digest;
+- ordered E2/H2/H3 scientific-protocol authority and digest;
 - expected execution identity, clean code commit, Docker image digest,
   submission-profile reference, runner and network-policy pins;
 - one real Provider/model pair and the approved cost/runtime limit.  The local
