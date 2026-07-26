@@ -27,6 +27,10 @@ from typing import Any, Iterable
 
 from easyicu.research_agent.agents.core import PlannerAgent
 from easyicu.research_agent.know_how import KnowHowRegistry
+from easyicu.research_agent.planning.analysis_blueprint import (
+    build_analysis_blueprint,
+    render_analysis_blueprint_for_prompt,
+)
 from easyicu.research_agent.resources import (
     CODER_RESOURCE_PROMPT_LIMIT_BYTES,
     ResourceScheduler,
@@ -39,7 +43,7 @@ from easyicu.research_agent.schema import (
     ResearchContext,
 )
 
-TOOL_VERSION = "2.2.0"
+TOOL_VERSION = "2.3.0"
 SCHEMA_VERSION = "easyicu.research_agent_resource_baseline/2"
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXED_CREATED_AT = datetime(2026, 7, 22, tzinfo=timezone.utc)
@@ -120,7 +124,12 @@ SOURCE_FILES: tuple[str, ...] = (
     "src/easyicu/research_agent/research_context/outbound.py",
     "src/easyicu/research_agent/know_how/registry.py",
     "src/easyicu/research_agent/planning/analysis_types.py",
+    "src/easyicu/research_agent/planning/analysis_blueprint.py",
     "src/easyicu/research_agent/planning/cohort_contract.py",
+    "src/easyicu/research_agent/planning/figure_strategy.py",
+    "src/easyicu/research_agent/planning/study_design.py",
+    "src/easyicu/research_agent/planning/study_design_playbook.py",
+    "src/easyicu/research_agent/reporting/article_contract.py",
     "src/easyicu/research_agent/resources/schema.py",
     "src/easyicu/research_agent/resources/catalog.py",
     "src/easyicu/research_agent/resources/capability.py",
@@ -188,10 +197,17 @@ def _task_measurement(
     )
     hits = selection.hits
     know_how_prompt = selection.prompt if hits else ""
-    without_resources = PlannerAgent.request_metrics(context)
+    planning_contract_context = render_analysis_blueprint_for_prompt(
+        build_analysis_blueprint(context)
+    )
+    without_resources = PlannerAgent.request_metrics(
+        context,
+        planning_contract_context=planning_contract_context,
+    )
     with_resources = PlannerAgent.request_metrics(
         context,
         know_how_context=know_how_prompt,
+        planning_contract_context=planning_contract_context,
     )
     coder_bundle = build_coder_resource_bundle(
         step_id=f"{fixture['task_id'].lower()}_primary_analysis",
@@ -241,6 +257,12 @@ def _task_measurement(
         "resource_catalog_sha256": selection.receipt.catalog_sha256,
         "resource_allowlist_sha256": selection.receipt.allowlist_sha256,
         "know_how_prompt_bytes": len(know_how_prompt.encode("utf-8")),
+        "planning_contract_bytes": len(
+            planning_contract_context.encode("utf-8")
+        ),
+        "planning_contract_sha256": hashlib.sha256(
+            planning_contract_context.encode("utf-8")
+        ).hexdigest(),
         "planner_without_resources": without_resources,
         "planner_with_resources": with_resources,
         "resource_added_bytes": (

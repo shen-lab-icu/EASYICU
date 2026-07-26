@@ -418,6 +418,7 @@ def _build_planner_user_prompt(
     context: ResearchContext,
     *,
     know_how_context: str = "",
+    planning_contract_context: str = "",
 ) -> str:
     """Build the planner user prompt with runtime concept-id grounding."""
 
@@ -665,6 +666,13 @@ def _build_planner_user_prompt(
         + "\n\n"
         + planner_variable_catalog(context, planner_context)
     )
+    if planning_contract_context:
+        prompt += (
+            "\n\nHOST-DERIVED PRE-PLAN DESIGN PROFILE "
+            "(provisional until you select a valid analysis_type; generated "
+            "from the typed study context and resealed for the selected family):\n"
+            + planning_contract_context
+        )
     if know_how_context:
         prompt += (
             "\n\nKNOW-HOW DECISION OUTPUT CONTRACT:\n"
@@ -755,6 +763,7 @@ class PlannerAgent:
         context: ResearchContext,
         *,
         know_how_context: str = "",
+        planning_contract_context: str = "",
     ) -> list[LLMMessage]:
         """Build the exact initial Planner request used by ``run``."""
         return [
@@ -764,6 +773,7 @@ class PlannerAgent:
                 content=_build_planner_user_prompt(
                     context,
                     know_how_context=know_how_context,
+                    planning_contract_context=planning_contract_context,
                 ),
             ),
         ]
@@ -774,13 +784,19 @@ class PlannerAgent:
         context: ResearchContext,
         *,
         know_how_context: str = "",
+        planning_contract_context: str = "",
     ) -> Dict[str, Any]:
         try:
             return bounded_request_metrics(
                 system_content=_SYSTEM_GUIDE + _PRINCIPLES_GUIDE,
-                base_user_content=_build_planner_user_prompt(context),
+                base_user_content=_build_planner_user_prompt(
+                    context,
+                    planning_contract_context=planning_contract_context,
+                ),
                 full_user_content=_build_planner_user_prompt(
-                    context, know_how_context=know_how_context
+                    context,
+                    know_how_context=know_how_context,
+                    planning_contract_context=planning_contract_context,
                 ),
                 max_bytes=_PLANNER_PROMPT_BYTE_LIMIT,
             )
@@ -797,19 +813,34 @@ class PlannerAgent:
         know_how_context: str = "",
         enforce_article_contract: bool = False,
         article_contract_context: Optional[ResearchContext] = None,
+        planning_contract_context: str = "",
     ) -> AnalysisPlan:
         if bool(allowed_know_how_decisions) != bool(know_how_context):
             raise ValueError(
                 "Planner know-how decision authority and structured context must "
                 "be supplied together"
             )
+        resolved_planning_contract_context = planning_contract_context
+        if enforce_article_contract and not resolved_planning_contract_context:
+            from ..reporting.article_contract import (
+                build_article_analysis_contract,
+                render_article_analysis_contract_for_prompt,
+            )
+
+            resolved_planning_contract_context = (
+                render_article_analysis_contract_for_prompt(
+                    build_article_analysis_contract(article_contract_context or context)
+                )
+            )
         messages = self.request_messages(
             context,
             know_how_context=know_how_context,
+            planning_contract_context=resolved_planning_contract_context,
         )
         self.last_prompt_metrics = self.request_metrics(
             context,
             know_how_context=know_how_context,
+            planning_contract_context=resolved_planning_contract_context,
         )
         if self.last_prompt_metrics["total_bytes"] > _PLANNER_PROMPT_BYTE_LIMIT:
             raise PlannerPromptBudgetError(
@@ -837,7 +868,10 @@ class PlannerAgent:
             temperature=0.2,
             format_reminder=(
                 "The JSON must be a single object with keys: "
-                "research_question (string), cohort (object or null), optional "
+                "research_question (string), optional analysis_type (string), "
+                "cohort (object or null), optional display_labels (object), "
+                "robustness_specs (array; non-empty when the binding contract "
+                "requires robustness), optional "
                 "know_how_decisions (claim-level adopted/rejected/unresolved/"
                 "requires_confirmation records using exact retrieved version, SHA, "
                 "claim_id, and citation_ids), "

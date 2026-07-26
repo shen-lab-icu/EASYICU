@@ -56,6 +56,8 @@ def test_each_selected_resource_is_digest_bound_and_selection_is_llm_free() -> N
 
     for task in measured["tasks"]:
         assert task["resource_selection_provider_calls"] == 0
+        assert task["planning_contract_bytes"] > 0
+        assert len(task["planning_contract_sha256"]) == 64
         for resource in task["selected_know_how"]:
             assert len(resource["file_sha256"]) == 64
         assert task["planner_with_resources"]["total_bytes"] <= 80_000

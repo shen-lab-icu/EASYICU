@@ -2634,6 +2634,7 @@ class ResearchAgentPipeline:
         article_contract = None
         article_figure_strategy = None
         analysis_blueprint = None
+        planning_contract_context = ""
         try:
             # Contract scope comes only from the frozen user/data context.
             # Prompt-enrichment notes include generic examples such as
@@ -2725,6 +2726,7 @@ class ResearchAgentPipeline:
                     generation_mode="deterministic_skill",
                 )
             design_note = render_analysis_blueprint_for_prompt(analysis_blueprint)
+            planning_contract_context = design_note
             agent_notes = (
                 f"{agent_context.notes}\n\n{design_note}"
                 if agent_context.notes
@@ -3014,9 +3016,12 @@ class ResearchAgentPipeline:
                     **know_how_binding.planner_kwargs,
                     enforce_article_contract=True,
                     article_contract_context=context,
+                    planning_contract_context=planning_contract_context,
                 )
                 planner_prompt_metrics = know_how_binding.prompt_metrics(
-                    planner, agent_context
+                    planner,
+                    agent_context,
+                    planning_contract_context=planning_contract_context,
                 )
             except PlannerArticleContractError:
                 raise
@@ -3069,6 +3074,7 @@ class ResearchAgentPipeline:
                         **know_how_binding.planner_kwargs,
                         enforce_article_contract=True,
                         article_contract_context=context,
+                        planning_contract_context=planning_contract_context,
                     )
                 except Exception:
                     retry_plan = None
@@ -3117,6 +3123,7 @@ class ResearchAgentPipeline:
                         **know_how_binding.planner_kwargs,
                         enforce_article_contract=True,
                         article_contract_context=context,
+                        planning_contract_context=planning_contract_context,
                     )
                 except Exception:
                     cohort_retry = None
