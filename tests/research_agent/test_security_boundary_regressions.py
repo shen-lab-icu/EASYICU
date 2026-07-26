@@ -1,4 +1,6 @@
-"""Gates for the 2026-07-25 external research-agent review.
+"""MCP disclosure, egress, runner and debug safety regressions.
+
+Origin: 2026-07-25 external research-agent review.
 
 One test per finding, named with the finding id so a reviewer can map a
 report line to the check that closes it.
@@ -930,7 +932,7 @@ def test_p1_5_debug_dump_is_owner_only():
     This asserted that the chmod/O_EXCL calls appeared in the module source,
     which passes whether or not they are reached. The 2026-07-26 review was
     right to reject that; see
-    ``test_review_20260726_agent_fixes.py::test_p1_5_debug_dump_is_owner_only_on_disk``,
+    ``test_pipeline_authority_regressions.py::test_p1_5_debug_dump_is_owner_only_on_disk``,
     which drives a completion and stats the file the dump wrote.
     """
 

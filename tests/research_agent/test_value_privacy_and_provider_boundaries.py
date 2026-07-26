@@ -1,4 +1,6 @@
-"""Behaviour tests for the 2026-07-29 external review (eighth pass).
+"""Value-level privacy, provider-boundary and retry-attempt regressions.
+
+Origin: 2026-07-29 external review (eighth pass).
 
 Round 7 made the privacy audit read values instead of column names. This round
 is about the *types* those values arrive as. Every bypass below is a case where

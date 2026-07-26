@@ -1,4 +1,6 @@
-"""Behavioural regressions for the 2026-07-26 deep re-review.
+"""Pipeline projection, review, evidence and profile-authority regressions.
+
+Origin: 2026-07-26 deep re-review.
 
 The theme of that review was not "this component is wrong" but "this component
 is right and nothing calls it": a gate that only a hand-built test fixture can
@@ -680,12 +682,12 @@ def test_p1_2_per_subject_panel_roles_do_not_get_the_flag():
 
     Panel role is now one *input* to the audit rather than the authorization;
     the role condition itself is covered by
-    ``test_review_20260727_agent_fixes.py`` together with the source-artefact
+    ``test_review_resume_and_egress_authority.py`` together with the source-artefact
     inspection that a role check cannot perform. See that module for the
     replacement.
     """
 
-    pytest.skip("replaced by the host privacy audit in test_review_20260727")
+    pytest.skip("replaced by the host privacy audit in review-resume regressions")
 
 
 def test_p1_2_metadata_only_fallback_does_not_forward_host_paths(tmp_path):
