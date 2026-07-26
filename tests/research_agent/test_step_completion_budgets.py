@@ -15,8 +15,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from easyicu.research_agent.orchestration.config import PipelineConfig
+import pytest
+
+from easyicu.research_agent.orchestration.config import (
+    PipelineConfig,
+    step_provider_call_entitlement,
+)
 from easyicu.research_agent.plan_utils import _cap_plan_preserving_figure_steps
+from easyicu.research_agent.reporting.completion import publication_authorized
 from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
 
@@ -42,6 +48,74 @@ def test_a_step_may_not_be_entitled_to_spend_more_than_it_is_granted() -> None:
         f"is entitled to spend (entitled={entitled}, "
         f"granted={config.max_step_provider_calls})"
     )
+
+
+def test_a_budget_that_cannot_fund_its_own_repairs_is_refused() -> None:
+    """The default being adequate says nothing about a configured one.
+
+    A step that runs out of provider calls mid-repair fails the way a broken
+    analysis fails, so the run reports a scientific problem that is really an
+    accounting one. Construction is the last point where the two are still
+    distinguishable.
+    """
+
+    with pytest.raises(ValueError, match="cannot fund the repair policy"):
+        PipelineConfig(
+            workdir="./unused",
+            max_code_repair_attempts=3,
+            max_step_llm_repair_attempts=4,
+            enable_llm_concept_audit=True,
+            max_step_provider_calls=7,
+        )
+
+
+def test_deliberate_under_funding_stays_available_when_it_is_declared() -> None:
+    """Capping spend on a throwaway run is a real need; hiding it is not."""
+
+    config = PipelineConfig(
+        workdir="./unused",
+        max_step_provider_calls=2,
+        allow_underfunded_step_provider_calls=True,
+    )
+    assert config.max_step_provider_calls == 2
+
+
+def test_the_entitlement_is_computed_from_the_policy_not_a_constant() -> None:
+    """Each term is edited for its own reason; nothing recomputed the sum.
+
+    Turning the concept auditor off must lower the requirement, or the check
+    would demand budget for a call the run will never make.
+    """
+
+    with_audit = step_provider_call_entitlement(
+        max_code_repair_attempts=3,
+        max_step_llm_repair_attempts=2,
+        llm_concept_audit_enabled=True,
+    )
+    without_audit = step_provider_call_entitlement(
+        max_code_repair_attempts=3,
+        max_step_llm_repair_attempts=2,
+        llm_concept_audit_enabled=False,
+    )
+    assert with_audit == 7
+    assert without_audit == with_audit - 1
+    assert (
+        step_provider_call_entitlement(
+            max_code_repair_attempts=5,
+            max_step_llm_repair_attempts=2,
+            llm_concept_audit_enabled=True,
+        )
+        == with_audit + 2
+    )
+
+
+def test_the_default_configuration_funds_itself(tmp_path: Path) -> None:
+    """The gate must not fire on the shipped defaults — through either door."""
+
+    from easyicu.research_agent import MockLLMClient, ResearchAgentPipeline
+
+    PipelineConfig(workdir="./unused")
+    ResearchAgentPipeline(workdir=tmp_path / "wd", llm=MockLLMClient())
 
 
 # ------------------------------- wall clock --------------------------------
@@ -143,6 +217,67 @@ def test_an_untruncated_plan_reports_no_truncation() -> None:
         for finding in findings
         if finding.detail and finding.detail.get("plan_truncated")
     ]
+
+
+# ------------------- truncation is binding, not just visible -------------------
+
+
+def _authorized(**overrides: bool) -> bool:
+    """Everything a paper needs is satisfied except what the test overrides."""
+
+    terms = {
+        "manuscript_ready": True,
+        "publication_figure_bundle_ready": True,
+        "publication_provenance_ready": True,
+        "display_suite_complete": True,
+        "article_contract_complete": True,
+        "article_figure_strategy_complete": True,
+    }
+    terms.update(overrides)
+    return publication_authorized(**terms)
+
+
+def test_a_run_that_lost_planned_products_is_not_a_paper() -> None:
+    """Naming the dropped products is only a report until something reads it.
+
+    Every other gate asks whether what the run did is sound. None of them can
+    see that the run was asked for more: the dropped steps never executed, so
+    they have no failed record, no missing evidence and no unbound number.
+    """
+
+    assert _authorized() is True
+    assert _authorized(plan_not_truncated=False) is False
+
+
+def test_a_truncated_run_is_still_worth_reading() -> None:
+    """The block belongs on paper authorization, not on the manuscript.
+
+    A truncated run is exactly what an operator iterating on a study wants to
+    read; refusing to produce it would trade a silent loss for a blind one.
+    """
+
+    from easyicu.research_agent.reporting.readiness import _plan_truncation_status
+
+    plan = _plan_with_products(6)
+    _capped, findings = _cap_plan_preserving_figure_steps(plan=plan, cap=3)
+    status = _plan_truncation_status(findings)
+    assert status["plan_truncated"] is True
+    # The gate carries the reason with it, so the report can say which products
+    # are missing rather than only that authorization failed.
+    assert status["plan_truncated_dropped_outputs"]
+
+
+def test_the_cap_and_the_gate_agree_on_an_intact_plan() -> None:
+    """Negative control: the gate must not block a plan that fit its cap."""
+
+    from easyicu.research_agent.reporting.readiness import _plan_truncation_status
+
+    plan = _plan_with_products(3)
+    _capped, findings = _cap_plan_preserving_figure_steps(plan=plan, cap=8)
+    status = _plan_truncation_status(findings)
+    assert status["plan_truncated"] is False
+    assert status["plan_truncated_dropped_outputs"] == []
+    assert _authorized(plan_not_truncated=not status["plan_truncated"]) is True
 
 
 def test_pipeline_default_wall_clock_matches_the_config_default(

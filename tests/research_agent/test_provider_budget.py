@@ -1575,7 +1575,12 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as hand
         enable_probe_step=False,
         enable_replanning=False,
         runner_kind="subprocess",
+        # Two calls cannot fund 1 generation + 3 code repairs + 2 LLM repairs +
+        # the reserved audit. That is the point: this test drives the step into
+        # exhaustion to check the budget survives a resume. Declaring the
+        # shortfall is what separates it from a config nobody sized on purpose.
         max_step_provider_calls=2,
+        allow_underfunded_step_provider_calls=True,
     )
     first = first_pipeline.run(
         question="Summarize the ICU cohort.",
@@ -1614,7 +1619,12 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as hand
         enable_probe_step=False,
         enable_replanning=False,
         runner_kind="subprocess",
+        # Two calls cannot fund 1 generation + 3 code repairs + 2 LLM repairs +
+        # the reserved audit. That is the point: this test drives the step into
+        # exhaustion to check the budget survives a resume. Declaring the
+        # shortfall is what separates it from a config nobody sized on purpose.
         max_step_provider_calls=2,
+        allow_underfunded_step_provider_calls=True,
     )
     resumed_pipeline.run(
         question="Summarize the ICU cohort.",
@@ -1780,10 +1790,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as hand
             ),
             (
                 "INTERPRET THE RESULTS",
-                [
-                    "Cohort summary completed "
-                    "{evidence:baseline_characteristics}."
-                ],
+                ["Cohort summary completed " "{evidence:baseline_characteristics}."],
             ),
         ]
     )

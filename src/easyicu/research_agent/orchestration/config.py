@@ -53,6 +53,70 @@ def _is_secret_field(name: str) -> bool:
     return bool(_SECRET_FIELD_RE.search(str(name)))
 
 
+def step_provider_call_entitlement(
+    *,
+    max_code_repair_attempts: int,
+    max_step_llm_repair_attempts: int,
+    llm_concept_audit_enabled: bool,
+) -> int:
+    """Return the provider calls one step may legitimately spend.
+
+    The arithmetic lived only in a comment beside ``max_step_provider_calls``,
+    which is how the three numbers drifted apart before: each is edited for its
+    own reason, and nothing recomputes their sum. This is that sum, in one
+    place, so a change to any term is felt by the other two.
+    """
+
+    return (
+        1  # initial generation
+        + max(0, int(max_code_repair_attempts))
+        + max(0, int(max_step_llm_repair_attempts))
+        # execution/phase.py reserves the final call for the concept audit
+        # (``reserved_final_category``) only when that auditor is enabled.
+        + (1 if llm_concept_audit_enabled else 0)
+    )
+
+
+def assert_step_provider_budget_funds_its_repairs(
+    *,
+    max_step_provider_calls: int,
+    max_code_repair_attempts: int,
+    max_step_llm_repair_attempts: int,
+    llm_concept_audit_enabled: bool,
+    allow_underfunded: bool = False,
+) -> None:
+    """Refuse a budget that cannot pay for the repairs the same config promises.
+
+    A step that exhausts its provider budget mid-repair fails, and it fails the
+    way a scientifically broken step fails — so the run reports an analysis
+    problem that is really an accounting one. Catching it at construction is
+    the only point where the two are still distinguishable.
+
+    Deliberate under-funding stays available through ``allow_underfunded``;
+    what is refused is under-funding nobody decided on.
+    """
+
+    granted = max(0, int(max_step_provider_calls))
+    entitled = step_provider_call_entitlement(
+        max_code_repair_attempts=max_code_repair_attempts,
+        max_step_llm_repair_attempts=max_step_llm_repair_attempts,
+        llm_concept_audit_enabled=llm_concept_audit_enabled,
+    )
+    if allow_underfunded or granted >= entitled:
+        return
+    raise ValueError(
+        f"max_step_provider_calls={granted} cannot fund the repair policy this "
+        f"configuration declares: 1 initial generation + "
+        f"{max(0, int(max_code_repair_attempts))} code repairs + "
+        f"{max(0, int(max_step_llm_repair_attempts))} LLM repairs"
+        + (" + 1 reserved concept audit" if llm_concept_audit_enabled else "")
+        + f" = {entitled} calls. Raise max_step_provider_calls to at least "
+        f"{entitled}, lower the repair attempts to match, or pass "
+        "allow_underfunded_step_provider_calls=True to declare that the "
+        "shortfall is intended."
+    )
+
+
 def _deep_freeze(value: Any) -> Any:
     """Return an immutable view of a plain data container, recursively.
 
@@ -186,6 +250,12 @@ class PipelineConfig:
     # attempt instead of costing headroom. Two spare calls keep transport noise
     # from being charged to the science.
     max_step_provider_calls: int = 9
+    # Deliberately running a step on less than its repair policy costs is a
+    # legitimate choice — exercising the stop-loss, or capping spend on a
+    # throwaway run. It must be a choice. Without this flag the shortfall is
+    # invisible until a step fails, and a step that was never funded to finish
+    # is indistinguishable in the record from one whose science failed.
+    allow_underfunded_step_provider_calls: bool = False
     enable_deterministic_code_fallback: bool = False
     enable_deterministic_planner_fallback: bool = False
     enable_deterministic_runner_repair: bool = True
@@ -390,6 +460,17 @@ class PipelineConfig:
             frozen = _deep_freeze(value)
             if frozen is not value:
                 object.__setattr__(self, field_def.name, frozen)
+        assert_step_provider_budget_funds_its_repairs(
+            max_step_provider_calls=self.max_step_provider_calls,
+            max_code_repair_attempts=self.max_code_repair_attempts,
+            max_step_llm_repair_attempts=self.max_step_llm_repair_attempts,
+            # `None` means "decide from the client", which a declarative config
+            # cannot see. Count the reserved audit call only when it was asked
+            # for outright; the pipeline re-checks with the resolved flag, so
+            # the stricter number is applied by the layer that knows it.
+            llm_concept_audit_enabled=self.enable_llm_concept_audit is True,
+            allow_underfunded=self.allow_underfunded_step_provider_calls,
+        )
 
     def with_overrides(self, **overrides: Any) -> "PipelineConfig":
         """Return a new :class:`PipelineConfig` with the given fields

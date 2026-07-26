@@ -114,8 +114,22 @@ def publication_authorized(
     display_suite_complete: bool,
     article_contract_complete: bool,
     article_figure_strategy_complete: bool,
+    plan_not_truncated: bool = True,
 ) -> bool:
-    """Return the existing fail-closed publication conjunction."""
+    """Return the existing fail-closed publication conjunction.
+
+    ``plan_not_truncated`` closes a gap the other terms cannot see. They all
+    ask whether what the run *did* is sound; none asks whether the run did
+    what it planned. When a plan exceeds ``max_total_steps`` the host drops
+    steps and records a warning, and every remaining step can then complete,
+    bind its evidence and verify its numerics — so a run that quietly lost its
+    calibration figure or its PH diagnostic reaches this conjunction looking
+    exactly like one that never needed them. The dropped products are named in
+    the truncation finding; this is what makes naming them binding.
+
+    It stays out of ``manuscript_ready`` on purpose: a truncated run is still
+    worth reading, iterating on, and diagnosing. It is not a paper.
+    """
 
     return bool(
         manuscript_ready
@@ -124,6 +138,7 @@ def publication_authorized(
         and display_suite_complete
         and article_contract_complete
         and article_figure_strategy_complete
+        and plan_not_truncated
     )
 
 
