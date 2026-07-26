@@ -187,6 +187,17 @@ def test_benchmark_options_keep_execution_timeouts_independent() -> None:
     assert options["standard_executor_timeout_seconds"] == 2_345.0
 
 
+def test_benchmark_options_default_to_pipeline_execution_timeouts() -> None:
+    options = _benchmark_pipeline_options(
+        max_total_steps=None,
+        disable_replanning=False,
+        max_code_repair_attempts=None,
+    )
+
+    assert options["timeout_seconds"] == 900.0
+    assert options["standard_executor_timeout_seconds"] == 3_600.0
+
+
 def test_benchmark_options_disable_cross_run_memory_by_default() -> None:
     # Canonical/benchmark runs must NOT inject cross-run RunMemory (StrategyCard)
     # into the planner: every resume reuses the workdir, so prior-run cards would

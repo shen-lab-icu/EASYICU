@@ -75,7 +75,7 @@ def _execution_config():
 
     return build_canonical_execution_config(
         seed=7,
-        timeout_seconds=300.0,
+        timeout_seconds=900.0,
         standard_executor_timeout_seconds=3600.0,
     )
 
@@ -1453,7 +1453,7 @@ def test_preflight_rejects_unpaired_trajectory_authority(tmp_path) -> None:
 def _config_with(**overrides):
     return build_canonical_execution_config(
         seed=7,
-        timeout_seconds=300.0,
+        timeout_seconds=900.0,
         standard_executor_timeout_seconds=3600.0,
         **overrides,
     )
@@ -1473,7 +1473,7 @@ def test_stop_after_step_blocks(tmp_path) -> None:
 def test_config_seed_mismatch_blocks(tmp_path) -> None:
     request, _ = _authorized_setup(tmp_path)
     changed = build_canonical_execution_config(
-        seed=999, timeout_seconds=300.0, standard_executor_timeout_seconds=3600.0
+        seed=999, timeout_seconds=900.0, standard_executor_timeout_seconds=3600.0
     )
     auth = verify_realrun_authorization(
         _with_invocation(request, execution_config=changed)
@@ -1495,7 +1495,7 @@ def test_config_request_timeout_mismatch_blocks(tmp_path) -> None:
     request, _ = _authorized_setup(tmp_path)
     changed = build_canonical_execution_config(
         seed=7,
-        timeout_seconds=300.0,
+        timeout_seconds=900.0,
         standard_executor_timeout_seconds=3600.0,
         request_timeout_seconds=12.0,
     )
@@ -1520,7 +1520,7 @@ def test_config_mutable_case_selector_blocks_even_when_pinned(tmp_path) -> None:
     request, paths = _authorized_setup(tmp_path)
     changed = build_canonical_execution_config(
         seed=7,
-        timeout_seconds=300.0,
+        timeout_seconds=900.0,
         standard_executor_timeout_seconds=3600.0,
         case="mutable_fixture_name",
     )
@@ -1777,6 +1777,9 @@ def test_run_ehrflowbench_writes_receipt_and_ledger(tmp_path, monkeypatch) -> No
                 "execution_identity": identity,
                 "publication_ready": True,
                 "manuscript_ready": True,
+                "publication_artifacts_ready": True,
+                "execution_paper_eligible": True,
+                "paper_authorized": True,
                 "n_errors": 0,
                 "figure2_evaluation_attempt": {
                     "status": "valid",
@@ -1897,6 +1900,9 @@ def test_formal_canary_rejects_valid_but_analysis_only_paper_score() -> None:
         "aware": {
             "publication_ready": True,
             "manuscript_ready": True,
+            "publication_artifacts_ready": True,
+            "execution_paper_eligible": True,
+            "paper_authorized": True,
             "n_errors": 0,
             "figure2_evaluation_attempt": {
                 "status": "valid",
@@ -1904,6 +1910,33 @@ def test_formal_canary_rejects_valid_but_analysis_only_paper_score() -> None:
                     "scorecard": {
                         "scorecard_canonical_json": json.dumps(
                             {"tristate": "analysis_only"}
+                        )
+                    }
+                },
+            },
+        }
+    }
+
+    assert bench._figure2_canary_passed(score) is False
+
+
+def test_formal_canary_rejects_artifact_ready_but_unauthorized_run() -> None:
+    import tools.run_research_agent_bench as bench
+
+    score = {
+        "aware": {
+            "publication_ready": True,
+            "manuscript_ready": True,
+            "publication_artifacts_ready": True,
+            "execution_paper_eligible": False,
+            "paper_authorized": False,
+            "n_errors": 0,
+            "figure2_evaluation_attempt": {
+                "status": "valid",
+                "envelope": {
+                    "scorecard": {
+                        "scorecard_canonical_json": json.dumps(
+                            {"tristate": "gate_reportable"}
                         )
                     }
                 },
