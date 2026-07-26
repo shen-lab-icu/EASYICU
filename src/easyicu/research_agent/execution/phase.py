@@ -954,6 +954,27 @@ def _raw_contract_inputs_for_step(
     return tuple(names)
 
 
+def _resolved_raw_input_contracts_for_step(
+    *,
+    coder_base_context: ResearchContext,
+    coder_context: ResearchContext,
+    planner_declared_inputs: Sequence[str],
+    primary_cohort_execution_receipt: Optional[Mapping[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """Resolve exact receipt columns without widening the Coder prompt."""
+
+    contract_inputs = _raw_contract_inputs_for_step(
+        planner_declared_inputs=planner_declared_inputs,
+        primary_cohort_execution_receipt=primary_cohort_execution_receipt,
+    )
+    authority_context = (
+        coder_base_context
+        if primary_cohort_execution_receipt is not None
+        else coder_context
+    )
+    return resolved_raw_input_contracts(authority_context, contract_inputs)
+
+
 def _failed_contract_code_can_be_reused_before_coder(
     *,
     prior_step_record: Optional[Mapping[str, Any]],
@@ -5680,13 +5701,12 @@ def run_execute_phase(
             planner_declared_inputs=step.inputs,
             bindings=resolved_input_bindings,
             context_path=plan_result.context_path,
-            raw_input_contracts=resolved_raw_input_contracts(
-                coder_context,
-                _raw_contract_inputs_for_step(
-                    planner_declared_inputs=step.inputs,
-                    primary_cohort_execution_receipt=(
-                        primary_cohort_execution_receipt
-                    ),
+            raw_input_contracts=_resolved_raw_input_contracts_for_step(
+                coder_base_context=coder_base_context,
+                coder_context=coder_context,
+                planner_declared_inputs=step.inputs,
+                primary_cohort_execution_receipt=(
+                    primary_cohort_execution_receipt
                 ),
             ),
             host_verified_cohort_execution_receipt=(
