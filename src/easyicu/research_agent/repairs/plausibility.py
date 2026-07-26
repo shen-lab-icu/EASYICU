@@ -3,9 +3,99 @@
 from __future__ import annotations
 
 import ast
+import re
 from typing import Optional, Sequence
 
 from ..schema import ValidationFinding
+
+
+_PLAUSIBILITY_RANGE_KEY_ERROR = re.compile(
+    r"KeyError:\s*(?P<key>0|1|'lower'|'upper'|\"lower\"|\"upper\")",
+    re.IGNORECASE,
+)
+
+
+def patch_plausibility_range_schema_keys(code: str, run_log: str) -> str:
+    """Adapt legacy/list range access to the sealed minimum/maximum schema.
+
+    The host manifest always represents ``analysis_plausibility_range`` as a
+    JSON object with ``minimum`` and ``maximum`` keys. A generated script may
+    still guess a two-item sequence or ``lower``/``upper`` aliases. Only an
+    exact KeyError plus an AST-proven assignment from that host field permits
+    rewriting the key tokens; bound values and policy logic are untouched.
+    """
+
+    match = _PLAUSIBILITY_RANGE_KEY_ERROR.search(str(run_log or ""))
+    if match is None:
+        return code
+    raw_key = match.group("key").strip("\"'")
+    failed_key: int | str = int(raw_key) if raw_key in {"0", "1"} else raw_key.lower()
+    key_map: dict[int | str, str] = {
+        0: "minimum",
+        1: "maximum",
+        "lower": "minimum",
+        "upper": "maximum",
+    }
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+
+    range_names = {
+        node.targets[0].id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Attribute)
+        and node.value.func.attr == "get"
+        and node.value.args
+        and isinstance(node.value.args[0], ast.Constant)
+        and node.value.args[0].value == "analysis_plausibility_range"
+    }
+    candidates: list[tuple[ast.AST, int | str]] = []
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Subscript)
+            and isinstance(node.value, ast.Name)
+            and node.value.id in range_names
+            and isinstance(node.slice, ast.Constant)
+            and node.slice.value in key_map
+        ):
+            continue
+        candidates.append((node.slice, node.slice.value))
+    if not candidates or failed_key not in {key for _, key in candidates}:
+        return code
+
+    lines = code.splitlines(keepends=True)
+    line_starts: list[int] = []
+    offset = 0
+    for line in lines:
+        line_starts.append(offset)
+        offset += len(line)
+
+    def _absolute_offset(lineno: int, utf8_col: int) -> int:
+        line = lines[lineno - 1]
+        char_col = len(line.encode("utf-8")[:utf8_col].decode("utf-8"))
+        return line_starts[lineno - 1] + char_col
+
+    replacements = [
+        (
+            _absolute_offset(node.lineno, node.col_offset),
+            _absolute_offset(node.end_lineno, node.end_col_offset),
+            repr(key_map[key]),
+        )
+        for node, key in candidates
+    ]
+    repaired = code
+    for start, end, replacement in sorted(replacements, reverse=True):
+        repaired = repaired[:start] + replacement + repaired[end:]
+    try:
+        ast.parse(repaired)
+    except SyntaxError:
+        return code
+    return repaired
 
 
 def patch_flag_only_plausibility_range_rejection(
@@ -373,4 +463,7 @@ def patch_flag_only_plausibility_range_rejection(
     return repaired
 
 
-__all__ = ["patch_flag_only_plausibility_range_rejection"]
+__all__ = [
+    "patch_flag_only_plausibility_range_rejection",
+    "patch_plausibility_range_schema_keys",
+]

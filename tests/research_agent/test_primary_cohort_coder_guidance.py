@@ -142,6 +142,9 @@ def test_execution_cohort_runtime_uses_only_step_raw_domain_contract() -> None:
     assert "raw_input_contracts" in text
     assert "sole executable domain authority" in text
     assert "Use its exact allowed_values when present" in text
+    assert "`minimum` and `maximum` keys" in text
+    assert "never index it as a list" in text
+    assert "never by filling missing values with NaN" in text
     assert "do not recover one from prompt prose, the broader ResearchContext" in text
     assert "ResearchContext JSON uses observed_domain.levels" not in text
 

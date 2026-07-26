@@ -61,6 +61,7 @@ from .merge_collision import patch_pandas_merge_dynamic_column_collision
 from .model_contract import patch_penalized_convergence_contract
 from .name_alias import patch_undefined_mapping_near_match_alias
 from .nonfinite_audit import (
+    patch_nonfinite_missing_mask_conflation,
     patch_nonfinite_audit_host_strict_boundary,
     patch_strict_numeric_nonfinite_audit_conflict,
     patch_strict_numeric_helper_nonfinite_guard,
@@ -68,7 +69,10 @@ from .nonfinite_audit import (
 from .nullable_validation import patch_unused_nullable_numeric_validation
 from .rendering_role import patch_structured_analysis_role_selection
 from .rendering_summary import patch_render_only_effect_echo
-from .plausibility import patch_flag_only_plausibility_range_rejection
+from .plausibility import (
+    patch_flag_only_plausibility_range_rejection,
+    patch_plausibility_range_schema_keys,
+)
 from .provenance_summary import (
     patch_audit_only_companion_value_selector,
     patch_closed_provenance_envelope_alias,
@@ -6127,6 +6131,18 @@ def _deterministic_runner_repair(
         repaired = patch_raw_contract_mapping_iteration(code, run_log)
         if repaired != code:
             return raw_contract_mapping_repair, repaired
+
+    plausibility_schema_repair = "plausibility_range_schema_keys_v1"
+    if previous_repair != plausibility_schema_repair:
+        repaired = patch_plausibility_range_schema_keys(code, run_log)
+        if repaired != code:
+            return plausibility_schema_repair, repaired
+
+    nonfinite_missing_repair = "nonfinite_missing_mask_conflation_v1"
+    if previous_repair != nonfinite_missing_repair:
+        repaired = patch_nonfinite_missing_mask_conflation(code, run_log)
+        if repaired != code:
+            return nonfinite_missing_repair, repaired
 
     receipt_source_repair = "host_receipt_source_envelope_v1"
     if previous_repair != receipt_source_repair:

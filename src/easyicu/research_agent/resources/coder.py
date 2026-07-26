@@ -558,10 +558,16 @@ def bind_execution_cohort_runtime(
         'int(os.environ["EASYICU_COHORT_ROWS"]); the runner owns that value. '
         "For every Planner-declared raw input, "
         "manifest['raw_input_contracts']['contracts'] is the sole executable "
-        "domain authority. Use its exact allowed_values when present. Absence "
-        "means no closed category list is authorized for this step: do not "
-        "recover one from prompt prose, the broader ResearchContext, or the "
-        "loaded frame, and never copy private literals into generated source."
+        "domain authority. Use its exact allowed_values when present. "
+        "`analysis_plausibility_range` is a JSON object with `minimum` and "
+        "`maximum` keys; either may be null, so apply only non-null bounds and "
+        "never index it as a list or use `lower`/`upper` aliases. Keep source "
+        "missingness distinct from non-finite values: count non-finite only "
+        "where the converted source value is nonmissing, never by filling "
+        "missing values with NaN and counting `~isfinite`. Absence means "
+        "no closed category list is authorized for this step: do not recover "
+        "one from prompt prose, the broader ResearchContext, or the loaded "
+        "frame, and never copy private literals into generated source."
     )
 
 

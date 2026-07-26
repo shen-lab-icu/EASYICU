@@ -480,6 +480,7 @@ def _untrusted_runtime_repair_allowed(*, repair_id: str, source: str) -> bool:
         repair_id
         in {
             "all_rows_outcome_coordinate_filter_v1",
+            "nonfinite_missing_mask_conflation_v1",
             "non_tabular_companion_row_gate_v1",
         }
         or metadata.repair_class is RepairClass.SYNTACTIC
