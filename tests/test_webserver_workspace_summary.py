@@ -6153,6 +6153,30 @@ def test_agent_provider_status_blocks_when_ai_or_env_missing(monkeypatch) -> Non
     assert status["network_calls"] == 0
 
 
+def test_agent_provider_status_rejects_an_unsafe_configured_base_url(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(settings_store, "load_settings", lambda: {"ai_enabled": True})
+    monkeypatch.setenv("EASYICU_LLM_API_KEY", "sk-test-provider-status")
+    monkeypatch.setenv("CUSTOM_BASE_URL", "http://10.0.0.1/v1")
+    monkeypatch.setenv("CUSTOM_MODEL", "test-model")
+    client = TestClient(app)
+
+    response = client.get("/api/agent-runs/provider-status?provider=custom")
+
+    assert response.status_code == 200
+    payload = response.json()
+    status = payload["provider_status"]
+    assert status["ready"] is False
+    assert status["base_url_present"] is True
+    assert status["base_url_validation"] == "rejected"
+    assert status["base_url_rejection_reason"] == "private_address"
+    assert "base_url_safety" in status["missing"]
+    serialized = json.dumps(payload)
+    assert "sk-test-provider-status" not in serialized
+    assert "http://10.0.0.1/v1" not in serialized
+
+
 def test_agent_provider_status_reads_private_env_file_without_secret(
     tmp_path: Path,
     monkeypatch,

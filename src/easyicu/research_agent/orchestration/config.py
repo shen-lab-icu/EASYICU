@@ -540,4 +540,8 @@ class PipelineConfig:
         return hashlib.sha256(rendered.encode("utf-8")).hexdigest()
 
 
-__all__ = ["PipelineConfig"]
+__all__ = [
+    "PipelineConfig",
+    "assert_step_provider_budget_funds_its_repairs",
+    "step_provider_call_entitlement",
+]

@@ -613,7 +613,9 @@ def test_trajectory_stability_terminal_failures_never_enter_repair_or_fallback(
             for finding in partial.get("findings") or []
             if finding.get("validator") == "runtime_execution_timeout"
         ]
-        assert timeout_findings, "a killed executor must say which clock killed it"
+        # Exactly one: the branch that emits it also breaks, so the generic
+        # classifier below must never get a second look at the same kill.
+        assert len(timeout_findings) == 1, timeout_findings
         assert timeout_findings[0]["detail"]["timeout_seconds"] == 1_234.0
         assert timeout_findings[0]["detail"]["deterministic_executor_used"] is True
     if stability_mode == "ok_contract_error":

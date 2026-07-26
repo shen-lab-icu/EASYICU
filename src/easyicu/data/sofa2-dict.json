@@ -676,18 +676,16 @@
       224310,
       224322,
       227980,
-      228866,
       225979,
       228154,
       228156,
       228151,
       228158,
       228198,
-      229254,
       220128
      ],
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-07-18 fix: mirror miiv MetaVision IABP/LVAD/RVAD itemids (sofa2 overlay was shadowing concept-dict; MIMIC-III chartevents holds the data)."
+     "_comment": "2026-07-26 audit: mirror only MetaVision items present in MIMIC-III; MIMIC-IV-only 228866 (Plateau Pressure IABP) and 229254 (Flow LVAD) are deliberately excluded."
     }
    ],
    "mimic_demo": [
@@ -702,18 +700,16 @@
       224310,
       224322,
       227980,
-      228866,
       225979,
       228154,
       228156,
       228151,
       228158,
       228198,
-      229254,
       220128
      ],
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-07-18 fix: mirror miiv MetaVision IABP/LVAD/RVAD itemids (sofa2 overlay was shadowing concept-dict; MIMIC-III chartevents holds the data)."
+     "_comment": "2026-07-26 audit: mirror only MetaVision items present in MIMIC-III; MIMIC-IV-only 228866 (Plateau Pressure IABP) and 229254 (Flow LVAD) are deliberately excluded."
     }
    ]
   }

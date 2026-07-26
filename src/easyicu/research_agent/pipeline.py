@@ -1784,6 +1784,21 @@ class ResearchAgentPipeline:
                 "development diagnostics are non-paper authority and cannot "
                 "be combined with a submission profile"
             )
+        from .orchestration.profiles import is_paper_facing_profile
+
+        if allow_underfunded_step_provider_calls and is_paper_facing_profile(
+            submission_profile_name
+        ):
+            # Declaring the shortfall makes it visible; it does not make it
+            # paper authority. A submission run whose steps could exhaust their
+            # provider budget mid-repair reports an accounting failure in the
+            # shape of a scientific one. Keyed off paper-facing rather than
+            # "a profile was supplied", so `*_dev` profiles can still exercise
+            # exhaustion.
+            raise ValueError(
+                "an under-funded provider budget is non-paper authority and "
+                "cannot be combined with a paper-facing submission profile"
+            )
         self._enable_probe_step = bool(enable_probe_step)
         self._enable_replanning = bool(enable_replanning)
         # 0 / None means "no cap". Anything positive enforces the cap in

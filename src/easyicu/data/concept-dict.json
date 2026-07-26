@@ -8411,18 +8411,16 @@
       224310,
       224322,
       227980,
-      228866,
       225979,
       228154,
       228156,
       228151,
       228158,
       228198,
-      229254,
       220128
      ],
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-07-18 fix: MIMIC-III had NO mech_circ_support source (extracted empty) despite chartevents holding IABP/LVAD/RVAD data. Mirrors miiv MetaVision itemids (shared d_items; itemids absent in MIMIC-III drop naturally). Excludes CareVue low-number ambiguous itemids and ECMO (separate concept)."
+     "_comment": "2026-07-26 audit: MIMIC-III MetaVision includes the listed IABP/Impella/Tandem/RVAD items. MIMIC-IV-only 228866 (Plateau Pressure IABP) and 229254 (Flow LVAD) are deliberately excluded because they are absent from the MIMIC-III d_items catalog. Excludes CareVue low-number ambiguous itemids and ECMO (separate concept)."
     }
    ],
    "mimic_demo": [
@@ -8437,18 +8435,16 @@
       224310,
       224322,
       227980,
-      228866,
       225979,
       228154,
       228156,
       228151,
       228158,
       228198,
-      229254,
       220128
      ],
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-07-18 fix: MIMIC-III had NO mech_circ_support source (extracted empty) despite chartevents holding IABP/LVAD/RVAD data. Mirrors miiv MetaVision itemids (shared d_items; itemids absent in MIMIC-III drop naturally). Excludes CareVue low-number ambiguous itemids and ECMO (separate concept)."
+     "_comment": "2026-07-26 audit: MIMIC-III MetaVision includes the listed IABP/Impella/Tandem/RVAD items. MIMIC-IV-only 228866 (Plateau Pressure IABP) and 229254 (Flow LVAD) are deliberately excluded because they are absent from the MIMIC-III d_items catalog. Excludes CareVue low-number ambiguous itemids and ECMO (separate concept)."
     }
    ]
   }

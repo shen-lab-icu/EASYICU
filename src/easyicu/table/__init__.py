@@ -982,7 +982,7 @@ def _same_values(left: pd.Series, right: pd.Series) -> bool:
 
 def _assert_cbind_alignment(
     tables: Sequence[Union[IdTbl, pd.DataFrame]],
-) -> List[str]:
+) -> tuple[List[str], Optional[int]]:
     """Refuse to bind columns whose rows are only assumed to line up.
 
     ``pd.concat(axis=1)`` joins on the pandas index, which after a filter or a
@@ -993,40 +993,53 @@ def _assert_cbind_alignment(
     column recorded the swap. Anything a caller cannot prove is aligned is now
     an error instead.
 
-    Returns the anchor's key columns, which the caller drops from the other
-    typed frames so the bind does not emit them twice.
+    Returns the typed anchor's key columns and position, which the caller uses
+    to keep exactly one copy of those keys. A bare frame may appear first, but
+    it does not disable row-shape checks or the checks between later typed
+    tables.
     """
 
-    anchor = tables[0]
-    if not isinstance(anchor, (IdTbl, TsTbl, WinTbl)):
-        return []
-    anchor_df = anchor.data
-    keys = [column for column in anchor.meta_vars() if column]
-    missing = [column for column in keys if column not in anchor_df.columns]
-    if missing:
-        raise KeyAlignmentError(
-            f"table 0 declares key column(s) {missing} that it does not carry, "
-            "so no other table can be checked against it"
-        )
-
+    row_anchor_df = _cbind_frame(tables[0])
     for position, other in enumerate(tables[1:], start=1):
         other_df = _cbind_frame(other)
-        if len(other_df) != len(anchor_df):
+        if len(other_df) != len(row_anchor_df):
             raise KeyAlignmentError(
                 f"table {position} has {len(other_df)} row(s) against "
-                f"{len(anchor_df)} in table 0; column-binding them would pad "
-                "or truncate one of them"
+                f"{len(row_anchor_df)} in table 0; column-binding them would "
+                "pad or truncate one of them"
             )
-        if not anchor_df.index.equals(other_df.index):
+        if not row_anchor_df.index.equals(other_df.index):
             raise KeyAlignmentError(
                 f"table {position} does not share table 0's row index, so "
                 "column-binding would align rows by label and silently "
                 "introduce missing values"
             )
-        if not isinstance(other, (IdTbl, TsTbl, WinTbl)):
-            # A bare frame is the caller's own derived columns; it carries no
-            # keys to check, so shape agreement is all this can establish.
-            continue
+
+    typed_positions = [
+        position
+        for position, table in enumerate(tables)
+        if isinstance(table, (IdTbl, TsTbl, WinTbl))
+    ]
+    if not typed_positions:
+        return [], None
+
+    typed_anchor_position = typed_positions[0]
+    anchor = tables[typed_anchor_position]
+    assert isinstance(anchor, (IdTbl, TsTbl, WinTbl))
+    anchor_df = anchor.data
+    keys = [column for column in anchor.meta_vars() if column]
+    missing = [column for column in keys if column not in anchor_df.columns]
+    if missing:
+        raise KeyAlignmentError(
+            f"table {typed_anchor_position} declares key column(s) {missing} "
+            "that it does not carry, "
+            "so no other table can be checked against it"
+        )
+
+    for position in typed_positions[1:]:
+        other = tables[position]
+        assert isinstance(other, (IdTbl, TsTbl, WinTbl))
+        other_df = _cbind_frame(other)
         absent = [column for column in keys if column not in other_df.columns]
         if absent:
             raise KeyAlignmentError(
@@ -1041,11 +1054,12 @@ def _assert_cbind_alignment(
         ]
         if disagreeing:
             raise KeyAlignmentError(
-                f"table {position} disagrees with table 0 on key column(s) "
-                f"{disagreeing}: the same row position refers to different "
-                "subjects or times in the two tables"
+                f"table {position} disagrees with table "
+                f"{typed_anchor_position} on key column(s) {disagreeing}: the "
+                "same row position refers to different subjects or times in "
+                "the two tables"
             )
-    return keys
+    return keys, typed_anchor_position
 
 
 def cbind_tbl(*tables: Union[IdTbl, pd.DataFrame],
@@ -1068,14 +1082,18 @@ def cbind_tbl(*tables: Union[IdTbl, pd.DataFrame],
     if not tables:
         return pd.DataFrame()
 
-    keys = _assert_cbind_alignment(tables)
+    keys, typed_anchor_position = _assert_cbind_alignment(tables)
 
     # The unit check reads each input's own duration column, so it needs the
     # frames as given; the bind gets the deduplicated ones.
     source_frames = [_cbind_frame(tbl) for tbl in tables]
-    dfs = [source_frames[0]]
-    for tbl, frame in zip(tables[1:], source_frames[1:]):
-        if keys and isinstance(tbl, (IdTbl, TsTbl, WinTbl)):
+    dfs = []
+    for position, (tbl, frame) in enumerate(zip(tables, source_frames)):
+        if (
+            keys
+            and isinstance(tbl, (IdTbl, TsTbl, WinTbl))
+            and position != typed_anchor_position
+        ):
             frame = frame.drop(columns=[c for c in keys if c in frame.columns])
         dfs.append(frame)
 

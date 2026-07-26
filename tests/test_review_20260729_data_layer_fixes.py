@@ -193,6 +193,77 @@ def test_a_numeric_offset_needs_its_unit_declared(tmp_path: Path) -> None:
     ]
 
 
+def test_load_ts_forwards_explicit_numeric_time_contract(tmp_path: Path) -> None:
+    """The public time-series wrapper must not consume and discard time_vars."""
+
+    source = _source(
+        "eicu",
+        {
+            "patient": {
+                "patientunitstayid": [11],
+                "patienthealthsystemstayid": [1],
+                "unitadmitoffset": [0],
+                "hospitaladmitoffset": [-120],
+                "hospitaldischargeoffset": [3000],
+                "unitdischargeoffset": [1440],
+            },
+            "vitalperiodic": {
+                "patientunitstayid": [11],
+                "observationoffset": [30],
+                "heartrate": [80],
+            },
+        },
+        tmp_path,
+    )
+
+    table = load_ts(
+        "vitalperiodic",
+        src=source,
+        id_var="patientunitstayid",
+        index_var="observationoffset",
+        time_vars=["observationoffset"],
+        time_unit="minutes",
+    )
+
+    assert table.data["observationoffset"].tolist() == [pd.Timedelta(minutes=30)]
+
+
+def test_a_row_without_its_declared_origin_is_refused_without_echoing_id(
+    tmp_path: Path,
+) -> None:
+    source = _source(
+        "miiv",
+        {
+            "icustays": {
+                "subject_id": [1],
+                "hadm_id": [10],
+                "stay_id": [100],
+                "intime": _stamps("2180-01-01 00:00:00"),
+                "outtime": _stamps("2180-01-05 00:00:00"),
+            },
+            "chartevents": {
+                "subject_id": [9],
+                "hadm_id": [90],
+                "stay_id": [999],
+                "charttime": _stamps("2180-03-01 03:00:00"),
+                "itemid": [220045],
+                "valuenum": [90.0],
+            },
+        },
+        tmp_path,
+    )
+
+    with pytest.raises(TimeOriginError) as excinfo:
+        load_difftime(
+            "chartevents", src=source, id_hint="stay_id", time_vars=["charttime"]
+        )
+
+    message = str(excinfo.value)
+    assert "1 row(s)" in message
+    assert "id_sha256=" in message
+    assert "999" not in message
+
+
 def test_load_ts_returns_a_series_that_knows_whose_it_is(tmp_path: Path) -> None:
     """``as_ts_tbl`` requires ``id_vars``; the call site omitted it entirely."""
 
@@ -378,6 +449,33 @@ def test_mismatched_row_labels_are_refused_not_padded() -> None:
 
     with pytest.raises(KeyAlignmentError):
         cbind_tbl(left, right)
+
+
+def test_a_bare_first_frame_cannot_disable_row_alignment_checks() -> None:
+    bare = pd.DataFrame({"exposure": [10.0]})
+    typed = _id_tbl(stay_id=[1, 2], outcome=[100, 200])
+
+    with pytest.raises(KeyAlignmentError):
+        cbind_tbl(bare, typed)
+
+
+def test_a_bare_first_frame_keeps_one_typed_key_copy() -> None:
+    bare = pd.DataFrame({"exposure": [10.0, 20.0]})
+    typed = _id_tbl(stay_id=[1, 2], outcome=[100, 200])
+
+    out = cbind_tbl(bare, typed)
+
+    assert isinstance(out, pd.DataFrame)
+    assert list(out.columns) == ["exposure", "stay_id", "outcome"]
+
+
+def test_later_typed_tables_still_agree_when_the_first_frame_is_bare() -> None:
+    bare = pd.DataFrame({"exposure": [10.0, 20.0]})
+    left = _id_tbl(stay_id=[1, 2], left=[1, 2])
+    right = _id_tbl(stay_id=[2, 1], right=[3, 4])
+
+    with pytest.raises(KeyAlignmentError):
+        cbind_tbl(bare, left, right)
 
 
 def test_duplicate_value_columns_are_rejected_by_default() -> None:

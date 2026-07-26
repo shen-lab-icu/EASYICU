@@ -390,7 +390,16 @@ def acquire_universe_for_question(
 
     # Hard block only when the outcome itself cannot be sourced — every other
     # gap is advisory (re-extract) and we proceed on what is present.
-    outcome_ok = assess_coverage(list(outcome_concepts), catalog).sufficient
+    #
+    # ``require_outcome`` asserts that this study *has* an outcome, so an empty
+    # ``outcome_concepts`` cannot satisfy it.  ``assess_coverage`` derives
+    # ``missing`` from ``requested``, so a request that names nothing has an
+    # empty ``missing`` list and reads ``sufficient`` — the same shape as a
+    # fully covered one.  Naming no outcome is not the same as needing none.
+    outcome_ok = (
+        bool(outcome_concepts)
+        and assess_coverage(list(outcome_concepts), catalog).sufficient
+    )
     if require_outcome and not outcome_ok:
         return AcquisitionResult(
             universe_path=None,
@@ -400,8 +409,14 @@ def acquire_universe_for_question(
             coverage=coverage,
             blocked=True,
             note=(
-                f"Target outcome {list(outcome_concepts)} is not in the provided "
-                "data; cannot build the cohort. Re-extract the outcome concept."
+                "This study requires an outcome but named no outcome concept; "
+                "cannot build the cohort."
+                if not outcome_concepts
+                else (
+                    f"Target outcome {list(outcome_concepts)} is not in the "
+                    "provided data; cannot build the cohort. Re-extract the "
+                    "outcome concept."
+                )
             ),
             selection_usage=sel_usage,
             selection_cost_usd=sel_cost,
