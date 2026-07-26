@@ -205,7 +205,7 @@ def clear_easyicu_cache():
     
     # 2. 清除全局加载器（重要：否则患者ID可能被缓存）
     try:
-        from .api import clear_global_loader
+        from ..api import clear_global_loader
         clear_global_loader()
         logger.info("✅ 已清除全局加载器")
     except ImportError:
@@ -217,13 +217,3 @@ def get_cache_status():
     """获取缓存状态的便捷函数"""
     cache_manager = get_cache_manager()
     return cache_manager.get_cache_info()
-
-# 在模块导入时自动执行（如果启用）
-def _initialize_cache_manager():
-    """初始化缓存管理器"""
-    try:
-        cache_manager = get_cache_manager()
-        if AUTO_CLEAR_CACHE:
-            cache_manager.clear_all_cache()
-    except Exception as e:
-        logger.warning(f"初始化缓存管理器时出错: {e}")

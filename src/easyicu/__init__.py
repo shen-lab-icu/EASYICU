@@ -5,33 +5,7 @@ interface for loading intensive care datasets, working with configuration
 metadata, and resolving clinical concepts across heterogeneous sources.
 """
 
-import os
-import sys
-
-
 _IMPORT_ERRORS: dict[str, ImportError] = {}
-
-
-def _configure_stdio_encoding() -> None:
-    """Force UTF-8 stdio on Windows to avoid legacy console codec crashes."""
-    if os.name != "nt":
-        return
-
-    os.environ.setdefault("PYTHONUTF8", "1")
-    os.environ.setdefault("PYTHONIOENCODING", "utf-8")
-
-    for stream_name in ("stdout", "stderr"):
-        stream = getattr(sys, stream_name, None)
-        reconfigure = getattr(stream, "reconfigure", None)
-        if reconfigure is None:
-            continue
-        try:
-            reconfigure(encoding="utf-8", errors="replace")
-        except Exception:
-            continue
-
-
-_configure_stdio_encoding()
 
 from .config import DataSourceConfig, DataSourceRegistry
 from .concept import ConceptDictionary, ConceptResolver
@@ -41,6 +15,7 @@ from .utils.logging_utils import configure_logging
 from .runtime.cache_manager import get_cache_manager, auto_clear_cache_if_enabled, clear_easyicu_cache, get_cache_status
 from .runtime.memory_manager import release_memory, get_rss_mb, get_available_memory_mb
 from .runtime.runtime_defaults import LoaderDefaults, resolve_loader_defaults
+from .runtime.configure import configure_runtime
 from .table import (
     ICUTable, 
     IdTbl, 
@@ -753,6 +728,7 @@ __all__ = [
     "list_available_sources",
     "get_concept_info",
     "configure_logging",
+    "configure_runtime",
 
     # === 核心类 ===
     "ConceptDictionary",
@@ -1244,15 +1220,3 @@ try:
     ])
 except ImportError:
     _HAS_DATA_CONVERTER = False
-
-# 模块初始化时自动执行缓存清理（如果启用）
-try:
-    from .runtime.cache_manager import _initialize_cache_manager
-    _initialize_cache_manager()
-except ImportError:
-    # 如果缓存管理器不可用，继续正常运行
-    pass
-except Exception as e:
-    # 缓存初始化失败不应阻止模块加载
-    import logging
-    logging.getLogger(__name__).warning(f"缓存管理器初始化失败: {e}")
