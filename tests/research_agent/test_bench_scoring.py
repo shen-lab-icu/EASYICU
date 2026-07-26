@@ -505,6 +505,9 @@ def test_score_arm_reports_active_errors_separately_from_historical_errors(tmp_p
                     "numeric_error_count": 0,
                     "evidence_error_count": 0,
                     "analysis_error_count": 0,
+                    "publication_artifacts_ready": True,
+                    "execution_paper_eligible": False,
+                    "paper_authorized": False,
                 },
             }
         ),
@@ -522,6 +525,9 @@ def test_score_arm_reports_active_errors_separately_from_historical_errors(tmp_p
 
     assert score["n_errors"] == 0
     assert score["n_historical_errors"] == 1
+    assert score["publication_artifacts_ready"] is True
+    assert score["execution_paper_eligible"] is False
+    assert score["paper_authorized"] is False
 
 
 def test_score_arm_uses_only_latest_successful_step_records_and_active_evidence(

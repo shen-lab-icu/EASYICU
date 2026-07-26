@@ -813,7 +813,10 @@ def _figure2_canary_passed(score: Mapping[str, Any]) -> bool:
             if isinstance(parsed_scorecard, Mapping):
                 paper_tristate = str(parsed_scorecard.get("tristate") or "")
     return bool(
-        aware.get("publication_ready")
+        aware.get("publication_artifacts_ready")
+        and aware.get("execution_paper_eligible")
+        and aware.get("paper_authorized")
+        and aware.get("publication_ready")
         and aware.get("manuscript_ready")
         and int(aware.get("n_errors") or 0) == 0
         and isinstance(evaluation, Mapping)
@@ -995,6 +998,14 @@ def _score_arm(*, run_dir: Path, item, label: str) -> Dict[str, Any]:
         "gate_status": _gate_ladder(run_dir, readiness),
         "manuscript_ready": bool(readiness.get("manuscript_ready")),
         "publication_ready": bool(readiness.get("publication_ready")),
+        # Keep the three independent completion axes visible at the benchmark
+        # boundary.  ``publication_ready`` describes artifact completeness; it
+        # must never be interpreted as paper authority on its own.
+        "publication_artifacts_ready": bool(
+            readiness.get("publication_artifacts_ready")
+        ),
+        "execution_paper_eligible": bool(readiness.get("execution_paper_eligible")),
+        "paper_authorized": bool(readiness.get("paper_authorized")),
         "writer_attempts": _writer_attempts(run_dir, readiness),
         "superseded_error_count": (
             int(readiness.get("superseded_error_count") or 0)
@@ -2129,7 +2140,7 @@ def _benchmark_pipeline_options(
     disable_replanning: bool,
     max_code_repair_attempts: Optional[int],
     max_step_llm_repair_attempts: Optional[int] = None,
-    timeout_seconds: float = 300.0,
+    timeout_seconds: float = 900.0,
     standard_executor_timeout_seconds: float = 3_600.0,
     enable_repro_envelope: bool = True,
     enable_cost_tracking: bool = True,
@@ -2523,7 +2534,7 @@ def _canonical_execution_config_from_args(args):
 
     return build_canonical_execution_config(
         seed=int(getattr(args, "seed", 7)),
-        timeout_seconds=float(getattr(args, "timeout", 300.0)),
+        timeout_seconds=float(getattr(args, "timeout", 900.0)),
         standard_executor_timeout_seconds=float(
             getattr(args, "standard_executor_timeout", 3600.0)
         ),
@@ -2909,10 +2920,10 @@ def main() -> int:
     parser.add_argument(
         "--timeout",
         type=float,
-        default=300.0,
+        default=900.0,
         help=(
             "Per-attempt timeout in seconds for ordinary model-generated "
-            "analysis code. This does not change the LLM request timeout or "
+            "analysis code (default: 900). This does not change the LLM request timeout or "
             "the registered standard-executor timeout."
         ),
     )

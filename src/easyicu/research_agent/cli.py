@@ -201,8 +201,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--timeout",
         type=float,
-        default=300.0,
-        help="Per-step subprocess timeout in seconds (default: 300).",
+        default=900.0,
+        help="Per-step subprocess timeout in seconds (default: 900).",
     )
     p.add_argument(
         "--manuscript-language",
