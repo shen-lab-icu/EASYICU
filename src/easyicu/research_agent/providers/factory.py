@@ -146,6 +146,7 @@ def _reviewed_dispatch_identity(client: Any) -> tuple[Any, ...]:
             id(transport),
             type(transport),
             extra_body_identity,
+            str(instance_vars.get("_completion_token_parameter", "")),
         )
     if _is_reviewed_client_type(client, "CLIAgentLLMClient"):
         instance_vars = _safe_instance_vars(client)

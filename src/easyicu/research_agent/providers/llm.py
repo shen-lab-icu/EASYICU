@@ -461,6 +461,7 @@ class OpenAIClient:
                 ) from exc
             self._client = OpenAI(**kwargs)
         self._model = model
+        self._completion_token_parameter = _completion_token_parameter_name(model)
         self._timeout = request_timeout
         self._max_retries = int(max_retries)
         self._stream_enabled = bool(stream_enabled)
@@ -626,10 +627,10 @@ class OpenAIClient:
         create_kwargs: Dict[str, Any] = {
             "model": self._model,
             "messages": chat_messages,
-            "max_tokens": max_tokens,
             "temperature": temperature,
             "timeout": self._timeout,
         }
+        create_kwargs[self._completion_token_parameter] = int(max_tokens)
         if seed is not None:
             # OpenAI / OpenRouter / most OpenAI-compatible providers
             # accept a ``seed`` integer for deterministic(-ish) output.
@@ -667,9 +668,9 @@ class OpenAIClient:
                 payload = {
                     "model": self._model,
                     "messages": chat_messages,
-                    "max_tokens": max_tokens,
                     "temperature": temperature,
                 }
+                payload[self._completion_token_parameter] = int(max_tokens)
                 if seed is not None:
                     payload["seed"] = int(seed)
                 if top_p is not None:
@@ -961,10 +962,10 @@ class OpenAIClient:
         create_kwargs: Dict[str, Any] = {
             "model": self._model,
             "messages": [{"role": "user", "content": content}],
-            "max_tokens": max_tokens,
             "temperature": temperature,
             "timeout": self._timeout,
         }
+        create_kwargs[self._completion_token_parameter] = int(max_tokens)
         if self._extra_body:
             create_kwargs["extra_body"] = self._extra_body
         resp = self._client.chat.completions.create(**create_kwargs)  # type: ignore[arg-type]
@@ -991,6 +992,21 @@ class OpenAIClient:
 def _model_looks_like_qwen3(model: str) -> bool:
     lowered = (model or "").strip().lower()
     return lowered.startswith("qwen3") or "/qwen3" in lowered or "qwen3-" in lowered
+
+
+def _completion_token_parameter_name(model: str) -> str:
+    """Return the output-cap field honored by the selected model family.
+
+    GPT-5 and OpenAI ``o`` reasoning models use ``max_completion_tokens``.
+    Several compatible gateways silently accept but ignore the legacy
+    ``max_tokens`` field for those models, which defeats both output-size and
+    cost controls. Other compatible providers still require ``max_tokens``.
+    """
+
+    leaf = (model or "").strip().lower().rsplit("/", 1)[-1]
+    if leaf.startswith("gpt-5") or re.match(r"^o[134](?:-|$)", leaf):
+        return "max_completion_tokens"
+    return "max_tokens"
 
 
 def _model_looks_vision_capable(model: str) -> bool:
