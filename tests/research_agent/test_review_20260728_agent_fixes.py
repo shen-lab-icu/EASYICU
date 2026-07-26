@@ -628,7 +628,7 @@ def test_the_ci_check_no_longer_falls_back_to_every_step():
 
 
 def test_the_pause_declares_its_own_resume_scope():
-    from easyicu.research_agent.graph import (
+    from easyicu.research_agent.orchestration.workflow import (
         HUMAN_REVIEW_RESUME_SCOPE,
         HumanReviewPending,
         HumanReviewRequest,
@@ -652,7 +652,10 @@ def test_the_pause_declares_its_own_resume_scope():
 
 
 def test_a_pause_from_another_process_is_refused_not_mis_resumed():
-    from easyicu.research_agent.graph import HumanReviewPending, HumanReviewRequest
+    from easyicu.research_agent.orchestration.workflow import (
+        HumanReviewPending,
+        HumanReviewRequest,
+    )
 
     request = HumanReviewRequest.create(
         kind="capability_request",
@@ -682,7 +685,7 @@ def test_resume_on_a_fresh_instance_names_the_boundary(tmp_path):
 def test_unreadable_review_evidence_fails_closed():
     """No evidence binding, no review request — an approval must bind something."""
 
-    from easyicu.research_agent.graph import (
+    from easyicu.research_agent.orchestration.workflow import (
         HumanReviewAuthorityError,
         human_review_requests_for_plan,
     )

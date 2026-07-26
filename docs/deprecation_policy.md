@@ -26,6 +26,7 @@ immediately.
 | `easyicu.io.data_utils` and `easyicu.table.utils` ID conversion helpers | `easyicu.table.id_conversion` | Keep divergent historical behavior with call-time warnings; never silently redirect because the legacy direction is different. | 2.0 |
 | `easyicu.io.id_mapping` non-working entry points | Canonical `load_concepts()` path | Continue failing explicitly instead of simulating success. | 2.0 |
 | `align_to_icu_admission()` | Canonical relative-time output from `load_concepts()` | Fail explicitly in 1.x; do not restore the pass-through stub. | 2.0 |
+| `ResearchAgentPipeline.run_with_graph()` / `research_agent.graph.build_pipeline_graph()` | `run()` / `orchestration.workflow.build_pipeline_workflow()` | The method warns and delegates; the retired builder refuses construction so it cannot recreate a shadow dispatcher. Human-review model imports remain compatible. | 2.0 |
 
 Before a 2.0 removal, run a repository and downstream import scan, publish the
 replacement table in release notes, and retain tests that prove the canonical
@@ -50,12 +51,18 @@ is frozen:
 
 ### LangGraph
 
-The review's “half-used” description is outdated for the current tree.
-LangGraph is a core dependency, `build_pipeline_graph()` drives the main
-pipeline, human-review resume uses the same compiled graph, and runtime
-receipts record the backend/version. The remaining task is not to choose a
-second architecture; it is to audit that direct helper entry points cannot
-bypass graph authority or emit paper-ready artifacts independently.
+Architecture decision: use one explicit EasyICU state machine and remove the
+LangGraph dependency. The former graph checkpoint could not serialize the
+plan-phase `EvidenceStore`, provider resolver, or run-scoped services, so it
+stored those objects in a process-local dictionary. That gave EasyICU two
+dispatchers without durable cross-process resume.
+
+`orchestration.workflow.PipelineWorkflow` now owns
+`plan → human_review → execute → write → finalise` directly. Runtime receipts
+identify `explicit_state_machine`; human-review pauses still declare
+`resume_scope="same_process"` until a complete artifact-rehydration contract
+exists. EasyICU receipts, capsules, evidence and checkpoints remain the only
+scientific/replay authority.
 
 ### MCP
 

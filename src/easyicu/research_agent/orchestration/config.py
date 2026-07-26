@@ -146,7 +146,7 @@ class PipelineConfig:
     it was hashed into the run authority. :meth:`__post_init__` therefore also
     freezes the plain data containers: every ``dict`` becomes a read-only
     mapping and every ``list``/``set`` a tuple/frozenset, recursively.
-    Provider clients, factories, adapters, checkpointers, and plugin
+    Provider clients, factories, adapters, review control planes, and plugin
     registries belong in ``PipelineServices`` instead.
     """
 
