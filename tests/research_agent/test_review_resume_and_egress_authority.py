@@ -32,12 +32,24 @@ import pytest
 def _plan_result_with_review(evidence, run_dir):
     """A plan result carrying one error-severity finding that demands review."""
 
-    from easyicu.research_agent.schema import ValidationFinding
+    from easyicu.research_agent.schema import (
+        AnalysisPlan,
+        AnalysisStep,
+        ValidationFinding,
+    )
 
     return SimpleNamespace(
         aborted_result=None,
         evidence=evidence,
-        plan=SimpleNamespace(steps=[SimpleNamespace(step_id="step_01")]),
+        plan=AnalysisPlan(
+            research_question="Can this capability be used?",
+            steps=[
+                AnalysisStep(
+                    step_id="step_01",
+                    intent="Run the requested registered analysis.",
+                )
+            ],
+        ),
         findings=[
             ValidationFinding(
                 validator="capability_gate",
@@ -197,7 +209,11 @@ def test_p0_authority_digest_binds_the_plan_and_its_evidence(tmp_path):
     from easyicu.research_agent.orchestration.workflow import (
         human_review_requests_for_plan,
     )
-    from easyicu.research_agent.schema import ValidationFinding
+    from easyicu.research_agent.schema import (
+        AnalysisPlan,
+        AnalysisStep,
+        ValidationFinding,
+    )
 
     finding = ValidationFinding(
         validator="capability_gate",
@@ -205,8 +221,24 @@ def test_p0_authority_digest_binds_the_plan_and_its_evidence(tmp_path):
         message="This plan requests an unregistered capability.",
         detail={"reason": "capability_review_required"},
     )
-    plan_v1 = SimpleNamespace(revision=1, steps=[SimpleNamespace(step_id="s1")])
-    plan_v2 = SimpleNamespace(revision=2, steps=[SimpleNamespace(step_id="s1")])
+    plan_v1 = AnalysisPlan(
+        research_question="Does the exposure predict the outcome?",
+        analysis_type="descriptive",
+        steps=[
+            AnalysisStep(
+                step_id="s1",
+                intent="Summarise the cohort.",
+                inputs=["cohort"],
+                expected_outputs=["table:summary"],
+                method="descriptive_summary",
+                icu_rule_refs=["icu:first_24h"],
+            )
+        ],
+        display_labels={"outcome": "Hospital mortality"},
+        rationale="Pre-specified descriptive analysis.",
+        revision=1,
+    )
+    plan_v2 = plan_v1.model_copy(update={"revision": 2})
 
     class _Evidence:
         def __init__(self, sha):
@@ -228,6 +260,181 @@ def test_p0_authority_digest_binds_the_plan_and_its_evidence(tmp_path):
     assert base[0].authority_sha256 != revised[0].authority_sha256
     assert base[0].authority_sha256 != other_evidence[0].authority_sha256
     assert base[0].payload["plan_evidence_sha256"] == {"cohort": "a" * 64}
+    authority = base[0].payload["plan_review_authority"]
+    assert authority["plan_payload"] == plan_v1.model_dump(mode="json")
+    assert (
+        authority["plan_sha256"]
+        == hashlib.sha256(
+            json.dumps(
+                plan_v1.model_dump(mode="json"),
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")
+        ).hexdigest()
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("research_question", "Does a different exposure predict the outcome?"),
+        ("analysis_type", "prediction"),
+        ("display_labels", {"outcome": "Thirty-day mortality"}),
+        ("rationale", "A revised scientific rationale."),
+        ("revision", 2),
+    ],
+)
+def test_review_authority_changes_for_every_plan_level_edit(field, replacement):
+    from easyicu.research_agent.orchestration.workflow import (
+        human_review_requests_for_plan,
+    )
+    from easyicu.research_agent.schema import (
+        AnalysisPlan,
+        AnalysisStep,
+        ValidationFinding,
+    )
+
+    finding = ValidationFinding(
+        validator="capability_gate",
+        severity="error",
+        message="This plan requests an unregistered capability.",
+        detail={"reason": "capability_review_required"},
+    )
+    plan = AnalysisPlan(
+        research_question="Does the exposure predict the outcome?",
+        analysis_type="descriptive",
+        steps=[
+            AnalysisStep(
+                step_id="s1",
+                intent="Summarise the cohort.",
+                inputs=["cohort"],
+                expected_outputs=["table:summary"],
+                method="descriptive_summary",
+                icu_rule_refs=["icu:first_24h"],
+            )
+        ],
+        display_labels={"outcome": "Hospital mortality"},
+        rationale="Pre-specified descriptive analysis.",
+    )
+    changed = plan.model_copy(update={field: replacement})
+
+    original_request = human_review_requests_for_plan(
+        findings=[finding],
+        plan=plan,
+    )[0]
+    changed_request = human_review_requests_for_plan(
+        findings=[finding],
+        plan=changed,
+    )[0]
+
+    assert original_request.authority_sha256 != changed_request.authority_sha256
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("intent", "Fit a revised descriptive summary."),
+        ("inputs", ["revised_cohort"]),
+        ("expected_outputs", ["table:revised_summary"]),
+        ("method", "revised_descriptive_summary"),
+        ("icu_rule_refs", ["icu:first_48h"]),
+    ],
+)
+def test_review_authority_changes_for_every_step_edit(field, replacement):
+    from easyicu.research_agent.orchestration.workflow import (
+        human_review_requests_for_plan,
+    )
+    from easyicu.research_agent.schema import (
+        AnalysisPlan,
+        AnalysisStep,
+        ValidationFinding,
+    )
+
+    finding = ValidationFinding(
+        validator="capability_gate",
+        severity="error",
+        message="This plan requests an unregistered capability.",
+        detail={"reason": "capability_review_required"},
+    )
+    step = AnalysisStep(
+        step_id="s1",
+        intent="Summarise the cohort.",
+        inputs=["cohort"],
+        expected_outputs=["table:summary"],
+        method="descriptive_summary",
+        icu_rule_refs=["icu:first_24h"],
+    )
+    plan = AnalysisPlan(
+        research_question="Does the exposure predict the outcome?",
+        steps=[step],
+    )
+    changed_step = step.model_copy(update={field: replacement})
+    changed = plan.model_copy(update={"steps": [changed_step]})
+
+    original_request = human_review_requests_for_plan(
+        findings=[finding],
+        plan=plan,
+    )[0]
+    changed_request = human_review_requests_for_plan(
+        findings=[finding],
+        plan=changed,
+    )[0]
+
+    assert original_request.authority_sha256 != changed_request.authority_sha256
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("pipeline_config_sha256", "b" * 64),
+        ("submission_profile_ref", "npj_dm/20260727"),
+        ("capability_activation_sha256", "c" * 64),
+        ("run_input_capsule_sha256", "d" * 64),
+    ],
+)
+def test_review_authority_changes_for_execution_identity(field, replacement):
+    from easyicu.research_agent.authority.plan_review import ReviewExecutionAuthority
+    from easyicu.research_agent.orchestration.workflow import (
+        human_review_requests_for_plan,
+    )
+    from easyicu.research_agent.schema import (
+        AnalysisPlan,
+        AnalysisStep,
+        ValidationFinding,
+    )
+
+    finding = ValidationFinding(
+        validator="capability_gate",
+        severity="error",
+        message="This plan requests an unregistered capability.",
+        detail={"reason": "capability_review_required"},
+    )
+    plan = AnalysisPlan(
+        research_question="Does the exposure predict the outcome?",
+        steps=[AnalysisStep(step_id="s1", intent="Summarise the cohort.")],
+    )
+    execution = ReviewExecutionAuthority(
+        pipeline_config_sha256="a" * 64,
+        submission_profile_ref="development/1",
+        capability_activation_sha256="e" * 64,
+        run_input_capsule_sha256="f" * 64,
+    )
+    changed_execution = execution.model_copy(update={field: replacement})
+
+    original_request = human_review_requests_for_plan(
+        findings=[finding],
+        plan=plan,
+        execution_authority=execution,
+    )[0]
+    changed_request = human_review_requests_for_plan(
+        findings=[finding],
+        plan=plan,
+        execution_authority=changed_execution,
+    )[0]
+
+    assert original_request.authority_sha256 != changed_request.authority_sha256
 
 
 def test_p0_run_returns_a_typed_pause_not_a_keyerror():
@@ -626,7 +833,9 @@ def test_p0_privacy_audit_refuses_a_source_with_a_subject_identifier(tmp_path):
 
     source = tmp_path / "primary.csv"
     source.write_text("stay_id,risk\n1,0.5\n2,0.6\n", encoding="utf-8")
-    evidence = _FakeEvidence(tmp_path, {"primary": _record("primary.csv", root=tmp_path)})
+    evidence = _FakeEvidence(
+        tmp_path, {"primary": _record("primary.csv", root=tmp_path)}
+    )
 
     audit = audit_figure_privacy(
         contract=_contract(roles=("primary_estimand",), sources=("primary",)),
@@ -649,7 +858,9 @@ def test_p0_privacy_audit_clears_an_aggregate_source(tmp_path):
         json.dumps({"odds_ratio": 1.42, "ci_lower": 1.11, "n_patients": 4_218}),
         encoding="utf-8",
     )
-    evidence = _FakeEvidence(tmp_path, {"summary": _record("summary.json", root=tmp_path)})
+    evidence = _FakeEvidence(
+        tmp_path, {"summary": _record("summary.json", root=tmp_path)}
+    )
 
     audit = audit_figure_privacy(
         contract=_contract(roles=("primary_estimand", "calibration")),
@@ -670,7 +881,9 @@ def test_p0_privacy_audit_refuses_a_small_declared_group(tmp_path):
 
     source = tmp_path / "strata.json"
     source.write_text(json.dumps({"strata": [{"n_patients": 3}]}), encoding="utf-8")
-    evidence = _FakeEvidence(tmp_path, {"strata": _record("strata.json", root=tmp_path)})
+    evidence = _FakeEvidence(
+        tmp_path, {"strata": _record("strata.json", root=tmp_path)}
+    )
 
     audit = audit_figure_privacy(
         contract=_contract(roles=("heterogeneity",)),
@@ -725,7 +938,9 @@ def test_p0_privacy_audit_refuses_an_identifier_in_rendered_text(tmp_path):
 
     source = tmp_path / "summary.json"
     source.write_text(json.dumps({"odds_ratio": 1.42}), encoding="utf-8")
-    evidence = _FakeEvidence(tmp_path, {"summary": _record("summary.json", root=tmp_path)})
+    evidence = _FakeEvidence(
+        tmp_path, {"summary": _record("summary.json", root=tmp_path)}
+    )
     contract = _contract()
     contract.panels[0].claim = "Index case 30042318 drives the effect."
 
@@ -750,7 +965,9 @@ def test_p0_role_alone_no_longer_authorizes_egress(tmp_path):
     source.write_text(
         "subject_id,predicted,observed\n1,0.2,0\n2,0.4,1\n", encoding="utf-8"
     )
-    evidence = _FakeEvidence(tmp_path, {"scatter": _record("scatter.csv", root=tmp_path)})
+    evidence = _FakeEvidence(
+        tmp_path, {"scatter": _record("scatter.csv", root=tmp_path)}
+    )
 
     audit = audit_figure_privacy(
         contract=_contract(roles=("validation",)),
@@ -811,9 +1028,7 @@ def test_p0_egress_receipt_has_two_phases(tmp_path):
     intent = json.loads(
         (tmp_path / "figure_egress_authorization_intent.json").read_text("utf-8")
     )
-    completed = json.loads(
-        (tmp_path / "figure_egress_receipt.json").read_text("utf-8")
-    )
+    completed = json.loads((tmp_path / "figure_egress_receipt.json").read_text("utf-8"))
     assert intent["authorized_count"] == 0
     assert completed["authorized_count"] == 1
     # Authorized but never closed out: recorded as unknown, not as a success.
@@ -849,7 +1064,12 @@ def test_mcp_non_frame_result_is_withheld_not_repr_dumped():
         def __repr__(self):
             return "stay_id=30042318 charttime=2180-01-01 lactate=8.1"
 
-    summary = summarise_frame(_Weird(), policy=DisclosurePolicy(patient_data=False, preview_rows=0, include_identifier_columns=False))
+    summary = summarise_frame(
+        _Weird(),
+        policy=DisclosurePolicy(
+            patient_data=False, preview_rows=0, include_identifier_columns=False
+        ),
+    )
 
     assert summary["unsupported_result"] is True
     assert "repr" not in summary
@@ -864,7 +1084,12 @@ def test_mcp_small_cell_size_is_bounded_not_exact():
     )
 
     frame = pd.DataFrame({"lactate": [8.1, 7.2, 6.3] + [None] * 97})
-    summary = summarise_frame(frame, policy=DisclosurePolicy(patient_data=False, preview_rows=0, include_identifier_columns=False))
+    summary = summarise_frame(
+        frame,
+        policy=DisclosurePolicy(
+            patient_data=False, preview_rows=0, include_identifier_columns=False
+        ),
+    )
 
     stats = summary["aggregate_statistics"]["lactate"]
     assert stats["withheld"] is True
@@ -879,7 +1104,9 @@ def test_mcp_two_small_cells_are_indistinguishable():
 
     a = pd.DataFrame({"x": [1.0] * 3 + [None] * 97})
     b = pd.DataFrame({"x": [1.0] * 17 + [None] * 83})
-    policy = DisclosurePolicy(patient_data=False, preview_rows=0, include_identifier_columns=False)
+    policy = DisclosurePolicy(
+        patient_data=False, preview_rows=0, include_identifier_columns=False
+    )
 
     left = summarise_frame(a, policy=policy)
     right = summarise_frame(b, policy=policy)
@@ -994,8 +1221,16 @@ def test_brier_claim_is_scoped_to_its_own_step():
         "[^claim_1]: value=0.180; step=step_primary; evidence=step_summary\n"
     )
     records = [
-        {"step_id": "step_primary", "status": "ok", "step_summary": {"brier_score": 0.180}},
-        {"step_id": "step_sensitivity", "status": "ok", "step_summary": {"brier_score": 0.090}},
+        {
+            "step_id": "step_primary",
+            "status": "ok",
+            "step_summary": {"brier_score": 0.180},
+        },
+        {
+            "step_id": "step_sensitivity",
+            "status": "ok",
+            "step_summary": {"brier_score": 0.090},
+        },
     ]
 
     assert audit_manuscript_numeric_claims(manuscript, per_step_records=records) == []
@@ -1016,8 +1251,16 @@ def test_prevalence_claim_is_scoped_to_its_own_step():
         "[^claim_2]: value=0.180; step=step_primary; evidence=step_summary\n"
     )
     records = [
-        {"step_id": "step_primary", "status": "ok", "step_summary": {"event_rate": 0.180}},
-        {"step_id": "step_other", "status": "ok", "step_summary": {"event_rate": 0.400}},
+        {
+            "step_id": "step_primary",
+            "status": "ok",
+            "step_summary": {"event_rate": 0.180},
+        },
+        {
+            "step_id": "step_other",
+            "status": "ok",
+            "step_summary": {"event_rate": 0.400},
+        },
     ]
 
     assert audit_manuscript_numeric_claims(manuscript, per_step_records=records) == []
@@ -1037,8 +1280,16 @@ def test_an_unbound_claim_still_falls_back_to_match_any():
 
     manuscript = "The model achieved a Brier score of 0.090.\n"
     records = [
-        {"step_id": "step_primary", "status": "ok", "step_summary": {"brier_score": 0.180}},
-        {"step_id": "step_sensitivity", "status": "ok", "step_summary": {"brier_score": 0.090}},
+        {
+            "step_id": "step_primary",
+            "status": "ok",
+            "step_summary": {"brier_score": 0.180},
+        },
+        {
+            "step_id": "step_sensitivity",
+            "status": "ok",
+            "step_summary": {"brier_score": 0.090},
+        },
     ]
 
     assert audit_manuscript_numeric_claims(manuscript, per_step_records=records) == []

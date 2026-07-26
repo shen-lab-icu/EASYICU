@@ -249,9 +249,7 @@ from .audits.manuscript_claims import (  # noqa: E402,F401
     _extract_percent_claims_near,
 )
 
-_audit_manuscript_numeric_claims = (
-    audit_manuscript_numeric_claims  # noqa: F841 (legacy alias)
-)
+_audit_manuscript_numeric_claims = audit_manuscript_numeric_claims  # noqa: F841 (legacy alias)
 
 from .authority.evidence_store import (
     EvidenceEnforcementError,
@@ -437,6 +435,8 @@ from .authority.run_input import (
     seal_run_input_capsule,
     verify_legacy_trajectory_capsule_receipt,
 )
+from .authority.plan_review import ReviewExecutionAuthority
+from .canonical_json import canonical_sha256
 from .authority.run_lock import (
     acquire_run_execution_lock,
     current_locked_run_id,
@@ -4395,10 +4395,42 @@ class ResearchAgentPipeline:
             from .orchestration.workflow import human_review_requests_for_plan
 
             reviewed_plan.append(plan_result)
+            plan_evidence = getattr(plan_result, "evidence", None)
+            capsule_record = (
+                plan_evidence.get(RUN_INPUT_CAPSULE_EVIDENCE_ID)
+                if plan_evidence is not None
+                else None
+            )
+            if capsule_record is None:
+                requests_without_execution = human_review_requests_for_plan(
+                    findings=plan_result.findings,
+                    plan=plan_result.plan,
+                    evidence=plan_evidence,
+                )
+                if not requests_without_execution:
+                    return requests_without_execution
+                raise RuntimeError(
+                    "human review cannot bind execution identity because the "
+                    "run input capsule is absent"
+                )
+            submission_profile_ref = (
+                self._submission_profile_ref
+                if self._submission_profile_name and self._submission_profile_version
+                else None
+            )
+            execution_authority = ReviewExecutionAuthority(
+                pipeline_config_sha256=self._config.canonical_digest(),
+                submission_profile_ref=submission_profile_ref,
+                capability_activation_sha256=canonical_sha256(
+                    self._config.capability_activation
+                ),
+                run_input_capsule_sha256=str(capsule_record.sha256),
+            )
             requests = human_review_requests_for_plan(
                 findings=plan_result.findings,
                 plan=plan_result.plan,
-                evidence=getattr(plan_result, "evidence", None),
+                evidence=plan_evidence,
+                execution_authority=execution_authority,
             )
             if requests and self._human_review_gate is None:
                 # Only a caller that supplies an operator control plane can
