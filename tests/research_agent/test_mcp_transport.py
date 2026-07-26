@@ -24,6 +24,11 @@ from easyicu.research_agent.mcp_policy import (
     MCP_SCOPES_ENV,
     granted_scopes,
 )
+from easyicu.research_agent.mcp_server import (
+    SERVER_INFO,
+    TOOL_SCHEMAS,
+    dispatch as application_dispatch,
+)
 from easyicu.research_agent.mcp_transport import (
     create_mcp_server,
     create_streamable_http_app,
@@ -45,9 +50,18 @@ def _mcp_policy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
+def _server(*, dispatcher=application_dispatch, **kwargs):
+    return create_mcp_server(
+        dispatcher=dispatcher,
+        server_info=SERVER_INFO,
+        tool_schemas=TOOL_SCHEMAS,
+        **kwargs,
+    )
+
+
 @pytest.mark.anyio
 async def test_official_client_initializes_lists_and_calls_tools() -> None:
-    server = create_mcp_server()
+    server = _server()
 
     async with create_connected_server_and_client_session(
         server,
@@ -74,7 +88,7 @@ async def test_official_client_initializes_lists_and_calls_tools() -> None:
 @pytest.mark.anyio
 async def test_sdk_validates_input_schema_before_dispatch() -> None:
     calls: list[tuple[str, dict]] = []
-    server = create_mcp_server(
+    server = _server(
         dispatcher=lambda name, arguments: (
             calls.append((name, arguments or {})) or {"unexpected": True}
         )
@@ -94,7 +108,7 @@ async def test_sdk_validates_input_schema_before_dispatch() -> None:
 
 @pytest.mark.anyio
 async def test_sdk_preserves_structured_error_contract() -> None:
-    server = create_mcp_server(
+    server = _server(
         dispatcher=lambda _name, _arguments: {
             "error": "scope not granted",
             "error_code": "scope_not_granted",
@@ -128,7 +142,7 @@ async def test_tool_timeout_returns_error_and_server_remains_usable() -> None:
             release.wait(timeout=2)
         return {"call": calls}
 
-    server = create_mcp_server(
+    server = _server(
         dispatcher=dispatcher,
         tool_timeout_seconds=0.05,
     )
@@ -165,7 +179,7 @@ async def test_tool_limiter_bounds_concurrent_dispatch() -> None:
             with lock:
                 active -= 1
 
-    server = create_mcp_server(
+    server = _server(
         dispatcher=dispatcher,
         max_concurrent_tool_calls=2,
     )
@@ -199,7 +213,7 @@ async def test_client_cancellation_does_not_poison_later_calls() -> None:
             release.wait(timeout=2)
         return {"call": calls}
 
-    server = create_mcp_server(dispatcher=dispatcher)
+    server = _server(dispatcher=dispatcher)
     async with create_connected_server_and_client_session(
         server,
         raise_exceptions=True,
@@ -271,6 +285,7 @@ def _http_app(
     bearer_token: str | None = None,
     max_body_bytes: int = 1024 * 1024,
 ):
+    server = server or _server()
     return create_streamable_http_app(
         server=server,
         host="127.0.0.1",
@@ -363,7 +378,7 @@ async def test_streamable_http_enforces_bearer_and_patient_credentials(
     def projected_scopes(_name: str, _arguments: dict | None) -> dict:
         return {"scopes": sorted(granted_scopes())}
 
-    server = create_mcp_server(dispatcher=projected_scopes)
+    server = _server(dispatcher=projected_scopes)
     app = _http_app(server=server, bearer_token="mcp-token")
     headers = {
         "Accept": "application/json, text/event-stream",
