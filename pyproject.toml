@@ -23,9 +23,11 @@ dependencies = [
   "requests>=2.28",
   "tqdm>=4.65",
   "duckdb>=0.9.0",
+  "scipy>=1.10",
   "scikit-learn>=1.3",
   "statsmodels>=0.14",
-  "langgraph>=1.0"
+  "langgraph>=1.0",
+  "typing-extensions>=4.8"
 ]
 
 [project.optional-dependencies]
@@ -34,7 +36,10 @@ dev = [
   "pytest>=7.0",
   "pytest-cov>=4.0",
   "black>=23.0",
-  "ruff>=0.1.0"
+  "ruff>=0.1.0",
+  "vulture>=2.14",
+  "deptry>=0.23",
+  "import-linter>=2.13"
 ]
 viz = [
   "plotly>=5.15",
@@ -44,24 +49,34 @@ webapp = [
   "fastapi>=0.115",
   "uvicorn>=0.30",
   "psutil>=5.9",
-  "openai>=1.0"
+  "openai>=1.0",
+  "starlette>=0.40",
+  "pymupdf>=1.24"
 ]
 llmserver = [
   "fastapi>=0.115",
   "uvicorn>=0.30"
 ]
-agentic = []
+agentic = [
+  "httpx>=0.27",
+  "pillow>=10.0",
+  "pypdf>=5.0"
+]
+cli = [
+  "rich>=13.0"
+]
 # Advanced analytical methods the research-agent sandbox may use. Mirrors
 # research_agent/contracts/method_packages.CURATED_METHOD_PACKAGES — the coder is only
 # allowed to import a package once it is declared here (reproducible) AND
 # importable at run time (verified by the capability probe).
 methods = [
   "lifelines>=0.27",
+  "numba>=0.59",
   "shap>=0.44",
   "xgboost>=2.0"
 ]
 all = [
-  "easyicu[dev,viz,webapp,llmserver,agentic,methods]"
+  "easyicu[dev,viz,webapp,llmserver,agentic,cli,methods]"
 ]
 
 [project.scripts]
@@ -103,6 +118,12 @@ easyicu = ["data/*.json", "data/research_know_how/*.json"]
 [tool.ruff]
 target-version = "py310"
 
+[tool.deptry]
+# Optional feature groups and developer tools are intentionally not imported
+# by the production package. Missing and transitive runtime dependencies remain
+# hard failures; only the "declared but unused" report is suppressed.
+ignore = ["DEP002"]
+
 [tool.ruff.lint]
 # Keep the first project-wide gate conservative while the historical lint
 # backlog is retired. This mirrors Ruff's default error-focused families.
@@ -113,9 +134,50 @@ select = ["E4", "E7", "E9", "F"]
 # imports that are intentionally not referenced inside the defining module.
 "src/easyicu/__init__.py" = ["E402", "F401", "F822"]
 "src/easyicu/research_agent/__init__.py" = ["E402", "F401", "F822"]
-"src/easyicu/research_agent/*.py" = ["E402", "F401", "F841"]
-"src/easyicu/research_agent/**/*.py" = ["E402", "F401", "F841"]
-"src/easyicu/research_agent/pipeline.py" = ["E402", "F401", "F541"]
+"src/easyicu/research_agent/*.py" = ["E402"]
+"src/easyicu/research_agent/**/*.py" = ["E402"]
+# Historical F401/F841 debt is pinned to the exact files that contain it.
+# New research-agent files receive both rules automatically.
+"src/easyicu/research_agent/agents/core.py" = ["F401", "F841"]
+"src/easyicu/research_agent/audits/patterns.py" = ["F401"]
+"src/easyicu/research_agent/audits/validators.py" = ["F401", "F841"]
+"src/easyicu/research_agent/authority/provenance.py" = ["F401"]
+"src/easyicu/research_agent/authority/step_runtime.py" = ["F401"]
+"src/easyicu/research_agent/authority/typed_input_receipt.py" = ["F401"]
+"src/easyicu/research_agent/case_plugins/builder.py" = ["F401"]
+"src/easyicu/research_agent/cohort/schema.py" = ["F401"]
+"src/easyicu/research_agent/contracts/declared_product.py" = ["F401"]
+"src/easyicu/research_agent/contracts/table_one.py" = ["F401"]
+"src/easyicu/research_agent/discovery/idea_mining.py" = ["F401"]
+"src/easyicu/research_agent/execution/code_hygiene.py" = ["F401"]
+"src/easyicu/research_agent/execution/development_sample.py" = ["F401", "F841"]
+"src/easyicu/research_agent/execution/phase.py" = ["F401"]
+"src/easyicu/research_agent/execution/runners/deterministic_descriptive.py" = ["F401"]
+"src/easyicu/research_agent/figures/causal.py" = ["F401"]
+"src/easyicu/research_agent/figures/phenotype.py" = ["F401"]
+"src/easyicu/research_agent/figures/prediction.py" = ["F401"]
+"src/easyicu/research_agent/gates/preflight.py" = ["F401"]
+"src/easyicu/research_agent/learning/runtime.py" = ["F401"]
+"src/easyicu/research_agent/methods/survival.py" = ["F401", "F841"]
+"src/easyicu/research_agent/orchestration/experiment_spec.py" = ["F401"]
+"src/easyicu/research_agent/pipeline.py" = ["F401", "F541", "F841"]
+"src/easyicu/research_agent/providers/llm.py" = ["F401"]
+"src/easyicu/research_agent/providers/mocks.py" = ["F401", "F841"]
+"src/easyicu/research_agent/repairs/serialization.py" = ["F841"]
+"src/easyicu/research_agent/repairs/source.py" = ["F401"]
+"src/easyicu/research_agent/replication/notebook.py" = ["F401"]
+"src/easyicu/research_agent/replication/paper.py" = ["F841"]
+"src/easyicu/research_agent/reporting/bibtex.py" = ["F401"]
+"src/easyicu/research_agent/reporting/latex.py" = ["F401"]
+"src/easyicu/research_agent/reporting/reporting_checklist.py" = ["F401"]
+"src/easyicu/research_agent/reporting/reviewer.py" = ["F401", "F841"]
+"src/easyicu/research_agent/research_context/builder.py" = ["F401"]
+"src/easyicu/research_agent/research_context/prompt_scope.py" = ["F401"]
+"src/easyicu/research_agent/research_context/typed.py" = ["F401"]
+"src/easyicu/research_agent/resources/capability.py" = ["F401"]
+"src/easyicu/research_agent/resources/coder.py" = ["F401"]
+"src/easyicu/research_agent/robustness/panel.py" = ["F401"]
+"src/easyicu/research_agent/robustness/primary_effect.py" = ["F401"]
 # Legacy compact callback/specification files are tracked as lint debt rather
 # than reformatted in this behaviour-preserving research-agent cleanup pass.
 # 2026-07-03: paths re-mapped after the flat modules moved into subpackages

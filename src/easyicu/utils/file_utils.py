@@ -256,14 +256,9 @@ def default_config_path() -> str:
     """
     # In Python package, configs are in easyicu/data/
     from importlib import resources
-    try:
-        # Python 3.9+
-        with resources.as_file(resources.files('easyicu').joinpath('data')) as path:
-            return str(path)
-    except AttributeError:
-        # Python 3.7-3.8
-        import pkg_resources
-        return pkg_resources.resource_filename('easyicu', 'data')
+
+    with resources.as_file(resources.files("easyicu").joinpath("data")) as path:
+        return str(path)
 
 def user_config_path() -> Optional[List[str]]:
     """Get user config path from environment (R ricu user_config_path).

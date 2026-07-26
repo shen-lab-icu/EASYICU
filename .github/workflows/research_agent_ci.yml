@@ -60,6 +60,7 @@ jobs:
             "tqdm>=4.65" \
             "duckdb>=0.9.0" \
             "scipy>=1.10" \
+            "typing-extensions>=4.8" \
             "pytest>=7.0" \
             "pyyaml>=6.0" \
             "scikit-learn>=1.3" \
