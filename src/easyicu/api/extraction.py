@@ -1,0 +1,1963 @@
+"""Full-database extraction services.
+
+This module owns worker isolation, bounds enforcement, grouped extraction, and
+native-v2 export publication. The public API module only re-exports the stable
+entry points.
+"""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+from typing import Dict, List, Optional, Union
+
+import pandas as pd
+
+from ..base import BaseICULoader, detect_database_type, get_default_data_path
+from ..concept.catalog import CONCEPT_GROUPS_INTERNAL
+from ..config import DATABASE_ID_CONFIG
+from ..resources import load_dictionary
+from .cohort import get_all_patient_ids_impl
+from .concepts import (
+    _concepts_need_sofa2,
+    _normalize_patient_ids_for_db,
+    _sample_patient_ids,
+)
+
+
+def _get_all_patient_ids(
+    data_path: Union[str, Path],
+    database: Optional[str] = None,
+    max_patients: Optional[int] = None,
+) -> tuple[List, str]:
+    """Resolve extraction IDs through the fail-closed cohort service."""
+    return get_all_patient_ids_impl(
+        data_path,
+        database_id_config=DATABASE_ID_CONFIG,
+        detect_database_type_fn=detect_database_type,
+        base_loader_cls=BaseICULoader,
+        sample_patient_ids_fn=_sample_patient_ids,
+        database=database,
+        max_patients=max_patients,
+    )
+
+
+# ============================================================================
+# 全库提取 API — 按模块子进程隔离，16GB 安全
+# ============================================================================
+
+# Module definitions are derived from the shared web/export catalog so the
+# public extract_database() API cannot drift from the 19-module full export.
+EXTRACT_MODULES: Dict[str, List[str]] = {
+    module: list(concepts) for module, concepts in CONCEPT_GROUPS_INTERNAL.items()
+}
+
+# Fast-to-slow preferred order. Unknown future modules are appended below.
+_PREFERRED_EXTRACT_MODULE_ORDER: List[str] = [
+    "vitals",
+    "demographics",
+    "outcome",
+    "blood_gas",
+    "chemistry",
+    "hematology",
+    "ventilator",
+    "respiratory",
+    "vasopressors",
+    "medications",
+    "neurological",
+    "renal",
+    "circulatory",
+    "other_scores",
+    "sepsis_shared",
+    "sofa1_score",
+    "sofa2_score",
+    "sepsis3_sofa1",
+    "sepsis3_sofa2",
+]
+EXTRACT_MODULE_ORDER: List[str] = [
+    module for module in _PREFERRED_EXTRACT_MODULE_ORDER if module in EXTRACT_MODULES
+] + [
+    module
+    for module in EXTRACT_MODULES
+    if module not in _PREFERRED_EXTRACT_MODULE_ORDER
+]
+
+# 特殊概念 — 需要专用加载函数而非 load_concepts
+_SPECIAL_CONCEPT_MODULES = {"sepsis3_sofa1", "sepsis3_sofa2"}
+
+# 已知数据库路径映射（可被 data_paths 参数或环境变量 EASYICU_DATA_PATH 覆盖）
+# 默认使用环境变量中的数据根目录
+_DEFAULT_DB_PATH_CACHE: Dict[str, str] = {}
+
+
+def _get_default_db_path(database: str) -> Optional[str]:
+    """惰性解析单个数据库的默认路径（按需，带缓存）。
+
+    旧实现在 import api.py 时就为全部 6 个库递归扫描目录。
+    在慢速 FUSE 挂载上，每个 os.listdir 要数秒，且每个提取子进程
+    import 时都重复付出这笔开销。改为按需解析、只扫描真正用到的库。
+    """
+    if database in _DEFAULT_DB_PATH_CACHE:
+        return _DEFAULT_DB_PATH_CACHE[database]
+    _root = os.environ.get("EASYICU_DATA_PATH", "")
+    if not _root:
+        return None
+    try:
+        from easyicu.io.data_paths import find_database_path
+
+        path = find_database_path(_root, database)
+    except ImportError:
+        path = os.path.join(_root, database)
+    _DEFAULT_DB_PATH_CACHE[database] = path
+    return path
+
+
+def _build_default_db_paths() -> Dict[str, str]:
+    """解析全部 6 个数据库的默认路径（仅 extract_all_databases 使用）。"""
+    return {
+        db: p
+        for db in ["sic", "aumc", "hirid", "mimic", "miiv", "eicu"]
+        if (p := _get_default_db_path(db)) is not None
+    }
+
+
+# 特殊模块（Sepsis-3）在分组临时目录下的输出子目录名
+_SPECIAL_OUTPUT_DIRNAME = "_special"
+
+
+def _extract_worker_env_setup(data_path: str) -> None:
+    """提取子进程入口的共享环境准备。
+
+    本 worker 已是隔离子进程：模块退出后 OS 完整回收内存，模块间无碎片累积。
+    因此模块内部应一次性 in-process 加载，绝不要让 load_concepts 再启动“每批
+    子进程 fork”——每次 fork 都会重读共享源表(chartevents/labevents…)，是数倍
+    慢的根源。强制 in-process，让模块内单次扫表。
+    """
+    import os
+    import sys
+
+    os.environ.setdefault("EASYICU_DATA_PATH", data_path)
+    os.environ.setdefault("EASYICU_FORCE_INPROCESS_BATCH", "1")
+    _src_dir = os.path.dirname(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    )
+    if _src_dir not in sys.path:
+        sys.path.insert(0, _src_dir)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Concept-bounds enforcement (physiological plausibility clamp)
+# ─────────────────────────────────────────────────────────────────────────────
+# R ricu applies `clamp_var` (out-of-range raw value → NA) BEFORE hourly
+# aggregation, then `filter_bounds` after. EasyICU's DuckDB aggregation path
+# (`load_bucketed_table_aggregated` / `_multi_aggregated` / `_wide_aggregated` in
+# datasource.py) deliberately SKIPS the raw min/max WHERE-filter whenever a
+# `value_transform` or an inline unit-convert is present (the raw column may be a
+# different unit or VARCHAR — see datasource.py L3040-3049, 3108-3110), and the
+# "post-agg filter_bounds handled in concept.py" step those comments defer to was
+# never implemented (there is no concept.py and no filter_bounds anywhere in the
+# package). `_filter_concept_data` (load_concepts.py:1142) enforces min/max but is
+# only reached by the deprecated interactive loader, NOT the batch-export path.
+# Net effect: declared concept `min`/`max` in concept-dict.json are NOT enforced
+# for numeric concepts in `extract_database`, so gross source errors survive into
+# the export (observed in mimiciv: hr 1e7, map 9e6, sbp 1e6, resp 7e6, spo2 9.9e6,
+# peep 8.77e6, glu 1.28e6, wbc 1e6, lact 1.28e6). This is the single
+# post-aggregation enforcement point for the LONG per-concept (`merge=False`)
+# export: for each extracted concept it drops rows whose (post-conversion,
+# target-unit) value lies outside the concept's declared [min, max]. NaN/missing
+# and categorical (text-only) values are preserved. Idempotent — a no-op on data
+# that is already within bounds.
+_CONCEPT_BOUNDS_CACHE = None
+
+
+_BOUNDS_METADATA_KEYS = (
+    "rows_before",
+    "bounds_dropped",
+    "bounds_dropped_post_aggregation",
+    "bounds_count_status",
+    "bounds_raw_transformed_non_null",
+    "bounds_bounded_transformed_non_null",
+    "bounds_bounded_aggregate_non_null",
+    "bounds_unit_suspect",
+    "bounds_unbounded_retry",
+    "bounds_skipped",
+    "bounds_status",
+)
+
+
+def _load_concept_bounds_map():
+    """Return ``{concept_name: (min, max)}`` from the active concept dictionary.
+
+    Only concepts with at least one finite declared bound are included. Bounds are
+    in the concept's declared (target) unit, matching the post-conversion value the
+    aggregation path produces. Cached after first load.
+    """
+    global _CONCEPT_BOUNDS_CACHE
+    if _CONCEPT_BOUNDS_CACHE is not None:
+        return _CONCEPT_BOUNDS_CACHE
+    import os as _os
+    import json as _json
+
+    bounds = {}
+    data_dir = _os.path.join(
+        _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
+        "data",
+    )
+    dict_paths = [
+        _os.path.join(data_dir, "concept-dict.json"),
+        _os.path.join(data_dir, "sofa2-dict.json"),
+    ]
+    try:
+        for dict_path in dict_paths:
+            with open(dict_path) as _f:
+                _d = _json.load(_f)
+            for _name, _entry in _d.items():
+                if not isinstance(_entry, dict):
+                    continue
+                _mn = _entry.get("min")
+                _mx = _entry.get("max")
+                _mn = float(_mn) if _mn is not None else None
+                _mx = float(_mx) if _mx is not None else None
+                if _mn is not None or _mx is not None:
+                    bounds[_name] = (_mn, _mx)
+    except Exception as exc:
+        import warnings as _warnings
+
+        _warnings.warn(
+            f"Could not load concept bounds from {dict_path}: {exc}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        bounds = {}
+    _CONCEPT_BOUNDS_CACHE = bounds
+    return bounds
+
+
+def _bounds_metadata_from_manifest_info(info):
+    """Subset persisted concept-bound audit fields from a worker manifest entry."""
+    if not isinstance(info, dict):
+        return {}
+    return {k: info[k] for k in _BOUNDS_METADATA_KEYS if k in info}
+
+
+def _attach_bounds_metadata(df, info):
+    """Attach bounds audit metadata to an in-memory concept DataFrame."""
+    meta = _bounds_metadata_from_manifest_info(info)
+    if meta and hasattr(df, "attrs"):
+        df.attrs["easyicu_bounds"] = meta
+        for key, value in meta.items():
+            df.attrs[f"easyicu_{key}"] = value
+    return meta
+
+
+def _concept_result_info(path, info):
+    """Build the public output-dir concept entry, preserving bounds audit data."""
+    out = {"path": path, "rows": info.get("rows", 0)}
+    out.update(_bounds_metadata_from_manifest_info(info))
+    return out
+
+
+def _enforce_concept_bounds(df, concept_name):
+    """Drop rows whose numeric value for ``concept_name`` is outside its declared
+    [min, max]. The per-concept extraction DataFrame holds the value in a column
+    named after the concept. NaN/missing and non-numeric (categorical) values are
+    preserved. Returns ``(df, n_dropped)``.
+    """
+    import pandas as _pd
+
+    if not isinstance(df, _pd.DataFrame) or concept_name not in df.columns:
+        return df, 0
+    bnd = _load_concept_bounds_map().get(concept_name)
+    if bnd is None:
+        return df, 0
+    loader_diagnostics = df.attrs.get("easyicu_bounds_loader", {})
+    if isinstance(loader_diagnostics, dict) and loader_diagnostics.get(
+        "bounds_unit_suspect"
+    ):
+        # The SQL fast path saw at least 100 transformed non-null values but
+        # none within the declared bounds. It already retried without bounds,
+        # so retain those recovered values and surface the existing -1 signal.
+        return df, -1
+    mn, mx = bnd
+    v = _pd.to_numeric(df[concept_name], errors="coerce")
+    numeric = v.notna()
+    # UNIT-SAFETY GUARD: if a concept has BOTH bounds and its central value (median)
+    # falls outside [min,max], the values are almost certainly in the wrong unit for
+    # this database (e.g. temperature still in Fahrenheit, median ~98 vs bounds
+    # [32,42]). Bound-dropping would then delete valid-but-mis-united data, so SKIP
+    # enforcement and leave the concept untouched (surfaced upstream as a WARN). A
+    # correctly-united physiological concept always has its median well within bounds,
+    # so this never suppresses legitimate outlier removal. Requires enough data to
+    # make the median meaningful.
+    if mn is not None and mx is not None and int(numeric.sum()) >= 100:
+        med = float(v[numeric].median())
+        if med < mn or med > mx:
+            return (
+                df,
+                -1,
+            )  # sentinel: enforcement SKIPPED (unit-suspect), nothing dropped
+    in_range = _pd.Series(True, index=df.index)
+    if mn is not None:
+        in_range &= v >= mn
+    if mx is not None:
+        in_range &= v <= mx
+    # keep non-numeric/missing rows (NaN is "missing", not "out of range") and
+    # numeric rows that are within [min, max]; drop only genuine out-of-range values.
+    keep = (~numeric) | in_range
+    n_drop = int((~keep).sum())
+    if n_drop == 0:
+        return df, 0
+    return df.loc[keep].reset_index(drop=True), n_drop
+
+
+def _normalise_module_frame_for_parquet(result, concepts):
+    """Return one module frame in a stable, parquet-writable representation."""
+    import pandas as pd
+
+    if not isinstance(result, pd.DataFrame) or result.empty:
+        return None
+    result = result.copy()
+    # Indicator concepts can arrive as bool/float/NA object columns.  Arrow
+    # cannot write that mixed representation, while genuine text columns must
+    # stay text.
+    for column in result.columns:
+        if result[column].dtype == object:
+            numeric = pd.to_numeric(result[column], errors="coerce")
+            if bool((numeric.notna() | result[column].isna()).all()):
+                result[column] = numeric
+    return result
+
+
+def _stream_module_batches_to_parquet(
+    module_name: str,
+    concepts: List[str],
+    load_kwargs: Dict,
+    patient_ids_filter: Dict,
+    batch_size: int,
+    output_dir: str,
+    *,
+    loader=None,
+) -> Optional[Dict]:
+    """Append bounded patient batches directly to one module parquet file.
+
+    This is the constrained-host export path.  It deliberately trades repeated
+    source scans for a hard resident-memory boundary: no full module DataFrame
+    and no final ``concat`` are materialised in the worker.  The temporary
+    partial file lives beside the eventual module output, so callers that put
+    their output on an external disk never use the system volume for it.
+    """
+    import gc
+    import os
+    from pathlib import Path
+
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    from easyicu import load_concepts as _lc
+
+    if not patient_ids_filter or len(patient_ids_filter) != 1:
+        raise ValueError("streamed module export requires one patient-id filter")
+    id_col, all_ids = next(iter(patient_ids_filter.items()))
+    all_ids = list(all_ids)
+    if batch_size < 1:
+        raise ValueError("streamed module export batch_size must be positive")
+
+    destination = Path(output_dir) / f"{module_name}.parquet"
+    partial = destination.with_name(f".{module_name}.partial.parquet")
+    if partial.exists() or partial.is_symlink():
+        raise ValueError(f"refusing stale streamed module partial: {partial}")
+
+    writer = None
+    schema = None
+    columns = None
+    rows = 0
+    batch_load_kwargs = dict(load_kwargs)
+    batch_load_kwargs.pop("patient_ids", None)
+    try:
+        for start in range(0, len(all_ids), batch_size):
+            batch = _lc(
+                **batch_load_kwargs,
+                patient_ids={id_col: all_ids[start : start + batch_size]},
+            )
+            frame = _normalise_module_frame_for_parquet(batch, concepts)
+            if frame is not None:
+                if columns is None:
+                    columns = list(frame.columns)
+                else:
+                    # A sparse batch may omit an optional column; preserve the
+                    # first-batch public schema rather than silently changing
+                    # the parquet contract mid-file.
+                    frame = frame.reindex(columns=columns)
+                table = pa.Table.from_pandas(frame, preserve_index=False, schema=schema)
+                if writer is None:
+                    schema = table.schema
+                    writer = pq.ParquetWriter(partial, schema, compression="snappy")
+                writer.write_table(table)
+                rows += len(frame)
+            del batch, frame
+            if loader is not None:
+                try:
+                    loader.clear_cache()
+                except Exception:
+                    resolver = getattr(loader, "concept_resolver", None)
+                    if resolver is not None and hasattr(resolver, "drop_source_caches"):
+                        resolver.drop_source_caches()
+            gc.collect()
+        if writer is None:
+            return None
+        writer.close()
+        writer = None
+        os.replace(partial, destination)
+    except Exception:
+        if writer is not None:
+            writer.close()
+        partial.unlink(missing_ok=True)
+        raise
+
+    return {
+        "path": str(destination),
+        "rows": rows,
+        "concepts": [name for name in concepts if name in (columns or [])],
+    }
+
+
+def _run_module_extraction(
+    module_name: str,
+    concepts: List[str],
+    database: str,
+    data_path: str,
+    patient_ids_filter: Optional[Dict],
+    batch_size: Optional[int],
+    output_dir: str,
+    use_sofa2: bool = False,
+    loader=None,
+    stream_output_batches: bool = False,
+) -> None:
+    """加载一个模块的所有概念并写入 parquet + _manifest.json。
+
+    在 worker 子进程内运行；``loader`` 由分组 worker 传入，用于 OOM 降级
+    重试前先清掉共享缓存释放内存。
+    """
+    import json
+    import os
+    import time
+    import traceback
+    import pandas as pd
+    from easyicu import load_concepts as _lc
+
+    t0 = time.time()
+    saved = {}
+    errors = []
+
+    # 构造 load_concepts 参数
+    # use_sofa2 显式传入：分组模式下保持全组 loader 配置一致，
+    # 避免 sofa2 自动检测切换字典时重建 loader、丢掉组内共享缓存。
+    warnings = []
+    kwargs = dict(
+        data_path=data_path,
+        database=database,
+        concepts=concepts,
+        verbose=False,
+        merge=True,
+        concept_workers=1,
+        use_sofa2=use_sofa2,
+    )
+    if patient_ids_filter:
+        kwargs["patient_ids"] = patient_ids_filter
+
+    # ── 一个模块一次 load、合并成一个宽表、写一个 {module}.parquet（不重复 io）──
+    # load_concepts 一次拿到该模块**所有概念**（chartevents/labevents 等共享源表只扫
+    # 一次；内部若按患者分批也由它自己 concat，对外仍是一次调用、一次扫描）。
+    #
+    # 分批策略：**除超大队列外一律一次性**。只有患者数 > ONESHOT_MAX_PATIENTS（15万，
+    # 实际只有 eICU ~20万命中）才让 auto_batch_size 以 ≤ MAX_EXTRACT_CHUNKS（默认 3）份
+    # 启用。实测最重非 eICU 模块 miiv medications（49 概念 × 9.4万患者）merge=True 一次性
+    # 峰值仅 5.44GB，远低于预算；旧内存估算器约 3-5× 高估会把这类模块误判成要分批（见
+    # web 端 dataio.py:1657 的同款观察），故对 ≤15万 的库直接跳过估算、强制一次性。
+    ONESHOT_MAX_PATIENTS = 150_000
+    _n_ids = 0
+    if patient_ids_filter:
+        try:
+            _n_ids = len(next(iter(patient_ids_filter.values())))
+        except Exception:
+            _n_ids = 0
+    if _n_ids > ONESHOT_MAX_PATIENTS and (not batch_size or batch_size >= _n_ids):
+        try:
+            from easyicu.runtime.memory_manager import auto_batch_size as _auto_bs
+
+            # 稳定预算：用物理总内存判定（而非波动的当前可用），避免后台程序临时吃内存
+            # 把本可一次性的模块误判成分批。EASYICU_ONESHOT_BUDGET_MB 可覆盖此上限(MB)。
+            _stable_avail_mb = None
+            _env_budget = os.environ.get("EASYICU_ONESHOT_BUDGET_MB")
+            if _env_budget:
+                _stable_avail_mb = float(_env_budget) / 0.6
+            else:
+                try:
+                    import psutil as _ps
+
+                    _stable_avail_mb = _ps.virtual_memory().total / (1024 * 1024)
+                except Exception:
+                    _stable_avail_mb = None
+            _safe_bs = _auto_bs(
+                list(concepts), database, _n_ids, available_memory_mb=_stable_avail_mb
+            )
+            if _safe_bs and _safe_bs < _n_ids:
+                batch_size = _safe_bs
+        except Exception:
+            pass
+
+    if batch_size:
+        kwargs["batch_size"] = batch_size
+
+    streamed = False
+    result = None
+    try:
+        if stream_output_batches:
+            if not patient_ids_filter or not batch_size:
+                raise ValueError(
+                    "streamed module export requires patient_ids and batch_size"
+                )
+            streamed = True
+            stream_info = _stream_module_batches_to_parquet(
+                module_name,
+                concepts,
+                kwargs,
+                patient_ids_filter,
+                int(batch_size),
+                output_dir,
+                loader=loader,
+            )
+            if stream_info is not None:
+                saved[module_name] = stream_info
+        else:
+            result = _lc(**kwargs)
+    except MemoryError:
+        traceback.print_exc()
+        if streamed:
+            errors.append(f"streamed module export exhausted memory: {module_name}")
+            result = {}
+        else:
+            if loader is not None:
+                try:
+                    loader.concept_resolver.clear_table_cache()
+                except Exception:
+                    pass
+            _n = 0
+            try:
+                _n = (
+                    len(next(iter(patient_ids_filter.values())))
+                    if patient_ids_filter
+                    else 0
+                )
+            except Exception:
+                _n = 0
+            from easyicu.runtime.memory_manager import (
+                MAX_EXTRACT_CHUNKS as _MAX_CH,
+                _ceil_div as _cdiv,
+            )
+
+            fallback_bs = max(10000, _cdiv(_n, _MAX_CH)) if _n else 10000
+            errors.append(
+                f"{module_name}: one-shot OOM, retrying batched (batch_size={fallback_bs})"
+            )
+            kwargs["batch_size"] = fallback_bs
+            try:
+                result = _lc(**kwargs)
+            except Exception as e:
+                traceback.print_exc()
+                errors.append(f"load_concepts({module_name}) batched: {e}")
+                result = {}
+    except Exception as e:
+        traceback.print_exc()
+        errors.append(
+            f"{'streamed export' if streamed else 'load_concepts'}({module_name}): {e}"
+        )
+        result = {}
+
+    # 写出：load_concepts(merge=True) 直接返回该模块宽表（id + time + 每概念一列），
+    # 与 web 端(dataio.py)完全一致的成熟路径。**不再自造合并**——避免 endtime 列冲突、
+    # 递归概念(oxygenation_index/adv_resp/ecmo…)一次性 load 爆内存、以及把含 numpy 的
+    # 逐概念元数据塞进 manifest 导致 json.dump 崩溃等"手写合并"问题。生理边界在
+    # load_concepts 内部按 filter_bounds 预聚合强制（与 web 端同一套）。
+    if streamed:
+        pass
+    elif isinstance(result, pd.DataFrame) and len(result) > 0:
+        try:
+            result = _normalise_module_frame_for_parquet(result, concepts)
+            _cols = [c for c in concepts if c in result.columns]
+            path = os.path.join(output_dir, f"{module_name}.parquet")
+            result.to_parquet(path, index=False, engine="pyarrow")
+            saved[module_name] = {
+                "path": path,
+                "rows": len(result),
+                "concepts": _cols,
+            }
+        except Exception as e:
+            traceback.print_exc()
+            errors.append(f"write({module_name}): {e}")
+    elif isinstance(result, dict) and result:
+        # merge=True 应始终返回 DataFrame；若意外返回 dict，大声记错而不静默丢数据。
+        errors.append(
+            f"{module_name}: merge=True returned a dict ({len(result)} concepts) unexpectedly; not written"
+        )
+
+    elapsed = time.time() - t0
+    manifest = {
+        "module": module_name,
+        "saved": saved,
+        "errors": errors,
+        "warnings": warnings,
+        "elapsed_sec": round(elapsed, 1),
+    }
+    with open(os.path.join(output_dir, "_manifest.json"), "w") as f:
+        json.dump(manifest, f)
+
+
+def _extract_module_worker(
+    concepts: List[str],
+    database: str,
+    data_path: str,
+    patient_ids_filter: Optional[Dict] = None,
+    batch_size: Optional[int] = None,
+    output_dir: str = "",
+    module_name: str = "",
+):
+    """（兼容包装）单模块子进程入口。
+
+    新的默认入口是 _extract_module_group_worker（组内共享源表扫描）；
+    保留此包装以兼容仍按单模块 spawn 的旧调用方。
+    """
+    _extract_worker_env_setup(data_path)
+    _run_module_extraction(
+        module_name,
+        concepts,
+        database,
+        data_path,
+        patient_ids_filter,
+        batch_size,
+        output_dir,
+    )
+
+
+def _stream_special_extraction_batches(
+    special_modules: List[str],
+    database: str,
+    data_path: str,
+    patient_ids_filter: Dict,
+    batch_size: int,
+    output_dir: str,
+    *,
+    use_sofa2: bool,
+    published_output_dir: str,
+) -> None:
+    """Derive Sepsis labels from already-streamed dependency module artifacts.
+
+    The old path asked ``load_concepts`` to merge ``susp_inf``, ``sofa`` and
+    ``sofa2`` together, which can form a huge time-indexed intermediate even
+    for a tiny requested cohort.  In constrained mode the three dependency
+    modules have already been published one at a time.  Filter each parquet to
+    one patient batch, derive the patient-local labels, and append them.
+    """
+    import json
+    import os
+    import time
+
+    import pyarrow.dataset as ds
+    import pyarrow.parquet as pq
+
+    if not patient_ids_filter or len(patient_ids_filter) != 1:
+        raise ValueError("streamed special export requires one patient-id filter")
+    id_col, all_ids = next(iter(patient_ids_filter.items()))
+    all_ids = list(all_ids)
+    # SOFA dependencies can be wider than the ordinary vitals module.  Keep
+    # their individual workset especially small on a 16 GB consumer machine.
+    safe_batch_size = min(int(batch_size), 2_000)
+    concepts = [
+        concept
+        for module_name in special_modules
+        for concept in EXTRACT_MODULES.get(module_name, [])
+    ]
+    writers = {}
+    partials = {}
+    rows = {concept: 0 for concept in concepts}
+    errors = []
+    started = time.time()
+    source_root = Path(published_output_dir)
+
+    def _read_dependency(module_name: str, ids: List) -> "pd.DataFrame":
+        source = source_root / f"{module_name}.parquet"
+        if not source.is_file():
+            raise FileNotFoundError(f"missing streamed dependency module: {source}")
+        return (
+            ds.dataset(source, format="parquet")
+            .to_table(filter=ds.field(id_col).isin(ids))
+            .to_pandas()
+        )
+
+    def _append_frame(concept: str, frame) -> None:
+        if frame is None or frame.empty:
+            return
+        table = __import__("pyarrow").Table.from_pandas(frame, preserve_index=False)
+        if concept not in writers:
+            partial = Path(output_dir) / f".{concept}.partial.parquet"
+            partials[concept] = partial
+            writers[concept] = pq.ParquetWriter(
+                partial, table.schema, compression="snappy"
+            )
+        writers[concept].write_table(table)
+        rows[concept] += len(frame)
+
+    try:
+        for start in range(0, len(all_ids), safe_batch_size):
+            ids = all_ids[start : start + safe_batch_size]
+            susp = _read_dependency("sepsis_shared", ids)
+            sofa1 = _read_dependency("sofa1_score", ids)
+            sofa2 = _read_dependency("sofa2_score", ids)
+            time_col = next(
+                (
+                    name
+                    for name in (
+                        "charttime",
+                        "time",
+                        "starttime",
+                        "datetime",
+                        "Offset",
+                        "measuredat_minutes",
+                        "measuredat",
+                    )
+                    if name in susp.columns
+                    and name in sofa1.columns
+                    and name in sofa2.columns
+                ),
+                None,
+            )
+            if time_col is None or "susp_inf" not in susp.columns:
+                errors.append(
+                    "streamed Sepsis dependencies lack a shared time index or susp_inf"
+                )
+                continue
+            if "sep3_sofa1" in concepts and "sofa" in sofa1.columns:
+                from ..scores.sepsis import sep3 as _sep3
+
+                frame = _sep3(
+                    sofa1[[id_col, time_col, "sofa"]],
+                    susp[[id_col, time_col, "susp_inf"]],
+                    id_cols=[id_col],
+                    index_col=time_col,
+                ).rename(columns={"sep3": "sep3_sofa1"})
+                if "sep3_sofa1" in frame.columns:
+                    frame["sep3_sofa1"] = frame["sep3_sofa1"].fillna(0).astype(int)
+                _append_frame("sep3_sofa1", frame)
+            if "sep3_sofa2" in concepts and "sofa2" in sofa2.columns:
+                from ..scores.sepsis_sofa2 import sep3_sofa2 as _sep3_sofa2
+
+                frame = _sep3_sofa2(
+                    sofa2[[id_col, time_col, "sofa2"]],
+                    susp[[id_col, time_col, "susp_inf"]],
+                    id_cols=[id_col],
+                    index_col=time_col,
+                )
+                if "sep3_sofa2" in frame.columns:
+                    frame["sep3_sofa2"] = frame["sep3_sofa2"].fillna(0).astype(int)
+                _append_frame("sep3_sofa2", frame)
+
+        saved = {}
+        for concept, writer in writers.items():
+            writer.close()
+            destination = Path(output_dir) / f"{concept}.parquet"
+            os.replace(partials[concept], destination)
+            saved[concept] = {"path": str(destination), "rows": rows[concept]}
+    except Exception:
+        for writer in writers.values():
+            writer.close()
+        for partial in partials.values():
+            partial.unlink(missing_ok=True)
+        raise
+
+    manifest = {
+        "module": "special_concepts",
+        "saved": saved,
+        "errors": errors,
+        "elapsed_sec": round(time.time() - started, 1),
+    }
+    with open(os.path.join(output_dir, "_manifest.json"), "w") as handle:
+        json.dump(manifest, handle)
+
+
+def _run_special_extraction(
+    special_modules: List[str],
+    database: str,
+    data_path: str,
+    patient_ids_filter: Optional[Dict],
+    batch_size: Optional[int],
+    output_dir: str,
+    use_sofa2: bool = False,
+    stream_output_batches: bool = False,
+    published_output_dir: Optional[str] = None,
+) -> None:
+    """加载特殊概念（Sepsis-3 等）并写入 parquet + _manifest.json。
+
+    sep3_sofa1/sep3_sofa2 不在 concept-dict 中，需要先加载 susp_inf + sofa/sofa2，
+    然后通过 _load_sep3_diagnosis 逻辑计算 Sepsis-3 诊断。分组模式下与
+    sofa1_score/sofa2_score 同进程运行，susp_inf/sofa/sofa2 直接命中组内缓存。
+    """
+    import json
+    import os
+    import time
+    import traceback
+    import pandas as pd
+    from easyicu import load_concepts as _lc
+
+    if stream_output_batches:
+        if not patient_ids_filter or not batch_size:
+            raise ValueError(
+                "streamed special export requires patient_ids and batch_size"
+            )
+        _stream_special_extraction_batches(
+            special_modules,
+            database,
+            data_path,
+            patient_ids_filter,
+            int(batch_size),
+            output_dir,
+            use_sofa2=use_sofa2,
+            published_output_dir=published_output_dir or output_dir,
+        )
+        return
+
+    t0 = time.time()
+    saved = {}
+    errors = []
+
+    # 构建公共加载参数（use_sofa2 显式传入以保持组内 loader 配置一致）
+    load_kw = dict(
+        data_path=data_path,
+        database=database,
+        verbose=False,
+        merge=True,
+        use_sofa2=use_sofa2,
+    )
+    if patient_ids_filter:
+        load_kw["patient_ids"] = patient_ids_filter
+    if batch_size:
+        load_kw["batch_size"] = batch_size
+
+    # 收集需要的概念: sep3_sofa1 需要 sofa, sep3_sofa2 需要 sofa2
+    need_sofa1 = any(
+        "sep3_sofa1" in EXTRACT_MODULES.get(m, []) for m in special_modules
+    )
+    need_sofa2 = any(
+        "sep3_sofa2" in EXTRACT_MODULES.get(m, []) for m in special_modules
+    )
+
+    deps = ["susp_inf"]
+    if need_sofa1:
+        deps.append("sofa")
+    if need_sofa2:
+        deps.append("sofa2")
+
+    try:
+        merged = _lc(concepts=deps, **load_kw)
+    except Exception:
+        # sofa2 可能不可用，回退到仅 sofa
+        try:
+            merged = _lc(concepts=["susp_inf", "sofa"], **load_kw)
+            need_sofa2 = False
+        except Exception as e:
+            traceback.print_exc()
+            errors.append(f"Failed to load dependencies {deps}: {e}")
+            merged = pd.DataFrame()
+
+    if isinstance(merged, pd.DataFrame) and not merged.empty:
+        # 检测 ID 和时间列
+        id_col = next(
+            (
+                c
+                for c in [
+                    "stay_id",
+                    "patientunitstayid",
+                    "admissionid",
+                    "patientid",
+                    "icustay_id",
+                    "CaseID",
+                ]
+                if c in merged.columns
+            ),
+            None,
+        )
+        time_col = next(
+            (
+                c
+                for c in [
+                    "charttime",
+                    "time",
+                    "starttime",
+                    "datetime",
+                    "Offset",
+                    "measuredat_minutes",
+                    "measuredat",
+                ]
+                if c in merged.columns
+            ),
+            None,
+        )
+
+        if id_col and time_col and "susp_inf" in merged.columns:
+            # Sepsis-3 = a >=2-point SOFA increase WITHIN the suspected-infection
+            # window (delta rule, R ricu sep3), NOT an absolute SOFA>=2. Use the
+            # shared sep3()/sep3_sofa2() so both labels match load_sepsis3 and the
+            # module export (unified to delta 2026-06-22).
+            if need_sofa1 and "sofa" in merged.columns:
+                from ..scores.sepsis import sep3 as _sep3
+
+                result = _sep3(
+                    merged[[id_col, time_col, "sofa"]],
+                    merged[[id_col, time_col, "susp_inf"]],
+                    id_cols=[id_col],
+                    index_col=time_col,
+                ).rename(columns={"sep3": "sep3_sofa1"})
+                if "sep3_sofa1" in result.columns:
+                    result["sep3_sofa1"] = result["sep3_sofa1"].fillna(0).astype(int)
+                if len(result) > 0:
+                    path = os.path.join(output_dir, "sep3_sofa1.parquet")
+                    result.to_parquet(path, index=False, engine="pyarrow")
+                    saved["sep3_sofa1"] = {"path": path, "rows": len(result)}
+
+            if need_sofa2 and "sofa2" in merged.columns:
+                from ..scores.sepsis_sofa2 import sep3_sofa2 as _sep3_sofa2
+
+                result = _sep3_sofa2(
+                    merged[[id_col, time_col, "sofa2"]],
+                    merged[[id_col, time_col, "susp_inf"]],
+                    id_cols=[id_col],
+                    index_col=time_col,
+                )
+                if "sep3_sofa2" in result.columns:
+                    result["sep3_sofa2"] = result["sep3_sofa2"].fillna(0).astype(int)
+                if len(result) > 0:
+                    path = os.path.join(output_dir, "sep3_sofa2.parquet")
+                    result.to_parquet(path, index=False, engine="pyarrow")
+                    saved["sep3_sofa2"] = {"path": path, "rows": len(result)}
+        else:
+            missing = []
+            if not id_col:
+                missing.append("id_col")
+            if not time_col:
+                missing.append("time_col")
+            if "susp_inf" not in merged.columns:
+                missing.append("susp_inf")
+            # 🔧 FIX 2026-05-11: 对于 sic/hirid 等不支持 susp_inf 的数据库，
+            # sep3_sofa1/sep3_sofa2 无法计算属正常情况，不应记为错误。
+            # 只有当 id/time 列也缺失时才认为是真正的错误。
+            if missing == ["susp_inf"]:
+                pass  # 静默跳过：数据库不支持 susp_inf，sep3 概念不适用
+            else:
+                errors.append(
+                    f"Missing columns: {missing}, available: {list(merged.columns)[:10]}"
+                )
+
+    elapsed = time.time() - t0
+    manifest = {
+        "module": "special_concepts",
+        "saved": saved,
+        "errors": errors,
+        "elapsed_sec": round(elapsed, 1),
+    }
+    with open(os.path.join(output_dir, "_manifest.json"), "w") as f:
+        json.dump(manifest, f)
+
+
+def _extract_special_worker(
+    special_modules: List[str],
+    database: str,
+    data_path: str,
+    patient_ids_filter: Optional[Dict] = None,
+    batch_size: Optional[int] = None,
+    output_dir: str = "",
+):
+    """（兼容包装）特殊概念子进程入口 — 参见 _extract_module_group_worker。"""
+    _extract_worker_env_setup(data_path)
+    _run_special_extraction(
+        special_modules,
+        database,
+        data_path,
+        patient_ids_filter,
+        batch_size,
+        output_dir,
+    )
+
+
+def _extract_module_group_worker(
+    module_specs: List[tuple],
+    special_modules: List[str],
+    database: str,
+    data_path: str,
+    patient_ids_filter: Optional[Dict],
+    batch_size: Optional[int],
+    output_root: str,
+    use_sofa2: bool,
+    stream_output_batches: bool = False,
+    published_output_dir: Optional[str] = None,
+):
+    """在一个子进程中顺序提取一组共享源表的模块。
+
+    keep_cache 让组内模块共享 raw/table 缓存（受 EASYICU_CACHE_BUDGET_MB
+    字节预算约束），chartevents/labevents 等重表每组只扫一次，而不是每
+    模块重扫一遍；子进程退出后 OS 仍完整回收内存。分组因此是“缓存复用”
+    与“内存隔离”之间的折中：组内复用，组间隔离。
+
+    module_specs: [(module_name, [concepts...]), ...]，每个模块写
+    ``output_root/<module_name>/``；特殊模块写 ``output_root/_special/``。
+    """
+    import os
+    import traceback
+
+    _extract_worker_env_setup(data_path)
+    from easyicu.api import keep_cache as _keep_cache
+
+    with _keep_cache(
+        database=database, data_path=data_path, use_sofa2=use_sofa2
+    ) as _loader:
+        for module_name, concepts in module_specs:
+            out_dir = os.path.join(output_root, module_name)
+            os.makedirs(out_dir, exist_ok=True)
+            try:
+                _run_module_extraction(
+                    module_name,
+                    concepts,
+                    database,
+                    data_path,
+                    patient_ids_filter,
+                    batch_size,
+                    out_dir,
+                    use_sofa2=use_sofa2,
+                    loader=_loader,
+                    stream_output_batches=stream_output_batches,
+                )
+            except Exception:
+                # _run_module_extraction 已内部捕获常规异常并写 manifest；
+                # 这里兜底保证一个模块的意外崩溃不拖垮组内后续模块。
+                traceback.print_exc()
+        if special_modules:
+            sp_dir = os.path.join(output_root, _SPECIAL_OUTPUT_DIRNAME)
+            os.makedirs(sp_dir, exist_ok=True)
+            try:
+                _run_special_extraction(
+                    special_modules,
+                    database,
+                    data_path,
+                    patient_ids_filter,
+                    batch_size,
+                    sp_dir,
+                    use_sofa2=use_sofa2,
+                    stream_output_batches=stream_output_batches,
+                    published_output_dir=published_output_dir,
+                )
+            except Exception:
+                traceback.print_exc()
+
+
+# 分组亲和表：同组模块共享同一批重源表（chartevents/labevents/inputevents
+# 家族），或互为依赖（SOFA 闭包）。分组只影响“哪些模块共用一个子进程 +
+# keep_cache”，不改变模块内容、输出布局或模块顺序语义。
+_EXTRACT_MODULE_GROUP_AFFINITY: List[List[str]] = [
+    # chartevents / nursecharting 家族
+    ["vitals", "neurological", "respiratory", "ventilator"],
+    # 入科级小表（icustays/admissions/patients）
+    ["demographics", "outcome"],
+    # labevents 家族
+    ["blood_gas", "chemistry", "hematology", "renal"],
+    # inputevents / prescriptions 家族
+    ["vasopressors", "medications", "circulatory"],
+    # 评分闭包：SOFA 组件被 sofa1/sofa2 共享，sep3_* 复用 susp_inf+sofa/sofa2
+    ["other_scores", "sepsis_shared", "sofa1_score", "sofa2_score"],
+]
+
+
+def _group_modules_for_extraction(
+    normal_modules: List[str],
+    special_modules: List[str],
+    group_modules: bool = True,
+) -> List[Dict[str, List[str]]]:
+    """把请求的模块划分为子进程组。
+
+    返回 [{'modules': [...], 'special': [...]}, ...]。group_modules=False
+    时退化为每模块一组（旧行为）。未出现在亲和表中的新模块各自成组。
+    特殊模块（Sepsis-3）挂到评分组上（若本次请求包含评分组），使
+    susp_inf/sofa/sofa2 命中组内缓存；否则单独成组。
+    """
+    if not group_modules:
+        groups: List[Dict[str, List[str]]] = [
+            {"modules": [m], "special": []} for m in normal_modules
+        ]
+        if special_modules:
+            groups.append({"modules": [], "special": list(special_modules)})
+        return groups
+
+    groups = []
+    assigned = set()
+    for affinity in _EXTRACT_MODULE_GROUP_AFFINITY:
+        members = [m for m in normal_modules if m in affinity]
+        if members:
+            groups.append({"modules": members, "special": []})
+            assigned.update(members)
+    for m in normal_modules:
+        if m not in assigned:
+            groups.append({"modules": [m], "special": []})
+
+    if special_modules:
+        target = next(
+            (
+                g
+                for g in groups
+                if any(
+                    m in ("sofa1_score", "sofa2_score", "sepsis_shared")
+                    for m in g["modules"]
+                )
+            ),
+            None,
+        )
+        if target is None:
+            groups.append({"modules": [], "special": list(special_modules)})
+        else:
+            target["special"] = list(special_modules)
+    return groups
+
+
+_NATIVE_EXPORT_SCHEMA_V2 = "easyicu_native_export_v2"
+
+
+def _publish_native_export_v2(
+    *,
+    database: str,
+    data_path: str,
+    output_dir: str,
+    modules: List[str],
+    max_patients: Optional[int],
+    result: Dict,
+) -> Dict[str, object]:
+    """Seal completed grouped-module files as one native-v2 package.
+
+    The raw database has already been consumed by the grouped workers. This
+    finalization reads only the newly written parquet files once, to validate
+    their physical values and bind each column to producer-owned metadata. A
+    partial extraction never gets a root native manifest.
+    """
+    import json
+    import time
+
+    from ..concept.export_metadata import (
+        ExportMetadataError,
+        build_export_file_metadata_binding,
+        missing_primary_metadata_concepts,
+    )
+    from ..concept.metadata_sidecar import (
+        EXPORT_PHYSICAL_SCOPE,
+        ColumnMetadataSidecar,
+        write_content_addressed_sidecar,
+    )
+    from ..config import load_src_cfg
+
+    output_root = Path(output_dir)
+    root_manifest = output_root / "_manifest.json"
+    if root_manifest.exists() or root_manifest.is_symlink():
+        raise ValueError(
+            "native_export_v2 refuses an existing root _manifest.json; "
+            "use a fresh output directory"
+        )
+
+    failures = {
+        module: list((result.get("modules", {}).get(module) or {}).get("errors") or [])
+        for module in modules
+        if list((result.get("modules", {}).get(module) or {}).get("errors") or [])
+    }
+    missing_module_results = [
+        module for module in modules if module not in result.get("modules", {})
+    ]
+    if failures or missing_module_results:
+        raise ValueError(
+            "native_export_v2 requires every requested module to finish before "
+            f"publication (failures={sorted(failures)}, "
+            f"missing_results={missing_module_results})"
+        )
+
+    # Structural non-availability (for example, a database without a Sepsis-3
+    # source) is not an extraction failure. It has no physical file and must not
+    # be silently given a typed binding; record it separately and select only
+    # the files the producer actually materialized.
+    unavailable_modules = [
+        {
+            "module": module,
+            "reason": "producer_returned_no_physical_output",
+            "concept_ids": list(EXTRACT_MODULES[module]),
+        }
+        for module in modules
+        if not (output_root / f"{module}.parquet").is_file()
+    ]
+    published_modules = [
+        module for module in modules if (output_root / f"{module}.parquet").is_file()
+    ]
+    if not published_modules:
+        raise ValueError("native_export_v2 has no physical module output to seal")
+
+    normalized_database = str(database).strip().lower()
+    dictionary = load_dictionary(include_sofa2=True)
+    source_config = load_src_cfg(normalized_database)
+    class_prefixes = tuple(
+        str(value).strip().lower()
+        for value in source_config.class_prefix
+        if str(value).strip()
+    )
+    requested_concept_plan = {
+        module: list(EXTRACT_MODULES[module]) for module in published_modules
+    }
+    concept_plan: Dict[str, List[str]] = {}
+    unavailable_concepts: List[Dict[str, str]] = []
+    files: List[Dict[str, object]] = []
+    file_bindings = []
+
+    for module in published_modules:
+        relative_path = f"{module}.parquet"
+        # This is an output validation pass, not a second scan of any raw table.
+        frame = pd.read_parquet(output_root / relative_path)
+        produced_concepts: Optional[set[str]] = None
+        module_manifest_path = output_root / f"{module}.manifest.json"
+        if module_manifest_path.is_file() and not module_manifest_path.is_symlink():
+            module_manifest = json.loads(
+                module_manifest_path.read_text(encoding="utf-8")
+            )
+            saved = module_manifest.get("saved")
+            if isinstance(saved, dict):
+                produced_concepts = set()
+                for saved_name, record in saved.items():
+                    if isinstance(saved_name, str):
+                        produced_concepts.add(saved_name)
+                    if isinstance(record, dict):
+                        produced_concepts.update(
+                            concept
+                            for concept in (record.get("concepts") or [])
+                            if isinstance(concept, str)
+                        )
+        structurally_unavailable = {
+            concept
+            for concept in requested_concept_plan[module]
+            if produced_concepts is not None and concept not in produced_concepts
+        }
+        concept_plan[module] = [
+            concept
+            for concept in requested_concept_plan[module]
+            if concept not in structurally_unavailable
+        ]
+        unavailable_concepts.extend(
+            {
+                "module": module,
+                "concept": concept,
+                "reason": "producer_returned_no_physical_column",
+            }
+            for concept in requested_concept_plan[module]
+            if concept in structurally_unavailable
+        )
+        try:
+            binding = build_export_file_metadata_binding(
+                relative_path=relative_path,
+                module=module,
+                frame=frame,
+                concept_ids=concept_plan[module],
+                database=normalized_database,
+                database_class_prefixes=class_prefixes,
+                dictionary=dictionary,
+            )
+        except ExportMetadataError as exc:
+            raise ValueError(
+                f"native_export_v2 cannot seal {relative_path}: {exc.error}"
+            ) from exc
+        file_bindings.append(binding)
+        files.append(
+            {
+                "file": relative_path,
+                "module": module,
+                "concepts": len(concept_plan[module]),
+                "concept_ids": concept_plan[module],
+                "rows": int(frame.shape[0]),
+                "column_metadata_columns": list(binding.columns),
+            }
+        )
+
+    missing_primary = missing_primary_metadata_concepts(
+        concept_plan=concept_plan,
+        file_bindings=file_bindings,
+    )
+    if missing_primary:
+        raise ValueError(
+            "native_export_v2 cannot seal selected concepts without a primary "
+            f"physical binding: {missing_primary}"
+        )
+
+    sidecar = ColumnMetadataSidecar(
+        source_database=normalized_database,
+        source_database_class_prefixes=class_prefixes,
+        scope=EXPORT_PHYSICAL_SCOPE,
+        files=tuple(file_bindings),
+    )
+    sidecar_ref = write_content_addressed_sidecar(output_root, sidecar)
+    manifest = {
+        "schema_version": _NATIVE_EXPORT_SCHEMA_V2,
+        "database": normalized_database,
+        "data_path": str(data_path),
+        "format": "parquet",
+        "max_patients": max_patients,
+        "generated": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "export_kind": "grouped_module_extraction",
+        "unavailable_modules": unavailable_modules,
+        "unavailable_concepts": unavailable_concepts,
+        "concept_selection": {
+            "mode": "all_in_selected_modules",
+            "modules": concept_plan,
+        },
+        "files": files,
+        "feature_definitions": {"included": False},
+        "column_metadata": sidecar_ref.to_dict(),
+    }
+    temporary_manifest = output_root / ".native-export-v2-manifest.tmp"
+    temporary_manifest.write_text(
+        json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+    os.replace(temporary_manifest, root_manifest)
+    return {
+        "manifest": str(root_manifest),
+        "column_metadata": sidecar_ref.file,
+        "column_metadata_sha256": sidecar_ref.sha256,
+        "output_validation_reads": len(files),
+    }
+
+
+def extract_database(
+    database: str,
+    data_path: Optional[Union[str, Path]] = None,
+    output_dir: Optional[Union[str, Path]] = None,
+    modules: Optional[List[str]] = None,
+    patient_ids: Optional[Union[List, Dict]] = None,
+    max_patients: Optional[int] = None,
+    batch_size: Optional[int] = None,
+    group_modules: bool = True,
+    native_export_v2: bool = False,
+    stream_output_batches: bool = False,
+    verbose: bool = True,
+) -> Dict:
+    """按 19 个模块分组、子进程隔离地提取整个数据库的全部特征。
+
+    ★ 这是全量特征提取的推荐入口。 不要为了提取全量特征自己写
+    `load_concepts` 循环——尤其不要按单概念或小批 patient_ids 循环，那会让
+    共享源表(chartevents/labevents…)被反复重读，慢上数倍。
+
+    工作原理与性能：
+      * 概念按 19 个模块分组(EXTRACT_MODULE_ORDER)，每个模块一次性
+        load_concepts(模块全部概念)，共享源表只扫一次。
+      * 共享同族源表的模块进一步合并为分组(_EXTRACT_MODULE_GROUP_AFFINITY)，
+        每组一个子进程、组内用 keep_cache 复用 raw/table 缓存：
+        chartevents/labevents 等重表每组只扫一次，而不是每模块重扫一遍；
+        SOFA 闭包只算一次并被 sofa1/sofa2/sep3_* 复用。缓存受
+        EASYICU_CACHE_BUDGET_MB 字节预算约束（默认物理内存的 25%），
+        8-16GB 机器安全。
+      * 每组在独立子进程中运行，组退出后 OS 完整回收内存（含 pymalloc
+        arena 碎片），主进程 RSS 几乎不增长。group_modules=False 或环境变量
+        EASYICU_EXTRACT_GROUPING=0 退回每模块一个子进程的旧行为。
+      * 模块内默认 **不分批、一次性 in-process** 加载：实测单模块峰值 RSS
+        恒定 ~2-3GB(与队列规模无关)，故 16GB 机器也能对任意规模数据库一次性
+        全量提取。仅当一次性确实 OOM(极小内存机器的最大队列)时，worker 自动
+        降级为有界分批。
+      * 参考实测：MIMIC-III 全量 61,532 stays 的 SOFA-2 六分量 ~6 分钟。
+
+    Args:
+        database: 数据库类型 ('miiv', 'eicu', 'aumc', 'hirid', 'mimic', 'sic')
+        data_path: 数据路径（None 则按数据库名自动解析）
+        output_dir: 输出目录（None 则不写文件，仅返回 dict）
+        modules: 要提取的模块列表（None = 全部 19 个模块）
+        patient_ids: 患者 ID 列表或 dict（None = 全部患者）
+        max_patients: 限制患者数量（与 patient_ids 互斥）
+        batch_size: 模块内患者分批大小。None(默认) = 不分批，一次性 in-process
+            加载(推荐，最快)。仅在极小内存机器上想强制限制峰值内存时才显式传值。
+        group_modules: True(默认) = 共享源表的模块合并为分组子进程并复用
+            keep_cache 缓存；False = 每模块一个子进程（旧行为）。
+        native_export_v2: True 时，在所有模块成功后基于刚写出的 parquet
+            文件建立 native-v2 typed metadata sidecar；不会重读原始表。若任何
+            模块或 metadata 绑定失败，不会发布根 ``_manifest.json``。
+        stream_output_batches: 将显式患者批次直接追加写入模块 parquet，不在
+            worker 内合并整模块 DataFrame。用于本地磁盘/内存受限且输出位于
+            外置盘的完整导出；会牺牲部分源表复用以换取稳定的峰值内存。
+        verbose: 是否打印进度
+
+    Returns:
+        dict: {
+            'database': str,
+            'num_patients': int,
+            'modules': {module_name: {'concepts': {name: DataFrame}, 'elapsed': float, 'errors': list}},
+            'total_elapsed': float,
+            'output_dir': str or None,
+        }
+
+    Examples:
+        >>> # 提取 AUMC 全部特征到目录
+        >>> result = extract_database('aumc', output_dir='/tmp/aumc_export')
+        >>> print(f"共 {result['num_patients']} 患者, {result['total_elapsed']:.0f}s")
+
+        >>> # 仅提取 vitals 和 demographics，返回 DataFrame
+        >>> result = extract_database('miiv', modules=['vitals', 'demographics'])
+        >>> hr_df = result['modules']['vitals']['concepts']['hr']
+    """
+    import multiprocessing as mp
+    import tempfile
+    import json
+    import time
+    import shutil
+
+    from ..runtime.memory_manager import get_rss_mb
+
+    t_start = time.time()
+
+    # 确定数据路径
+    if data_path is None:
+        data_path = _get_default_db_path(database)
+        if data_path is None:
+            data_path = get_default_data_path()
+    data_path = str(data_path)
+
+    # 磁盘溢写 / 批处理中间文件的默认落点：**输出目录旁的 .easyicu_spill/**，而不是
+    # 系统临时目录（常在快满的系统盘上）。输出目录通常在用户为数据特意选的大盘上，
+    # 这样零配置即安全，调用方无需每次手设 TMPDIR / EASYICU_DUCKDB_TEMP_DIR。放在
+    # 最前，确保后续所有 DuckDB 连接与 fork 出的 worker 子进程都继承此设置。
+    # opt-out：显式把 EASYICU_DUCKDB_TEMP_DIR 指向别处（非 .easyicu_spill）则完全尊重。
+    # 多库循环：每库各自重指向本库输出旁，故用 basename 判定"是否用户自定义"。
+    if output_dir is not None:
+        _cur_spill = os.environ.get("EASYICU_DUCKDB_TEMP_DIR")
+        _user_spill = (
+            _cur_spill is not None
+            and os.path.basename(os.path.normpath(_cur_spill)) != ".easyicu_spill"
+        )
+        if not _user_spill:
+            _spill_root = os.path.join(
+                os.path.abspath(str(output_dir)), ".easyicu_spill"
+            )
+            try:
+                os.makedirs(_spill_root, exist_ok=True)
+                os.environ["EASYICU_DUCKDB_TEMP_DIR"] = _spill_root
+                os.environ["TMPDIR"] = _spill_root
+                tempfile.tempdir = _spill_root
+            except Exception:
+                pass
+
+    # 获取患者 ID
+    if patient_ids is None:
+        all_ids, id_col = _get_all_patient_ids(data_path, database, max_patients)
+        if not all_ids:
+            raise ValueError(
+                f"无法获取 {database} 的患者ID，请检查 data_path: {data_path}"
+            )
+        patient_ids_filter = {id_col: all_ids}
+    else:
+        patient_ids_filter = _normalize_patient_ids_for_db(database, patient_ids)
+        id_col = list(patient_ids_filter.keys())[0]
+        all_ids = list(patient_ids_filter.values())[0]
+
+    num_patients = len(all_ids)
+
+    # 默认 batch_size：不分批。
+    # 每个模块已在独立子进程(_extract_module_worker)中运行，模块退出后 OS 完整
+    # 回收内存，所以模块间不会累积碎片。实测单模块峰值 RSS 恒定 ~2-3GB(与队列
+    # 规模无关，因为 load_concepts 按源表流式处理)，全量 6 个库都能一次装下。
+    # 主动分批只会让 load_concepts 每批重读共享源表(chartevents/labevents…)，
+    # 数倍变慢——这是用户“怎么这么慢”的根因。故默认用大于任意队列的哨兵值，
+    # 让模块内单次扫表完成。仅在极端机器上由用户显式传 batch_size 覆盖。
+    if stream_output_batches:
+        # The bounded writer needs real batches.  10K stays keeps the largest
+        # MIMIC-IV chart-event module below the host-memory/swap cliff while
+        # still avoiding tiny, pathological per-patient reads.
+        batch_size = int(batch_size or min(10_000, num_patients))
+        _auto_one_shot = False
+    elif batch_size is None:
+        batch_size = max(num_patients + 1, 2_000_000)
+        _auto_one_shot = True
+    else:
+        _auto_one_shot = False
+
+    # 确定要提取的模块
+    if modules is None:
+        modules = list(EXTRACT_MODULE_ORDER)
+    else:
+        # 保持用户指定顺序，但验证模块名
+        for m in modules:
+            if m not in EXTRACT_MODULES:
+                raise ValueError(
+                    f"未知模块 '{m}'，可选: {list(EXTRACT_MODULES.keys())}"
+                )
+
+    # 创建输出目录
+    if output_dir is not None:
+        output_dir = str(output_dir)
+        os.makedirs(output_dir, exist_ok=True)
+    if native_export_v2 and output_dir is None:
+        raise ValueError("native_export_v2 requires output_dir")
+    if native_export_v2 and output_dir is not None:
+        native_manifest = Path(output_dir) / "_manifest.json"
+        if native_manifest.exists() or native_manifest.is_symlink():
+            raise ValueError(
+                "native_export_v2 refuses an existing root _manifest.json; "
+                "use a fresh output directory"
+            )
+
+    if verbose:
+        rss = get_rss_mb()
+        print(f"{'='*60}")
+        print(f"📊 extract_database: {database}")
+        print(f"   患者数: {num_patients:,}, 模块数: {len(modules)}")
+        print(
+            f"   批策略: {'一次性 in-process (推荐)' if _auto_one_shot else f'batch_size={batch_size}'}"
+        )
+        print(f"   RSS: {rss:.0f}MB, 输出: {output_dir or '仅内存'}")
+        print(f"{'='*60}")
+
+    result = {
+        "database": database,
+        "num_patients": num_patients,
+        "modules": {},
+        "total_elapsed": 0,
+        "output_dir": output_dir,
+    }
+
+    # 分离普通模块和特殊模块
+    normal_modules = [m for m in modules if m not in _SPECIAL_CONCEPT_MODULES]
+    special_modules = [m for m in modules if m in _SPECIAL_CONCEPT_MODULES]
+
+    mp_ctx = mp.get_context("fork" if os.name != "nt" else "spawn")
+
+    # ---- 模块分组：组内共享源表扫描（keep_cache），组间子进程隔离 ----
+    group_flag = group_modules and not stream_output_batches
+    _env_grouping = os.environ.get("EASYICU_EXTRACT_GROUPING", "").strip().lower()
+    if _env_grouping in ("0", "off", "false", "no"):
+        group_flag = False
+
+    groups = _group_modules_for_extraction(normal_modules, special_modules, group_flag)
+
+    if verbose and group_flag:
+        print(
+            f"   分组: {len(groups)} 组（组内共享源表扫描；"
+            f"EASYICU_EXTRACT_GROUPING=0 或 group_modules=False 关闭）"
+        )
+
+    n_units_total = len(normal_modules) + len(special_modules)
+    units_done = 0
+
+    def _collect_module_result(tmp_mod_dir: str, mod_name: str) -> Dict:
+        """读回单个模块 worker 的 manifest + parquet 输出。"""
+        mod_result = {
+            "concepts": {},
+            "elapsed": 0.0,
+            "errors": [],
+            "warnings": [],
+            "bounds": {},
+        }
+        manifest_path = os.path.join(tmp_mod_dir, "_manifest.json")
+        if not os.path.exists(manifest_path):
+            mod_result["errors"] = [
+                f"{mod_name}: worker produced no manifest (process may have died)"
+            ]
+            return mod_result
+        with open(manifest_path) as f:
+            manifest = json.load(f)
+        mod_result["errors"] = manifest.get("errors", [])
+        mod_result["warnings"] = manifest.get("warnings", [])
+        mod_result["elapsed"] = manifest.get("elapsed_sec", 0.0)
+        output_manifest = {
+            "module": mod_name,
+            "saved": {},
+            "errors": mod_result["errors"],
+            "warnings": mod_result["warnings"],
+            "bounds": mod_result["bounds"],
+            "elapsed_sec": mod_result["elapsed"],
+        }
+        # 每个模块一个宽表 parquet：manifest["saved"] 只有一条（键=模块名），
+        # info 里带 concepts（列名清单）+ concept_meta（逐概念 rows/bounds provenance）。
+        for _saved_key, info in manifest.get("saved", {}).items():
+            pq_path = info.get("path")
+            if not pq_path or not os.path.exists(pq_path):
+                continue
+            module_rows = info.get("rows", 0)
+            concept_meta = info.get("concept_meta", {}) or {}
+            concept_names = info.get("concepts") or list(concept_meta.keys())
+            # 逐概念 bounds 元数据（provenance）
+            for cn, cmeta in concept_meta.items():
+                bmeta = _bounds_metadata_from_manifest_info(cmeta)
+                if bmeta:
+                    mod_result["bounds"][cn] = bmeta
+            if output_dir is not None:
+                # flat：一个模块一个文件 output_dir/{module}.parquet（不重复 io）
+                os.makedirs(output_dir, exist_ok=True)
+                dst = os.path.join(output_dir, f"{mod_name}.parquet")
+                shutil.move(pq_path, dst)
+                module_info = {
+                    "path": dst,
+                    "rows": module_rows,
+                    "concepts": concept_names,
+                    "merge_keys": info.get("merge_keys", []),
+                    "concept_meta": concept_meta,
+                }
+                output_manifest["saved"][mod_name] = module_info
+                # 逐概念一条（path 都指向该模块宽表），供 summary CSV 保留每概念行数。
+                for cn in concept_names:
+                    cmeta = concept_meta.get(cn, {})
+                    concept_info = {"path": dst, "rows": cmeta.get("rows", module_rows)}
+                    for k, v in cmeta.items():
+                        if k != "rows":
+                            concept_info[k] = v
+                    mod_result["concepts"][cn] = concept_info
+            else:
+                # 无输出目录：读回宽表 DataFrame 到内存（键=模块名）
+                mod_result["concepts"][mod_name] = pd.read_parquet(pq_path)
+        if output_dir is not None:
+            with open(os.path.join(output_dir, f"{mod_name}.manifest.json"), "w") as f:
+                json.dump(output_manifest, f)
+        return mod_result
+
+    def _count_rows(mod_result: Dict) -> int:
+        n_rows = 0
+        for v in mod_result["concepts"].values():
+            if isinstance(v, dict):
+                n_rows += v.get("rows", 0)
+            elif isinstance(v, pd.DataFrame):
+                n_rows += len(v)
+        return n_rows
+
+    def _collect_special_results(tmp_sp_dir: str, sp_modules: List[str]) -> None:
+        """读回特殊模块（Sepsis-3）worker 输出到 result['modules']。"""
+        nonlocal units_done
+        manifest = None
+        manifest_path = os.path.join(tmp_sp_dir, "_manifest.json")
+        if os.path.exists(manifest_path):
+            with open(manifest_path) as f:
+                manifest = json.load(f)
+        sp_elapsed = (manifest or {}).get("elapsed_sec", 0.0)
+        for mod_name in sp_modules:
+            concepts = EXTRACT_MODULES.get(mod_name, [])
+            if manifest is None:
+                mod_result = {
+                    "concepts": {},
+                    "elapsed": 0.0,
+                    "errors": [
+                        f"{mod_name}: worker produced no manifest (process may have died)"
+                    ],
+                    "warnings": [],
+                    "bounds": {},
+                }
+            else:
+                mod_result = {
+                    "concepts": {},
+                    "elapsed": sp_elapsed,
+                    "errors": manifest.get("errors", []),
+                    "warnings": manifest.get("warnings", []),
+                    "bounds": {},
+                }
+                output_manifest = {
+                    "module": mod_name,
+                    "saved": {},
+                    "errors": mod_result["errors"],
+                    "warnings": mod_result["warnings"],
+                    "bounds": mod_result["bounds"],
+                    "elapsed_sec": sp_elapsed,
+                }
+                for c_name in concepts:
+                    info = manifest.get("saved", {}).get(c_name)
+                    if info and os.path.exists(info["path"]):
+                        rows = info.get("rows", 0)
+                        meta = _bounds_metadata_from_manifest_info(info)
+                        if meta:
+                            mod_result["bounds"][c_name] = meta
+                        if output_dir is not None:
+                            # flat：派生模块（sepsis3_*）每模块单概念，与普通模块
+                            # 统一写 output_dir/{module}.parquet，不再嵌套
+                            # {module}/{concept}.parquet（否则 17 扁平 + 2 嵌套的
+                            # 混合布局违反"每模块一个宽表"契约）。
+                            os.makedirs(output_dir, exist_ok=True)
+                            dst = os.path.join(output_dir, f"{mod_name}.parquet")
+                            shutil.move(info["path"], dst)
+                            concept_info = _concept_result_info(dst, info)
+                            concept_info["rows"] = rows
+                            mod_result["concepts"][c_name] = concept_info
+                            output_manifest["saved"][c_name] = concept_info
+                        else:
+                            df = pd.read_parquet(info["path"])
+                            _attach_bounds_metadata(df, info)
+                            mod_result["concepts"][c_name] = df
+                if output_dir is not None:
+                    with open(
+                        os.path.join(output_dir, f"{mod_name}.manifest.json"), "w"
+                    ) as f:
+                        json.dump(output_manifest, f)
+            result["modules"][mod_name] = mod_result
+            units_done += 1
+            if verbose:
+                print(
+                    f"   {'✅' if not mod_result['errors'] else '⚠️'} "
+                    f"[{units_done}/{n_units_total}] {mod_name}: "
+                    f"{len(mod_result['concepts'])} concepts, "
+                    f"{_count_rows(mod_result):,} rows, {sp_elapsed:.1f}s"
+                )
+
+    # ---- 逐组在子进程中加载 ----
+    from collections import deque
+
+    pending_groups = deque(groups)
+    while pending_groups:
+        group = pending_groups.popleft()
+        group_mods = [m for m in group["modules"] if EXTRACT_MODULES.get(m)]
+        group_special = list(group["special"])
+        if not group_mods and not group_special:
+            continue
+
+        module_specs = [(m, EXTRACT_MODULES[m]) for m in group_mods]
+        group_use_sofa2 = any(_concepts_need_sofa2(c) for _, c in module_specs) or any(
+            "sofa2" in m for m in group_special
+        )
+
+        tmp_root = tempfile.mkdtemp(prefix="easyicu_grp_")
+        if verbose:
+            rss = get_rss_mb()
+            label = " + ".join(group_mods + group_special)
+            print(f"\n⏳ {label} ... RSS={rss:.0f}MB")
+
+        proc = mp_ctx.Process(
+            target=_extract_module_group_worker,
+            args=(
+                module_specs,
+                group_special,
+                database,
+                data_path,
+                patient_ids_filter,
+                batch_size,
+                tmp_root,
+                group_use_sofa2,
+                stream_output_batches,
+                output_dir,
+            ),
+            daemon=True,
+        )
+        proc.start()
+        proc.join()
+
+        # 组 worker 硬崩溃（如 OOM kill）：已完成模块正常读回；未完成的
+        # 模块拆成单模块组重试一次，避免一个组的失败拖垮整组输出。
+        crashed = proc.exitcode not in (0, None)
+        incomplete_mods = [
+            m
+            for m in group_mods
+            if not os.path.exists(os.path.join(tmp_root, m, "_manifest.json"))
+        ]
+        special_incomplete = bool(group_special) and not os.path.exists(
+            os.path.join(tmp_root, _SPECIAL_OUTPUT_DIRNAME, "_manifest.json")
+        )
+        can_split = len(group_mods) + (1 if group_special else 0) > 1
+        if crashed and can_split and (incomplete_mods or special_incomplete):
+            if verbose:
+                retry_units = incomplete_mods + (
+                    group_special if special_incomplete else []
+                )
+                print(
+                    f"   ⚠️ group worker exit={proc.exitcode}; "
+                    f"retrying individually: {retry_units}"
+                )
+            if special_incomplete:
+                pending_groups.appendleft({"modules": [], "special": group_special})
+                group_special = []
+            for m in reversed(incomplete_mods):
+                pending_groups.appendleft({"modules": [m], "special": []})
+            group_mods = [m for m in group_mods if m not in incomplete_mods]
+
+        for mod_name in group_mods:
+            mod_result = _collect_module_result(
+                os.path.join(tmp_root, mod_name), mod_name
+            )
+            result["modules"][mod_name] = mod_result
+            units_done += 1
+            if verbose:
+                status = "✅" if not mod_result["errors"] else "⚠️"
+                print(
+                    f"   {status} [{units_done}/{n_units_total}] {mod_name}: "
+                    f"{len(mod_result['concepts'])} concepts, "
+                    f"{_count_rows(mod_result):,} rows, {mod_result['elapsed']:.1f}s"
+                    + (
+                        f" | errors: {mod_result['errors']}"
+                        if mod_result["errors"]
+                        else ""
+                    )
+                    + (
+                        f" | warnings: {mod_result['warnings']}"
+                        if mod_result.get("warnings")
+                        else ""
+                    )
+                )
+
+        if group_special:
+            _collect_special_results(
+                os.path.join(tmp_root, _SPECIAL_OUTPUT_DIRNAME), group_special
+            )
+
+        # 清理临时目录
+        shutil.rmtree(tmp_root, ignore_errors=True)
+
+    if native_export_v2:
+        assert output_dir is not None
+        result["native_export_v2"] = _publish_native_export_v2(
+            database=database,
+            data_path=data_path,
+            output_dir=output_dir,
+            modules=modules,
+            max_patients=max_patients,
+            result=result,
+        )
+
+    total_elapsed = time.time() - t_start
+    result["total_elapsed"] = round(total_elapsed, 1)
+
+    if verbose:
+        rss = get_rss_mb()
+        total_concepts = sum(len(m["concepts"]) for m in result["modules"].values())
+        total_rows = 0
+        for m in result["modules"].values():
+            for v in m["concepts"].values():
+                if isinstance(v, dict):
+                    total_rows += v.get("rows", 0)
+                elif isinstance(v, pd.DataFrame):
+                    total_rows += len(v)
+        all_errors = [e for m in result["modules"].values() for e in m["errors"]]
+        all_warnings = [
+            w for m in result["modules"].values() for w in m.get("warnings", [])
+        ]
+        print(f"\n{'='*60}")
+        print(
+            f"✅ {database} 完成: {total_concepts} concepts, "
+            f"{total_rows:,} rows, {total_elapsed:.1f}s"
+        )
+        print(
+            f"   RSS: {rss:.0f}MB" + (f"  |  输出: {output_dir}" if output_dir else "")
+        )
+        if all_errors:
+            print(f"   ⚠️ {len(all_errors)} 错误: {all_errors[:5]}")
+        if all_warnings:
+            print(f"   ⚠️ {len(all_warnings)} 警告: {all_warnings[:5]}")
+        print(f"{'='*60}")
+
+    return result
+
+
+def extract_all_databases(
+    databases: Optional[List[str]] = None,
+    data_paths: Optional[Dict[str, str]] = None,
+    output_dir: Optional[Union[str, Path]] = None,
+    modules: Optional[List[str]] = None,
+    max_patients: Optional[int] = None,
+    batch_size: Optional[int] = None,
+    native_export_v2: bool = False,
+    verbose: bool = True,
+) -> Dict:
+    """逐库逐模块子进程隔离提取所有数据库的全部特征。
+
+    每个模块运行在独立子进程中，主进程内存几乎不增长。
+    适用于 16GB 内存环境。
+
+    Args:
+        databases: 要提取的数据库列表（None = 全部 6 个: sic, aumc, hirid, mimic, miiv, eicu）
+        data_paths: {database: path} 覆盖默认路径
+        output_dir: 输出根目录（每个库一个子目录）
+        modules: 要提取的模块列表（None = 全部）
+        max_patients: 每个库的患者数量限制
+        batch_size: 子进程内患者分批大小
+        native_export_v2: 为每个完整数据库输出发布 native-v2 typed package
+        verbose: 是否打印进度
+
+    Returns:
+        dict: {database_name: extract_database() 返回值}
+
+    Examples:
+        >>> results = extract_all_databases(output_dir='/tmp/all_export')
+        >>> for db, r in results.items():
+        ...     print(f"{db}: {r['num_patients']:,} patients, {r['total_elapsed']:.0f}s")
+    """
+    import time
+
+    if databases is None:
+        databases = ["sic", "aumc", "hirid", "mimic", "miiv", "eicu"]
+
+    merged_paths = _build_default_db_paths()
+    if data_paths:
+        merged_paths.update(data_paths)
+
+    t_start = time.time()
+    results = {}
+
+    if verbose:
+        print(f"\n{'#'*60}")
+        print(f"# extract_all_databases: {len(databases)} 个数据库")
+        print(f"# 模块: {modules or '全部'}")
+        print(f"# 输出: {output_dir or '仅内存'}")
+        print(f"{'#'*60}")
+
+    for db_idx, db in enumerate(databases):
+        dp = merged_paths.get(db)
+        if dp is None:
+            if verbose:
+                print(f"\n⚠️ 跳过 {db}: 无数据路径")
+            continue
+
+        if not os.path.isdir(dp):
+            if verbose:
+                print(f"\n⚠️ 跳过 {db}: 路径不存在 {dp}")
+            continue
+
+        db_output = None
+        if output_dir is not None:
+            db_output = os.path.join(str(output_dir), db)
+
+        if verbose:
+            print(f"\n{'━'*60}")
+            print(f"  [{db_idx+1}/{len(databases)}] 🏥 {db.upper()}")
+            print(f"{'━'*60}")
+
+        try:
+            r = extract_database(
+                database=db,
+                data_path=dp,
+                output_dir=db_output,
+                modules=modules,
+                max_patients=max_patients,
+                batch_size=batch_size,
+                native_export_v2=native_export_v2,
+                verbose=verbose,
+            )
+            results[db] = r
+        except Exception as e:
+            if verbose:
+                print(f"  ❌ {db} 失败: {e}")
+            results[db] = {"error": str(e)}
+
+    total = time.time() - t_start
+
+    if verbose:
+        print(f"\n{'#'*60}")
+        print(f"# 全部完成: {total:.1f}s")
+        for db, r in results.items():
+            if "error" in r:
+                print(f"#   {db}: ❌ {r['error']}")
+            else:
+                nc = sum(len(m["concepts"]) for m in r["modules"].values())
+                nr = 0
+                for m in r["modules"].values():
+                    for v in m["concepts"].values():
+                        if isinstance(v, dict):
+                            nr += v.get("rows", 0)
+                        elif hasattr(v, "__len__"):
+                            nr += len(v)
+                print(
+                    f"#   {db}: {r['num_patients']:,} patients, "
+                    f"{nc} concepts, {nr:,} rows, {r['total_elapsed']:.0f}s"
+                )
+        print(f"{'#'*60}")
+
+    return results

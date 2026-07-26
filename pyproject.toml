@@ -184,7 +184,6 @@ select = ["E4", "E7", "E9", "F"]
 # (concept/, scores/, io/, utils/, runtime/); entries whose debt was actually
 # fixed in that pass (F841 dead assignments, E731, F821) were dropped instead
 # of re-ignored.
-"src/easyicu/api.py" = ["E401", "E402", "E701", "F401", "F811", "F841"]
 "src/easyicu/cohort_visualization.py" = ["F401"]
 "src/easyicu/concept/__init__.py" = ["E402", "E701", "F401"]
 "src/easyicu/concept/callbacks.py" = ["E402"]

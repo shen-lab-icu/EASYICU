@@ -5,7 +5,7 @@ import pandas as pd
 import pytest
 
 import easyicu
-from easyicu import api
+from easyicu.api import extraction as api
 
 
 def test_enforce_concept_bounds_drops_only_numeric_out_of_range(monkeypatch):

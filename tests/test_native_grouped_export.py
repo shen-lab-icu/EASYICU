@@ -8,7 +8,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from easyicu import api
+from easyicu.api import extraction as api
 from easyicu.research_agent.intake.export_package import open_export_package
 
 
