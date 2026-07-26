@@ -17,14 +17,6 @@ def _references_name(node: ast.AST, name: str) -> bool:
     )
 
 
-def _is_zero(node: ast.AST) -> bool:
-    return (
-        isinstance(node, ast.Constant)
-        and not isinstance(node.value, bool)
-        and node.value in {0, 0.0}
-    )
-
-
 def patch_observed_binary_primary_exposure_guard(
     code: str,
     *,
@@ -36,7 +28,7 @@ def patch_observed_binary_primary_exposure_guard(
     The model-origin finding only nominates a variable.  It does not authorize
     the domain.  The transformation proceeds only when ResearchContext itself
     identifies that exact primary exposure as observed numeric binary and the
-    candidate has one unguarded alias that partitions values at zero.  The
+    candidate has one unguarded Series alias loaded from that exact column.  The
     inserted check can only fail closed; it does not recode a value or choose a
     cohort, threshold, model, or estimand.
     """
@@ -57,8 +49,12 @@ def patch_observed_binary_primary_exposure_guard(
     for finding in repair_findings:
         if finding.validator != "llm_concept_auditor" or finding.severity != "error":
             continue
-        variables = (finding.detail or {}).get("variables")
-        if isinstance(variables, list) and variables == [primary_exposure]:
+        detail = finding.detail or {}
+        variables = detail.get("variables")
+        variable = detail.get("variable")
+        if (isinstance(variables, list) and variables == [primary_exposure]) or (
+            isinstance(variable, str) and variable.strip() == primary_exposure
+        ):
             nominated = True
             break
     if not nominated:
@@ -67,25 +63,43 @@ def patch_observed_binary_primary_exposure_guard(
         tree = ast.parse(code)
     except SyntaxError:
         return code
-    assignments: list[tuple[ast.Assign, str]] = []
+    direct_assignments: list[tuple[ast.Assign, str]] = []
+    wrapped_assignments: list[tuple[ast.Assign, str]] = []
     for node in ast.walk(tree):
         if not (
             isinstance(node, ast.Assign)
             and len(node.targets) == 1
             and isinstance(node.targets[0], ast.Name)
-            and isinstance(node.value, ast.Subscript)
-            and isinstance(node.value.slice, ast.Constant)
-            and node.value.slice.value == primary_exposure
         ):
             continue
-        assignments.append((node, node.targets[0].id))
+        direct = (
+            isinstance(node.value, ast.Subscript)
+            and isinstance(node.value.slice, ast.Constant)
+            and node.value.slice.value == primary_exposure
+        )
+        wrapped = (
+            isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Attribute)
+            and node.value.func.attr in {"astype", "copy", "to_numeric"}
+            and sum(
+                1
+                for child in ast.walk(node.value)
+                if isinstance(child, ast.Subscript)
+                and isinstance(child.slice, ast.Constant)
+                and child.slice.value == primary_exposure
+            )
+            == 1
+        )
+        if direct:
+            direct_assignments.append((node, node.targets[0].id))
+        elif wrapped:
+            wrapped_assignments.append((node, node.targets[0].id))
+    assignments = direct_assignments or wrapped_assignments
     if len(assignments) != 1:
         return code
     assignment, alias = assignments[0]
     if "_easyicu_observed_binary_primary_exposure_guard_v1" in code:
         return code
-    lower_partition = False
-    upper_partition = False
     exact_domain_check = False
     for node in ast.walk(tree):
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
@@ -101,15 +115,7 @@ def patch_observed_binary_primary_exposure_guard(
                     ]
                     if values == [0, 1]:
                         exact_domain_check = True
-        if not isinstance(node, ast.Compare) or len(node.ops) != 1:
-            continue
-        if len(node.comparators) != 1 or not _is_zero(node.comparators[0]):
-            continue
-        if not _references_name(node.left, alias):
-            continue
-        lower_partition = lower_partition or isinstance(node.ops[0], ast.LtE)
-        upper_partition = upper_partition or isinstance(node.ops[0], ast.Gt)
-    if exact_domain_check or not (lower_partition and upper_partition):
+    if exact_domain_check:
         return code
     if assignment.end_lineno is None:
         return code

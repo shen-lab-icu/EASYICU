@@ -11,6 +11,10 @@ _KNOWN_HOST_HELPER_RELOCATIONS = {
         "easyicu.research_agent.methods.validation",
         "strict_numeric_input",
     ): "easyicu.research_agent.methods.descriptive_inputs",
+    (
+        "easyicu.research_agent.methods.measurement_provenance_receipt",
+        "measurement_provenance_receipt",
+    ): "easyicu.research_agent.methods.descriptive_inputs",
 }
 
 

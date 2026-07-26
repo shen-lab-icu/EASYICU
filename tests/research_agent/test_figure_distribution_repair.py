@@ -125,6 +125,23 @@ value = strict_numeric_input(series).values
     assert "value = strict_numeric_input(series).values" in repaired
 
 
+def test_relocates_measurement_provenance_helper_import() -> None:
+    code = (
+        "from easyicu.research_agent.methods.measurement_provenance_receipt "
+        "import measurement_provenance_receipt\n"
+    )
+    repaired = patch_known_host_helper_import(
+        code,
+        "ModuleNotFoundError: No module named "
+        "'easyicu.research_agent.methods.measurement_provenance_receipt'",
+    )
+
+    assert repaired == (
+        "from easyicu.research_agent.methods.descriptive_inputs "
+        "import measurement_provenance_receipt\n"
+    )
+
+
 def test_known_host_helper_relocation_rejects_unclosed_helpers() -> None:
     code = "from easyicu.research_agent.methods.validation import fit_model\n"
     assert (
