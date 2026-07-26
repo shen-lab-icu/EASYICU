@@ -2635,7 +2635,12 @@ class ResearchAgentPipeline:
         article_figure_strategy = None
         analysis_blueprint = None
         try:
-            study_design_brief = build_study_design_brief(agent_context)
+            # Contract scope comes only from the frozen user/data context.
+            # Prompt-enrichment notes include generic examples such as
+            # "external validation" and "transportability"; feeding those
+            # generated notes back into adaptive trigger inference would
+            # silently widen a single-database study.
+            study_design_brief = build_study_design_brief(context)
             study_design_path = run_dir / "study_design_brief.json"
             study_design_path.write_text(
                 study_design_brief.model_dump_json(indent=2),
@@ -2655,7 +2660,7 @@ class ResearchAgentPipeline:
                     generation_mode="deterministic_skill",
                 )
             article_contract = build_article_analysis_contract(
-                agent_context,
+                context,
                 brief=study_design_brief,
             )
             article_contract_path = run_dir / "article_analysis_contract.json"
@@ -2676,7 +2681,7 @@ class ResearchAgentPipeline:
                     producer="study_design_scout",
                     generation_mode="deterministic_skill",
                 )
-            article_figure_strategy = build_article_figure_strategy(agent_context)
+            article_figure_strategy = build_article_figure_strategy(context)
             figure_strategy_path = run_dir / "article_figure_strategy.json"
             figure_strategy_path.write_text(
                 article_figure_strategy.model_dump_json(indent=2),
@@ -2696,7 +2701,7 @@ class ResearchAgentPipeline:
                     generation_mode="deterministic_skill",
                 )
             analysis_blueprint = build_analysis_blueprint(
-                agent_context,
+                context,
                 brief=study_design_brief,
                 contract=article_contract,
                 figure_strategy=article_figure_strategy,
@@ -3008,6 +3013,7 @@ class ResearchAgentPipeline:
                     agent_context,
                     **know_how_binding.planner_kwargs,
                     enforce_article_contract=True,
+                    article_contract_context=context,
                 )
                 planner_prompt_metrics = know_how_binding.prompt_metrics(
                     planner, agent_context
@@ -3062,6 +3068,7 @@ class ResearchAgentPipeline:
                         agent_context,
                         **know_how_binding.planner_kwargs,
                         enforce_article_contract=True,
+                        article_contract_context=context,
                     )
                 except Exception:
                     retry_plan = None
@@ -3109,6 +3116,7 @@ class ResearchAgentPipeline:
                         agent_context,
                         **know_how_binding.planner_kwargs,
                         enforce_article_contract=True,
+                        article_contract_context=context,
                     )
                 except Exception:
                     cohort_retry = None
@@ -3210,20 +3218,20 @@ class ResearchAgentPipeline:
                 # contract instead of letting provisional inference retain
                 # scientific headline authority.
                 final_brief = build_study_design_brief(
-                    agent_context,
+                    context,
                     analysis_type=plan.analysis_type,
                 )
                 final_contract = build_article_analysis_contract(
-                    agent_context,
+                    context,
                     brief=final_brief,
                     analysis_type=plan.analysis_type,
                 )
                 final_strategy = build_article_figure_strategy(
-                    agent_context,
+                    context,
                     analysis_family=final_brief.analysis_family,
                 )
                 final_blueprint = build_analysis_blueprint(
-                    agent_context,
+                    context,
                     brief=final_brief,
                     contract=final_contract,
                     figure_strategy=final_strategy,

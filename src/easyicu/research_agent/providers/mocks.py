@@ -1602,14 +1602,32 @@ def _mock_code_prediction_model(
         thr = np.concatenate([[scores.max() + 1e-6], scores[order], [scores.min() - 1e-6]])
         return pd.DataFrame({"fpr": fpr, "tpr": tpr, "threshold": thr})
 
+    if "patient_stay_id" in df.columns:
+        patient_groups = df["patient_stay_id"].astype(str).str.split(":s").str[0]
+        patient_group_source = "patient_stay_id_prefix_before_:s"
+    elif "subject_id" in df.columns:
+        patient_groups = df["subject_id"].astype(str)
+        patient_group_source = "subject_id"
+    elif "patient_id" in df.columns:
+        patient_groups = df["patient_id"].astype(str)
+        patient_group_source = "patient_id"
+    else:
+        raise SystemExit(
+            "Prediction preflight requires a patient-level grouping column; "
+            "row-level or stay-level splitting is forbidden."
+        )
+
     feature_order = ["sofa2", "lact", "creat", "map", "hr", "resp", "spo2", "vaso", "age", "sex"]
     features = [c for c in feature_order if c in df.columns and c != outcome_col]
     model_df = df[[outcome_col] + features].copy()
+    model_df["_patient_group"] = patient_groups
     if "sex" in model_df.columns:
         model_df["sex_M"] = (model_df["sex"].astype(str) == "M").astype(int)
         model_df = model_df.drop(columns=["sex"])
         features = ["sex_M" if c == "sex" else c for c in features]
-    model_df = model_df.apply(pd.to_numeric, errors="coerce")
+    model_df[[outcome_col] + features] = model_df[
+        [outcome_col] + features
+    ].apply(pd.to_numeric, errors="coerce")
     model_df = model_df.replace([np.inf, -np.inf], np.nan).dropna()
     model_df[outcome_col] = model_df[outcome_col].astype(int)
 
@@ -1617,13 +1635,20 @@ def _mock_code_prediction_model(
         raise SystemExit("Not enough complete cases for prediction-model example.")
 
     rng = np.random.default_rng(7)
-    perm = rng.permutation(len(model_df))
-    split = max(int(0.7 * len(model_df)), 40)
-    train = model_df.iloc[perm[:split]].copy()
-    test = model_df.iloc[perm[split:]].copy()
-    if test.empty:
-        test = train.iloc[-max(20, len(train) // 4):].copy()
-        train = train.iloc[:-len(test)].copy()
+    unique_groups = np.asarray(sorted(model_df["_patient_group"].unique()))
+    if len(unique_groups) < 10:
+        raise SystemExit("Prediction preflight requires at least 10 patient groups.")
+    shuffled_groups = rng.permutation(unique_groups)
+    split = min(max(int(0.7 * len(shuffled_groups)), 2), len(shuffled_groups) - 1)
+    train_group_set = set(shuffled_groups[:split].tolist())
+    test_group_set = set(shuffled_groups[split:].tolist())
+    overlap = sorted(train_group_set & test_group_set)
+    if overlap:
+        raise RuntimeError("patient-level train/test split overlap detected")
+    train = model_df[model_df["_patient_group"].isin(train_group_set)].copy()
+    test = model_df[model_df["_patient_group"].isin(test_group_set)].copy()
+    if train.empty or test.empty:
+        raise RuntimeError("patient-grouped split produced an empty partition")
 
     coef, cov, names, backend = fit_logit(train, outcome_col, features)
     X_test = np.column_stack([np.ones(len(test)), test[features].astype(float).to_numpy()])
@@ -1632,6 +1657,19 @@ def _mock_code_prediction_model(
 
     auc = auc_rank(y_test, risk)
     brier = float(np.mean((risk - y_test) ** 2))
+    predicted_class = (risk >= 0.5).astype(int)
+    true_positive = int(np.sum((predicted_class == 1) & (y_test == 1)))
+    false_positive = int(np.sum((predicted_class == 1) & (y_test == 0)))
+    false_negative = int(np.sum((predicted_class == 0) & (y_test == 1)))
+    precision = true_positive / max(true_positive + false_positive, 1)
+    recall = true_positive / max(true_positive + false_negative, 1)
+    f1 = 2.0 * precision * recall / max(precision + recall, 1e-12)
+    score_order = np.argsort(-risk)
+    sorted_outcome = y_test[score_order]
+    cumulative_precision = np.cumsum(sorted_outcome) / np.arange(1, len(y_test) + 1)
+    average_precision = float(
+        np.sum(cumulative_precision * sorted_outcome) / max(int(y_test.sum()), 1)
+    )
     logit_pred = np.log(np.clip(risk, 1e-6, 1 - 1e-6) / np.clip(1 - risk, 1e-6, 1 - 1e-6))
     cal_df = pd.DataFrame({"death": y_test, "logit_pred": logit_pred})
     cal_slope = None
@@ -1663,12 +1701,18 @@ def _mock_code_prediction_model(
         "n_train": int(len(train)),
         "n_test": int(len(test)),
         "auc": auc,
+        "auroc": auc,
+        "average_precision": average_precision,
+        "precision": precision,
+        "recall": recall,
+        "f1": f1,
         "brier": brier,
         "calibration_slope": cal_slope,
     }])
     perf_df.to_csv(out_dir / "model_performance_train_test.csv", index=False)
 
-    risk_df = test[features + [outcome_col]].copy()
+    risk_df = test[["_patient_group", *features, outcome_col]].copy()
+    risk_df = risk_df.rename(columns={"_patient_group": "patient_group"})
     risk_df["predicted_risk"] = risk
     risk_df.to_csv(out_dir / "risk_predictions_test.csv", index=False)
 
@@ -1683,6 +1727,33 @@ def _mock_code_prediction_model(
         n_bin=("death", "size"),
     ).reset_index(drop=True)
     cal_curve.to_csv(out_dir / "calibration_curve.csv", index=False)
+
+    thresholds = np.linspace(0.05, 0.50, 10)
+    decision_rows = []
+    prevalence = float(y_test.mean())
+    for threshold in thresholds:
+        predicted_positive = risk >= threshold
+        tp = float(np.sum(predicted_positive & (y_test == 1)))
+        fp = float(np.sum(predicted_positive & (y_test == 0)))
+        odds = threshold / (1.0 - threshold)
+        decision_rows.append({
+            "threshold": float(threshold),
+            "net_benefit_model": (tp / len(y_test)) - (fp / len(y_test)) * odds,
+            "net_benefit_all": prevalence - (1.0 - prevalence) * odds,
+            "net_benefit_none": 0.0,
+        })
+    pd.DataFrame(decision_rows).to_csv(
+        out_dir / "decision_curve.csv", index=False
+    )
+    pd.DataFrame([{
+        "patient_group_source": patient_group_source,
+        "n_train_rows": int(len(train)),
+        "n_test_rows": int(len(test)),
+        "n_train_patients": int(len(train_group_set)),
+        "n_test_patients": int(len(test_group_set)),
+        "patient_overlap_n": int(len(overlap)),
+        "preprocessing_fit_scope": "training_partition_only",
+    }]).to_csv(out_dir / "split_definition.csv", index=False)
 
     fig, ax = plt.subplots(figsize=(4.0, 3.2))
     ax.plot(roc_df["fpr"], roc_df["tpr"], color="#1f77b4", linewidth=1.6)
@@ -1714,15 +1785,36 @@ def _mock_code_prediction_model(
         "n_complete_cases": int(len(model_df)),
         "n_train": int(len(train)),
         "n_test": int(len(test)),
+        "patient_group_source": patient_group_source,
+        "patient_overlap_n": int(len(overlap)),
         "auc": auc,
+        "auroc": auc,
+        "average_precision": average_precision,
+        "precision": precision,
+        "recall": recall,
+        "f1": f1,
         "brier": brier,
         "calibration_slope": cal_slope,
+        "output_files": {
+            "table:model_performance_train_test": "model_performance_train_test.csv",
+            "table:model_coefficients": "model_coefficients.csv",
+            "table:risk_predictions_test": "risk_predictions_test.csv",
+            "table:roc_curve": "roc_curve.csv",
+            "table:calibration_curve": "calibration_curve.csv",
+            "table:decision_curve": "decision_curve.csv",
+            "table:split_definition": "split_definition.csv",
+            "figure:roc_curve": "roc_curve.png",
+            "figure:calibration_curve": "calibration_curve.png",
+            "statistic:auc": "model_performance_train_test.csv",
+        },
         "outputs": {
             "performance_table": "model_performance_train_test.csv",
             "coefficients_table": "model_coefficients.csv",
             "risk_predictions": "risk_predictions_test.csv",
             "roc_curve": "roc_curve.png",
             "calibration_curve": "calibration_curve.png",
+            "decision_curve": "decision_curve.csv",
+            "split_definition": "split_definition.csv",
         },
     }
     with open(out_dir / "step_summary.json", "w", encoding="utf-8") as f:
@@ -1781,10 +1873,20 @@ def _mock_code_trajectory_clustering(
 
     def suffix_key(name):
         m = re.search(r"_t(\d+)$", str(name))
-        return int(m.group(1)) if m else 0
+        if m:
+            return float(m.group(1))
+        m = re.search(r"_h(\d+(?:p\d+)?)_(\d+(?:p\d+)?)$", str(name))
+        return float(m.group(1).replace("p", ".")) if m else 0.0
 
-    lact_cols = sorted([c for c in df.columns if re.match(r"lact_t\d+$", str(c))], key=suffix_key)
-    map_cols = sorted([c for c in df.columns if re.match(r"map_t\d+$", str(c))], key=suffix_key)
+    window_suffix = r"(?:t\d+|h\d+(?:p\d+)?_\d+(?:p\d+)?)"
+    lact_cols = sorted(
+        [c for c in df.columns if re.fullmatch(rf"lact_{window_suffix}", str(c))],
+        key=suffix_key,
+    )
+    map_cols = sorted(
+        [c for c in df.columns if re.fullmatch(rf"map_{window_suffix}", str(c))],
+        key=suffix_key,
+    )
     if not lact_cols or not map_cols:
         raise SystemExit("Trajectory clustering example requires lact_t* and map_t* columns.")
 
