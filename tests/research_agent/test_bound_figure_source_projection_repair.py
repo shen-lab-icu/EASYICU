@@ -247,6 +247,84 @@ def main():
     ]
 
 
+def test_direct_bound_figure_repair_supports_typed_loader_tuple_and_path_name(
+    tmp_path: Path,
+) -> None:
+    code = f"""
+from pathlib import Path
+import pandas as pd
+
+OUT_DIR = Path({str(tmp_path)!r})
+
+def load_bound_table(input_key, manifest):
+    if input_key == "table:absolute_risk_context":
+        return (
+            pd.DataFrame({{"group": ["a"], "estimate": [1.25]}}),
+            {{"input_key": input_key}},
+            Path("absolute_risk_context.csv"),
+        )
+    return (
+        pd.DataFrame({{"group": ["b"], "count": [17]}}),
+        {{"input_key": input_key}},
+        Path("exposure_outcome_distribution.csv"),
+    )
+
+def make_figure_contract(**kwargs):
+    return kwargs
+
+def save_publication_figure(*, fig, out_dir, stem, contract):
+    return None
+
+def main():
+    manifest = {{}}
+    absolute_df, absolute_receipt, absolute_path = load_bound_table(
+        "table:absolute_risk_context", manifest
+    )
+    distribution_df, distribution_receipt, distribution_path = load_bound_table(
+        "table:exposure_outcome_distribution", manifest
+    )
+    source_path = OUT_DIR / "combined_source_data.csv"
+    contract = make_figure_contract(
+        figure_id="figure:overview",
+        source_data=source_path.name,
+    )
+    save_publication_figure(
+        fig=None,
+        out_dir=OUT_DIR,
+        stem="overview",
+        contract=contract,
+    )
+    return contract
+"""
+    finding = {
+        **_FINDING,
+        "detail": {
+            **_FINDING["detail"],
+            "missing_bound_tables": [
+                "absolute_risk_context.csv",
+                "exposure_outcome_distribution.csv",
+            ],
+        },
+    }
+
+    repair = deterministic_contract_repair(code=code, findings=[finding])
+
+    assert repair is not None
+    repair_id, repaired = repair
+    assert repair_id == "direct_bound_figure_source_projection_v1"
+    namespace: dict[str, object] = {}
+    exec(repaired, namespace)
+    contract = namespace["main"]()
+    assert contract["source_data"] == [
+        "bound_000_absolute_risk_context_source_data.csv",
+        "bound_001_exposure_outcome_distribution_source_data.csv",
+    ]
+    absolute = pd.read_csv(tmp_path / contract["source_data"][0])
+    distribution = pd.read_csv(tmp_path / contract["source_data"][1])
+    assert absolute["estimate"].tolist() == [1.25]
+    assert distribution["count"].tolist() == [17]
+
+
 def test_direct_bound_figure_repair_materializes_prior_dataframe_dict_shape(
     tmp_path: Path,
 ) -> None:

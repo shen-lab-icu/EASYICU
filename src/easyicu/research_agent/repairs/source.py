@@ -5232,7 +5232,7 @@ def _materialize_direct_bound_source_frames(
 def _figure_contract_source_assignment(
     tree: ast.AST,
     *,
-    source_value_type: type[ast.AST],
+    source_value_type: type[ast.AST] | tuple[type[ast.AST], ...],
 ) -> tuple[ast.Assign, ast.keyword] | None:
     candidates: List[tuple[ast.Assign, ast.keyword]] = []
     for node in ast.walk(tree):
@@ -5288,35 +5288,66 @@ def _patch_direct_bound_figure_source_projection(
 
     loaded_tables: Dict[str, str] = {}
     duplicate_products: Set[str] = set()
-    for node in ast.walk(tree):
-        if not (
-            isinstance(node, ast.Assign)
-            and len(node.targets) == 1
-            and isinstance(node.targets[0], ast.Name)
-            and isinstance(node.value, ast.Call)
-            and isinstance(node.value.func, ast.Attribute)
-            and node.value.func.attr == "copy"
-            and isinstance(node.value.func.value, ast.Subscript)
-        ):
-            continue
-        row_subscript = node.value.func.value
-        if not (
-            isinstance(row_subscript.slice, ast.Constant)
-            and row_subscript.slice.value == 0
-            and isinstance(row_subscript.value, ast.Subscript)
-            and isinstance(row_subscript.value.value, ast.Name)
-            and isinstance(row_subscript.value.slice, ast.Constant)
-            and isinstance(row_subscript.value.slice.value, str)
-        ):
-            continue
-        input_key = row_subscript.value.slice.value
+
+    def _register_loaded_table(*, input_key: str, frame_name: str) -> None:
         if not input_key.startswith("table:"):
-            continue
+            return
         product = input_key.split(":", 1)[1]
         if product in loaded_tables:
             duplicate_products.add(product)
+            return
+        loaded_tables[product] = frame_name
+
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Assign) and len(node.targets) == 1):
             continue
-        loaded_tables[product] = node.targets[0].id
+        target = node.targets[0]
+        value = node.value
+        if (
+            isinstance(target, ast.Name)
+            and isinstance(value, ast.Call)
+            and isinstance(value.func, ast.Attribute)
+            and value.func.attr == "copy"
+            and isinstance(value.func.value, ast.Subscript)
+        ):
+            row_subscript = value.func.value
+            if (
+                isinstance(row_subscript.slice, ast.Constant)
+                and row_subscript.slice.value == 0
+                and isinstance(row_subscript.value, ast.Subscript)
+                and isinstance(row_subscript.value.value, ast.Name)
+                and isinstance(row_subscript.value.slice, ast.Constant)
+                and isinstance(row_subscript.value.slice.value, str)
+            ):
+                _register_loaded_table(
+                    input_key=str(row_subscript.value.slice.value),
+                    frame_name=target.id,
+                )
+            continue
+        if not (
+            isinstance(target, (ast.Tuple, ast.List))
+            and target.elts
+            and isinstance(target.elts[0], ast.Name)
+            and isinstance(value, ast.Call)
+            and (
+                (
+                    isinstance(value.func, ast.Name)
+                    and value.func.id == "load_bound_table"
+                )
+                or (
+                    isinstance(value.func, ast.Attribute)
+                    and value.func.attr == "load_bound_table"
+                )
+            )
+            and value.args
+            and isinstance(value.args[0], ast.Constant)
+            and isinstance(value.args[0].value, str)
+        ):
+            continue
+        _register_loaded_table(
+            input_key=str(value.args[0].value),
+            frame_name=target.elts[0].id,
+        )
     if duplicate_products:
         return code
     missing_products = [Path(name).stem for name in plain_missing_names]
@@ -5326,11 +5357,16 @@ def _patch_direct_bound_figure_source_projection(
         return code
     source_assignment = _figure_contract_source_assignment(
         tree,
-        source_value_type=ast.Constant,
+        source_value_type=(ast.Constant, ast.Attribute),
     )
     if source_assignment is None:
         return code
     contract_statement, source_keyword = source_assignment
+    if isinstance(source_keyword.value, ast.Attribute) and not (
+        source_keyword.value.attr == "name"
+        and isinstance(source_keyword.value.value, ast.Name)
+    ):
+        return code
     entries = [
         (product, loaded_tables[product], source_name)
         for source_name, product in zip(
