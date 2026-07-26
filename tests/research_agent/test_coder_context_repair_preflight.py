@@ -797,6 +797,54 @@ groups.loc[exposure > 0] = "Exposure"
     assert repaired == code
 
 
+def test_binary_primary_exposure_guard_repairs_wrapped_runtime_predicate(ra):
+    context = _context(ra)
+    context = context.model_copy(
+        update={
+            "variables": [
+                (
+                    variable.model_copy(
+                        update={
+                            "observed_domain": {
+                                "is_binary": True,
+                                "n_unique": 2,
+                                "levels": [0.0, 1.0],
+                            }
+                        }
+                    )
+                    if variable.name == context.primary_exposure
+                    else variable
+                )
+                for variable in context.variables
+            ]
+        }
+    )
+    code = """
+numeric = pd.to_numeric(frame["selected_first"], errors="coerce")
+retained = numeric.notna() & (numeric >= 0)
+"""
+    finding = ValidationFinding(
+        validator="llm_concept_auditor",
+        severity="error",
+        message="The binary domain is not enforced before eligibility.",
+        detail={
+            "issue_code": "other",
+            "variable": "selected_first",
+            "required_domain": [0, 1],
+        },
+    )
+
+    repaired = patch_observed_binary_primary_exposure_guard(
+        code,
+        context=context,
+        repair_findings=[finding],
+    )
+
+    assert repaired != code
+    assert "if not bool(numeric.dropna().isin([0, 1]).all()):" in repaired
+    assert "retained = numeric.notna() & (numeric >= 0)" in repaired
+
+
 def test_local_read_before_assignment_repair_moves_existing_call(ra):
     code = """
 binding = {"column": "exposure"}
