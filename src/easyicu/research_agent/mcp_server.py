@@ -1409,11 +1409,19 @@ def dispatch(
 
 
 def main(argv: Optional[List[str]] = None) -> int:  # pragma: no cover
-    """Run the official MCP SDK adapter without importing it for Python calls."""
+    """Compose EasyICU's contracts with the official MCP SDK transport."""
 
-    from .mcp_transport import main as transport_main
+    from .mcp_transport import create_mcp_server, main as transport_main
 
-    return transport_main(argv)
+    def server_factory(**kwargs):
+        return create_mcp_server(
+            dispatcher=dispatch,
+            server_info=SERVER_INFO,
+            tool_schemas=TOOL_SCHEMAS,
+            **kwargs,
+        )
+
+    return transport_main(argv, server_factory=server_factory)
 
 
 __all__ = [

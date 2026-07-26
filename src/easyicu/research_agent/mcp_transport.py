@@ -38,14 +38,13 @@ from .mcp_policy import (
     process_scopes,
     scope_override,
 )
-from .mcp_server import SERVER_INFO, TOOL_SCHEMAS, dispatch
-
 MCP_BEARER_TOKEN_ENV = "EASYICU_MCP_BEARER_TOKEN"
 DEFAULT_HTTP_MAX_BODY_BYTES = 1024 * 1024
 DEFAULT_MAX_CONCURRENT_TOOL_CALLS = 4
 LOOPBACK_ANONYMOUS_SCOPES = frozenset({SCOPE_METADATA})
 
 Dispatcher = Callable[[str, Optional[dict[str, Any]]], dict[str, Any]]
+ServerFactory = Callable[..., Server]
 
 
 def _json_safe(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -56,7 +55,9 @@ def _json_safe(payload: Mapping[str, Any]) -> dict[str, Any]:
 
 def create_mcp_server(
     *,
-    dispatcher: Dispatcher = dispatch,
+    dispatcher: Dispatcher,
+    server_info: Mapping[str, str],
+    tool_schemas: Sequence[Mapping[str, Any]],
     max_concurrent_tool_calls: int = DEFAULT_MAX_CONCURRENT_TOOL_CALLS,
     tool_timeout_seconds: Optional[float] = None,
 ) -> Server:
@@ -73,8 +74,8 @@ def create_mcp_server(
         raise ValueError("tool_timeout_seconds must be positive when configured")
 
     server = Server(
-        SERVER_INFO["name"],
-        version=SERVER_INFO["version"],
+        server_info["name"],
+        version=server_info["version"],
         instructions=(
             "EasyICU research tools. Tool results remain governed by EasyICU "
             "scope, disclosure, evidence and patient-data audit policies."
@@ -84,7 +85,7 @@ def create_mcp_server(
 
     @server.list_tools()
     async def _list_tools() -> list[mcp_types.Tool]:
-        return [mcp_types.Tool.model_validate(schema) for schema in TOOL_SCHEMAS]
+        return [mcp_types.Tool.model_validate(schema) for schema in tool_schemas]
 
     @server.call_tool(validate_input=True)
     async def _call_tool(
@@ -291,7 +292,7 @@ class _RequestBodyLimitMiddleware:
 
 def create_streamable_http_app(
     *,
-    server: Optional[Server] = None,
+    server: Server,
     host: str = "127.0.0.1",
     port: int = 8765,
     bearer_token: Optional[str] = None,
@@ -313,9 +314,8 @@ def create_streamable_http_app(
         allowed_hosts=exact_hosts,
         allowed_origins=exact_origins,
     )
-    sdk_server = server or create_mcp_server()
     manager = StreamableHTTPSessionManager(
-        app=sdk_server,
+        app=server,
         event_store=None,
         json_response=True,
         stateless=True,
@@ -344,7 +344,7 @@ def create_streamable_http_app(
         routes=[Route("/mcp", endpoint=endpoint)],
         lifespan=lifespan,
     )
-    app.state.easyicu_mcp_server = sdk_server
+    app.state.easyicu_mcp_server = server
     app.state.easyicu_mcp_session_manager = manager
     return app
 
@@ -360,17 +360,16 @@ async def _serve_stdio(server: Server) -> None:
 
 def _run_streamable_http(
     *,
+    server: Server,
     host: str,
     port: int,
     bearer_token: Optional[str],
     allowed_hosts: Sequence[str],
     allowed_origins: Sequence[str],
     max_body_bytes: int,
-    tool_timeout_seconds: Optional[float],
 ) -> int:
     import uvicorn
 
-    server = create_mcp_server(tool_timeout_seconds=tool_timeout_seconds)
     app = create_streamable_http_app(
         server=server,
         host=host,
@@ -384,8 +383,12 @@ def _run_streamable_http(
     return 0
 
 
-def main(argv: Optional[Sequence[str]] = None) -> int:
-    """Run EasyICU through official stdio or Streamable HTTP transports."""
+def main(
+    argv: Optional[Sequence[str]] = None,
+    *,
+    server_factory: ServerFactory,
+) -> int:
+    """Run an injected application server over official MCP transports."""
 
     parser = argparse.ArgumentParser(description="EasyICU research-agent MCP server")
     parser.add_argument(
@@ -412,22 +415,22 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         ),
     )
     args = parser.parse_args(list(argv) if argv is not None else None)
+    server = server_factory(tool_timeout_seconds=args.tool_timeout_seconds)
 
     if args.transport == "streamable-http":
         try:
             return _run_streamable_http(
+                server=server,
                 host=args.host,
                 port=args.port,
                 bearer_token=os.environ.get(MCP_BEARER_TOKEN_ENV),
                 allowed_hosts=args.allowed_host,
                 allowed_origins=args.allowed_origin,
                 max_body_bytes=args.max_request_bytes,
-                tool_timeout_seconds=args.tool_timeout_seconds,
             )
         except ValueError as exc:
             parser.error(str(exc))
 
-    server = create_mcp_server(tool_timeout_seconds=args.tool_timeout_seconds)
     asyncio.run(_serve_stdio(server))
     return 0
 
