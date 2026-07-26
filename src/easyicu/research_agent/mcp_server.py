@@ -257,6 +257,12 @@ _SAFE_MANIFEST_KEYS = (
     "submission_profile_version",
 )
 
+_SAFE_READINESS_KEYS = (
+    "publication_artifacts_ready",
+    "execution_paper_eligible",
+    "paper_authorized",
+)
+
 
 def _safe_manifest_payload(manifest: Mapping[str, Any]) -> Dict[str, Any]:
     """Project a run manifest down to identity, status and evidence index.
@@ -269,6 +275,15 @@ def _safe_manifest_payload(manifest: Mapping[str, Any]) -> Dict[str, Any]:
 
     payload: Dict[str, Any] = {
         key: manifest[key] for key in _SAFE_MANIFEST_KEYS if key in manifest
+    }
+    readiness = manifest.get("readiness")
+    readiness_gates = readiness if isinstance(readiness, Mapping) else {}
+    # ``publication_ready`` describes the content bundle, not its execution
+    # authority. Expose the three-axis contract explicitly and fail closed on
+    # missing/legacy fields so clients cannot infer paper authority from a
+    # status label alone.
+    payload["readiness"] = {
+        key: readiness_gates.get(key) is True for key in _SAFE_READINESS_KEYS
     }
     payload["context_path_sha256"] = (
         _path_digest(manifest["context_path"]) if manifest.get("context_path") else None

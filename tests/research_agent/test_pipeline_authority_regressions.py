@@ -135,6 +135,12 @@ def test_p0_1_read_manifest_projects_evidence_index_not_prose(tmp_path):
                 "started_at": "2026-07-26T00:00:00Z",
                 "context_path": str(run_dir / "research_context.json"),
                 "plan_path": str(run_dir / "analysis_plan.json"),
+                "readiness": {
+                    "publication_ready": True,
+                    "publication_artifacts_ready": True,
+                    "execution_paper_eligible": False,
+                    "paper_authorized": False,
+                },
                 "evidence": [
                     {
                         "evidence_id": "primary_model",
@@ -172,6 +178,15 @@ def test_p0_1_read_manifest_projects_evidence_index_not_prose(tmp_path):
     assert payload["run_id"] == "run-1"
     assert payload["evidence"][0]["evidence_id"] == "primary_model"
     assert payload["evidence"][0]["sha256"] == "a" * 64
+    # Content readiness is not paper authority. The public MCP projection
+    # exposes the explicit execution-bound verdict and must not invite clients
+    # to infer authorization from ``publication_ready``.
+    assert payload["readiness"] == {
+        "publication_artifacts_ready": True,
+        "execution_paper_eligible": False,
+        "paper_authorized": False,
+    }
+    assert "publication_ready" not in payload["readiness"]
     encoded = json.dumps(payload)
     # Identity and digests survive; prose, host paths and step stdout do not.
     assert "ward 7" not in encoded
