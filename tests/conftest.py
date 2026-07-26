@@ -84,6 +84,33 @@ def _explicit_test_runner_backend(monkeypatch):
     yield
 
 
+def _clear_runtime_capability_test_context() -> None:
+    """Clear a runner capability publication without importing Agent code."""
+
+    module = sys.modules.get(
+        "easyicu.research_agent.execution.method_capabilities"
+    )
+    if module is not None:
+        module.set_runtime_capability_snapshot_provider(None)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_runtime_capability_provider():
+    """Keep direct runner unit tests from contaminating later prompt tests.
+
+    Production Pipeline entry points already use
+    ``runtime_capability_job_scope``. Some runner tests intentionally construct
+    ``DockerRunner`` directly to inspect its lazy image-backed capability
+    provider, so pytest itself supplies the missing outer job boundary.
+    """
+
+    _clear_runtime_capability_test_context()
+    try:
+        yield
+    finally:
+        _clear_runtime_capability_test_context()
+
+
 @pytest.fixture(scope="session")
 def synthetic_cohort():
     """Small synthetic cohort with a composite-score completeness signal."""
