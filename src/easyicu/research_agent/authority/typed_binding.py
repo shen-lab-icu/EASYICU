@@ -1133,6 +1133,96 @@ def _coder_authority_with_typed_parent_schema_receipts(
     return authority.append(_assignment_model_authority_context_block(bindings))
 
 
+def _validated_primary_cohort_execution_receipt(
+    receipt: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """Return a JSON-safe, row-accounted host cohort execution receipt."""
+
+    try:
+        payload = json.loads(
+            json.dumps(
+                receipt,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("host cohort execution receipt must be finite JSON") from exc
+    if (
+        not isinstance(payload, dict)
+        or payload.get("schema_version") != "easyicu.primary_cohort_execution_prompt/1"
+    ):
+        raise ValueError("host cohort execution receipt schema is invalid")
+
+    def _is_sha256(value: Any) -> bool:
+        return (
+            isinstance(value, str)
+            and len(value) == 64
+            and all(character in "0123456789abcdef" for character in value)
+        )
+
+    def _row_count(value: Any, *, field: str) -> int:
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError(
+                f"host cohort execution receipt {field} must be a non-negative integer"
+            )
+        return value
+
+    if not _is_sha256(payload.get("cohort_definition_sha256")):
+        raise ValueError("host cohort execution receipt cohort digest is invalid")
+    raw_universe = payload.get("raw_universe")
+    analysis_cohort = payload.get("authoritative_analysis_cohort")
+    flow = payload.get("ordered_predicate_flow")
+    if (
+        not isinstance(raw_universe, dict)
+        or not isinstance(analysis_cohort, dict)
+        or not isinstance(flow, list)
+        or not flow
+        or any(not isinstance(row, dict) for row in flow)
+    ):
+        raise ValueError("host cohort execution receipt structure is invalid")
+    if not _is_sha256(raw_universe.get("sha256")) or not _is_sha256(
+        analysis_cohort.get("sha256")
+    ):
+        raise ValueError("host cohort execution receipt artifact digest is invalid")
+    for optional_digest in ("row_identity_sha256", "authority_sha256"):
+        value = analysis_cohort.get(optional_digest)
+        if value is not None and not _is_sha256(value):
+            raise ValueError(
+                f"host cohort execution receipt {optional_digest} is invalid"
+            )
+    identity_column = analysis_cohort.get("identity_column")
+    if identity_column is not None and (
+        not isinstance(identity_column, str) or not identity_column.strip()
+    ):
+        raise ValueError("host cohort execution receipt identity_column is invalid")
+
+    raw_rows = _row_count(raw_universe.get("rows"), field="raw rows")
+    analysis_rows = _row_count(analysis_cohort.get("rows"), field="analysis rows")
+    previous_remaining: Optional[int] = None
+    for index, row in enumerate(flow):
+        before = _row_count(row.get("n_before"), field="n_before")
+        excluded = _row_count(row.get("n_excluded"), field="n_excluded")
+        remaining = _row_count(row.get("n_remaining"), field="n_remaining")
+        if row.get("step_order") != index:
+            raise ValueError("host cohort execution receipt step order is invalid")
+        if before != excluded + remaining:
+            raise ValueError("host cohort execution receipt partition is invalid")
+        if previous_remaining is not None and before != previous_remaining:
+            raise ValueError("host cohort execution receipt flow is discontinuous")
+        previous_remaining = remaining
+    if (
+        flow[0].get("predicate_kind") != "universe"
+        or flow[0]["n_before"] != raw_rows
+        or flow[0]["n_remaining"] != raw_rows
+        or previous_remaining != analysis_rows
+    ):
+        raise ValueError("host cohort execution receipt row accounting is invalid")
+    return payload
+
+
 def _write_resolved_inputs_manifest(
     *,
     run_dir: Path,
@@ -1141,6 +1231,7 @@ def _write_resolved_inputs_manifest(
     bindings: Mapping[str, Mapping[str, Any]],
     context_path: Optional[Path] = None,
     raw_input_contracts: Optional[Mapping[str, Any]] = None,
+    host_verified_cohort_execution_receipt: Optional[Mapping[str, Any]] = None,
 ) -> Path:
     """Persist the step's authority capsule outside its writable overlay."""
 
@@ -1201,6 +1292,12 @@ def _write_resolved_inputs_manifest(
             raise ValueError("raw input contract digest mismatch")
         raw_payload["contracts_sha256"] = declared_digest
         payload["raw_input_contracts"] = raw_payload
+    if host_verified_cohort_execution_receipt is not None:
+        payload["host_verified_cohort_execution_receipt"] = (
+            _validated_primary_cohort_execution_receipt(
+                host_verified_cohort_execution_receipt
+            )
+        )
     if context_path is not None:
         resolved_context = Path(context_path).resolve()
         run_root = Path(run_dir).resolve()

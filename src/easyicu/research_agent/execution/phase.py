@@ -791,18 +791,18 @@ def _planner_locked_cohort_prompt_payload(plan: AnalysisPlan) -> str:
     )
 
 
-def _planner_materialized_cohort_prompt_payload(
+def _planner_materialized_cohort_execution_receipt(
     *,
     plan: AnalysisPlan,
     universe_path: Path,
     analysis_cohort_path: Path,
-) -> str:
+) -> Dict[str, Any]:
     """Return a verified execution receipt for the Planner-owned predicates.
 
     The host already applies the locked cohort definition before execution.
-    This projection gives the Coder the resulting physical column bindings and
-    row-accounting checks without exposing row identities or choosing any new
-    scientific rule.
+    This projection gives both the Coder prompt and its read-only runtime
+    manifest the same physical column bindings and row-accounting checks
+    without exposing row identities or choosing any new scientific rule.
     """
 
     analysis_cohort_path = Path(analysis_cohort_path)
@@ -878,7 +878,7 @@ def _planner_materialized_cohort_prompt_payload(
             "analysis cohort execution receipt row accounting changed"
         )
 
-    receipt = {
+    return {
         "schema_version": "easyicu.primary_cohort_execution_prompt/1",
         "cohort_definition_sha256": provenance.get("cohort_sha256"),
         "raw_universe": {
@@ -894,6 +894,21 @@ def _planner_materialized_cohort_prompt_payload(
         },
         "ordered_predicate_flow": flow,
     }
+
+
+def _planner_materialized_cohort_prompt_payload(
+    *,
+    plan: AnalysisPlan,
+    universe_path: Path,
+    analysis_cohort_path: Path,
+) -> str:
+    """Serialize the verified cohort receipt for the Coder authority prompt."""
+
+    receipt = _planner_materialized_cohort_execution_receipt(
+        plan=plan,
+        universe_path=universe_path,
+        analysis_cohort_path=analysis_cohort_path,
+    )
     return json.dumps(
         receipt,
         ensure_ascii=False,
@@ -5308,6 +5323,19 @@ def run_execute_phase(
                 total_steps=total_steps,
             )
             return step_record
+        primary_cohort_execution_receipt = (
+            _planner_materialized_cohort_execution_receipt(
+                plan=plan,
+                universe_path=universe_path,
+                analysis_cohort_path=run_input_authority_state.analysis_path,
+            )
+            if primary_cohort_uses_universe
+            and bool(
+                getattr(plan.cohort, "inclusion", ())
+                or getattr(plan.cohort, "exclusion", ())
+            )
+            else None
+        )
         coder_authority = _coder_authority_with_locked_robustness_specs(
             authority=HostCoderAuthority(),
             context=coder_base_context,
@@ -5325,16 +5353,13 @@ def run_execute_phase(
                 else None
             ),
             materialized_execution_payload=(
-                _planner_materialized_cohort_prompt_payload(
-                    plan=plan,
-                    universe_path=universe_path,
-                    analysis_cohort_path=run_input_authority_state.analysis_path,
+                json.dumps(
+                    primary_cohort_execution_receipt,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
                 )
-                if primary_cohort_uses_universe
-                and bool(
-                    getattr(plan.cohort, "inclusion", ())
-                    or getattr(plan.cohort, "exclusion", ())
-                )
+                if primary_cohort_execution_receipt is not None
                 else None
             ),
         )
@@ -5621,6 +5646,11 @@ def run_execute_phase(
             raw_input_contracts=resolved_raw_input_contracts(
                 coder_context,
                 step.inputs,
+            ),
+            host_verified_cohort_execution_receipt=(
+                primary_cohort_execution_receipt
+                if primary_cohort_uses_universe
+                else None
             ),
         )
         coder_authority = attach_step_coder_input_authority(
@@ -5937,9 +5967,7 @@ def run_execute_phase(
                     step_record["step_authority_capsule_stage"] = (
                         step_attempt_state.selected_resume_capsule.capsule.stage
                     )
-                    selected_digest = (
-                        step_attempt_state.selected_resume_capsule.capsule.candidate_code.sha256
-                    )
+                    selected_digest = step_attempt_state.selected_resume_capsule.capsule.candidate_code.sha256
                     if (
                         step_attempt_state.selected_resume_capsule.capsule.concept_audit
                         is not None
@@ -10206,7 +10234,9 @@ def run_execute_phase(
         figure_role = (
             "publication_figure"
             if publication_step
-            else "analysis_figure" if _step_expects_figure(step) else None
+            else "analysis_figure"
+            if _step_expects_figure(step)
+            else None
         )
         if (
             publication_step

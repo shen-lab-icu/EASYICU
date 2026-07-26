@@ -520,7 +520,10 @@ def bind_primary_cohort_role(
             "check. "
             "The counts and digests are integrity checks, not permission to "
             "select rows by position, truncate, sample, or copy an arbitrary "
-            "same-sized frame. Receipt JSON: "
+            "same-sized frame. At runtime, read this exact receipt only from "
+            "`manifest['host_verified_cohort_execution_receipt']` in the "
+            "host-mounted `EASYICU_RESOLVED_INPUTS_JSON`; do not expect an "
+            "alias or reconstruct the receipt. Receipt JSON: "
             f"{materialized_execution_payload}."
         )
     return authority.append(attachment)

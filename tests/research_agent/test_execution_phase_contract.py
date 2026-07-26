@@ -1766,6 +1766,8 @@ def test_primary_cohort_raw_runner_is_scoped_and_authority_hashes_are_rechecked(
     assert "or has_primary_cohort_universe_producer" in source
     assert source.count("if run_input_authority_state.corrupted:") == 2
     assert '"remaining_steps_suppressed": True' in source
+    assert "primary_cohort_execution_receipt = (" in source
+    assert "host_verified_cohort_execution_receipt=(" in source
 
     runner_call = source.index("run_result = step_executor.execute(")
     cohort_authority_check = source.index(
@@ -1914,9 +1916,9 @@ def test_plan_and_execute_result_dataclass_shapes_match_contracts_module():
         "resume_state",
     }
     missing = required_plan_fields - plan_fields
-    assert (
-        not missing
-    ), f"_PlanPhaseResult is missing fields {missing} consumed by run_execute_phase."
+    assert not missing, (
+        f"_PlanPhaseResult is missing fields {missing} consumed by run_execute_phase."
+    )
 
     exec_fields = {f.name for f in fields(_ExecutePhaseResult)}
     required_exec_fields = {

@@ -123,6 +123,8 @@ def test_primary_cohort_role_binds_resolved_predicate_receipt() -> None:
     assert "every non-missing value is exactly in {0, 1}" in text
     assert "A threshold check alone is not a domain check" in text
     assert "not permission to select rows by position" in text
+    assert "`manifest['host_verified_cohort_execution_receipt']`" in text
+    assert "do not expect an alias or reconstruct the receipt" in text
 
 
 def test_repair_prompt_and_contract_guidance_share_primary_cohort_schema() -> None:
