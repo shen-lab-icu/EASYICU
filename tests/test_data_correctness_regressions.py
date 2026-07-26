@@ -14,6 +14,18 @@ from easyicu.io.data_converter import ConversionStatus, DataConverter
 from easyicu.table import ICUTable
 
 
+def test_align_to_icu_admission_fails_instead_of_returning_input_unchanged():
+    frame = pd.DataFrame(
+        {"stay_id": [1], "charttime": [pd.Timestamp("2026-01-01T00:00:00")]}
+    )
+
+    with pytest.raises(NotImplementedError, match="no longer returns unaligned data"):
+        api.align_to_icu_admission(frame, verbose=False)
+
+    with pytest.raises(NotImplementedError, match="load_concepts"):
+        api.align_to_icu_admission({"hr": frame}, verbose=False)
+
+
 def test_explicit_empty_cohort_returns_all_requested_special_outputs(monkeypatch):
     monkeypatch.setattr(
         api,
