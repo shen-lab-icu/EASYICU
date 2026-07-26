@@ -89,6 +89,7 @@ from ..research_context.prompt_scope import (
 )
 from ..contracts.declared_product import (
     RUNTIME_BINDABLE_TYPED_INPUT_KINDS,
+    primary_analysis_cohort_plan_findings,
     typed_product as _canonical_typed_product,
 )
 from ..plan_utils import (
@@ -453,6 +454,15 @@ def _build_planner_user_prompt(
         "Report per-group missing n (%), one variable-appropriate P value, "
         "and the test name. If only an ungrouped cohort description is wanted, "
         "emit `table:cohort_summary` instead and omit table_one_spec. "
+        "A primary cohort construction/eligibility + attrition step is also a "
+        "strict execution boundary: it must declare exactly one materialised "
+        "closed cohort product (`artifact:analysis_cohort`, "
+        "`dataset:analysis_cohort`, `cohort:analysis_set`, or "
+        "`cohort:<exact cohort.name>`) plus only canonical attrition or "
+        "denominator tables. Do not place a baseline/cohort summary, Table 1, "
+        "model, statistic, figure, or other side output in that raw-universe "
+        "step. Put each such output in a downstream step that consumes the "
+        "declared closed cohort product. "
         "Table 1 enum values are exact: `variable_kind` is one of "
         "`continuous`, `categorical`, or `ordinal` (a binary variable is "
         "`categorical`); `summary` is one of `mean_sd`, `median_iqr`, `both`, "
@@ -1186,6 +1196,36 @@ class PlannerAgent:
                 )
             plan.analysis_type = canonical_family
         validate_plan_typed_bindings_against_context(plan=plan, context=context)
+        primary_cohort_findings = primary_analysis_cohort_plan_findings(plan=plan)
+        if primary_cohort_findings:
+            violations = [
+                {
+                    "step_id": finding.detail.get("step_id"),
+                    "issue": finding.detail.get("issue"),
+                    "expected_outputs": list(
+                        next(
+                            (
+                                step.expected_outputs
+                                for step in plan.steps
+                                if step.step_id == finding.detail.get("step_id")
+                            ),
+                            [],
+                        )
+                    ),
+                }
+                for finding in primary_cohort_findings
+            ]
+            raise ValueError(
+                "Planner primary-cohort output contract is not executable. "
+                "Violations: "
+                + json.dumps(violations, ensure_ascii=False, default=str)
+                + ". Move side outputs to downstream steps that consume the "
+                "closed cohort product. A primary cohort construction/"
+                "eligibility + attrition "
+                "step must uniquely own exactly one materialised closed cohort "
+                "product and may otherwise emit only canonical attrition/"
+                "denominator tables."
+            )
         _validate_required_primary_result(plan=plan, context=context)
         return plan
 

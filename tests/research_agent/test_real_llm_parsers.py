@@ -205,6 +205,83 @@ def test_planner_uses_enough_completion_budget(ra):
     assert llm.calls[0][1]["max_tokens"] >= 4096
 
 
+def test_planner_retries_primary_cohort_step_with_side_output(ra):
+    """Raw-universe cohort ownership must be repaired before probe execution."""
+
+    schema = ra.schema
+    ctx = schema.ResearchContext(
+        research_question="Describe a closed primary cohort.",
+        cohort=schema.CohortDescriptor(
+            cohort_name="c", database="d", n_patients=1, n_stays=1
+        ),
+        variables=[],
+    )
+    invalid = json.dumps(
+        {
+            "research_question": ctx.research_question,
+            "analysis_type": "descriptive_epidemiology",
+            "steps": [
+                {
+                    "step_id": "01_cohort",
+                    "planned_analysis_role": "auxiliary",
+                    "intent": "Materialize the cohort and report attrition.",
+                    "inputs": [],
+                    "expected_outputs": [
+                        "artifact:analysis_cohort",
+                        "table:cohort_flow",
+                        "table:cohort_summary",
+                    ],
+                    "method": "cohort_definition_and_attrition",
+                }
+            ],
+        }
+    )
+    repaired = json.dumps(
+        {
+            "research_question": ctx.research_question,
+            "analysis_type": "descriptive_epidemiology",
+            "steps": [
+                {
+                    "step_id": "01_cohort",
+                    "planned_analysis_role": "auxiliary",
+                    "intent": "Materialize the cohort and report attrition.",
+                    "inputs": [],
+                    "expected_outputs": [
+                        "artifact:analysis_cohort",
+                        "table:cohort_flow",
+                    ],
+                    "method": "cohort_definition_and_attrition",
+                },
+                {
+                    "step_id": "02_summary",
+                    "planned_analysis_role": "auxiliary",
+                    "intent": "Describe the closed analysis cohort.",
+                    "inputs": ["artifact:analysis_cohort"],
+                    "expected_outputs": ["table:cohort_summary"],
+                    "method": "descriptive",
+                },
+            ],
+        }
+    )
+    llm = ScriptedMockLLMClient([invalid, repaired])
+
+    from easyicu.research_agent.agents.core import PlannerAgent
+
+    plan = PlannerAgent(llm).run(ctx)
+
+    assert len(llm.calls) == 2
+    assert plan.steps[0].expected_outputs == [
+        "artifact:analysis_cohort",
+        "table:cohort_flow",
+    ]
+    assert plan.steps[1].inputs == ["artifact:analysis_cohort"]
+    assert "strict execution boundary" in llm.calls[0][0][-1].content
+    feedback = llm.calls[1][0][-1].content
+    assert "primary-cohort output contract is not executable" in feedback
+    assert "table:cohort_summary" in feedback
+    assert "downstream steps" in feedback
+
+
 def test_planner_retry_projection_keeps_structure_and_bounds_prose() -> None:
     from easyicu.research_agent.agents.core import (
         _PLANNER_RETRY_PROJECTION_BYTE_LIMIT,
