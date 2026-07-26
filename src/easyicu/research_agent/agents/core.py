@@ -85,6 +85,7 @@ from ..research_context.prompt_scope import (
     coder_guide_for_step,
     coder_rewrite_guide_for_step,
     scoped_coder_context,
+    scoped_reporting_context,
 )
 from ..contracts.declared_product import (
     RUNTIME_BINDABLE_TYPED_INPUT_KINDS,
@@ -230,6 +231,7 @@ def _format_context(
     method_constraint_variable_names: Optional[set[str]] = None,
     include_ctas_aggregation_guidance: bool = True,
     compact_declared_source_companions: bool = False,
+    compact_method_constraints: bool = False,
 ) -> str:
     from ..research_context.outbound import format_outbound_safe_context
 
@@ -258,7 +260,10 @@ def _format_context(
                     ]
                 }
             )
-        constraints = render_variable_constraints(constraint_context)
+        constraints = render_variable_constraints(
+            constraint_context,
+            compact=compact_method_constraints,
+        )
         if constraints:
             rendered += "\n\n" + constraints
     return rendered
@@ -652,7 +657,11 @@ def _build_planner_user_prompt(
         '  "rationale": "<one paragraph>"\n'
         "}\n\n"
         "RESEARCH CONTEXT:\n"
-        + _format_context(planner_context, include_materialized_input_facts=True)
+        + _format_context(
+            planner_context,
+            include_materialized_input_facts=True,
+            compact_method_constraints=True,
+        )
         + "\n\n"
         + planner_variable_catalog(context, planner_context)
     )
@@ -1176,6 +1185,7 @@ class ReplannerAgent(PlannerAgent):
             if directive
             else ""
         )
+        replanner_context = scoped_planner_context(context)
         messages = [
             LLMMessage(
                 role="system",
@@ -1199,12 +1209,26 @@ class ReplannerAgent(PlannerAgent):
                     f"COMPLETED STEP RECORDS:\n{json.dumps(completed, ensure_ascii=False, default=str)}\n\n"
                     "RESEARCH CONTEXT:\n"
                     + _format_context(
-                        context,
+                        replanner_context,
                         include_materialized_input_facts=True,
+                        compact_method_constraints=True,
                     )
+                    + "\n\n"
+                    + planner_variable_catalog(context, replanner_context)
                 ),
             ),
         ]
+        replanner_bytes = sum(
+            len(str(message.content or "").encode("utf-8"))
+            for message in messages
+        )
+        if replanner_bytes > _PLANNER_PROMPT_BYTE_LIMIT:
+            raise PlannerPromptBudgetError(
+                "Replanner prompt transport budget exceeded: "
+                f"{replanner_bytes} > {_PLANNER_PROMPT_BYTE_LIMIT} bytes. "
+                "No plan, completed-step evidence, or scientific coordinate was "
+                "truncated; reduce the scoped discovery catalog."
+            )
         from ..providers.structured_retry import call_llm_with_structured_retry
 
         def parse_revised(raw: str) -> AnalysisPlan:
@@ -3067,6 +3091,40 @@ def _repair_specialization(
 # ---------------------------------------------------------------------------
 
 
+_ANALYZER_PROMPT_BYTE_LIMIT = 48_000
+_WRITER_PROMPT_BYTE_LIMIT = 64_000
+
+
+class ReportingPromptBudgetError(RuntimeError):
+    """A lossless Analyzer/Writer request exceeds its transport envelope."""
+
+    def __init__(self, *, role: str, actual_bytes: int, limit_bytes: int) -> None:
+        self.role = str(role)
+        self.actual_bytes = int(actual_bytes)
+        self.limit_bytes = int(limit_bytes)
+        super().__init__(
+            f"{self.role} prompt transport budget exceeded: "
+            f"{self.actual_bytes} > {self.limit_bytes} bytes. "
+            "No evidence digest or binding scientific coordinate was truncated; "
+            "reduce the role-scoped projection or split the evidence digest."
+        )
+
+
+def _enforce_reporting_prompt_budget(
+    messages: Sequence[LLMMessage],
+    *,
+    role: str,
+    limit_bytes: int,
+) -> None:
+    actual_bytes = _coder_prompt_payload_bytes(messages)
+    if actual_bytes > int(limit_bytes):
+        raise ReportingPromptBudgetError(
+            role=role,
+            actual_bytes=actual_bytes,
+            limit_bytes=limit_bytes,
+        )
+
+
 class AnalyzerAgent:
     """Turns step outputs into a short, evidence-grounded interpretation."""
 
@@ -3085,6 +3143,11 @@ class AnalyzerAgent:
         from ..research_context.outbound import project_outbound_step_summary
 
         safe_step_summary = project_outbound_step_summary(step_summary)
+        reporting_context = scoped_coder_context(
+            context,
+            step,
+            max_variables=20,
+        )
         messages = [
             LLMMessage(role="system", content=_SYSTEM_GUIDE),
             LLMMessage(
@@ -3100,10 +3163,19 @@ class AnalyzerAgent:
                     "in the form {evidence:<id>}.\n"
                     "- Do not introduce numbers that are not in the summary.\n"
                     "- 4 sentences max. No clinical recommendations.\n\n"
-                    "RESEARCH CONTEXT:\n" + _format_context(context)
+                    "RESEARCH CONTEXT:\n"
+                    + _format_context(
+                        reporting_context,
+                        include_method_constraints=False,
+                    )
                 ),
             ),
         ]
+        _enforce_reporting_prompt_budget(
+            messages,
+            role="Analyzer",
+            limit_bytes=_ANALYZER_PROMPT_BYTE_LIMIT,
+        )
         return complete_with_provider_budget(
             budget=provider_budget,
             category="analyzer",
@@ -3124,7 +3196,7 @@ class WriterAgent:
     problem where small models truncate Introduction / Discussion.
 
     Each section call gets:
-    - the full research context (variables, cohort, question),
+    - a role-scoped research context (study coordinates, not every source column),
     - the machine evidence digest (numbers to cite),
     - the list of available evidence ids,
     - a section-specific instruction with word-count target.
@@ -3152,6 +3224,7 @@ class WriterAgent:
         evidence_list = (
             ", ".join(str(eid) for eid in evidence_ids) if evidence_ids else "(none)"
         )
+        reporting_context = scoped_reporting_context(context)
         messages = [
             LLMMessage(role="system", content=_SYSTEM_GUIDE + _WRITER_GUIDE),
             LLMMessage(
@@ -3194,10 +3267,18 @@ class WriterAgent:
                     "MACHINE EVIDENCE DIGEST:\n"
                     + (evidence_digest or "(none)")
                     + "\n\nRESEARCH CONTEXT:\n"
-                    + _format_context(context)
+                    + _format_context(
+                        reporting_context,
+                        include_method_constraints=False,
+                    )
                 ),
             ),
         ]
+        _enforce_reporting_prompt_budget(
+            messages,
+            role="Writer",
+            limit_bytes=_WRITER_PROMPT_BYTE_LIMIT,
+        )
         raw = authorized_complete(
             self.llm, messages, max_tokens=max_tokens, temperature=0.3
         ).strip()

@@ -12,12 +12,22 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from easyicu.research_agent.agents.core import (
+    PlannerPromptBudgetError,
+    ReplannerAgent,
     _REPLANNER_STEP_SUMMARY_CHAR_BUDGET,
     _REPLANNER_TOTAL_RECORDS_CHAR_BUDGET,
     _clip_json,
     _slim_completed_records_for_prompt,
     _slim_record_for_replanner,
+)
+from easyicu.research_agent.providers.mocks import PatternScriptedMockLLMClient
+from easyicu.research_agent.schema import (
+    AnalysisPlan,
+    CohortDescriptor,
+    ResearchContext,
 )
 
 
@@ -97,3 +107,27 @@ def test_clip_json_marks_truncation_and_respects_budget():
     out = _clip_json({"a": "q" * 100}, char_budget=20)
     assert out.endswith("budget]")
     assert out.startswith("{")
+
+
+def test_oversized_replanner_directive_fails_before_provider_call():
+    context = ResearchContext(
+        research_question="Describe the ICU cohort.",
+        cohort=CohortDescriptor(
+            cohort_name="synthetic",
+            database="miiv",
+            n_patients=10,
+            n_stays=10,
+        ),
+        variables=[],
+    )
+    plan = AnalysisPlan(research_question=context.research_question, steps=[])
+    llm = PatternScriptedMockLLMClient([])
+
+    with pytest.raises(PlannerPromptBudgetError, match="Replanner prompt"):
+        ReplannerAgent(llm).run(
+            context=context,
+            current_plan=plan,
+            directive="x" * 90_000,
+        )
+
+    assert llm.calls == []

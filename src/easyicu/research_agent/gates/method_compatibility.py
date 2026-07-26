@@ -4,10 +4,10 @@ This module encodes statistical / clinical truths about *kinds* of
 variables (ordinal, binary, count, right-skewed continuous) and the
 method families that are inappropriate for each. It is consumed by
 :func:`render_variable_constraints` to produce a self-review checklist
-that the agent layer appends to every research-context summary, so the
-planner / coder / analyzer / writer all see the same up-front rule
-list **before** generated code reaches the post-hoc validators in
-``audits/``.
+for method-selecting Planner/Coder prompts **before** generated code reaches
+the deterministic post-hoc validators in ``audits/``. Evidence-interpreting
+Analyzer/Writer prompts receive a smaller role-scoped context because they do
+not choose or execute an analytical method.
 
 Design constraints
 ------------------
@@ -308,7 +308,11 @@ def variable_kind_constraints(
     return out
 
 
-def render_variable_constraints(context: ResearchContext) -> str:
+def render_variable_constraints(
+    context: ResearchContext,
+    *,
+    compact: bool = False,
+) -> str:
     """Return a human-readable self-review block for agent system prompts.
 
     Empty string when no variable in ``context.variables`` triggers a
@@ -331,11 +335,41 @@ def render_variable_constraints(context: ResearchContext) -> str:
         "automatically from the research context — must be honoured when",
         "drafting plans and writing code):",
     ]
-    for r in rules:
+    rendered_rules: List[Dict[str, object]]
+    if compact:
+        grouped: Dict[str, Dict[str, object]] = {}
+        for rule in rules:
+            kind = str(rule["kind"])
+            entry = grouped.setdefault(
+                kind,
+                {
+                    **rule,
+                    "variables": [],
+                },
+            )
+            variables = entry["variables"]
+            assert isinstance(variables, list)
+            variables.append(str(rule["variable"]))
+        rendered_rules = list(grouped.values())
+    else:
+        rendered_rules = [
+            {
+                **rule,
+                "variables": [str(rule["variable"])],
+            }
+            for rule in rules
+        ]
+    for r in rendered_rules:
         forbidden_head = ", ".join(list(r["forbidden_patterns"])[:5])  # type: ignore[index]
         preferred = ", ".join(list(r["preferred"]))  # type: ignore[index]
+        variables = ", ".join(f"`{name}`" for name in r["variables"])  # type: ignore[union-attr]
+        variable_label = (
+            variables
+            if len(r["variables"]) == 1  # type: ignore[arg-type]
+            else f"variables {variables}"
+        )
         lines.append(
-            f"  - `{r['variable']}` (kind: {r['kind']}): DO NOT use "
+            f"  - {variable_label} (kind: {r['kind']}): DO NOT use "
             f"{forbidden_head}. PREFERRED: {preferred}. "
             f"Reason: {r['rationale']}"
         )

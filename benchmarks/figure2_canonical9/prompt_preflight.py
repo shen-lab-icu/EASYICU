@@ -52,6 +52,8 @@ PROMPT_PREFLIGHT_SCHEMA_VERSION = "easyicu.canonical9_prompt_preflight/1"
 
 _PLANNER_LIMIT_BYTES = 80_000
 _CODER_LIMIT_BYTES = 42_000
+_ANALYZER_LIMIT_BYTES = 48_000
+_WRITER_LIMIT_BYTES = 64_000
 _REPAIR_LIMIT_BYTES = 30_000
 _PROMPT_KINDS = ("planner", "coder", "analyzer", "writer", "repair")
 class PromptPreflightError(RuntimeError):
@@ -597,14 +599,14 @@ def render_task_prompt_audit(row: Mapping[str, Any]) -> dict[str, object]:
             prompt_kind="analyzer",
             messages=analyzer_messages,
             required_strings=protocol_strings,
-            limit_bytes=None,
+            limit_bytes=_ANALYZER_LIMIT_BYTES,
             stage_mode="representative_step_summary",
         ),
         "writer": _prompt_record(
             prompt_kind="writer",
             messages=writer_messages,
             required_strings=[*protocol_strings, writer_canary],
-            limit_bytes=None,
+            limit_bytes=_WRITER_LIMIT_BYTES,
             stage_mode="representative_evidence_digest",
         ),
         "repair": _prompt_record(

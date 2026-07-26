@@ -191,6 +191,31 @@ def test_render_lists_one_line_per_constrained_variable():
     assert "`hr`" not in block
 
 
+def test_compact_render_groups_identical_rules_without_losing_variable_names():
+    ctx = _make_context(
+        [
+            ConceptDescriptor(
+                name="sofa_cardio",
+                dtype="int64",
+                role=VariableRole.ORDINAL_SCORE,
+            ),
+            ConceptDescriptor(
+                name="sofa_renal",
+                dtype="int64",
+                role=VariableRole.ORDINAL_SCORE,
+            ),
+        ]
+    )
+
+    block = render_variable_constraints(ctx, compact=True)
+
+    assert block.count("  - ") == 1
+    assert "`sofa_cardio`" in block
+    assert "`sofa_renal`" in block
+    assert "(kind: ordinal)" in block
+    assert "DO NOT use" in block
+
+
 def test_render_does_not_apply_outcome_family_rules_to_binary_covariates():
     ctx = _make_context(
         [
