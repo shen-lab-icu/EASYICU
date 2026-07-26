@@ -32,7 +32,7 @@ import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable, Literal, Optional
+from typing import Any, Callable, Literal, Optional, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -53,6 +53,7 @@ __all__ = [
     "HumanReviewRequest",
     "OrchestrationRuntimeReceipt",
     "PipelineWorkflow",
+    "WorkflowEngine",
     "WorkflowCompleted",
     "WorkflowPaused",
     "build_pipeline_workflow",
@@ -379,6 +380,29 @@ class WorkflowPaused:
     requests: tuple[HumanReviewRequest, ...]
 
 
+@runtime_checkable
+class WorkflowEngine(Protocol):
+    """Stable orchestration seam independent of a framework implementation.
+
+    A future durable engine may implement this interface after it can
+    rehydrate every phase handoff from artifact references. Callers should
+    depend on this contract, not on :class:`PipelineWorkflow` internals.
+    """
+
+    @property
+    def state(self) -> str:
+        """Return the engine's current lifecycle state."""
+
+    def start(self) -> WorkflowCompleted | WorkflowPaused:
+        """Run until completion or an explicit human-review pause."""
+
+    def resume(
+        self,
+        decisions: Sequence[HumanReviewDecision | Mapping[str, Any]],
+    ) -> WorkflowCompleted:
+        """Validate decisions for the active pause and continue the run."""
+
+
 class PipelineWorkflow:
     """Single-owner state machine for one pipeline run.
 
@@ -546,7 +570,7 @@ def build_pipeline_workflow(
         Callable[[Sequence[Mapping[str, Any]]], None]
     ] = None,
     reviewer_identity_resolver: Optional[Callable[[], str]] = None,
-) -> PipelineWorkflow:
+) -> WorkflowEngine:
     """Build the explicit phase dispatcher for one pipeline run."""
 
     return PipelineWorkflow(
