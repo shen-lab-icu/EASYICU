@@ -16,6 +16,7 @@ from easyicu.research_agent.agents.core import (
 from easyicu.research_agent.repairs.patch import PATCH_FORMAT
 from easyicu.research_agent.authority.coder_authority import HostCoderAuthority
 from easyicu.research_agent.research_context.prompt_scope import (
+    compact_quality_audit_coder_guide_for_step,
     compact_rendering_coder_guide_for_step,
     coder_context_requires_method_constraints,
     coder_guide_for_step,
@@ -1006,6 +1007,47 @@ def test_wide_quality_initial_prompt_stays_under_transport_gate_and_keeps_compan
         assert f"declared_family_{family}_measured" in payload
         assert f'"source_concept":"declared_family_{family}"' in payload
     assert "VARIABLE-TYPE METHOD COMPATIBILITY" not in payload
+
+
+def test_wide_quality_prompt_compacts_tutorials_without_losing_authority(ra):
+    step = _quality_step(ra)
+    authority_marker = "host-quality-authority:" + ("x" * 12_000)
+    llm = _CaptureLLM(["import os\nvalue = 1\n"])
+
+    CoderAgent(llm).run(
+        context=_wide_context(ra),
+        step=step,
+        host_authority=HostCoderAuthority.from_values([authority_marker]),
+    )
+
+    messages = llm.calls[0][0]
+    payload = "\n".join(str(message.content or "") for message in messages)
+    assert _payload_bytes(messages) <= 42_000
+    assert authority_marker in payload
+    assert str(step.inputs) in payload
+    assert "WIDE DATA-QUALITY AUDIT CONTRACT:" in payload
+    assert "TABLE-ONE / DESCRIPTIVE SUMMARIES:" not in payload
+    assert "CLINICAL SCORE AND MISSINGNESS SEMANTICS:" not in payload
+    for family in range(4):
+        assert f'"name":"declared_family_{family}_first"' in payload
+        assert f'"name":"declared_family_{family}_measured"' in payload
+
+
+def test_compact_quality_guide_is_structural_not_intent_routed(ra):
+    step = _quality_step(ra).model_copy(
+        update={"intent": "Human prose contains no quality keywords."}
+    )
+
+    guide = compact_quality_audit_coder_guide_for_step(
+        load_prompt_pack()["coder"],
+        step,
+    )
+
+    assert "WIDE DATA-QUALITY AUDIT CONTRACT:" in guide
+    assert "TABLE-ONE / DESCRIPTIVE SUMMARIES:" not in guide
+    assert "CLINICAL SCORE AND MISSINGNESS SEMANTICS:" not in guide
+    assert "MECHANICAL PYTHON CONTRACT:" in guide
+    assert "OUTPUT SERIALIZATION CONTRACT:" in guide
 
 
 def test_initial_prompt_compacts_non_consumed_source_concept_companions(ra):
