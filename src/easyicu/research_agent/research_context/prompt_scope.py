@@ -24,6 +24,7 @@ from ..plan_utils import (
 from ..schema import (
     PLANNED_MODEL_REQUIREMENTS_STEP_METHOD,
     AnalysisStep,
+    ConceptDescriptor,
     ResearchContext,
 )
 from .typed import project_research_context_variables
@@ -64,7 +65,7 @@ _PLANNER_TOPIC_STOPWORDS = frozenset(
     }
 )
 
-_PLANNER_FULL_DETAIL_TARGET = 36
+_PLANNER_FULL_DETAIL_TARGET = 24
 
 _FIGURE_METHODS = frozenset(
     {
@@ -735,7 +736,22 @@ def _planner_preferred_topic_representation(name: str) -> bool:
     return True
 
 
-def _planner_variable_catalog_line(variable: object) -> str:
+def _planner_catalog_caveat(variable: object) -> str:
+    caveats = tuple(getattr(variable, "clinical_caveats", ()) or ()) or tuple(
+        getattr(variable, "pitfalls", ()) or ()
+    )
+    if not caveats:
+        return ""
+    return " ".join(str(caveats[0]).split())[:160]
+
+
+def _planner_variable_catalog_line(
+    variable: object,
+    *,
+    window_refs: dict[str, str],
+    level_refs: dict[str, str],
+    caveat_refs: dict[str, str],
+) -> str:
     fields = [
         str(getattr(variable, "name", "")),
         f"role={getattr(getattr(variable, 'role', None), 'value', 'other')}",
@@ -746,7 +762,7 @@ def _planner_variable_catalog_line(variable: object) -> str:
         fields.append(f"source={source}")
     window = str(getattr(variable, "analysis_window", "") or "").strip()
     if window:
-        fields.append(f"window={window}")
+        fields.append(f"window_ref={window_refs[window]}")
     if bool(getattr(variable, "is_ordinal", False)):
         fields.append("ordinal=true")
     valid_range = getattr(variable, "valid_range", None)
@@ -765,13 +781,15 @@ def _planner_variable_catalog_line(variable: object) -> str:
     if domain.get("n_unique") is not None:
         fields.append(f"observed_n_unique={domain['n_unique']}")
     if domain.get("opaque_levels"):
-        fields.append(f"opaque_levels={domain['opaque_levels']!r}")
-    caveats = tuple(getattr(variable, "clinical_caveats", ()) or ()) or tuple(
-        getattr(variable, "pitfalls", ()) or ()
-    )
-    if caveats:
-        compact_caveat = " ".join(str(caveats[0]).split())
-        fields.append(f"caveat={compact_caveat[:160]}")
+        level_key = json.dumps(
+            domain["opaque_levels"],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        fields.append(f"opaque_levels_ref={level_refs[level_key]}")
+    caveat = _planner_catalog_caveat(variable)
+    if caveat:
+        fields.append(f"caveat_ref={caveat_refs[caveat]}")
     return "- " + " | ".join(fields)
 
 
@@ -898,6 +916,36 @@ def planner_variable_catalog(
         for variable in full_context.variables
         if variable.name.lower() not in selected
     ]
+    windows = list(
+        dict.fromkeys(
+            str(variable.analysis_window or "").strip()
+            for variable in omitted
+            if str(variable.analysis_window or "").strip()
+        )
+    )
+    level_keys = list(
+        dict.fromkeys(
+            json.dumps(
+                domain["opaque_levels"],
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            for variable in omitted
+            if (
+                domain := project_observed_domain(variable.observed_domain)
+            ).get("opaque_levels")
+        )
+    )
+    caveats = list(
+        dict.fromkeys(
+            caveat
+            for variable in omitted
+            if (caveat := _planner_catalog_caveat(variable))
+        )
+    )
+    window_refs = {value: f"W{index}" for index, value in enumerate(windows, 1)}
+    level_refs = {value: f"L{index}" for index, value in enumerate(level_keys, 1)}
+    caveat_refs = {value: f"C{index}" for index, value in enumerate(caveats, 1)}
     full_roster = [
         {
             "name": variable.name,
@@ -928,8 +976,113 @@ def planner_variable_catalog(
         "justified; its full typed metadata will be attached to that step. "
         "Do not infer units, transformations, or semantics not listed here.",
     ]
-    lines.extend(_planner_variable_catalog_line(variable) for variable in omitted)
+    if window_refs:
+        lines.append("Shared exact analysis-window references:")
+        lines.extend(f"- {ref}={value}" for value, ref in window_refs.items())
+    if level_refs:
+        lines.append("Shared exact opaque-level references:")
+        lines.extend(f"- {ref}={value}" for value, ref in level_refs.items())
+    if caveat_refs:
+        lines.append("Shared clinical-caveat references:")
+        lines.extend(f"- {ref}={value}" for value, ref in caveat_refs.items())
+    lines.append("Omitted-variable discovery catalog:")
+    lines.extend(
+        _planner_variable_catalog_line(
+            variable,
+            window_refs=window_refs,
+            level_refs=level_refs,
+            caveat_refs=caveat_refs,
+        )
+        for variable in omitted
+    )
     return "\n".join(lines)
+
+
+def scoped_reporting_context(
+    context: ResearchContext,
+    *,
+    max_variables: int = 20,
+) -> ResearchContext:
+    """Project the context for evidence interpretation and manuscript prose.
+
+    Analyzer and Writer do not select a model or discover new cohort columns.
+    They need the study coordinates, declared outcome/exposure, demographics,
+    explicit covariates, and provenance companions for those variables.  The
+    complete context remains the host authority used by planning, execution,
+    validation, and evidence binding.
+    """
+
+    direct_names = {
+        str(value or "").strip().lower()
+        for value in (
+            context.target_outcome,
+            context.primary_exposure,
+            *context.cohort.id_columns,
+            *context.cohort.time_columns,
+            *context.cohort.outcome_columns,
+        )
+        if str(value or "").strip()
+    }
+    if context.user_preferences is not None:
+        direct_names.update(
+            str(value or "").strip().lower()
+            for value in context.user_preferences.covariates
+            if str(value or "").strip()
+        )
+    direct_names.update(
+        variable.name.lower()
+        for variable in context.variables
+        if _planner_exact_name_is_mentioned(
+            variable.name,
+            context.research_question,
+        )
+    )
+
+    selected: list[ConceptDescriptor] = []
+    for variable in context.variables:
+        if (
+            variable.name.lower() in direct_names
+            or getattr(variable.role, "value", "") == "demographic"
+        ):
+            selected.append(variable)
+
+    selected_names = {variable.name.lower() for variable in selected}
+    selected_families = {_variable_family(name) for name in selected_names}
+    selected_sources = {
+        str(variable.source_concept or "").strip().lower()
+        for variable in selected
+        if variable.source_concept
+    }
+    for variable in context.variables:
+        if variable.name.lower() in selected_names:
+            continue
+        if _is_automatically_required_source_companion(variable) and (
+            _variable_family(variable.name) in selected_families
+            or str(variable.source_concept or "").strip().lower()
+            in selected_sources
+        ):
+            selected.append(variable)
+            selected_names.add(variable.name.lower())
+
+    # The cap limits optional demographic expansion, never the direct study
+    # coordinates or their provenance companions.
+    cap = max(1, int(max_variables))
+    if len(selected) > cap:
+        required = [
+            variable
+            for variable in selected
+            if variable.name.lower() in direct_names
+            or _is_automatically_required_source_companion(variable)
+        ]
+        optional = [variable for variable in selected if variable not in required]
+        selected = required + optional[: max(0, cap - len(required))]
+
+    return project_research_context_variables(
+        context,
+        selected,
+        additional_concept_ids=tuple(sorted(direct_names)),
+        include_source_concept_siblings=False,
+    )
 
 
 def scoped_coder_context(
@@ -1027,4 +1180,5 @@ __all__ = [
     "planner_variable_catalog",
     "scoped_coder_context",
     "scoped_planner_context",
+    "scoped_reporting_context",
 ]
