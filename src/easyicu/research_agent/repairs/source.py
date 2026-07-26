@@ -747,11 +747,11 @@ def _patch_closed_counts_stable_keywords(
     """Remove a diagnostic label or rename an authored levels keyword.
 
     The host helper accepts one series plus ``declared_levels=``. Generated
-    adapters sometimes add ``variable=`` for error-label prose or spell the
-    already-authored level expression as ``levels=``. Both forms currently
-    fail before execution. This repair changes no level value, category,
-    denominator, row, or scientific choice and applies every exact structured
-    occurrence atomically.
+    adapters sometimes add ``variable=``/``variable_name=`` for error-label
+    prose or spell the already-authored level expression as ``levels=`` or
+    ``allowed_values=``. These forms currently fail before execution. This
+    repair changes no level value, category, denominator, row, or scientific
+    choice and applies every exact structured occurrence atomically.
     """
 
     if not finding_lines:
@@ -788,14 +788,21 @@ def _patch_closed_counts_stable_keywords(
         keyword_map = {str(keyword.arg): keyword.value for keyword in call.keywords}
         if len(keyword_map) != len(call.keywords) or not set(keyword_map) <= {
             "variable",
+            "variable_name",
             "levels",
+            "allowed_values",
             "declared_levels",
         }:
             return code
-        if "levels" in keyword_map and "declared_levels" in keyword_map:
+        level_keywords = [
+            name
+            for name in ("declared_levels", "levels", "allowed_values")
+            if name in keyword_map
+        ]
+        if len(level_keywords) > 1:
             return code
-        level_expression = keyword_map.get("declared_levels") or keyword_map.get(
-            "levels"
+        level_expression = (
+            keyword_map[level_keywords[0]] if level_keywords else None
         )
         if level_expression is None:
             function: ast.AST | None = call

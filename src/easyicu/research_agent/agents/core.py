@@ -2228,6 +2228,13 @@ def _typed_input_scope_contract(step: AnalysisStep) -> str:
         "repeats that key-and-value comparison.\n"
         "- Use `strict_numeric_input(original).values` for result-bearing numeric "
         "input. Capture/report any raw non-finite mask before calling it.\n"
+        "- Stable descriptive-helper APIs are exact: "
+        "`closed_categorical_counts(series, declared_levels=levels).table` "
+        "returns columns `level` and `count`; "
+        "`measurement_provenance_receipt(frame, measured_column=..., "
+        "count_column=...)` uses one positional frame and two keyword-only "
+        "column names. Never inspect helper signatures, pass `*args`/`**kwargs`, "
+        "add label keywords, or build compatibility adapters.\n"
         f"{typed_numeric_null_contract}"
         "- Import `strict_numeric_input` and, for every exact Planner-declared "
         "measured/count pair, `measurement_provenance_receipt` from "
@@ -2959,6 +2966,22 @@ def _repair_specialization(
             "does not authorize sibling `*_measured` or `*_n` columns. Preserve "
             "the cohort predicates, ordered attrition, denominators, outputs, "
             "and all other scientific choices unchanged.\n"
+        )
+    if structured_reasons & {
+        "host_helper_call_signature_invalid",
+        "host_helper_runtime_introspection",
+    }:
+        guidance.append(
+            "- DIAGNOSED HOST-HELPER API REPAIR (binding): use the stable APIs "
+            "directly and exactly: "
+            "`closed_categorical_counts(series, declared_levels=levels).table` "
+            "with output columns `level` and `count`, and "
+            "`measurement_provenance_receipt(frame, measured_column=..., "
+            "count_column=...)`. Preserve the already-authored series, frame, "
+            "levels, and column-name expressions. Remove label-only keywords, "
+            "`inspect.signature`, `*args`/`**kwargs`, try/except adapters, and "
+            "schema guessing around these helpers; do not add inputs or choose "
+            "new levels.\n"
         )
     if standard_helper_in_script or RepairRoute.SPARSE_EVENT in repair_routes:
         metadata_candidates = []

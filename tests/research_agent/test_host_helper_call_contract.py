@@ -818,6 +818,40 @@ def add_categorical(series, variable, levels):
     assert _signature_findings(repaired, ra) == []
 
 
+def test_closed_counts_allowed_values_adapter_is_rebound_without_science_change(ra):
+    script = """
+from easyicu.research_agent.methods.descriptive_inputs import closed_categorical_counts
+
+def add_categorical(series, allowed_values, name):
+    return closed_categorical_counts(
+        series,
+        allowed_values=allowed_values,
+        variable_name=name,
+    )
+"""
+    findings = _signature_findings(script, ra)
+
+    repaired, names = deterministic_concept_audit_repair(
+        script,
+        [finding.message for finding in findings],
+        repair_reasons=[repair_reason_for_finding(finding) for finding in findings],
+        repair_findings=findings,
+    )
+
+    assert len(findings) == 1
+    assert findings[0].detail["violations"] == [
+        "required_keyword_only_argument_missing",
+        "unknown_keyword_argument",
+    ]
+    assert names == ["closed_counts_stable_keywords_v1"]
+    assert (
+        "closed_categorical_counts(series, declared_levels=allowed_values)"
+        in repaired
+    )
+    assert "variable_name=name" not in repaired
+    assert _signature_findings(repaired, ra) == []
+
+
 def test_closed_counts_unknown_keywords_are_repaired_atomically(ra):
     script = """
 from easyicu.research_agent.methods.descriptive_inputs import closed_categorical_counts
