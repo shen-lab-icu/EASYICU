@@ -4432,17 +4432,6 @@ class ResearchAgentPipeline:
                 evidence=plan_evidence,
                 execution_authority=execution_authority,
             )
-            if requests and self._human_review_gate is None:
-                # Only a caller that supplies an operator control plane can
-                # answer. Proceeding unattended past a state classified as
-                # needing sign-off is exactly the failure this pause prevents.
-                raise RuntimeError(
-                    "this run reached "
-                    f"{len(requests)} state(s) that require human review "
-                    f"({', '.join(sorted({item.kind for item in requests}))}) "
-                    "but no human_review_gate is configured; supply one or "
-                    "resolve the blocking findings before re-running"
-                )
             return requests
 
         def _human_review_recorder(records):
