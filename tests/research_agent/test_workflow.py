@@ -10,6 +10,7 @@ import pytest
 
 from easyicu.research_agent.orchestration.workflow import (
     HumanReviewDecision,
+    HumanReviewRejected,
     HumanReviewRequest,
     WorkflowEngine,
     WorkflowCompleted,
@@ -148,6 +149,114 @@ def test_human_review_rejects_duplicate_decisions() -> None:
 
     with pytest.raises(ValueError, match="decisions must have unique review_id"):
         workflow.resume(decisions)
+
+
+def test_human_review_rejection_is_recorded_and_terminal() -> None:
+    request = HumanReviewRequest.create(
+        kind="scientific_stop",
+        summary="Reject an unresolved scientific stop",
+        authority_sha256="d" * 64,
+        payload={"finding": "positivity_not_established"},
+    )
+    recorded: list[dict] = []
+    workflow, calls = _workflow(
+        human_review_invoker=lambda _plan: (request,),
+        human_review_recorder=recorded.extend,
+    )
+    assert isinstance(workflow.start(), WorkflowPaused)
+    rejected = HumanReviewDecision(
+        review_id=request.review_id,
+        authority_sha256=request.authority_sha256,
+        decision="rejected",
+        reviewer="maintainer",
+        decided_at="2026-07-26T11:00:00Z",
+        note="The design is not acceptable.",
+    )
+
+    with pytest.raises(HumanReviewRejected) as rejection:
+        workflow.resume([rejected])
+
+    assert rejection.value.review_ids == (request.review_id,)
+    assert workflow.state == "rejected"
+    assert recorded[0]["decision"] == "rejected"
+    assert calls == ["plan"]
+    assert workflow._requests == ()
+    assert workflow._plan_result is None
+
+    approved = rejected.model_copy(update={"decision": "approved"})
+    with pytest.raises(RuntimeError, match="found 'rejected'"):
+        workflow.resume([approved])
+    assert calls == ["plan"]
+
+
+def test_human_review_records_follow_request_order_not_client_order() -> None:
+    requests = tuple(
+        HumanReviewRequest.create(
+            kind="scientific_stop",
+            summary=f"Review stop {index}",
+            authority_sha256=str(index) * 64,
+            payload={"index": index},
+        )
+        for index in (1, 2)
+    )
+    recorded: list[dict] = []
+    workflow, _calls = _workflow(
+        human_review_invoker=lambda _plan: requests,
+        human_review_recorder=recorded.extend,
+    )
+    assert isinstance(workflow.start(), WorkflowPaused)
+    decisions = [
+        HumanReviewDecision(
+            review_id=request.review_id,
+            authority_sha256=request.authority_sha256,
+            decision="approved",
+            reviewer="maintainer",
+            decided_at="2026-07-26T11:00:00Z",
+        )
+        for request in reversed(requests)
+    ]
+
+    completed = workflow.resume(decisions)
+
+    expected_order = [request.review_id for request in requests]
+    assert [item["review_id"] for item in recorded] == expected_order
+    assert [
+        item["review_id"] for item in completed.human_review_decisions
+    ] == expected_order
+
+
+def test_human_review_hashes_use_the_shared_canonical_contract() -> None:
+    from easyicu.research_agent.canonical_json import canonical_sha256
+    from easyicu.research_agent.orchestration.workflow import (
+        _human_review_decision_record,
+    )
+
+    request = HumanReviewRequest.create(
+        kind="capability_request",
+        summary="Review canonical digest ownership",
+        authority_sha256="e" * 64,
+        payload={"unicode": "重症", "nested": {"b": 2, "a": 1}},
+    )
+    decision = HumanReviewDecision(
+        review_id=request.review_id,
+        authority_sha256=request.authority_sha256,
+        decision="approved",
+        reviewer="maintainer",
+        decided_at="2026-07-26T11:00:00Z",
+    )
+
+    record = _human_review_decision_record(
+        request=request,
+        decision=decision,
+        reviewer_identity="sso:maintainer",
+    )
+
+    assert record["request_sha256"] == canonical_sha256(
+        request.model_dump(mode="json")
+    )
+    assert record["decision_sha256"] == canonical_sha256(
+        decision.model_dump(mode="json")
+    )
 
 
 def test_retired_graph_builder_cannot_recreate_a_shadow_dispatcher() -> None:
