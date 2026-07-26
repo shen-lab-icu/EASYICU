@@ -537,7 +537,7 @@ def bind_execution_cohort_runtime(
     *,
     authority: HostCoderAuthority,
 ) -> HostCoderAuthority:
-    """Explain the host-owned current-cohort cardinality coordinate."""
+    """Explain the host-owned current-cohort and raw-domain coordinates."""
 
     return authority.append(
         "CURRENT EXECUTION COHORT (host-owned runtime contract): "
@@ -548,11 +548,12 @@ def bind_execution_cohort_runtime(
         "DataFrame. If an explicit row-count integrity assertion is needed, "
         "compare len(the loaded COHORT_PARQUET frame) with "
         'int(os.environ["EASYICU_COHORT_ROWS"]); the runner owns that value. '
-        "The prompt's outbound-safe variable view uses "
-        "observed_shape.opaque_levels, but the digest-verified local "
-        "ResearchContext JSON uses observed_domain.levels. Read the latter only "
-        "at local execution time when closed categorical helpers need the real "
-        "binding; never copy private literals into generated source."
+        "For every Planner-declared raw input, "
+        "manifest['raw_input_contracts']['contracts'] is the sole executable "
+        "domain authority. Use its exact allowed_values when present. Absence "
+        "means no closed category list is authorized for this step: do not "
+        "recover one from prompt prose, the broader ResearchContext, or the "
+        "loaded frame, and never copy private literals into generated source."
     )
 
 

@@ -18,7 +18,10 @@ from easyicu.research_agent.schema import (
     ResearchContext,
 )
 from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
-from easyicu.research_agent.resources.coder import bind_primary_cohort_role
+from easyicu.research_agent.resources.coder import (
+    bind_execution_cohort_runtime,
+    bind_primary_cohort_role,
+)
 from easyicu.research_agent.authority.coder_authority import HostCoderAuthority
 
 
@@ -127,6 +130,16 @@ def test_primary_cohort_role_binds_resolved_predicate_receipt() -> None:
     assert "Do not read or audit related measured/count/status/timing siblings" in text
     assert "`manifest['host_verified_cohort_execution_receipt']`" in text
     assert "do not expect an alias or reconstruct the receipt" in text
+
+
+def test_execution_cohort_runtime_uses_only_step_raw_domain_contract() -> None:
+    text = bind_execution_cohort_runtime(authority=HostCoderAuthority()).render()
+
+    assert "raw_input_contracts" in text
+    assert "sole executable domain authority" in text
+    assert "Use its exact allowed_values when present" in text
+    assert "do not recover one from prompt prose, the broader ResearchContext" in text
+    assert "ResearchContext JSON uses observed_domain.levels" not in text
 
 
 def test_repair_prompt_and_contract_guidance_share_primary_cohort_schema() -> None:

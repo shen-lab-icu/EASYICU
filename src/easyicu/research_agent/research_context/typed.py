@@ -823,6 +823,7 @@ def resolved_raw_input_contracts(
     if len(raw_names) != len(set(raw_names)):
         raise ValueError("Planner-declared raw inputs must be unique")
     cohort = context.materialized_inputs.cohort
+    variables = {variable.name: variable for variable in context.variables}
     contracts: Dict[str, Any] = {}
     for name in raw_names:
         binding = cohort.column_bindings.get(name)
@@ -834,6 +835,49 @@ def resolved_raw_input_contracts(
             **_column_prompt_fact(name, binding),
             "binding_sha256": binding.binding_sha256,
         }
+        variable = variables.get(name)
+        domain = (
+            variable.observed_domain
+            if variable is not None
+            and isinstance(variable.observed_domain, Mapping)
+            else None
+        )
+        observed_levels = domain.get("levels") if domain is not None else None
+        n_unique = domain.get("n_unique") if domain is not None else None
+        if (
+            "allowed_values" not in fact
+            and isinstance(observed_levels, list)
+            and 1 <= len(observed_levels) <= 8
+            and isinstance(n_unique, int)
+            and not isinstance(n_unique, bool)
+            and n_unique == len(observed_levels)
+        ):
+            try:
+                encoded_levels = [
+                    (
+                        type(value).__name__,
+                        json.dumps(
+                            value,
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                            allow_nan=False,
+                        ),
+                    )
+                    for value in observed_levels
+                    if value is not None
+                    and isinstance(value, (bool, int, float, str))
+                ]
+            except (TypeError, ValueError):
+                encoded_levels = []
+            if (
+                len(encoded_levels) == len(observed_levels)
+                and len(set(encoded_levels)) == len(encoded_levels)
+            ):
+                fact["allowed_values"] = list(observed_levels)
+                fact["allowed_values_basis"] = (
+                    "sealed_research_context_observed_domain"
+                )
         if binding.analysis_plausibility_range is not None:
             fact["plausibility_policy"] = {
                 "range_policy": "flag_only",
