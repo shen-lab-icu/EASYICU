@@ -173,6 +173,7 @@ def _readiness_with_all_content_gates_passing(
     manuscript = tmp_path / "manuscript.md"
     manuscript.write_text("Publishable-looking manuscript.\n", encoding="utf-8")
 
+    kwargs.setdefault("execution_paper_eligible", True)
     write_readiness_artifacts(
         context=context,
         plan=_plan(),
@@ -226,4 +227,23 @@ def test_an_undemoted_publishable_run_keeps_paper_authorization(
     )
 
     assert status["status"] == "publication_ready"
+    assert status["gates"]["publication_artifacts_ready"] is True
+    assert status["gates"]["execution_paper_eligible"] is True
     assert status["gates"]["paper_authorized"] is True
+
+
+def test_content_ready_run_without_paper_eligible_identity_is_not_authorized(
+    tmp_path: Path, monkeypatch
+):
+    """Content readiness must not substitute for an authorized execution."""
+    status = _readiness_with_all_content_gates_passing(
+        tmp_path,
+        monkeypatch=monkeypatch,
+        extra_gates={},
+        execution_paper_eligible=False,
+    )
+
+    assert status["status"] == "publication_ready"
+    assert status["gates"]["publication_artifacts_ready"] is True
+    assert status["gates"]["execution_paper_eligible"] is False
+    assert status["gates"]["paper_authorized"] is False

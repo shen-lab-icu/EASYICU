@@ -2349,6 +2349,7 @@ def write_readiness_artifacts(
     writer_probe_mode: bool = False,
     writer_probe_failed_steps: Optional[Sequence[str]] = None,
     force_diagnostic_only: bool = False,
+    execution_paper_eligible: bool = False,
 ) -> tuple[Dict[str, Any], Dict[str, str]]:
     gates = _compute_readiness_gates(
         context=context,
@@ -2392,23 +2393,18 @@ def write_readiness_artifacts(
         )
     )
 
-    # ``status`` honours two fail-closed demotions the content conjunction
-    # cannot see: an explicit development lane and an exhausted replan budget.
-    # ``paper_authorized`` is the field external readers key on (Web UI, MCP
-    # clients, scorecards), and it was computed from content alone — so a
-    # demoted run wrote ``"status": "diagnostic_only"`` and
-    # ``"paper_authorized": true`` into the same file. Derive it from
-    # ``status`` so there is one answer rather than two that can disagree.
-    #
-    # This does NOT make it an authority check: readiness cannot see the
-    # submission profile or the execution identity, so a run that is
-    # ``paper_eligible=False`` for want of a frozen profile, Docker runner or
-    # bound input authority can still reach ``paper_authorized`` here. Binding
-    # those in needs plumbing readiness does not have; ``_paper_eligible`` in
-    # ``authority/execution_identity.py`` remains the check that answers it.
-
-    gates["paper_authorized"] = bool(gates.get("paper_authorized")) and (
+    # The content gate and execution authority answer different questions.
+    # Preserve the former under an explicit name, then bind final paper
+    # authorization to the independently constructed execution identity.
+    # The default is fail-closed so direct callers cannot accidentally grant
+    # paper authority without supplying that identity verdict.
+    publication_artifacts_ready = bool(gates.get("paper_authorized")) and (
         status == "publication_ready"
+    )
+    gates["publication_artifacts_ready"] = publication_artifacts_ready
+    gates["execution_paper_eligible"] = bool(execution_paper_eligible)
+    gates["paper_authorized"] = publication_artifacts_ready and bool(
+        execution_paper_eligible
     )
 
     artifact_paths: Dict[str, str] = {}
