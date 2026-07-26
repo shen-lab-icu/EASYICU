@@ -84,6 +84,46 @@ def _level_index_findings(script: str, ra):
     ]
 
 
+def _count_domain_findings(script: str, ra):
+    return [
+        finding
+        for finding in audit_mechanical_code_contracts(script, _step(ra))
+        if (finding.detail or {}).get("reason")
+        == "count_companion_closed_domain_invalid"
+    ]
+
+
+def test_declared_count_companion_cannot_use_closed_binary_domain(ra):
+    script = """
+def allowed_values_for(name):
+    return raw_contracts[name].get("allowed_values")
+
+count_levels = allowed_values_for("value_n")
+require_binary(count, "value_n", count_levels)
+counts = closed_categorical_counts(count, declared_levels=count_levels)
+"""
+
+    findings = _count_domain_findings(script, ra)
+
+    assert [
+        (
+            finding.detail["helper_name"],
+            finding.detail["line"],
+            finding.detail["column"],
+        )
+        for finding in findings
+    ] == [
+        ("allowed_values_for", 5, "value_n"),
+        ("require_binary", 6, "value_n"),
+        ("closed_categorical_counts", 7, "value_n"),
+    ]
+    assert all(
+        repair_reason_for_finding(finding).value
+        == "SCIENTIFIC_SEMANTICS_VIOLATION"
+        for finding in findings
+    )
+
+
 def test_positional_keyword_only_host_arguments_fail_before_execution(ra):
     script = """
 from easyicu.research_agent.methods.descriptive_inputs import measurement_provenance_receipt

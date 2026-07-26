@@ -3685,6 +3685,48 @@ result = run_model()
     assert "age_dup" not in result.params.index
 
 
+def test_deterministic_summary_repair_prioritizes_failed_primary_over_sensitivity(ra):
+    from easyicu.research_agent.pipeline import _deterministic_summary_repair
+
+    code = """
+import statsmodels.api as sm
+fit_method = "statsmodels_logit_mle"
+interval_method = "profile_normal"
+ci_low = beta - 1.96 * se
+reported_interval_method = "wald_95_percent"
+result = sm.Logit(y, X).fit(disp=False, maxiter=200)
+"""
+    repaired = _deterministic_summary_repair(
+        code=code,
+        step_summary={
+            "model_contracts": [
+                {
+                    "analysis_role": "primary",
+                    "fit_status": "not_fitted",
+                    "fit_failure_reason": "Singular matrix",
+                },
+                {
+                    "analysis_role": "sensitivity",
+                    "fit_status": "fitted",
+                },
+            ],
+            "sensitivity_result": {"odds_ratio": 1.60799},
+        },
+        analysis_family="cohort_definition_sensitivity",
+    )
+
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "rank_safe_statsmodels_design_v1"
+    assert "_easyicu_rank_safe_design_v1" in patched
+    assert (
+        "result = sm.GLM(y, X, family=sm.families.Binomial()).fit("
+        "disp=False, maxiter=200)"
+    ) in patched
+    assert 'fit_method = "statsmodels_glm_binomial_irls_rank_safe"' in patched
+    assert 'interval_method = "wald_95_percent"' in patched
+
+
 def test_deterministic_runner_repair_promotes_publication_bundle_script(ra):
     from easyicu.research_agent.pipeline import _deterministic_runner_repair
 

@@ -346,7 +346,12 @@ def test_every_agent_context_uses_the_same_outbound_safe_projection(ra):
                         "unit": "mmol/L",
                         "valid_range": [0.0, 100.0],
                         "analysis_window": "first 24 hours after ICU admission",
+                        "source_concept": "trusted_component",
                         "forbidden_transformations": ["no silent zero imputation"],
+                        "derived_from_concepts": [
+                            "trusted_component",
+                            sentinel,
+                        ],
                         "observed_domain": {
                             "levels": ["PRIVATE_LEVEL_A", "PRIVATE_LEVEL_B"],
                             "n_unique": 2,
@@ -429,6 +434,7 @@ def test_every_agent_context_uses_the_same_outbound_safe_projection(ra):
         "first 24 hours after ICU admission",
         "no silent zero imputation",
         '"plausibility_range":[0.0,100.0]',
+        '"derived_from_concepts":["trusted_component"]',
     ):
         assert required in outbound
     analyzer_prompt = _all_prompt_text(analyzer)

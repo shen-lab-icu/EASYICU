@@ -558,6 +558,9 @@ _DETAIL_REASON_CODES = {
     "table_one_spec_not_planner_owned": RepairReason.INVALID_HELPER_SIGNATURE,
     "local_helper_unpack_arity_mismatch": RepairReason.INVALID_HELPER_SIGNATURE,
     "host_helper_runtime_introspection": RepairReason.INVALID_HELPER_SIGNATURE,
+    "count_companion_closed_domain_invalid": (
+        RepairReason.SCIENTIFIC_SEMANTICS_VIOLATION
+    ),
     "string_suffix_trim_length_mismatch": (RepairReason.STRING_SUFFIX_TRIM_MISMATCH),
     "resolved_context_payload_not_loaded": (RepairReason.TYPED_CONTEXT_BINDING_INVALID),
     "resolved_input_key_not_materialized": (RepairReason.TYPED_PRODUCT_BINDING_INVALID),

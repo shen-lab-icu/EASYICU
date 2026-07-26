@@ -980,6 +980,27 @@ class LLMConceptAuditor:
             variable_names={variable.name for variable in selected_variables},
         )
         safe_script = outbound_safe_script(step, script_text)
+        step_contract = (
+            {
+                key: value
+                for key, value in step.model_dump(mode="json").items()
+                if key
+                in {
+                    "step_id",
+                    "planned_analysis_role",
+                    "method",
+                    "inputs",
+                    "expected_outputs",
+                    "icu_rule_refs",
+                    "model_requirements",
+                    "input_consumption_contracts",
+                    "table_one_spec",
+                    "trajectory_stability_spec",
+                }
+            }
+            if step is not None
+            else {}
+        )
         return (
             "Review this generated analysis script for ICU concept-use risks "
             "that deterministic regex checks may miss. Focus only on: ordinal "
@@ -1080,6 +1101,24 @@ class LLMConceptAuditor:
             "the variable metadata to ICU mortality, hospital mortality or a "
             "fixed follow-up horizon, do not raise an error unless the script "
             "contradicts that binding or mixes incompatible outcome definitions.\n\n"
+            "The Planner-declared step contract below is binding scientific "
+            "authority. Audit whether the code implements that contract; do not "
+            "redesign its cohort, exposure, operator, threshold, input set, model "
+            "roster, or estimand merely because another defensible design exists. "
+            "Do not add a positive-only filter when the locked analysis needs both "
+            "exposure levels, and interpret comparison operators literally: for a "
+            "non-negative binary field, `>= 0` retains both zero and one. A "
+            "host-bound derived ConceptDescriptor may already incorporate its "
+            "`derived_from_concepts`; do not require the generated script to load "
+            "or filter on each raw component unless the Planner contract declares "
+            "that component separately. Conversely, report an ERROR when code "
+            "contradicts an explicit ICU rule or required model contract. "
+            "Measurement/count/source-status companions are audit-only metadata, "
+            "not automatic adjustment covariates. Flag them when they enter a model "
+            "design without Planner authority, including a measured flag together "
+            "with its deterministic missing-indicator complement, which makes an "
+            "intercept-bearing design rank-deficient. Their use in a separate "
+            "provenance audit is valid and should not be flagged.\n\n"
             "A named `full_stay` window is an administrative analysis span: it "
             "starts at ICU admission and ends at discharge, with `end_hours` "
             "serving only as an upper safety cap (the default cap is 720 hours). "
@@ -1103,6 +1142,14 @@ class LLMConceptAuditor:
             "Use an empty findings list if no issue is visible.\n\n"
             f"Step: {step.step_id if step else '(unknown)'}\n"
             f"Step intent: {step.intent if step else '(unknown)'}\n"
+            "Planner-declared step contract:\n"
+            + json.dumps(
+                step_contract,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                default=str,
+            )
+            + "\n"
             f"Target outcome: {context.target_outcome}\n"
             "Named time windows:\n"
             + json.dumps(
@@ -4388,6 +4435,30 @@ class PrimaryModelContractValidator:
         interval_method = cls._normalise(metadata.get("interval_method"))
         point_only = penalized and interval_method == "unavailable"
         issues: List[Dict[str, Any]] = []
+        row_interval_methods = {
+            normalised
+            for raw in rows.get(
+                "interval_method",
+                pd.Series(index=rows.index, dtype=object),
+            )
+            if pd.notna(raw)
+            and (normalised := cls._normalise(raw))
+            not in {"nan", "none", "not_applicable_reference", "null"}
+        }
+        if (
+            interval_method
+            and interval_method not in {"nan", "none", "null"}
+            and row_interval_methods
+            and row_interval_methods != {interval_method}
+        ):
+            issues.append(
+                {
+                    "model_id": model_id,
+                    "issue": "interval_method_contract_mismatch",
+                    "contract_interval_method": metadata.get("interval_method"),
+                    "term_interval_methods": sorted(row_interval_methods),
+                }
+            )
         effect_columns = [
             column
             for column in ("estimate", "odds_ratio", "or")
