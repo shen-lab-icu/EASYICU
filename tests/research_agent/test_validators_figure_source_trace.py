@@ -83,6 +83,30 @@ def test_effect_source_inherits_primary_tier_only_from_matching_model_contract()
         == "table:adjusted_association_estimates"
     )
 
+    compact_source = source[["model_id", "odds_ratio"]].assign(
+        exposure="marker_max"
+    )
+    assert (
+        FigureSourceDataValidator._contract_scoped_effect_product(
+            product="table:adjusted_association_estimates",
+            source_frame=compact_source,
+            upstream_step_id="05_model",
+            completed_step_records=completed,
+        )
+        == "table:primary_adjusted_association_estimates"
+    )
+
+    forged_compact_source = compact_source.assign(exposure="different_marker")
+    assert (
+        FigureSourceDataValidator._contract_scoped_effect_product(
+            product="table:adjusted_association_estimates",
+            source_frame=forged_compact_source,
+            upstream_step_id="05_model",
+            completed_step_records=completed,
+        )
+        == "table:adjusted_association_estimates"
+    )
+
     positional_source = pd.DataFrame({"source_row_index": [0, 1]})
     upstream = pd.DataFrame(
         {

@@ -2603,6 +2603,29 @@ def primary_analysis_cohort_integrity_findings(
     return []
 
 
+def _closed_non_result_counter_subtree(key: str, value: Any) -> bool:
+    """Recognise one exact host diagnostic counter map.
+
+    ``nonfinite_input_counts`` records how many source values were rejected
+    before a model or figure was evaluated.  A key such as ``odds_ratio``
+    inside that map is a column label, not a reported effect.  Keep this
+    exception deliberately closed: arbitrary nesting, booleans, negative
+    counts, floats, and text remain ordinary result-bearing summary content.
+    """
+
+    return (
+        key == "nonfinite_input_counts"
+        and isinstance(value, Mapping)
+        and all(
+            isinstance(raw_key, str)
+            and isinstance(count, int)
+            and not isinstance(count, bool)
+            and count >= 0
+            for raw_key, count in value.items()
+        )
+    )
+
+
 def _summary_scalar_products(value: Any) -> set[tuple[str, str]]:
     """Return exact statistic/log keys backed by non-null scalar values."""
 
@@ -2615,6 +2638,8 @@ def _summary_scalar_products(value: Any) -> set[tuple[str, str]]:
                 return
             for raw_key, child in node.items():
                 key = _normalise(raw_key)
+                if _closed_non_result_counter_subtree(key, child):
+                    continue
                 if key in _HOST_RECEIPT_SUBTREES or key in _OUTPUT_CONTAINER_KEYS:
                     continue
                 if isinstance(child, Mapping) or isinstance(child, (list, tuple)):
@@ -3163,6 +3188,8 @@ def _effect_summary_paths(summary: Mapping[str, Any]) -> list[str]:
             for raw_key, child in node.items():
                 key = _normalise(raw_key)
                 path = f"{prefix}.{key}" if prefix else key
+                if _closed_non_result_counter_subtree(key, child):
+                    continue
                 if key in _HOST_RECEIPT_SUBTREES:
                     continue
                 if isinstance(child, Mapping) or isinstance(child, (list, tuple)):

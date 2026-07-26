@@ -309,6 +309,7 @@ def _run_robustness_preflight(
                     primary_payload=primary or {},
                     source=structured_source,
                     data=fit_data,
+                    primary_data=cohort,
                     context=context,
                     out_dir=out_dir,
                 )
@@ -711,6 +712,76 @@ def _contained_regular_file(path: Path, root: Path) -> Optional[Path]:
     return resolved
 
 
+def _coefficient_filename_from_summary(summary: Dict[str, Any]) -> Optional[str]:
+    """Resolve the exact registered coefficient companion name.
+
+    Current model runners publish the term-level table through the sealed
+    ``diagnostic_companions.coefficients`` field.  Historical runners used the
+    fixed ``coefficients.csv`` name.  An explicit malformed companion must
+    fail closed rather than silently falling back to a sibling file.
+    """
+
+    companions = summary.get("diagnostic_companions")
+    if companions is None:
+        return "coefficients.csv"
+    if not isinstance(companions, dict):
+        return None
+    raw_name = companions.get("coefficients")
+    if raw_name is None:
+        return "coefficients.csv"
+    if not isinstance(raw_name, str):
+        return None
+    filename = raw_name.strip()
+    if (
+        not filename
+        or Path(filename).name != filename
+        or Path(filename).suffix.lower() != ".csv"
+    ):
+        return None
+    return filename
+
+
+def _coefficient_path_from_summary(
+    *,
+    summary: Dict[str, Any],
+    outputs_dir: Path,
+    containment_root: Path,
+) -> Optional[Path]:
+    filename = _coefficient_filename_from_summary(summary)
+    if filename is None:
+        return None
+    return _contained_regular_file(outputs_dir / filename, containment_root)
+
+
+def _primary_contract_from_summary(
+    summary: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    """Select exactly one primary model contract without prose inference."""
+
+    contracts = summary.get("model_contracts")
+    if not isinstance(contracts, list) or not contracts:
+        return None
+    primary_model_id = str(summary.get("primary_model_id") or "").strip()
+    if primary_model_id:
+        candidates = [
+            contract
+            for contract in contracts
+            if isinstance(contract, dict)
+            and str(contract.get("model_id") or "") == primary_model_id
+        ]
+    else:
+        candidates = [
+            contract
+            for contract in contracts
+            if isinstance(contract, dict)
+            and str(contract.get("analysis_role") or "").lower() == "primary"
+            and str(contract.get("exposure_role") or "primary").lower() == "primary"
+        ]
+    if len(candidates) != 1:
+        return None
+    return dict(candidates[0])
+
+
 def _matching_active_evidence_id(
     *,
     evidence_by_id: Dict[str, Dict[str, Any]],
@@ -807,11 +878,7 @@ def _find_structured_primary_model_source(
             outputs_dir / "step_summary.json",
             run_root,
         )
-        coefficient_path = _contained_regular_file(
-            outputs_dir / "coefficients.csv",
-            run_root,
-        )
-        if script_path is None or summary_path is None or coefficient_path is None:
+        if script_path is None or summary_path is None:
             continue
         if outputs_dir.is_symlink() or step_dir.is_symlink():
             continue
@@ -858,32 +925,14 @@ def _find_structured_primary_model_source(
             continue
         if not isinstance(summary, dict):
             continue
-        contracts = summary.get("model_contracts")
-        if not isinstance(contracts, list) or not contracts:
-            continue
-        primary_model_id = str(summary.get("primary_model_id") or "").strip()
-        primary_contract = next(
-            (
-                contract
-                for contract in contracts
-                if isinstance(contract, dict)
-                and primary_model_id
-                and str(contract.get("model_id") or "") == primary_model_id
-            ),
-            None,
+        coefficient_path = _coefficient_path_from_summary(
+            summary=summary,
+            outputs_dir=outputs_dir,
+            containment_root=run_root,
         )
-        if primary_contract is None:
-            primary_contract = next(
-                (
-                    contract
-                    for contract in contracts
-                    if isinstance(contract, dict)
-                    and str(contract.get("analysis_role") or "").lower() == "primary"
-                    and str(contract.get("exposure_role") or "primary").lower()
-                    == "primary"
-                ),
-                None,
-            )
+        if coefficient_path is None:
+            continue
+        primary_contract = _primary_contract_from_summary(summary)
         if not isinstance(primary_contract, dict):
             continue
         coefficient_sha256 = _sha256_file(coefficient_path)
@@ -896,7 +945,7 @@ def _find_structured_primary_model_source(
             expected_sha256=coefficient_sha256,
             kind="table",
             required_script_evidence_id=code_evidence_id,
-            expected_logical_name="coefficients.csv",
+            expected_logical_name=coefficient_path.name,
         )
         if coefficient_evidence_id is None:
             continue
@@ -923,6 +972,7 @@ def _fit_structured_robustness_rows(
     primary_payload: Dict[str, Any],
     source: Dict[str, Any],
     data: Any,
+    primary_data: Any,
     context: Any,
     out_dir: Path,
 ) -> tuple[List[RobustnessPanelRow], List[str], Dict[str, Any]]:
@@ -947,6 +997,34 @@ def _fit_structured_robustness_rows(
                     source,
                     analysis_set="complete_case",
                 )
+                if contract is None:
+                    (
+                        row,
+                        coefficient_rows,
+                        contract_copy,
+                        error,
+                    ) = _verified_complete_case_equivalence(
+                        spec=spec,
+                        source=source,
+                        primary_data=primary_data,
+                    )
+                    rows.append(row)
+                    if contract_copy is not None:
+                        variant_contracts.append(contract_copy)
+                    variant_coefficients.extend(coefficient_rows)
+                    replay_index.append(
+                        {
+                            "spec_id": spec.spec_id,
+                            "axis": spec.axis,
+                            "mode": "verified_complete_case_equivalence",
+                            "source_step_id": source["step_id"],
+                            "status": "ok" if error is None else "blocked",
+                            "error": error,
+                        }
+                    )
+                    if error:
+                        warnings.append(f"{spec.spec_id}: {error}")
+                    continue
             elif strategy == "source_aware_categories_no_imputation":
                 contract = dict(source["primary_contract"])
             else:
@@ -955,6 +1033,7 @@ def _fit_structured_robustness_rows(
                 spec_id=spec.spec_id,
                 axis=spec.axis,
                 outputs_dir=source["outputs_dir"],
+                coefficient_path=source["coefficient_path"],
                 contract=contract,
                 evidence_id=str(source["coefficient_evidence_id"]),
                 note_prefix=(
@@ -966,6 +1045,7 @@ def _fit_structured_robustness_rows(
             evidence_contracts, evidence_coefficients = _variant_model_evidence(
                 summary=source["summary"],
                 outputs_dir=source["outputs_dir"],
+                coefficient_path=source["coefficient_path"],
                 spec_id=spec.spec_id,
                 replay_mode="inherited_primary_step_output",
                 analysis_set=(
@@ -1037,6 +1117,115 @@ def _fit_structured_robustness_rows(
             "variant_coefficients_file": coefficient_filename or None,
         },
     )
+
+
+def _verified_complete_case_equivalence(
+    *,
+    spec: RobustnessSpec,
+    source: Dict[str, Any],
+    primary_data: Any,
+) -> tuple[
+    RobustnessPanelRow,
+    List[Dict[str, Any]],
+    Optional[Dict[str, Any]],
+    Optional[str],
+]:
+    """Reuse a fit only after proving the locked complete-case set is identical."""
+
+    override = spec.missing_override or {}
+    raw_variables = override.get("variables")
+    if (
+        str(override.get("strategy") or "").strip().lower() != "complete_case"
+        or not isinstance(raw_variables, list)
+        or not raw_variables
+        or any(not isinstance(value, str) or not value.strip() for value in raw_variables)
+    ):
+        error = "complete-case equivalence requires explicit locked variables"
+        return _blocked_panel_row(spec.spec_id, spec.axis, error), [], None, error
+    variables = [value.strip() for value in raw_variables]
+    if len(variables) != len(set(variables)):
+        error = "complete-case equivalence variables are not unique"
+        return _blocked_panel_row(spec.spec_id, spec.axis, error), [], None, error
+    data_columns = {str(column) for column in getattr(primary_data, "columns", [])}
+    missing_columns = [column for column in variables if column not in data_columns]
+    if missing_columns:
+        error = (
+            "complete-case equivalence variables are absent from the primary "
+            "cohort: " + ", ".join(missing_columns)
+        )
+        return _blocked_panel_row(spec.spec_id, spec.axis, error), [], None, error
+
+    definition = source.get("summary", {}).get("analysis_definition")
+    if not isinstance(definition, dict):
+        error = "primary analysis definition is unavailable for equivalence proof"
+        return _blocked_panel_row(spec.spec_id, spec.axis, error), [], None, error
+    contract = source.get("primary_contract")
+    if not isinstance(contract, dict):
+        error = "primary model contract is unavailable for equivalence proof"
+        return _blocked_panel_row(spec.spec_id, spec.axis, error), [], None, error
+    exposure = str(
+        definition.get("exposure") or contract.get("exposure_source") or ""
+    ).strip()
+    outcome = str(definition.get("outcome") or contract.get("outcome") or "").strip()
+    covariates = definition.get("covariates")
+    if not isinstance(covariates, list) or any(
+        not isinstance(value, str) or not value.strip() for value in covariates
+    ):
+        error = "primary covariate definition is unavailable for equivalence proof"
+        return _blocked_panel_row(spec.spec_id, spec.axis, error), [], None, error
+    required_variables = {
+        exposure,
+        outcome,
+        *(value.strip() for value in covariates),
+    }
+    required_variables.discard("")
+    if not required_variables or not required_variables <= set(variables):
+        error = (
+            "locked complete-case variables do not cover every primary model input"
+        )
+        return _blocked_panel_row(spec.spec_id, spec.axis, error), [], None, error
+
+    complete_case_n = int(primary_data.dropna(subset=variables).shape[0])
+    model_n = int(contract.get("n") or 0)
+    if complete_case_n <= 0 or complete_case_n != model_n:
+        error = (
+            "locked complete-case membership is not identical to the fitted "
+            f"primary analysis set (complete_case_n={complete_case_n}, model_n={model_n})"
+        )
+        return _blocked_panel_row(spec.spec_id, spec.axis, error), [], None, error
+
+    row, coefficient_rows, contract_copy, error = _structured_model_row(
+        spec_id=spec.spec_id,
+        axis=spec.axis,
+        outputs_dir=source["outputs_dir"],
+        coefficient_path=source["coefficient_path"],
+        contract=contract,
+        evidence_id=str(source["coefficient_evidence_id"]),
+        note_prefix=(
+            "The locked complete-case membership exactly equals the fitted "
+            "primary analysis set; no duplicate refit can change the estimate."
+        ),
+    )
+    if error is not None or contract_copy is None:
+        return row, coefficient_rows, contract_copy, error
+    contract_copy.update(
+        {
+            "spec_id": spec.spec_id,
+            "source_model_id": contract_copy.get("model_id"),
+            "source_analysis_role": contract_copy.get("analysis_role"),
+            "source_analysis_set": contract_copy.get("analysis_set"),
+            "analysis_role": "sensitivity",
+            "analysis_set": "complete_case",
+            "replay_mode": "verified_complete_case_equivalence",
+            "missing_override": dict(override),
+            "complete_case_n": complete_case_n,
+        }
+    )
+    for item in coefficient_rows:
+        item["replay_mode"] = "verified_complete_case_equivalence"
+        item["analysis_set"] = "complete_case"
+        item["analysis_role"] = "sensitivity"
+    return row, coefficient_rows, contract_copy, None
 
 
 def _replay_primary_model_for_cohort(
@@ -1141,22 +1330,26 @@ def _replay_primary_model_for_cohort(
             replay_root=replay_root,
             input_n=int(len(variant_cohort)),
         )
-    primary_model_id = str(replay_summary.get("primary_model_id") or "").strip()
-    contracts = replay_summary.get("model_contracts") or []
-    contract = next(
-        (
-            item
-            for item in contracts
-            if isinstance(item, dict)
-            and primary_model_id
-            and str(item.get("model_id") or "") == primary_model_id
-        ),
-        None,
+    contract = _primary_contract_from_summary(replay_summary)
+    replay_coefficient_path = _coefficient_path_from_summary(
+        summary=replay_summary,
+        outputs_dir=replay_outputs,
+        containment_root=replay_root,
     )
     if not isinstance(contract, dict):
         return _blocked_structured_replay(
             spec=spec,
             error="replayed primary step did not emit its primary model contract",
+            replay_root=replay_root,
+            input_n=int(len(variant_cohort)),
+        )
+    if replay_coefficient_path is None:
+        return _blocked_structured_replay(
+            spec=spec,
+            error=(
+                "replayed primary step did not emit its declared term-level "
+                "coefficient companion"
+            ),
             replay_root=replay_root,
             input_n=int(len(variant_cohort)),
         )
@@ -1174,6 +1367,7 @@ def _replay_primary_model_for_cohort(
         spec_id=spec.spec_id,
         axis=spec.axis,
         outputs_dir=replay_outputs,
+        coefficient_path=replay_coefficient_path,
         contract=contract,
         evidence_id="model_replay_index",
         note_prefix=(
@@ -1195,6 +1389,7 @@ def _replay_primary_model_for_cohort(
     evidence_contracts, evidence_coefficients = _variant_model_evidence(
         summary=replay_summary,
         outputs_dir=replay_outputs,
+        coefficient_path=replay_coefficient_path,
         spec_id=spec.spec_id,
         replay_mode="exact_registered_primary_model_code",
         cohort_override=spec.cohort_override.to_dict(),
@@ -1230,6 +1425,7 @@ def _structured_model_row(
     contract: Optional[Dict[str, Any]],
     evidence_id: str,
     note_prefix: str,
+    coefficient_path: Optional[Path] = None,
 ) -> tuple[
     RobustnessPanelRow,
     List[Dict[str, Any]],
@@ -1241,7 +1437,7 @@ def _structured_model_row(
     if not isinstance(contract, dict):
         error = "no compatible primary-exposure model contract is available"
         return _blocked_panel_row(spec_id, axis, error), [], None, error
-    coefficient_path = outputs_dir / "coefficients.csv"
+    coefficient_path = coefficient_path or outputs_dir / "coefficients.csv"
     try:
         coefficients = pd.read_csv(coefficient_path)
     except Exception as exc:
@@ -1391,7 +1587,12 @@ def _matrix_model_trace(
     primary_source = str(primary_contract.get("exposure_source") or "").strip()
 
     contract: Optional[Dict[str, Any]] = None
-    coefficient_source = "coefficients.csv"
+    coefficient_path = structured_source.get("coefficient_path")
+    coefficient_source = (
+        coefficient_path.name
+        if isinstance(coefficient_path, Path)
+        else "coefficients.csv"
+    )
     contract_source = "step_summary.json:model_contracts"
     replay_mode = "completed_primary_step_output"
     coefficient_rows: List[Dict[str, Any]] = []
@@ -1400,9 +1601,7 @@ def _matrix_model_trace(
         try:
             import pandas as pd  # type: ignore
 
-            coefficient_rows = pd.read_csv(
-                structured_source["outputs_dir"] / "coefficients.csv"
-            ).to_dict(orient="records")
+            coefficient_rows = pd.read_csv(coefficient_path).to_dict(orient="records")
         except Exception:
             coefficient_rows = []
     else:
@@ -1490,6 +1689,7 @@ def _variant_model_evidence(
     replay_mode: str,
     analysis_set: Optional[str] = None,
     cohort_override: Optional[Dict[str, Any]] = None,
+    coefficient_path: Optional[Path] = None,
 ) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """Collect the full spec-by-model contract and term-level evidence."""
 
@@ -1515,7 +1715,7 @@ def _variant_model_evidence(
             contract["cohort_override"] = cohort_override
         evidence_contracts.append(contract)
 
-    coefficient_path = outputs_dir / "coefficients.csv"
+    coefficient_path = coefficient_path or outputs_dir / "coefficients.csv"
     try:
         coefficients = pd.read_csv(coefficient_path)
     except Exception:
@@ -1778,6 +1978,7 @@ def _structured_primary_effect_payload(
         spec_id=PRIMARY_SPEC_ID,
         axis="primary",
         outputs_dir=source["outputs_dir"],
+        coefficient_path=source["coefficient_path"],
         contract=source["primary_contract"],
         evidence_id=str(source["coefficient_evidence_id"]),
         note_prefix="Digest-verified primary exposure coefficient.",
@@ -1813,6 +2014,25 @@ def _structured_primary_effect_payload(
     errors: List[str] = []
 
     def _payload_disagrees(payload: Optional[Dict[str, Any]], label: str) -> None:
+        if not isinstance(payload, dict):
+            return
+        claims_effect = bool(
+            _float_or_none(payload.get("primary_or")) is not None
+            or _float_or_none(payload.get("primary_ci_low")) is not None
+            or _float_or_none(payload.get("primary_ci_high")) is not None
+            or str(payload.get("effect_measure") or "").strip()
+        )
+        if not claims_effect:
+            # A model step may intentionally register its scientific values
+            # only in the digest-bound term table and keep the summary free of
+            # duplicate headline scalars.  A denominator copied into summary
+            # metadata is still checked when present.
+            sample_size = _float_or_none(payload.get("sample_size"))
+            if sample_size is not None and int(float(sample_size)) != int(row.n):
+                errors.append(
+                    f"{label} sample_size disagrees with the primary model contract"
+                )
+            return
         if not _complete_primary_payload(payload):
             errors.append(f"{label} primary headline is incomplete")
             return
