@@ -4418,6 +4418,7 @@ class ResearchAgentPipeline:
                 return
             from .orchestration.profiles import is_paper_facing_profile
 
+            decision_records = list(records)
             if is_paper_facing_profile(self._submission_profile_name):
                 # Field names follow the workflow decision record,
                 # which emits a flat record. Reading a nested ``request`` key
@@ -4425,7 +4426,7 @@ class ResearchAgentPipeline:
                 # authentication check into a crash.
                 unauthenticated = [
                     str(record.get("review_id") or "<unknown>")
-                    for record in records
+                    for record in decision_records
                     if record.get("reviewer_identity_source") != "authenticated"
                 ]
                 if unauthenticated:
@@ -4442,7 +4443,7 @@ class ResearchAgentPipeline:
                     {
                         "schema": "easyicu.human_review_decisions/1",
                         "run_id": run_id,
-                        "decisions": list(records),
+                        "decisions": decision_records,
                     },
                     indent=2,
                     sort_keys=True,
@@ -4453,7 +4454,8 @@ class ResearchAgentPipeline:
             # into the final manifest: workflow state is discarded at exit, so an
             # unregistered approval leaves the run unable to answer who
             # authorised it, against which digest, and when.
-            _review_evidence_store().register_file(
+            review_evidence = _review_evidence_store()
+            review_evidence.register_file(
                 kind="log",
                 description=(
                     "Operator decisions for the human-review interrupts raised "
@@ -4465,6 +4467,59 @@ class ResearchAgentPipeline:
                 producer="pipeline",
                 generation_mode="human_confirmed",
             )
+            rejected_review_ids = [
+                str(record.get("review_id") or "<unknown>")
+                for record in decision_records
+                if record.get("decision") == "rejected"
+            ]
+            if rejected_review_ids:
+                # A rejection ends before the normal finalisation phase, so
+                # write the canonical run-level receipt here. This lets a
+                # restarted process distinguish a terminal operator refusal
+                # from a merely paused or abandoned run without reconstructing
+                # state from the decision log.
+                run_status_path = run_dir / "run_status.json"
+                run_status_path.write_text(
+                    json.dumps(
+                        {
+                            "schema_version": "easyicu.run_status/2",
+                            "run_id": run_id,
+                            "status": "human_review_rejected",
+                            "strict_fail_closed": True,
+                            "terminal_reason": "operator_rejected",
+                            "rejected_review_ids": rejected_review_ids,
+                            "gates": {
+                                "human_review_approved": False,
+                                "execution_complete": False,
+                                "manuscript_ready": False,
+                                "publication_ready": False,
+                                "publication_artifacts_ready": False,
+                                "paper_authorized": False,
+                            },
+                            "canonical_outputs": {
+                                "human_review_decisions": (
+                                    "human_review_decisions.json"
+                                ),
+                                "run_status": "run_status.json",
+                            },
+                        },
+                        indent=2,
+                        sort_keys=True,
+                    ),
+                    encoding="utf-8",
+                )
+                review_evidence.register_file(
+                    kind="log",
+                    description=(
+                        "Fail-closed terminal status for an operator-rejected "
+                        "human-review pause."
+                    ),
+                    source_path=run_status_path,
+                    evidence_id="run_status",
+                    aliases=["run_status"],
+                    producer="pipeline",
+                    generation_mode="system",
+                )
 
         gate = self._human_review_gate
         from .orchestration.workflow import build_pipeline_workflow
@@ -4617,23 +4672,36 @@ class ResearchAgentPipeline:
         # and evidence store, so it must not proceed while another call is
         # writing there. ``run`` returns when it pauses, releasing its lease,
         # which is exactly why resume has to take one of its own.
+        workflow = pending_state["workflow"]
         try:
             with acquire_run_execution_lock(
                 workdir=Path(self.workdir), run_id=pending.run_id
             ):
-                outcome = pending_state["workflow"].resume(payload)
+                outcome = workflow.resume(payload)
+            return self._pipeline_result_or_pending(
+                outcome,
+                workflow=workflow,
+                run_id=pending.run_id,
+                run_dir=Path(pending.run_dir),
+            )
         except HumanReviewRejected:
             # The workflow has recorded the rejection and discarded its live
             # handoff. Do not keep presenting the public pipeline pause as
             # answerable or allow a later approval attempt against it.
             self._pending_human_review = None
             raise
-        return self._pipeline_result_or_pending(
-            outcome,
-            workflow=pending_state["workflow"],
-            run_id=pending.run_id,
-            run_dir=Path(pending.run_dir),
-        )
+        except Exception:
+            # Validation failures leave the workflow paused so the caller can
+            # correct and resubmit the exact decision set. Once execution,
+            # writing or finalisation terminalises the workflow, however, the
+            # live handoff is no longer resumable and must not be retained.
+            if getattr(workflow, "state", None) in {
+                "failed",
+                "rejected",
+                "completed",
+            }:
+                self._pending_human_review = None
+            raise
 
     def run_from_spec(
         self,
