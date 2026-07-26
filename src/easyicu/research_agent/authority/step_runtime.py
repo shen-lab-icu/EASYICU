@@ -31,7 +31,7 @@ from ..contracts.method_packages import (
     CURATED_METHOD_PACKAGES,
     OPTIONAL_BASELINE_PACKAGES,
 )
-from ..contracts.runtime import RunResult
+from ..contracts.execution_result import RunResult
 from ..gates.semantics import blocking_validator_findings
 from .provider_budget import ProviderCallBudgetReceiptState
 from ..authority.runtime_artifacts import (
