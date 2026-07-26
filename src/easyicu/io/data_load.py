@@ -24,6 +24,7 @@ the extraction suite will not exercise them.
 
 from __future__ import annotations
 
+import hashlib
 from typing import Any, Callable, Iterable, List, Mapping, Optional, Union
 
 import pandas as pd
@@ -47,6 +48,19 @@ class TimeOriginError(ValueError):
 
 #: Time units this loader will accept for a numeric time column.
 VALID_TIME_UNITS = frozenset({"seconds", "minutes", "hours", "days"})
+
+
+def _identifier_digest(values: pd.Series) -> str:
+    """Return a stable, non-reversible summary of identifiers for diagnostics."""
+
+    normalized = sorted(
+        {
+            "<missing>" if pd.isna(value) else str(value)
+            for value in values.tolist()
+        }
+    )
+    return hashlib.sha256("\n".join(normalized).encode("utf-8")).hexdigest()
+
 
 def load_src(
     x: Union[str, ICUDataSource, Any],
@@ -375,6 +389,16 @@ def load_difftime(
             on=id_col,
             how="left",
         )
+        missing_origin = data[merged_origin].isna() & data[pending].notna().any(axis=1)
+        if missing_origin.any():
+            affected = data.loc[missing_origin, id_col]
+            raise TimeOriginError(
+                f"{config.name}: {int(missing_origin.sum())} row(s) across "
+                f"{int(affected.nunique(dropna=False))} distinct {id_col!r} "
+                f"value(s) have no usable {origin_col!r} origin; "
+                f"id_sha256={_identifier_digest(affected)}. Cannot express "
+                f"{pending} as elapsed time."
+            )
         data = _to_relative(
             data,
             pending,
@@ -533,7 +557,15 @@ def load_ts(
         ...         index_var='charttime', interval=hours(1))
     """
     # Load as id_tbl first
-    tbl = load_id(x, rows=rows, cols=cols, id_var=id_var, src=src, **kwargs)
+    tbl = load_id(
+        x,
+        rows=rows,
+        cols=cols,
+        id_var=id_var,
+        time_vars=time_vars,
+        src=src,
+        **kwargs,
+    )
     
     # Determine index variable
     if index_var is None:

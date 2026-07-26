@@ -1856,28 +1856,113 @@ def _replan_budget_demotes(
 
 def _plan_truncation_status(
     findings: Sequence[ValidationFinding],
+    *,
+    plan: Optional[AnalysisPlan] = None,
 ) -> Dict[str, Any]:
-    """Report whether the plan the run executed is the plan it was given.
+    """Report whether the plan the run executed still lacks what it planned.
 
     The truncation finding names the expected outputs it dropped. Repeating
     them here keeps the reason a reader needs — "no calibration figure" — next
     to the gate it blocks, rather than buried in one warning among hundreds.
+
+    The cap runs on the initial plan *and* on every replanner revision, and all
+    of their findings accumulate in one list. Asking "was anything ever
+    truncated" would therefore latch. Recovery is nevertheless step-bound: a
+    product with the same display name on another step cannot prove that the
+    dropped scientific role came back. New findings carry exact step/product
+    contracts; legacy findings must at least recover every dropped step id and
+    every named product.
+
+    A truncation finding that named no outputs cannot be shown to have been
+    repaired, and counts as unresolved. Being unable to prove a loss was
+    recovered is not evidence that it was.
     """
 
-    dropped: list[str] = []
-    truncated = False
+    declared: set[str] = set()
+    declared_by_step: dict[str, tuple[str, set[str]]] = {}
+    for step in (plan.steps if plan is not None else None) or ():
+        step_id = str(getattr(step, "step_id", "") or "").strip()
+        role = str(getattr(step, "planned_analysis_role", "") or "").strip()
+        outputs: set[str] = set()
+        for output in getattr(step, "expected_outputs", None) or ():
+            text = str(output).strip()
+            if text:
+                declared.add(text)
+                outputs.add(text)
+        if step_id:
+            declared_by_step[step_id] = (role, outputs)
+
+    unresolved: list[str] = []
+    unresolved_step_ids: list[str] = []
+    recorded = False
+    unnamed = False
     for finding in findings:
         detail = getattr(finding, "detail", None) or {}
         if not isinstance(detail, Mapping) or not detail.get("plan_truncated"):
             continue
-        truncated = True
-        for output in detail.get("dropped_expected_outputs") or ():
-            text = str(output).strip()
-            if text and text not in dropped:
-                dropped.append(text)
+        recorded = True
+        step_products = detail.get("dropped_step_products")
+        if isinstance(step_products, list) and step_products:
+            for contract in step_products:
+                if not isinstance(contract, Mapping):
+                    unnamed = True
+                    continue
+                step_id = str(contract.get("step_id") or "").strip()
+                role = str(contract.get("planned_analysis_role") or "").strip()
+                expected = [
+                    str(output).strip()
+                    for output in contract.get("expected_outputs") or ()
+                    if str(output).strip()
+                ]
+                current = declared_by_step.get(step_id)
+                role_matches = current is not None and (
+                    not role or current[0] == role
+                )
+                if not step_id or not expected:
+                    unnamed = True
+                if not role_matches:
+                    if step_id and step_id not in unresolved_step_ids:
+                        unresolved_step_ids.append(step_id)
+                    for text in expected:
+                        if text not in unresolved:
+                            unresolved.append(text)
+                    continue
+                for text in expected:
+                    if text not in current[1] and text not in unresolved:
+                        unresolved.append(text)
+            continue
+
+        named = [
+            str(output).strip()
+            for output in detail.get("dropped_expected_outputs") or ()
+            if str(output).strip()
+        ]
+        dropped_step_ids = [
+            str(step_id).strip()
+            for step_id in detail.get("dropped_step_ids") or ()
+            if str(step_id).strip()
+        ]
+        missing_step_ids = [
+            step_id for step_id in dropped_step_ids if step_id not in declared_by_step
+        ]
+        if not named or not dropped_step_ids:
+            unnamed = True
+        for step_id in missing_step_ids:
+            if step_id not in unresolved_step_ids:
+                unresolved_step_ids.append(step_id)
+        for text in named:
+            if (
+                (missing_step_ids or text not in declared)
+                and text not in unresolved
+            ):
+                unresolved.append(text)
     return {
-        "plan_truncated": truncated,
-        "plan_truncated_dropped_outputs": dropped,
+        # Retained either way: the audit trail must show the run was capped
+        # even when a later revision recovered every product.
+        "plan_truncation_recorded": recorded,
+        "plan_truncated": bool(unresolved or unresolved_step_ids) or unnamed,
+        "plan_truncated_dropped_outputs": unresolved,
+        "plan_truncated_dropped_step_ids": unresolved_step_ids,
     }
 
 
@@ -2149,9 +2234,11 @@ def _compute_readiness_gates(
         ),
     )
     # Read the FULL findings list, not `active_findings`: supersession retires a
-    # finding when its step later succeeds, and a truncated plan has no such
-    # remedy. The steps were never run, so no later success can speak for them.
-    plan_truncation = _plan_truncation_status(findings)
+    # finding when its step later succeeds, and a dropped step never ran, so no
+    # later success can speak for it. What *can* speak for it is a later plan
+    # revision that declares the product again — which is why the final plan is
+    # passed in rather than the question being answered from findings alone.
+    plan_truncation = _plan_truncation_status(findings, plan=plan)
     publication_ready = publication_authorized(
         manuscript_ready=manuscript_ready,
         publication_figure_bundle_ready=publication["publication_figure_bundle_ready"],

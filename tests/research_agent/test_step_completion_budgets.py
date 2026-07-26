@@ -80,6 +80,59 @@ def test_deliberate_under_funding_stays_available_when_it_is_declared() -> None:
     assert config.max_step_provider_calls == 2
 
 
+def test_declaring_under_funding_changes_the_config_identity() -> None:
+    """An escape hatch that leaves no trace is a hole, not an escape hatch.
+
+    `canonical_payload` renders every field, so this holds today by
+    construction — which is exactly why it is worth pinning: a future payload
+    that filters fields could drop it silently, and a run would then claim a
+    repair policy its budget never funded.
+    """
+
+    funded = PipelineConfig(workdir="./unused")
+    declared = PipelineConfig(
+        workdir="./unused", allow_underfunded_step_provider_calls=True
+    )
+
+    assert funded.canonical_payload()["allow_underfunded_step_provider_calls"] is False
+    assert declared.canonical_payload()["allow_underfunded_step_provider_calls"] is True
+    assert funded.canonical_digest() != declared.canonical_digest()
+
+
+def test_a_paper_run_may_not_declare_an_under_funded_budget(tmp_path: Path) -> None:
+    """Declaring the shortfall makes it visible; it does not make it authority.
+
+    Keyed off paper-facing rather than "a profile was supplied", so a `*_dev`
+    profile can still exercise exhaustion — the same distinction the two
+    existing non-paper-authority guards beside it already draw.
+    """
+
+    from easyicu.research_agent import MockLLMClient, ResearchAgentPipeline
+    from easyicu.research_agent.orchestration.profiles import is_paper_facing_profile
+
+    with pytest.raises(ValueError, match="non-paper authority"):
+        ResearchAgentPipeline(
+            workdir=tmp_path / "paper",
+            llm=MockLLMClient(),
+            submission_profile_name="npj_dm",
+            submission_profile_version="20260719",
+            allow_underfunded_step_provider_calls=True,
+        )
+
+    # The dev arm is checked at the predicate the guard keys off. Constructing
+    # a `*_dev` pipeline here would drag in that profile's unrelated pins
+    # (know-how, capability workflow) and test those instead of this.
+    assert is_paper_facing_profile("npj_dm_know_how_dev") is False
+    assert is_paper_facing_profile("npj_dm") is True
+
+    # And no profile at all must not be treated as paper-facing either.
+    ResearchAgentPipeline(
+        workdir=tmp_path / "plain",
+        llm=MockLLMClient(),
+        allow_underfunded_step_provider_calls=True,
+    )
+
+
 def test_the_entitlement_is_computed_from_the_policy_not_a_constant() -> None:
     """Each term is edited for its own reason; nothing recomputed the sum.
 
@@ -188,6 +241,15 @@ def test_truncation_names_the_products_the_analysis_no_longer_has() -> None:
     detail = truncation[0].detail
     dropped_outputs = detail["dropped_expected_outputs"]
     assert dropped_outputs, "the dropped scientific products must be named"
+    step_products = detail["dropped_step_products"]
+    assert {contract["step_id"] for contract in step_products} == set(
+        detail["dropped_step_ids"]
+    )
+    assert {
+        output
+        for contract in step_products
+        for output in contract["expected_outputs"]
+    } == set(dropped_outputs)
     # Every named product really belongs to a dropped step, and none belongs
     # to a step that survived.
     dropped_ids = set(detail["dropped_step_ids"])
@@ -259,8 +321,8 @@ def test_a_truncated_run_is_still_worth_reading() -> None:
     from easyicu.research_agent.reporting.readiness import _plan_truncation_status
 
     plan = _plan_with_products(6)
-    _capped, findings = _cap_plan_preserving_figure_steps(plan=plan, cap=3)
-    status = _plan_truncation_status(findings)
+    capped, findings = _cap_plan_preserving_figure_steps(plan=plan, cap=3)
+    status = _plan_truncation_status(findings, plan=capped)
     assert status["plan_truncated"] is True
     # The gate carries the reason with it, so the report can say which products
     # are missing rather than only that authorization failed.
@@ -273,11 +335,118 @@ def test_the_cap_and_the_gate_agree_on_an_intact_plan() -> None:
     from easyicu.research_agent.reporting.readiness import _plan_truncation_status
 
     plan = _plan_with_products(3)
-    _capped, findings = _cap_plan_preserving_figure_steps(plan=plan, cap=8)
-    status = _plan_truncation_status(findings)
+    capped, findings = _cap_plan_preserving_figure_steps(plan=plan, cap=8)
+    status = _plan_truncation_status(findings, plan=capped)
     assert status["plan_truncated"] is False
+    assert status["plan_truncation_recorded"] is False
     assert status["plan_truncated_dropped_outputs"] == []
     assert _authorized(plan_not_truncated=not status["plan_truncated"]) is True
+
+
+def test_a_later_revision_that_restores_the_products_clears_the_block() -> None:
+    """The cap runs on every replanner revision and all findings accumulate.
+
+    Asking "was anything ever truncated" would latch: a capped revision
+    followed by one that fits and declares every product would be refused
+    forever on the strength of a superseded warning. The question is whether
+    the plan of record still lacks the products.
+    """
+
+    from easyicu.research_agent.reporting.readiness import _plan_truncation_status
+
+    over_cap = _plan_with_products(6)
+    _capped, findings = _cap_plan_preserving_figure_steps(plan=over_cap, cap=3)
+    assert [f for f in findings if f.detail and f.detail.get("plan_truncated")]
+
+    # The replanner then produces a revision that fits and declares every one
+    # of the products the earlier revision had to drop.
+    final_plan = _plan_with_products(6)
+    status = _plan_truncation_status(findings, plan=final_plan)
+
+    assert status["plan_truncated"] is False
+    assert status["plan_truncated_dropped_outputs"] == []
+    # The run was still capped once, and the record must say so.
+    assert status["plan_truncation_recorded"] is True
+
+
+def test_a_same_named_product_on_another_step_does_not_clear_the_block() -> None:
+    """A product label is not the identity of the scientific step producing it."""
+
+    from easyicu.research_agent.reporting.readiness import _plan_truncation_status
+
+    plan = _plan_with_products(4)
+    plan.steps[0] = plan.steps[0].model_copy(
+        update={"expected_outputs": ["table:product_4"]}
+    )
+    capped, findings = _cap_plan_preserving_figure_steps(plan=plan, cap=3)
+
+    status = _plan_truncation_status(findings, plan=capped)
+
+    assert "table:product_4" in {
+        output for step in capped.steps for output in step.expected_outputs
+    }
+    assert status["plan_truncated"] is True
+    assert status["plan_truncated_dropped_step_ids"] == ["04_step"]
+    assert status["plan_truncated_dropped_outputs"] == ["table:product_4"]
+    assert _authorized(plan_not_truncated=not status["plan_truncated"]) is False
+
+
+def test_reusing_a_step_id_for_another_scientific_role_does_not_clear_the_block() -> None:
+    from easyicu.research_agent.reporting.readiness import _plan_truncation_status
+
+    over_cap = _plan_with_products(4)
+    _capped, findings = _cap_plan_preserving_figure_steps(plan=over_cap, cap=3)
+    final_plan = _plan_with_products(4)
+    final_plan.steps[3] = final_plan.steps[3].model_copy(
+        update={"planned_analysis_role": "secondary"}
+    )
+
+    status = _plan_truncation_status(findings, plan=final_plan)
+
+    assert status["plan_truncated"] is True
+    assert status["plan_truncated_dropped_step_ids"] == ["04_step"]
+    assert status["plan_truncated_dropped_outputs"] == ["table:product_4"]
+
+
+def test_a_final_plan_that_never_regained_the_products_stays_blocked(
+    tmp_path: Path,
+) -> None:
+    """The other half of the same question — and the one that must fail closed."""
+
+    from easyicu.research_agent.reporting.readiness import _plan_truncation_status
+
+    plan = _plan_with_products(6)
+    capped, findings = _cap_plan_preserving_figure_steps(plan=plan, cap=3)
+    status = _plan_truncation_status(findings, plan=capped)
+
+    assert status["plan_truncated"] is True
+    assert status["plan_truncated_dropped_outputs"]
+    assert _authorized(plan_not_truncated=not status["plan_truncated"]) is False
+
+
+def test_a_truncation_that_named_no_products_is_not_treated_as_repaired() -> None:
+    """Being unable to prove a loss was recovered is not evidence that it was.
+
+    Without this the check fails open: a dropped step declaring no outputs
+    would produce an empty dropped-product list, which would then look
+    identical to "every dropped product came back".
+    """
+
+    from easyicu.research_agent.reporting.readiness import _plan_truncation_status
+    from easyicu.research_agent.schema import ValidationFinding
+
+    finding = ValidationFinding(
+        validator="planner",
+        severity="warning",
+        message="Initial plan had 6 steps; truncated to max_total_steps=3.",
+        detail={
+            "plan_truncated": True,
+            "dropped_step_ids": ["05_step", "06_step"],
+            "dropped_expected_outputs": [],
+        },
+    )
+    status = _plan_truncation_status([finding], plan=_plan_with_products(6))
+    assert status["plan_truncated"] is True
 
 
 def test_pipeline_default_wall_clock_matches_the_config_default(

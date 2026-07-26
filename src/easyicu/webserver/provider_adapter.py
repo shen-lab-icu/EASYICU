@@ -151,6 +151,17 @@ def provider_readiness(
     default_base = _default_base_url(provider_text)
     model_name, model = _first_env(env, model_names)
     has_base_url = bool(base_url or default_base)
+    base_url_validation = "provider_default" if default_base and not base_url else "missing"
+    base_url_rejection_reason: Optional[str] = None
+    if base_url:
+        try:
+            validate_provider_base_url(base_url)
+        except ProviderAdapterError as exc:
+            base_url_validation = "rejected"
+            base_url_rejection_reason = str(exc.detail.get("reason") or "rejected")
+        else:
+            base_url_validation = "validated"
+    base_url_safe = has_base_url and base_url_validation != "rejected"
     missing: List[str] = []
     if external and not ai_enabled:
         missing.append("ai_enabled")
@@ -158,6 +169,8 @@ def provider_readiness(
         missing.append("credential")
     if external and not has_base_url:
         missing.append("base_url")
+    if external and has_base_url and not base_url_safe:
+        missing.append("base_url_safety")
     if external and not model:
         missing.append("model")
     if external and env_file.get("status") == "insecure_permissions":
@@ -174,6 +187,8 @@ def provider_readiness(
         "base_url_source": (
             base_name if base_url else ("provider_default" if default_base else None)
         ),
+        "base_url_validation": base_url_validation,
+        "base_url_rejection_reason": base_url_rejection_reason,
         "model_env_candidates": model_names,
         "model_present": bool(model),
         "model_source": model_name if model else None,
@@ -182,7 +197,7 @@ def provider_readiness(
             or (
                 ai_enabled
                 and api_key
-                and has_base_url
+                and base_url_safe
                 and model
                 and env_file.get("status") != "insecure_permissions"
             )

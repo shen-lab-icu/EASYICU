@@ -2935,6 +2935,21 @@ def _cap_plan_preserving_figure_steps(
             if str(output).strip()
         }
     )
+    dropped_step_products = [
+        {
+            "step_id": str(step.step_id).strip(),
+            "planned_analysis_role": str(step.planned_analysis_role).strip(),
+            "expected_outputs": sorted(
+                {
+                    str(output).strip()
+                    for output in (step.expected_outputs or ())
+                    if str(output).strip()
+                }
+            ),
+        }
+        for step in steps
+        if step.step_id in set(dropped_ids)
+    ]
     findings = [
         ValidationFinding(
             validator="planner",
@@ -2955,6 +2970,7 @@ def _cap_plan_preserving_figure_steps(
             detail={
                 "dropped_step_ids": dropped_ids,
                 "dropped_expected_outputs": dropped_outputs,
+                "dropped_step_products": dropped_step_products,
                 "plan_truncated": True,
                 "cap": cap,
                 "protected_step_ids": sorted(protected_ids),

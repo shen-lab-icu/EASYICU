@@ -848,6 +848,22 @@ def test_miiv_top_level_mechanism_concepts_stay_aligned_with_sofa2() -> None:
     assert sofa2_mcs_chartevent_ids.issubset(concept_mcs_chartevent_ids)
 
 
+def test_mimiciii_mechanical_support_excludes_mimiciv_only_items() -> None:
+    """These two labels exist in MIMIC-IV but not MIMIC-III d_items."""
+
+    mimiciv_only = {228866, 229254}
+    for filename in ("concept-dict.json", "sofa2-dict.json"):
+        payload = _load_json(filename)
+        sources = payload["mech_circ_support"]["sources"]
+        miiv_ids = set(sources["miiv"][0]["ids"])
+        mimic_ids = set(sources["mimic"][0]["ids"])
+        mimic_demo_ids = set(sources["mimic_demo"][0]["ids"])
+
+        assert mimiciv_only.issubset(miiv_ids)
+        assert mimiciv_only.isdisjoint(mimic_ids)
+        assert mimic_demo_ids == mimic_ids
+
+
 def test_cross_source_mechanism_concepts_do_not_use_ambiguous_indication_sources() -> None:
     concept = _load_json("concept-dict.json")
 
