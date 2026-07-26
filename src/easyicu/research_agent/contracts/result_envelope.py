@@ -9,7 +9,6 @@ period the envelope is diagnostic-only and cannot grant paper authority.
 from __future__ import annotations
 
 import csv
-import hashlib
 import io
 import json
 import math
@@ -32,6 +31,10 @@ from pydantic import (
     StrictStr,
 )
 
+from ..canonical_json import (
+    canonical_json_bytes,
+    sha256_bytes as _sha256_bytes,
+)
 from .fraction_scale import is_scale_descriptor_field
 
 JsonScalar = Union[StrictBool, StrictInt, StrictFloat, StrictStr, None]
@@ -335,21 +338,9 @@ def rebuild_observed_scalar_tree(
     return root
 
 
-def _sha256_bytes(payload: bytes) -> str:
-    return hashlib.sha256(payload).hexdigest()
-
-
 def _canonical_json_bytes(payload: Any) -> bytes:
-    return (
-        json.dumps(
-            payload,
-            ensure_ascii=False,
-            allow_nan=False,
-            separators=(",", ":"),
-            sort_keys=True,
-        )
-        + "\n"
-    ).encode("utf-8")
+    # The result-envelope wire contract intentionally includes one final LF.
+    return canonical_json_bytes(payload, trailing_newline=True)
 
 
 def _model_content_sha256(envelope: StepResultEnvelope) -> str:

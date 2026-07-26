@@ -3,27 +3,17 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from typing import Any, Literal, Mapping
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ..canonical_json import canonical_json as _canonical_json
 from ..providers.factory import provider_authorization_manifest
 from ..providers.prompts import PROMPT_PACK_VERSION, prompt_pack_files
 from .runtime_artifacts import capture_code_version
 
 EXECUTION_IDENTITY_SCHEMA = "easyicu.execution_identity/2"
 EXPECTED_EXECUTION_IDENTITY_SCHEMA = "easyicu.expected_execution_identity/1"
-
-
-def _canonical_json(value: Mapping[str, Any]) -> str:
-    return json.dumps(
-        dict(value),
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        allow_nan=False,
-    )
 
 
 def _prompt_pack_sha256() -> str:
