@@ -365,6 +365,162 @@ def _host_helper_signature_repair_lines(
     )
 
 
+def _patch_measurement_receipt_stable_binding(
+    code: str,
+    *,
+    findings: Sequence[ValidationFinding],
+) -> str:
+    """Normalize one exact host receipt call without changing its data source."""
+
+    safe_violations = {
+        "unknown_keyword_argument",
+        "measured_column_role_invalid",
+        "count_column_role_invalid",
+        "measurement_companion_columns_mismatch",
+    }
+    details_by_line: dict[int, dict[str, object]] = {}
+    for finding in findings:
+        detail = dict(finding.detail or {})
+        violations = detail.get("violations")
+        if not (
+            finding.validator == "mechanical_code_preflight"
+            and finding.severity == "error"
+            and detail.get("reason") == "host_helper_call_signature_invalid"
+            and detail.get("helper_name") == "measurement_provenance_receipt"
+            and isinstance(detail.get("line"), int)
+            and not isinstance(detail.get("line"), bool)
+            and isinstance(violations, list)
+            and violations
+            and set(violations) <= safe_violations
+        ):
+            continue
+        details_by_line[int(detail["line"])] = detail
+    if not details_by_line:
+        return code
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+
+    direct_imports = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.ImportFrom)
+        and node.level == 0
+        and node.module == "easyicu.research_agent.methods.descriptive_inputs"
+        and any(
+            alias.name == "measurement_provenance_receipt" and alias.asname is None
+            for alias in node.names
+        )
+    ]
+    shadowing_bindings = [
+        node
+        for node in ast.walk(tree)
+        if (
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+            and node.name == "measurement_provenance_receipt"
+        )
+        or (
+            isinstance(node, ast.Name)
+            and isinstance(node.ctx, (ast.Store, ast.Del))
+            and node.id == "measurement_provenance_receipt"
+        )
+    ]
+    if len(direct_imports) != 1 or shadowing_bindings:
+        return code
+
+    candidates_by_line: dict[int, list[ast.Call]] = {
+        line: [] for line in details_by_line
+    }
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and int(getattr(node, "lineno", 0)) in candidates_by_line
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "measurement_provenance_receipt"
+        ):
+            candidates_by_line[int(node.lineno)].append(node)
+    if any(len(candidates) != 1 for candidates in candidates_by_line.values()):
+        return code
+
+    replacements: list[tuple[str, str]] = []
+    for line, detail in sorted(details_by_line.items()):
+        call = candidates_by_line[line][0]
+        if any(keyword.arg is None for keyword in call.keywords):
+            return code
+        keyword_map = {str(keyword.arg): keyword.value for keyword in call.keywords}
+        if len(keyword_map) != len(call.keywords):
+            return code
+        if len(call.args) == 1 and "frame" not in keyword_map:
+            frame_node = call.args[0]
+        elif not call.args and "frame" in keyword_map:
+            frame_node = keyword_map["frame"]
+        else:
+            return code
+        measured_node = keyword_map.get("measured_column")
+        count_node = keyword_map.get("count_column")
+        if measured_node is None or count_node is None:
+            return code
+
+        expected_measured = detail.get("expected_measured_column")
+        expected_count = detail.get("expected_count_column")
+        if expected_measured is not None and expected_count is not None:
+            # Two valid but crossed declared pairs do not identify which
+            # scientific pair the author intended.
+            return code
+        measured_source = ast.get_source_segment(code, measured_node)
+        count_source = ast.get_source_segment(code, count_node)
+        if expected_measured is not None:
+            if not (
+                isinstance(expected_measured, str)
+                and isinstance(measured_node, ast.Constant)
+                and measured_node.value == detail.get("observed_measured_column")
+            ):
+                return code
+            measured_source = repr(expected_measured)
+        if expected_count is not None:
+            if not (
+                isinstance(expected_count, str)
+                and isinstance(count_node, ast.Constant)
+                and count_node.value == detail.get("observed_count_column")
+            ):
+                return code
+            count_source = repr(expected_count)
+
+        call_source = ast.get_source_segment(code, call)
+        function_source = ast.get_source_segment(code, call.func)
+        frame_source = ast.get_source_segment(code, frame_node)
+        if (
+            not all(
+                (
+                    call_source,
+                    function_source,
+                    frame_source,
+                    measured_source,
+                    count_source,
+                )
+            )
+            or code.count(str(call_source)) != 1
+        ):
+            return code
+        replacement = (
+            f"{function_source}({frame_source}, "
+            f"measured_column={measured_source}, count_column={count_source})"
+        )
+        if replacement == call_source:
+            return code
+        replacements.append((str(call_source), replacement))
+
+    repaired = code
+    for call_source, replacement in replacements:
+        repaired = repaired.replace(call_source, replacement, 1)
+    try:
+        ast.parse(repaired)
+    except SyntaxError:
+        return code
+    return repaired
+
+
 def _closed_counts_signature_repair_lines(
     findings: Sequence[ValidationFinding],
 ) -> frozenset[int]:
@@ -2555,6 +2711,15 @@ def deterministic_concept_audit_repair(
         if publication_audit != repaired:
             repair_name = "publication_export_audit_paths_v1"
             repaired = publication_audit
+            repair_names.append(repair_name)
+
+        receipt_bound = _patch_measurement_receipt_stable_binding(
+            repaired,
+            findings=repair_findings,
+        )
+        if receipt_bound != repaired:
+            repair_name = "measurement_receipt_stable_binding_v1"
+            repaired = receipt_bound
             repair_names.append(repair_name)
 
         keyword_bound = _patch_host_helper_keyword_only_call(

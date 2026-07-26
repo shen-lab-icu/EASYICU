@@ -148,6 +148,78 @@ receipt = measurement_provenance_receipt(
     assert _signature_findings(script, ra) == []
 
 
+def test_literal_measurement_receipt_columns_must_match_declared_companion_roles(ra):
+    script = """
+from easyicu.research_agent.methods.descriptive_inputs import measurement_provenance_receipt
+receipt = measurement_provenance_receipt(
+    frame,
+    measured_column="value_max",
+    count_column="value_n",
+)
+"""
+
+    findings = _signature_findings(script, ra)
+
+    assert len(findings) == 1
+    assert findings[0].detail["violations"] == ["measured_column_role_invalid"]
+    assert findings[0].detail["observed_measured_column"] == "value_max"
+    assert findings[0].detail["expected_measured_column"] == "value_measured"
+
+    repaired, names = deterministic_concept_audit_repair(
+        script,
+        [finding.message for finding in findings],
+        repair_reasons=[repair_reason_for_finding(finding) for finding in findings],
+        repair_findings=findings,
+    )
+
+    assert names == ["measurement_receipt_stable_binding_v1"]
+    assert "measured_column='value_measured'" in repaired
+    assert _signature_findings(repaired, ra) == []
+
+
+def test_literal_measurement_receipt_accepts_exact_declared_companion_pair(ra):
+    script = """
+from easyicu.research_agent.methods.descriptive_inputs import measurement_provenance_receipt
+receipt = measurement_provenance_receipt(
+    frame,
+    measured_column="value_measured",
+    count_column="value_n",
+)
+"""
+
+    assert _signature_findings(script, ra) == []
+
+
+def test_measurement_receipt_unknown_keyword_and_frame_adapter_are_normalized(ra):
+    script = """
+from easyicu.research_agent.methods.descriptive_inputs import measurement_provenance_receipt
+receipt = measurement_provenance_receipt(
+    frame=frame,
+    planned_flag=measured_column,
+    measured_column=measured_column,
+    count_column=count_column,
+)
+"""
+    findings = _signature_findings(script, ra)
+
+    repaired, names = deterministic_concept_audit_repair(
+        script,
+        [finding.message for finding in findings],
+        repair_reasons=[repair_reason_for_finding(finding) for finding in findings],
+        repair_findings=findings,
+    )
+
+    assert len(findings) == 1
+    assert findings[0].detail["violations"] == ["unknown_keyword_argument"]
+    assert names == ["measurement_receipt_stable_binding_v1"]
+    assert "planned_flag" not in repaired
+    assert (
+        "measurement_provenance_receipt(frame, "
+        "measured_column=measured_column, count_column=count_column)"
+    ) in repaired
+    assert _signature_findings(repaired, ra) == []
+
+
 def test_render_only_figure_rejects_raw_row_provenance_helper(ra):
     script = """
 from easyicu.research_agent.methods.descriptive_inputs import (
