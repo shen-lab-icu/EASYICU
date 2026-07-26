@@ -6,7 +6,8 @@
 - Task ID：`AGENT-ROUTE-B-POSTREVIEW-P1-P2`
 - 分支：`fix/external-review-20260724-p0-p1`
 - 复审基线：`6fd65bd3133359de555d3e5ee026ec7a64f356fa`
-- 代码修复终点：`b0ff93606d6ef8a113d7a29bbaf756fb26b3868b`
+- 首轮代码修复终点：`b0ff93606d6ef8a113d7a29bbaf756fb26b3868b`
+- 低优先级闭环终点：`3f799d8e32804183b631ed758f54dcd1542e3f18`
 
 ## 状态核实
 
@@ -14,7 +15,12 @@
 origin，远端终点为 `6fd65bd`。旧完成记录中的“未 push”只反映记录生成时的
 状态，不再代表当前远端状态。
 
-本轮新增修复仍仅在本地，未执行 push。
+2026-07-26 07:40 EDT 再次核验本地 tracking ref 与 `git ls-remote`：首轮 6
+个代码提交及证据提交均已推送，远端终点为
+`d5d187d812ac223c2b922f63ca720f04701b1924`。此前“本轮新增修复仍仅在本地”
+已经过时。外审随后提出的两个低优先级闭环与 MCP 权威投影分别提交为
+`fdc46be`、`3f799d8`；截至本记录更新时，这两个新提交仅在本地，本证据更新
+另形成一个 docs-only 提交，因此分支相对 origin ahead 3。本会话未执行 push。
 
 ## 分批修复
 
@@ -26,6 +32,8 @@ origin，远端终点为 `6fd65bd`。旧完成记录中的“未 push”只反�
 | `8a51df7` | 将内容层结果改名暴露为 `publication_artifacts_ready`，最终 `paper_authorized` 同时要求该内容门与 `execution_identity.paper_eligible`；未提供执行身份的直接调用默认失败关闭。 |
 | `03cb725` | 加强取消回归：容量为 1 时，取消客户端等待不会提前释放后台 dispatcher 的槽位。 |
 | `b0ff936` | 新增 authority→reporting、orchestration→webserver、MCP transport→application 三条导入边界；把 `RunResult` 下沉至依赖中性的 contract owner，并移除 authority 对 mock/reporting 的传递依赖。CI 注释明确 Deptry 的 `DEP002` 例外。 |
+| `fdc46be` | 拒绝审核除 `human_review_decisions.json` 外，新增 evidence-registered `run_status.json` 终态（`human_review_rejected` / `operator_rejected` / rejected IDs / fail-closed gates）；批准后 execute/write/finalise 失败时清除失效 pending 引用，输入或 digest 错误仍保持 paused 供修正。缓存明确拒绝该终态。 |
+| `3f799d8` | MCP 外部 manifest 投影只公开 `publication_artifacts_ready`、`execution_paper_eligible`、`paper_authorized` 三轴；缺字段失败关闭，并不公开可被误当授权的 `publication_ready`。 |
 
 ## 验证
 
@@ -60,6 +68,25 @@ git diff --check: passed
 - readiness/execution identity/finalization：26 passed
 - runner + module graph：52 passed
 
+外审确认 `d5d187d` 后的低优先级闭环采用快速分层测试，不重复约 38 分钟全套：
+
+```text
+review/workflow/MCP projection 邻接：121 passed, 1 skipped
+completion/MCP transport/rejected-cache 邻接：29 passed
+合计不重复：150 passed, 1 skipped
+Ruff（5 个改动文件）：passed
+Deptry：489 files, success
+Import Linter：7 kept, 0 broken
+research-agent module graph baseline diff：exit 0
+git diff --check：passed
+```
+
+真实 workflow 回归同时覆盖正反两面：拒绝会先持久化决定与 run-level 终态且不进入
+execute；批准后 execute 抛错使 workflow=`failed` 并清除 pipeline pending；digest
+错误保持 workflow=`paused` 且 pending 可再次提交。MCP 契约用
+`publication_artifacts_ready=true`、`execution_paper_eligible=false`、
+`paper_authorized=false` 的反例锁定客户端不能把内容就绪误判为论文权威。
+
 ## 仍然诚实保留的边界
 
 - Route B 仍只支持 `same_process` resume；没有声称支持服务重启后的恢复。
@@ -71,6 +98,8 @@ git diff --check: passed
 - 旧完整功能套件报告过 1306 条 warning；本轮没有运行约 38 分钟的全套，
   因而没有伪造一个不跨 Python/环境稳定的 warning 数字基线。后续应在正式 CI
   上按 warning fingerprint 建立“不净增”门。
+- 拒绝终态现在可由另一个进程从磁盘辨识，但这不是 durable resume：服务重启后
+  仍不能恢复 live plan/evidence handoff；只能确定该 run 已被操作员拒绝。
 - 未刷新 Figure 2 scorer、resource 或 architecture 的冻结权威摘要；未启动
   Canonical9 paper-facing batch。
 - 本轮没有读取患者数据，也没有访问 `/Volumes/外置硬盘/databases`。此前 Route B
