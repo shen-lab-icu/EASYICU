@@ -79,27 +79,35 @@ deliberately not a restoration of the retired graph. Its acceptance contract is:
 
 ### MCP
 
-The custom stdio/JSON-RPC server should not be replaced during Canonical9.
-After baseline freeze, evaluate the official MCP SDK behind the existing tool
-contracts. Migration acceptance requires:
+Architecture decision: the owner explicitly authorized the post-review
+migration on 2026-07-26. `mcp_transport.py` now uses the stable official MCP
+Python SDK line (`mcp>=1.28,<2`) for protocol negotiation, JSON-RPC validation,
+stdio framing and stateless JSON Streamable HTTP. The upper bound prevents the
+pending SDK v2 release from silently changing production behavior.
 
-- byte/field-compatible tool schemas where compatibility is promised;
-- identical patient-data access audit and provider opt-in behavior;
-- concurrent request, cancellation, timeout, and malformed-message tests;
-- no change to evidence promotion or paper-authorization authority.
+`mcp_server.py` continues to own the field-compatible tool schemas and
+plain-Python `dispatch` seam. EasyICU continues to own scopes, provider opt-in,
+path confinement, patient-data audit and EvidenceStore promotion. The removed
+stdlib JSON-RPC/SSE bridge is not a compatibility authority.
+
+Migration regressions use the official `ClientSession` and cover initialization,
+tool listing/calls, schema rejection before dispatch, real subprocess stdio,
+concurrency ceilings, cancellation, configured wait timeout, malformed and
+oversized HTTP messages, Host/Origin protection, bearer authentication,
+separate patient-data credentials and anonymous-loopback scope reduction.
 
 ### Static debt reporting
 
-Ruff currently ignores `F401`/`F841` across the research-agent tree. Vulture,
-Deptry, and Import Linter are not installed in the current development
-environment, so this remediation does not pretend a report was run. The next
-non-baseline maintenance pass should:
+Ruff, Vulture, Deptry and Import Linter are declared development tools.
+Dependency and import-direction checks run in CI, with responsibility contracts
+covering the canonical data API and research-agent layers. Vulture remains
+report-only because dynamic registrations and compatibility exports require
+human classification.
 
-1. run Vulture and Deptry in report-only mode and archive raw output;
-2. classify findings rather than auto-delete dynamic imports or registrations;
-3. add Import Linter contracts for the canonical responsibility packages;
-4. remove `F401`/`F841` ignores one owned package at a time, beginning with new
-   or already-clean modules rather than flipping the entire tree at once.
+The broad historical `F401`/`F841` exemptions remain visible debt. Remove them
+one owned package at a time, beginning with new or already-clean modules, and
+archive the classified Vulture report before deleting any dynamically
+registered symbol.
 
 ### Package initialization
 

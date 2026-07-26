@@ -34,78 +34,16 @@ def _mcp_roots(tmp_path, monkeypatch):
     )
 
 
-def test_mcp_initialize_and_tools_list(ra):
-    from easyicu.research_agent.mcp_server import handle_jsonrpc
+def test_mcp_python_dispatch_remains_available(ra):
+    from easyicu.research_agent.mcp_server import dispatch
 
-    init = handle_jsonrpc(
-        {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": {},
-        }
-    )
-    assert init["result"]["capabilities"]["tools"] == {}
-    assert init["result"]["serverInfo"]["name"] == "easyicu-research-agent"
+    result = dispatch("research_agent.list_skills", {})
 
-    listed = handle_jsonrpc(
-        {
-            "jsonrpc": "2.0",
-            "id": 2,
-            "method": "tools/list",
-            "params": {},
-        }
-    )
-    names = {tool["name"] for tool in listed["result"]["tools"]}
-    assert {
-        "research_agent.run",
-        "research_agent.list_skills",
-        "research_agent.read_manifest",
-    } <= names
-
-
-def test_mcp_tools_call_wraps_tool_result_as_content(ra):
-    from easyicu.research_agent.mcp_server import handle_jsonrpc
-
-    resp = handle_jsonrpc(
-        {
-            "jsonrpc": "2.0",
-            "id": "skills",
-            "method": "tools/call",
-            "params": {
-                "name": "research_agent.list_skills",
-                "arguments": {},
-            },
-        }
-    )
-    assert resp["id"] == "skills"
-    assert resp["result"]["isError"] is False
-    text = resp["result"]["content"][0]["text"]
-    data = json.loads(text)
-    keys = {skill["key"] for skill in data["skills"]}
-    assert {
-        "association_analysis",
-        "prediction_model",
-        "data_quality_audit",
-    } <= keys
-
-
-def test_mcp_legacy_tool_shape_still_dispatches(ra):
-    from easyicu.research_agent.mcp_server import handle_jsonrpc
-
-    resp = handle_jsonrpc(
-        {
-            "id": 7,
-            "tool": "research_agent.list_skills",
-            "arguments": {},
-        }
-    )
-    assert resp["id"] == 7
-    assert "skills" in resp["result"]
+    assert "skills" in result
 
 
 def test_mcp_exposes_atomic_context_and_validator_tools(ra, tmp_path):
-    from easyicu.research_agent.mcp_server import dispatch, handle_jsonrpc
+    from easyicu.research_agent.mcp_server import TOOL_SCHEMAS, dispatch
 
     cohort_path = tmp_path / "cohort.parquet"
     pd.DataFrame(
@@ -116,15 +54,7 @@ def test_mcp_exposes_atomic_context_and_validator_tools(ra, tmp_path):
         }
     ).to_parquet(cohort_path)
 
-    listed = handle_jsonrpc(
-        {
-            "jsonrpc": "2.0",
-            "id": "tools",
-            "method": "tools/list",
-            "params": {},
-        }
-    )
-    names = {tool["name"] for tool in listed["result"]["tools"]}
+    names = {tool["name"] for tool in TOOL_SCHEMAS}
     assert {
         "research_agent.build_context",
         "research_agent.list_concepts",
