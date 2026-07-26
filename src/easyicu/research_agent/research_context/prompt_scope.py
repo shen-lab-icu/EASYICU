@@ -1122,11 +1122,20 @@ def scoped_coder_context(
             )
         )
         seed_names.update(code_referenced)
-    families = {_variable_family(value) for value in seed_names}
-    source_concepts = {
+    # Direct study coordinates are semantic context, not permission to widen
+    # this step's executable raw-input scope.  Automatically include provenance
+    # companions only for Planner-declared or already-authored repair inputs.
+    # In particular, a primary-cohort producer may receive its predicate
+    # columns through a separate host execution receipt while declaring no raw
+    # measured/count pair at all.
+    companion_seed_names = declared | code_referenced
+    companion_families = {
+        _variable_family(value) for value in companion_seed_names
+    }
+    companion_source_concepts = {
         str(variable.source_concept).strip().lower()
         for variable in context.variables
-        if variable.name.lower() in seed_names and variable.source_concept
+        if variable.name.lower() in companion_seed_names and variable.source_concept
     }
     priority = []
     referenced = []
@@ -1140,8 +1149,11 @@ def scoped_coder_context(
             or (
                 _is_automatically_required_source_companion(variable)
                 and (
-                    _variable_family(name) in families
-                    or (source_concept and source_concept in source_concepts)
+                    _variable_family(name) in companion_families
+                    or (
+                        source_concept
+                        and source_concept in companion_source_concepts
+                    )
                 )
             )
         ):

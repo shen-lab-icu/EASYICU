@@ -2119,7 +2119,20 @@ def _typed_input_scope_contract(step: AnalysisStep) -> str:
 
     declared_inputs = list(step.inputs or [])
     if not declared_inputs:
-        return ""
+        return (
+            "DECLARED INPUT SCOPE (binding):\n"
+            "- This step has no Planner-declared typed or raw-variable inputs. "
+            "Do not infer executable columns from ResearchContext, dataframe "
+            "schema, naming conventions, dtypes, or related concept companions.\n"
+            "- A separately attached host-owned execution receipt may authorize "
+            "only the exact coordinates it enumerates. It does not authorize "
+            "related `*_measured`, `*_n`, status, timing, or sibling-summary "
+            "columns.\n"
+            "- No measured/count provenance pair is declared for this step. Do "
+            "not read those companions, call `measurement_provenance_receipt`, "
+            "or hand-roll an equivalent audit. Exact Planner-declared inputs "
+            "for this step: [].\n"
+        )
     typed_inputs = []
     raw_inputs = []
     typed_cohort_inputs = []
@@ -2222,7 +2235,10 @@ def _typed_input_scope_contract(step: AnalysisStep) -> str:
         "replacements with those names. "
         "Run each receipt on the exact analysis frame before output, preserve its "
         "mapping, and let errors propagate. Do not pre-coerce, duplicate, or "
-        "hand-roll validation of the same pair.\n"
+        "hand-roll validation of the same pair. A measured/count receipt checks "
+        "`measured == (count > 0)`; it does not require the related value column "
+        "to be non-missing. Never compare value availability with the companion "
+        "pair or add it to provenance discordance.\n"
         f"{typed_cohort_contract}"
         f"- Exact Planner-declared inputs for this step: {declared_inputs}\n"
         f"- Exact typed inputs for this step: {typed_inputs}\n"
@@ -2929,6 +2945,20 @@ def _repair_specialization(
             "the exact typed-input digest and product-schema checks, preserve all "
             "registered aggregate values, and do not reconstruct a cohort, "
             "reinterpret companion columns, or change any statistic.\n"
+        )
+    if "measurement_provenance_pair_undeclared" in structured_reasons:
+        guidance.append(
+            "- DIAGNOSED UNDECLARED PROVENANCE-SCOPE REPAIR (binding): remove "
+            "every reported `measurement_provenance_receipt` call and every "
+            "custom measured/count/value audit that is not backed by one exact "
+            "Planner-declared measured/count pair in this step's inputs. Do not "
+            "add raw inputs, infer companions from ResearchContext, or widen the "
+            "Planner plan to preserve generated code. When a host cohort "
+            "execution receipt separately authorizes predicate columns, use "
+            "only those exact predicate coordinates and its recorded flow; it "
+            "does not authorize sibling `*_measured` or `*_n` columns. Preserve "
+            "the cohort predicates, ordered attrition, denominators, outputs, "
+            "and all other scientific choices unchanged.\n"
         )
     if standard_helper_in_script or RepairRoute.SPARSE_EVENT in repair_routes:
         metadata_candidates = []

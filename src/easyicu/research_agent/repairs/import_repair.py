@@ -15,6 +15,10 @@ _KNOWN_HOST_HELPER_RELOCATIONS = {
         "easyicu.research_agent.methods.measurement_provenance_receipt",
         "measurement_provenance_receipt",
     ): "easyicu.research_agent.methods.descriptive_inputs",
+    (
+        "easyicu.research_agent.methods",
+        "measurement_provenance_receipt",
+    ): "easyicu.research_agent.methods.descriptive_inputs",
 }
 
 
@@ -61,9 +65,16 @@ def patch_known_host_helper_import(source: str, diagnostic: str) -> str | None:
     for (old_module, helper), new_module in _KNOWN_HOST_HELPER_RELOCATIONS.items():
         old_import = f"from {old_module} import {helper}"
         new_import = f"from {new_module} import {helper}"
+        missing_symbol = (
+            f"cannot import name '{helper}' from '{old_module}'" in lowered
+            or f'cannot import name "{helper}" from "{old_module}"' in lowered
+        )
         if (
             old_import in source
-            and f"no module named '{old_module}'" in lowered
+            and (
+                f"no module named '{old_module}'" in lowered
+                or missing_symbol
+            )
             and source.count(old_import) == 1
         ):
             repaired = source.replace(old_import, new_import, 1)

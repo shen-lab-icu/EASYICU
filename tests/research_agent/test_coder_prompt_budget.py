@@ -148,6 +148,40 @@ def test_raw_input_scope_preserves_physical_superset_in_generation_and_repair(ra
         assert "preserve full row payload" in contract
 
 
+def test_empty_planner_input_scope_forbids_inferred_provenance_columns(ra):
+    step = ra.AnalysisStep(
+        step_id="define_cohort",
+        intent="Apply the separately bound eligibility predicates.",
+        inputs=[],
+        expected_outputs=["artifact:analysis_cohort", "table:cohort_attrition"],
+        method="cohort_definition_with_attrition",
+    )
+
+    contract = _typed_input_scope_contract(step)
+
+    assert "no Planner-declared typed or raw-variable inputs" in contract
+    assert "host-owned execution receipt" in contract
+    assert "No measured/count provenance pair is declared" in contract
+    assert "Do not read those companions" in contract
+    assert "Exact Planner-declared inputs for this step: []" in contract
+
+
+def test_measurement_provenance_contract_never_binds_value_availability(ra):
+    step = ra.AnalysisStep(
+        step_id="summarize",
+        intent="Summarize one declared measurement.",
+        inputs=["signal_max", "signal_measured", "signal_n"],
+        expected_outputs=["table:summary"],
+        method="descriptive",
+    )
+
+    contract = _typed_input_scope_contract(step)
+
+    assert "`measured == (count > 0)`" in contract
+    assert "does not require the related value column to be non-missing" in contract
+    assert "Never compare value availability" in contract
+
+
 def test_typed_input_contract_validates_used_values_without_fabricating_nulls(ra):
     step = ra.AnalysisStep(
         step_id="render_robustness",

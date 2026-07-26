@@ -107,6 +107,24 @@ def test_step_scoped_context_does_not_pad_unused_capacity(ra):
     }
 
 
+def test_step_scoped_context_does_not_promote_semantic_only_companions(ra):
+    context = _context(ra)
+    step = ra.AnalysisStep(
+        step_id="cohort",
+        intent="Apply the separately bound cohort predicates.",
+        inputs=[],
+        expected_outputs=["artifact:analysis_cohort", "table:cohort_flow"],
+        method="cohort_definition_and_attrition",
+    )
+
+    scoped = scoped_coder_context(context, step)
+
+    assert {variable.name for variable in scoped.variables} == {
+        "selected_first",
+        "outcome",
+    }
+
+
 def test_step_scoped_context_keeps_all_declared_source_concept_companions(ra):
     variables = [
         ra.ConceptDescriptor(name=f"filler_{index}", dtype="float64")
