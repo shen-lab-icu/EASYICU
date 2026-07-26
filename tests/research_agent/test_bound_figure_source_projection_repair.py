@@ -407,6 +407,91 @@ def main():
     ]
 
 
+def test_direct_bound_figure_repair_resolves_single_manual_tabular_loader(
+    tmp_path: Path,
+) -> None:
+    code = f"""
+from pathlib import Path
+import pandas as pd
+
+OUT_DIR = Path({str(tmp_path)!r})
+
+def _load_tabular(table_path):
+    assert table_path.name == "absolute_risk_context.csv"
+    return pd.DataFrame({{
+        "row_type": ["overall", "exposure_group"],
+        "exposure_group": ["overall", "positive"],
+        "mortality_numerator": [30, 20],
+        "mortality_denominator": [100, 40],
+        "mortality_pct": [30.0, 50.0],
+    }})
+
+def make_figure_contract(**kwargs):
+    return kwargs
+
+def save_publication_figure(*, fig, out_dir, stem, contract):
+    return None
+
+def main():
+    table_path = Path("absolute_risk_context.csv")
+    df = _load_tabular(table_path)
+    plotted = df.rename(columns={{"mortality_pct": "value_pct"}})
+    source_path = OUT_DIR / "prevalence_mortality_source_data.csv"
+    plotted.to_csv(source_path, index=False)
+    contract = make_figure_contract(
+        figure_id="figure:prevalence_mortality",
+        source_data=source_path.name,
+    )
+    save_publication_figure(
+        fig=None,
+        out_dir=OUT_DIR,
+        stem="prevalence_mortality",
+        contract=contract,
+    )
+    return contract
+"""
+    finding = {
+        **_FINDING,
+        "detail": {
+            **_FINDING["detail"],
+            "missing_bound_tables": ["absolute_risk_context.csv"],
+        },
+    }
+
+    repair = deterministic_contract_repair(code=code, findings=[finding])
+
+    assert repair is not None
+    repair_id, repaired = repair
+    assert repair_id == "direct_bound_figure_source_projection_v1"
+    namespace: dict[str, object] = {}
+    exec(repaired, namespace)
+    contract = namespace["main"]()
+    assert contract["source_data"] == [
+        "bound_000_absolute_risk_context_source_data.csv"
+    ]
+    projection = pd.read_csv(tmp_path / contract["source_data"][0])
+    assert projection.to_dict(orient="records") == [
+        {
+            "source_row_index": 0,
+            "source_table": "absolute_risk_context.csv",
+            "row_type": "overall",
+            "exposure_group": "overall",
+            "mortality_numerator": 30,
+            "mortality_denominator": 100,
+            "mortality_pct": 30.0,
+        },
+        {
+            "source_row_index": 1,
+            "source_table": "absolute_risk_context.csv",
+            "row_type": "exposure_group",
+            "exposure_group": "positive",
+            "mortality_numerator": 20,
+            "mortality_denominator": 40,
+            "mortality_pct": 50.0,
+        },
+    ]
+
+
 def test_direct_bound_figure_repair_materializes_prior_dataframe_dict_shape(
     tmp_path: Path,
 ) -> None:

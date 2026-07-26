@@ -8544,21 +8544,40 @@ class FigureSourceDataValidator:
             )
         ):
             return product
-        if not {"term_role", "source_variable"} <= set(contract_frame.columns):
-            return product
-        exposure_rows = contract_frame.loc[
-            contract_frame["term_role"].map(cls._normalise).eq("exposure")
-        ]
-        if exposure_rows.empty:
-            return product
-        for _, row in exposure_rows.iterrows():
-            contract = contract_by_model.get(str(row.get("model_id") or "").strip())
-            if (
-                contract is None
-                or str(row.get("source_variable") or "").strip()
-                != str(contract.get("exposure_source") or "").strip()
-            ):
+        if {"term_role", "source_variable"} <= set(contract_frame.columns):
+            exposure_rows = contract_frame.loc[
+                contract_frame["term_role"].map(cls._normalise).eq("exposure")
+            ]
+            if exposure_rows.empty:
                 return product
+            for _, row in exposure_rows.iterrows():
+                contract = contract_by_model.get(
+                    str(row.get("model_id") or "").strip()
+                )
+                if (
+                    contract is None
+                    or str(row.get("source_variable") or "").strip()
+                    != str(contract.get("exposure_source") or "").strip()
+                ):
+                    return product
+        elif "exposure" in contract_frame.columns:
+            # One-row-per-model display tables may use the exact exposure
+            # source as their row identity instead of re-exporting the richer
+            # term-level ``term_role``/``source_variable`` columns.  Accept
+            # that compact shape only when every row maps exactly to a fitted
+            # host model contract and preserves its locked exposure source.
+            for _, row in contract_frame.iterrows():
+                contract = contract_by_model.get(
+                    str(row.get("model_id") or "").strip()
+                )
+                if (
+                    contract is None
+                    or str(row.get("exposure") or "").strip()
+                    != str(contract.get("exposure_source") or "").strip()
+                ):
+                    return product
+        else:
+            return product
         tier = next(iter(tiers))
         kind, name = parsed
         if effect_estimand_tier(product) is not None:

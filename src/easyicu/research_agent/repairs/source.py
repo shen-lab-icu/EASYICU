@@ -5315,6 +5315,27 @@ def _patch_direct_bound_figure_source_projection(
         if (
             isinstance(target, ast.Name)
             and isinstance(value, ast.Call)
+            and (
+                (
+                    isinstance(value.func, ast.Name)
+                    and value.func.id in {"load_tabular", "_load_tabular"}
+                )
+                or (
+                    isinstance(value.func, ast.Attribute)
+                    and value.func.attr in {"load_tabular", "_load_tabular"}
+                )
+            )
+        ):
+            # Some generated renderers first resolve the single bound path and
+            # then call a local tabular loader, rather than using the shared
+            # ``load_bound_table`` tuple helper.  The finding still supplies
+            # the exact missing parent filename, so this frame is safe to bind
+            # only when both sides are unique below.
+            unkeyed_loaded_frames.append(target.id)
+            continue
+        if (
+            isinstance(target, ast.Name)
+            and isinstance(value, ast.Call)
             and isinstance(value.func, ast.Attribute)
             and value.func.attr == "copy"
             and isinstance(value.func.value, ast.Subscript)
