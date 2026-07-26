@@ -1412,6 +1412,9 @@ def test_coder_prompts_bind_untyped_only_inputs_to_planner_scope(ra):
         assert "manifest['raw_input_contracts']['contracts']" in prompt
         assert "allowed_values" in prompt
         assert "analysis_plausibility_range + plausibility_policy" in prompt
+        assert "`minimum` and `maximum` keys" in prompt
+        assert "never index it as a list" in prompt
+        assert "never count NaN introduced or retained for missingness" in prompt
         assert "['selected_first', 'selected_measured']" in prompt
         assert "Exact typed inputs for this step: []" in prompt
         assert "never invent a `raw:<column>` input_key" in prompt

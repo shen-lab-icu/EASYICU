@@ -2174,8 +2174,11 @@ def _typed_input_scope_contract(step: AnalysisStep) -> str:
             "- manifest['raw_input_contracts']['contracts'] is the unique "
             "host-generated executable metadata for untyped Planner inputs. Use "
             "exact allowed_values and analysis_plausibility_range + "
-            "plausibility_policy; do not rediscover them from prompt prose or "
-            "ResearchContext.\n"
+            "plausibility_policy. `analysis_plausibility_range` is a JSON object "
+            "with `minimum` and `maximum` keys; either bound may be null, so "
+            "apply only non-null bounds and never index it as a list or use "
+            "`lower`/`upper` aliases. Do not rediscover metadata from prompt "
+            "prose or ResearchContext.\n"
         )
     return (
         "TYPED INPUT BINDING (binding):\n"
@@ -2228,7 +2231,10 @@ def _typed_input_scope_contract(step: AnalysisStep) -> str:
         "column checked; set value_mismatch_n=0 only after comparison. The host "
         "repeats that key-and-value comparison.\n"
         "- Use `strict_numeric_input(original).values` for result-bearing numeric "
-        "input. Capture/report any raw non-finite mask before calling it.\n"
+        "input. Capture/report any raw non-finite mask before calling it. Source "
+        "missingness is separate: count non-finite only where the converted "
+        "source value is nonmissing (`values.notna() & ~np.isfinite(values)`); "
+        "never count NaN introduced or retained for missingness as non-finite.\n"
         "- Stable descriptive-helper APIs are exact: "
         "`closed_categorical_counts(series, declared_levels=levels).table` "
         "returns columns `level` and `count`; "
@@ -2326,14 +2332,19 @@ def _compact_repair_scope_contract(step: AnalysisStep) -> str:
         "that key-and-value comparison.",
         "- Numeric coercion is fail-closed: count original nonmissing values "
         "newly coerced to missing and raise when positive before any domain "
-        "check or output.",
+        "check or output. Keep missingness distinct from non-finite values: a "
+        "non-finite mask must require the converted source value to be nonmissing; "
+        "never count NaN introduced or retained for missingness as non-finite.",
     ]
     if raw_inputs:
         lines.append(
             "- manifest['raw_input_contracts']['contracts'] is unique host-generated "
             "executable metadata for untyped inputs: use exact allowed_values and "
-            "analysis_plausibility_range + plausibility_policy; never rediscover "
-            "them from prompt prose or ResearchContext."
+            "analysis_plausibility_range + plausibility_policy. The range is a "
+            "JSON object with `minimum` and `maximum` keys; either may be null, "
+            "so apply only non-null bounds and never index it as a list or use "
+            "`lower`/`upper` aliases. Never rediscover metadata from prompt prose "
+            "or ResearchContext."
         )
     if effect_authorized:
         lines.append(
