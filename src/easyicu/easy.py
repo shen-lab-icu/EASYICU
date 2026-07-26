@@ -1,334 +1,231 @@
-"""
-easyicu 极简 API - 一行代码完成数据提取
+"""Deprecated convenience wrappers retained for the EasyICU 1.x series.
 
-.. deprecated::
-    此模块已被废弃。请直接使用 `easyicu.api` 中的函数:
-    
-    - `easyicu.load_vitals` 代替 `easyicu.easy.load_vitals`
-    - `easyicu.load_labs` 代替 `easyicu.easy.load_labs`  
-    - `easyicu.load_sofa` 代替 `easyicu.easy.load_sofa_score`
-    - `easyicu.load_sepsis3` 代替 `easyicu.easy.load_sepsis`
-    
-    新API不需要指定 data_path，可以自动检测数据路径。
-
-Examples (已废弃的用法):
-    >>> from easyicu.easy import load_vitals, load_labs, load_sofa_score, load_sepsis
-    >>> 
-    >>> # 加载生命体征（自动处理所有细节）
-    >>> vitals = load_vitals(
-    ...     data_path='/path/to/mimic',
-    ...     patient_ids=[10001, 10002, 10003]
-    ... )
-    >>> print(vitals.columns)
-    >>> # ['stay_id', 'charttime', 'hr', 'sbp', 'dbp', 'mbp', 'resp', 'temp', 'spo2']
-    >>> 
-    >>> # 加载 SOFA 评分
-    >>> sofa = load_sofa_score('/path/to/mimic', patient_ids=[10001, 10002])
-    >>> 
-    >>> # 加载 Sepsis-3 诊断
-    >>> sepsis = load_sepsis('/path/to/mimic', patient_ids=[10001, 10002])
-
-推荐的新用法:
-    >>> from easyicu import load_vitals, load_labs, load_sofa, load_sepsis3
-    >>> 
-    >>> # 自动检测数据路径
-    >>> vitals = load_vitals(patient_ids=[10001, 10002, 10003])
-    >>> sofa = load_sofa(patient_ids=[10001, 10002])
+Use the top-level :mod:`easyicu` API instead. This module is a small,
+call-time-warning compatibility shim and is scheduled for removal in 2.0.
 """
 
 from __future__ import annotations
+
 import warnings
 from pathlib import Path
 from typing import List, Optional, Union
+
 import pandas as pd
 
-# 导入时发出废弃警告
-warnings.warn(
-    "easyicu.easy module is deprecated. "
-    "Use easyicu.load_vitals, easyicu.load_labs, easyicu.load_sofa instead. "
-    "The new API auto-detects data_path and doesn't require it as a mandatory argument.",
-    DeprecationWarning,
-    stacklevel=2
+from .api import load_concepts
+
+__all__ = [
+    "load_vitals",
+    "load_labs",
+    "load_sofa_score",
+    "load_sepsis",
+    "load_custom",
+    "quick_summary",
+]
+
+_REMOVAL_MESSAGE = (
+    "easyicu.easy.{name}() is deprecated and will be removed in EasyICU 2.0; "
+    "use {replacement} instead."
 )
 
-from .api import load_concepts
+
+def _warn(name: str, replacement: str) -> None:
+    warnings.warn(
+        _REMOVAL_MESSAGE.format(name=name, replacement=replacement),
+        DeprecationWarning,
+        stacklevel=2,
+    )
+
+
+def _load(
+    name: str,
+    replacement: str,
+    concepts: Union[str, List[str]],
+    *,
+    data_path: Union[str, Path],
+    patient_ids: Optional[List[int]],
+    database: str,
+    interval_hours: float,
+    **kwargs,
+) -> pd.DataFrame:
+    _warn(name, replacement)
+    return load_concepts(
+        concepts,
+        patient_ids=patient_ids,
+        database=database,
+        data_path=data_path,
+        interval=pd.Timedelta(hours=interval_hours),
+        verbose=False,
+        **kwargs,
+    )
+
 
 def load_vitals(
     data_path: Union[str, Path],
     patient_ids: Optional[List[int]] = None,
-    database: str = 'miiv',
+    database: str = "miiv",
     interval_hours: float = 1.0,
-    concepts: Optional[List[str]] = None
+    concepts: Optional[List[str]] = None,
 ) -> pd.DataFrame:
-    """加载生命体征数据（极简接口）
-    
-    自动处理所有细节，返回宽格式表格，每行一个时间点。
-    
-    Args:
-        data_path: ICU 数据路径
-        patient_ids: 患者 ID 列表（可选，默认加载所有患者）
-        database: 数据库类型 ('miiv', 'mimic', 'eicu', 'hirid', 'aumc')
-        interval_hours: 时间间隔（小时，默认 1 小时）
-        concepts: 要加载的概念列表（可选，默认加载所有常见生命体征）
-    
-    Returns:
-        DataFrame，包含列：
-            - stay_id: 患者 ICU 住院 ID
-            - charttime: 时间点（相对入 ICU 时间的小时数）
-            - hr: 心率
-            - sbp/dbp: 血压（收缩压/舒张压）
-            - resp: 呼吸频率
-            - temp: 体温（摄氏度）
-            - spo2: 血氧饱和度
-    
-    Examples:
-        >>> # 加载所有生命体征
-        >>> vitals = load_vitals('/data/mimic', patient_ids=[10001, 10002, 10003])
-        >>> 
-        >>> # 只加载心率和血压
-        >>> hr_bp = load_vitals('/data/mimic', patient_ids=[10001], 
-        ...                     concepts=['hr', 'sbp', 'dbp'])
-        >>> 
-        >>> # 每 6 小时采样
-        >>> vitals_6h = load_vitals('/data/mimic', interval_hours=6)
-    """
-    # 默认生命体征概念
-    if concepts is None:
-        concepts = ['hr', 'sbp', 'dbp', 'resp', 'temp', 'spo2']
-
-    df = load_concepts(
-        concepts,
+    """Deprecated wrapper for loading a legacy vital-sign bundle."""
+    return _load(
+        "load_vitals",
+        "easyicu.load_vitals()",
+        concepts or ["hr", "sbp", "dbp", "resp", "temp", "spo2"],
+        data_path=data_path,
         patient_ids=patient_ids,
         database=database,
-        data_path=data_path,
-        interval=pd.Timedelta(hours=interval_hours),
-        verbose=False
+        interval_hours=interval_hours,
     )
 
-    return df
 
 def load_labs(
     data_path: Union[str, Path],
     patient_ids: Optional[List[int]] = None,
-    database: str = 'miiv',
+    database: str = "miiv",
     interval_hours: float = 6.0,
-    concepts: Optional[List[str]] = None
+    concepts: Optional[List[str]] = None,
 ) -> pd.DataFrame:
-    """加载实验室检查数据（极简接口）
-    
-    Args:
-        data_path: ICU 数据路径
-        patient_ids: 患者 ID 列表
-        database: 数据库类型
-        interval_hours: 时间间隔（小时，默认 6 小时，因为实验室检查频率低）
-        concepts: 要加载的实验室检查（可选）
-    
-    Returns:
-        DataFrame，包含常见实验室检查结果
-    
-    Examples:
-        >>> labs = load_labs('/data/mimic', patient_ids=[10001, 10002])
-        >>> print(labs.columns)
-        >>> # ['stay_id', 'charttime', 'wbc', 'hgb', 'plt', 'creat', 'bili', ...]
-    """
-    if concepts is None:
-        # 常见实验室检查
-        concepts = [
-            'wbc',      # 白细胞计数
-            'hgb',      # 血红蛋白
-            'plt',      # 血小板
-            'crea',     # 肌酐
-            'bili',     # 胆红素
-            'lact',     # 乳酸
-        ]
-
-    df = load_concepts(
-        concepts,
+    """Deprecated wrapper for loading a legacy laboratory bundle."""
+    return _load(
+        "load_labs",
+        "easyicu.load_labs()",
+        concepts or ["wbc", "hgb", "plt", "crea", "bili", "lact"],
+        data_path=data_path,
         patient_ids=patient_ids,
         database=database,
-        data_path=data_path,
-        interval=pd.Timedelta(hours=interval_hours),
-        verbose=False
+        interval_hours=interval_hours,
     )
 
-    return df
 
 def load_sofa_score(
     data_path: Union[str, Path],
     patient_ids: Optional[List[int]] = None,
-    database: str = 'miiv',
+    database: str = "miiv",
     interval_hours: float = 1.0,
-    keep_components: bool = True
+    keep_components: bool = True,
 ) -> pd.DataFrame:
-    """加载 SOFA 评分（极简接口）
-    
-    Args:
-        data_path: ICU 数据路径
-        patient_ids: 患者 ID 列表
-        database: 数据库类型
-        interval_hours: 时间间隔（小时）
-        keep_components: 是否保留 SOFA 组件分数
-    
-    Returns:
-        DataFrame，包含 SOFA 总分和各组件分数
-    
-    Examples:
-        >>> sofa = load_sofa_score('/data/mimic', patient_ids=[10001, 10002])
-        >>> print(sofa.columns)
-        >>> # ['stay_id', 'charttime', 'sofa', 'sofa_resp', 'sofa_coag', ...]
-    """
-    df = load_concepts(
-        'sofa',
+    """Deprecated wrapper for :func:`easyicu.load_sofa`."""
+    return _load(
+        "load_sofa_score",
+        "easyicu.load_sofa()",
+        "sofa",
+        data_path=data_path,
         patient_ids=patient_ids,
         database=database,
-        data_path=data_path,
-        interval=pd.Timedelta(hours=interval_hours),
+        interval_hours=interval_hours,
         keep_components=keep_components,
-        verbose=False
     )
 
-    return df
 
 def load_sepsis(
     data_path: Union[str, Path],
     patient_ids: Optional[List[int]] = None,
-    database: str = 'miiv',
+    database: str = "miiv",
     interval_hours: float = 1.0,
-    definition: str = 'sepsis3'
+    definition: str = "sepsis3",
 ) -> pd.DataFrame:
-    """加载脓毒症诊断数据（极简接口）
-    
-    Args:
-        data_path: ICU 数据路径
-        patient_ids: 患者 ID 列表
-        database: 数据库类型
-        interval_hours: 时间间隔（小时）
-        definition: 脓毒症定义 ('sepsis3' 或 'sepsis2')
-    
-    Returns:
-        DataFrame，包含脓毒症诊断相关特征
-    
-    Examples:
-        >>> sepsis = load_sepsis('/data/mimic', patient_ids=[10001, 10002])
-        >>> print(sepsis.columns)
-        >>> # ['stay_id', 'charttime', 'sofa', 'abx', 'samp', 'susp_inf', 'sep3']
-        >>> 
-        >>> # 查看 Sepsis-3 阳性患者
-        >>> positive = sepsis[sepsis['sep3'] == True]
-    """
-    if definition == 'sepsis3':
-        concept = 'sep3'
-    elif definition == 'sepsis2':
-        concept = 'sep2'  # 如果已定义
-    else:
-        raise ValueError(f"Unknown sepsis definition: {definition}")
-
-    df = load_concepts(
+    """Deprecated wrapper for :func:`easyicu.load_sepsis3`."""
+    concept_by_definition = {"sepsis3": "sep3", "sepsis2": "sep2"}
+    try:
+        concept = concept_by_definition[definition]
+    except KeyError as exc:
+        raise ValueError(f"Unknown sepsis definition: {definition}") from exc
+    return _load(
+        "load_sepsis",
+        "easyicu.load_sepsis3()",
         concept,
+        data_path=data_path,
         patient_ids=patient_ids,
         database=database,
-        data_path=data_path,
-        interval=pd.Timedelta(hours=interval_hours),
-        verbose=False
+        interval_hours=interval_hours,
     )
 
-    return df
 
 def load_custom(
     data_path: Union[str, Path],
     concepts: Union[str, List[str]],
     patient_ids: Optional[List[int]] = None,
-    database: str = 'miiv',
-    interval_hours: float = 1.0
+    database: str = "miiv",
+    interval_hours: float = 1.0,
 ) -> pd.DataFrame:
-    """加载自定义概念组合（通用接口）
-    
-    最灵活的接口，可以加载任意概念组合。
-    
-    Args:
-        data_path: ICU 数据路径
-        concepts: 概念名称（字符串或列表）
-        patient_ids: 患者 ID 列表
-        database: 数据库类型
-        interval_hours: 时间间隔（小时）
-    
-    Returns:
-        DataFrame，包含请求的概念数据
-    
-    Examples:
-        >>> # 加载单个概念
-        >>> hr = load_custom('/data/mimic', 'hr', patient_ids=[10001])
-        >>> 
-        >>> # 加载多个概念
-        >>> features = load_custom('/data/mimic', 
-        ...                        ['hr', 'sbp', 'temp', 'sofa'],
-        ...                        patient_ids=[10001, 10002])
-    """
-    df = load_concepts(
+    """Deprecated wrapper for :func:`easyicu.load_concepts`."""
+    return _load(
+        "load_custom",
+        "easyicu.load_concepts()",
         concepts,
+        data_path=data_path,
         patient_ids=patient_ids,
         database=database,
-        data_path=data_path,
-        interval=pd.Timedelta(hours=interval_hours),
-        verbose=False
+        interval_hours=interval_hours,
     )
 
-    return df
 
 def quick_summary(
     data_path: Union[str, Path],
     patient_ids: Optional[List[int]] = None,
-    database: str = 'miiv'
+    database: str = "miiv",
 ) -> dict:
-    """快速生成患者数据摘要
-    
-    Args:
-        data_path: ICU 数据路径
-        patient_ids: 患者 ID 列表
-        database: 数据库类型
-    
-    Returns:
-        包含各类数据统计的字典
-    
-    Examples:
-        >>> summary = quick_summary('/data/mimic', patient_ids=[10001, 10002, 10003])
-        >>> print(summary)
-        >>> # {
-        >>> #     'patients': 3,
-        >>> #     'vitals_records': 230,
-        >>> #     'lab_records': 45,
-        >>> #     'sofa_mean': 2.5,
-        >>> #     'sepsis_positive': 1
-        >>> # }
-    """
-    try:
-        vitals = load_vitals(data_path, patient_ids, database, concepts=['hr'])
-        vitals_count = len(vitals)
-    except Exception:
-        vitals_count = 0
+    """Return the legacy best-effort summary plus explicit failure metadata."""
+    _warn("quick_summary", "explicit easyicu.load_*() calls")
+    errors: dict[str, str] = {}
 
-    try:
-        labs = load_labs(data_path, patient_ids, database, concepts=['wbc'])
-        labs_count = len(labs)
-    except Exception:
-        labs_count = 0
+    def attempt(label: str, loader, default):
+        try:
+            return loader()
+        except Exception as exc:  # compatibility summary is intentionally best effort
+            errors[label] = type(exc).__name__
+            return default
 
-    try:
-        sofa = load_sofa_score(data_path, patient_ids, database)
-        sofa_mean = sofa['sofa'].mean() if 'sofa' in sofa.columns else None
-    except Exception:
-        sofa_mean = None
-
-    try:
-        sepsis = load_sepsis(data_path, patient_ids, database)
-        sepsis_positive = sepsis['sep3'].sum() if 'sep3' in sepsis.columns else 0
-    except Exception:
-        sepsis_positive = 0
-    
+    vitals = attempt(
+        "vitals",
+        lambda: load_concepts(
+            ["hr"],
+            patient_ids=patient_ids,
+            database=database,
+            data_path=data_path,
+            verbose=False,
+        ),
+        pd.DataFrame(),
+    )
+    labs = attempt(
+        "labs",
+        lambda: load_concepts(
+            ["wbc"],
+            patient_ids=patient_ids,
+            database=database,
+            data_path=data_path,
+            verbose=False,
+        ),
+        pd.DataFrame(),
+    )
+    sofa = attempt(
+        "sofa",
+        lambda: load_concepts(
+            "sofa",
+            patient_ids=patient_ids,
+            database=database,
+            data_path=data_path,
+            verbose=False,
+        ),
+        pd.DataFrame(),
+    )
+    sepsis = attempt(
+        "sepsis",
+        lambda: load_concepts(
+            "sep3",
+            patient_ids=patient_ids,
+            database=database,
+            data_path=data_path,
+            verbose=False,
+        ),
+        pd.DataFrame(),
+    )
     return {
-        'patients': len(patient_ids) if patient_ids else 'all',
-        'vitals_records': vitals_count,
-        'lab_records': labs_count,
-        'sofa_mean': sofa_mean,
-        'sepsis_positive': sepsis_positive
+        "patients": len(patient_ids) if patient_ids else "all",
+        "vitals_records": len(vitals),
+        "lab_records": len(labs),
+        "sofa_mean": sofa["sofa"].mean() if "sofa" in sofa.columns else None,
+        "sepsis_positive": sepsis["sep3"].sum() if "sep3" in sepsis.columns else 0,
+        "errors": errors,
     }
