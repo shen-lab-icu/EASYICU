@@ -105,7 +105,7 @@ Swap the extra in brackets for what you actually need:
 | Native FastAPI web app (+ dormant-by-default provider status tooling) | `easyicu[webapp]` |
 | Plotly / Kaleido figure export | `easyicu[viz]` |
 | Host the LLM proxy for the research-agent | `easyicu[llmserver]` |
-| Opt-in LangGraph agent graph | `easyicu[agentic]` |
+| Research-agent HTTP/PDF/image helpers | `easyicu[agentic]` |
 | Current active extras above | `easyicu[all]` |
 
 The **core install (`easyicu`) already bundles the research-agent's analytical

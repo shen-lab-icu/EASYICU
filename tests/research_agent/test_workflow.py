@@ -11,6 +11,7 @@ import pytest
 from easyicu.research_agent.orchestration.workflow import (
     HumanReviewDecision,
     HumanReviewRequest,
+    WorkflowEngine,
     WorkflowCompleted,
     WorkflowPaused,
     build_pipeline_workflow,
@@ -45,6 +46,12 @@ def test_runtime_receipt_identifies_the_explicit_state_machine() -> None:
         "write",
         "finalise",
     )
+
+
+def test_builder_returns_the_framework_neutral_workflow_engine_contract() -> None:
+    workflow, _calls = _workflow()
+
+    assert isinstance(workflow, WorkflowEngine)
 
 
 def test_workflow_runs_each_phase_once_in_order() -> None:
@@ -167,6 +174,15 @@ def test_langgraph_is_not_a_core_dependency() -> None:
     dependencies = project["project"]["dependencies"]
 
     assert not any(item.lower().startswith("langgraph") for item in dependencies)
+
+
+def test_langgraph_is_not_in_the_runner_lock() -> None:
+    root = Path(__file__).resolve().parents[2]
+    lock_lines = (
+        root / "src/easyicu/research_agent/runner_image/requirements.lock"
+    ).read_text(encoding="utf-8").splitlines()
+
+    assert not any(line.lower().startswith("langgraph==") for line in lock_lines)
 
 
 def test_run_with_graph_is_only_a_deprecated_alias() -> None:

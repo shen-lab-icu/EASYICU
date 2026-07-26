@@ -64,6 +64,19 @@ identify `explicit_state_machine`; human-review pauses still declare
 exists. EasyICU receipts, capsules, evidence and checkpoints remain the only
 scientific/replay authority.
 
+Callers depend on the structural `WorkflowEngine` interface rather than on a
+framework-specific graph object. The post-paper durable-orchestration route is
+deliberately not a restoration of the retired graph. Its acceptance contract is:
+
+1. persisted state contains only `run_id`, artifact paths, immutable digests,
+   phase/status values and schema-versioned review records;
+2. `EvidenceStore`, provider resolution and run-scoped services are rebuilt by
+   repositories/factories and their reconstructed authority is digest-checked;
+3. a service-restart integration test pauses before review, destroys the first
+   process, starts a second process and resumes to the same evidence outcome;
+4. the runtime may advertise a durable resume scope only after that restart
+   test passes.
+
 ### MCP
 
 The custom stdio/JSON-RPC server should not be replaced during Canonical9.
