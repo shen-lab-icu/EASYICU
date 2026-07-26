@@ -232,6 +232,30 @@ def test_gaussian_mixture_phenotype_discovery_is_clustering(ra):
     assert infer_study_design_family(ctx) == "phenotyping"
 
 
+def test_imperative_fixed_window_trajectory_question_is_clustering(ra):
+    from easyicu.research_agent.planning.analysis_types import (
+        strong_trajectory_clustering_framing,
+    )
+    from easyicu.research_agent.planning.study_design import infer_study_design_family
+
+    question = (
+        "Cluster fixed-window organ-dysfunction trajectories, freeze cluster "
+        "selection through an independent stability design, and describe outcomes."
+    )
+    ctx = ra.ResearchContext(
+        research_question=question,
+        cohort=ra.CohortDescriptor(
+            cohort_name="c", database="synthetic", n_patients=100, n_stays=100
+        ),
+        variables=[],
+        target_outcome="death",
+    )
+
+    assert strong_trajectory_clustering_framing(question)
+    assert ra.infer_analysis_type(ctx).key == "trajectory_clustering"
+    assert infer_study_design_family(ctx) == "phenotyping"
+
+
 def test_causal_disclaimer_and_fixed_followup_endpoint_do_not_choose_science(ra):
     from easyicu.research_agent.planning.study_design import infer_study_design_family
 

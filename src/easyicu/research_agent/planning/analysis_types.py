@@ -738,6 +738,12 @@ def strong_trajectory_clustering_framing(text: str) -> bool:
         r"(?:classes|groups|clusters|phenotypes)\b",
         normalised,
     ) is not None
+    imperative_trajectory_clustering = re.search(
+        r"(?:^|[.!?]\s+)(?:please\s+)?(?:cluster|partition|group)\s+"
+        r"(?:[a-z0-9_-]+\s+){0,6}"
+        r"(?:trajectories?|longitudinal\s+(?:records?|profiles?|features?))\b",
+        normalised,
+    ) is not None
     chinese_discovery_disclaimer = re.search(
         r"(?:不|无需|避免)(?:进行|作|做|开展|采用|使用)?"
         r"[^，。；;]{0,12}(?:患者)?(?:表型|亚型|轨迹|患者群)"
@@ -783,6 +789,7 @@ def strong_trajectory_clustering_framing(text: str) -> bool:
     english_discovery = (
         cluster_action_target
         or cluster_into_groups
+        or imperative_trajectory_clustering
         or (discovery_action and phenotype_target and generic_unsupervised_method)
         or (discovery_action and explicit_procedure)
         or (

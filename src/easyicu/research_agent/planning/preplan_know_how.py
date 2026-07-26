@@ -88,8 +88,17 @@ class PlannerKnowHowBinding:
         if enabled:
             verify_know_how_decisions(decisions, self.decision_authority or {})
 
-    def prompt_metrics(self, planner: Any, context: ResearchContext) -> dict[str, Any]:
-        baseline = planner.request_metrics(context)
+    def prompt_metrics(
+        self,
+        planner: Any,
+        context: ResearchContext,
+        *,
+        planning_contract_context: str = "",
+    ) -> dict[str, Any]:
+        baseline = planner.request_metrics(
+            context,
+            planning_contract_context=planning_contract_context,
+        )
         metrics = dict(planner.last_prompt_metrics)
         return {
             **metrics,
