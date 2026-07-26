@@ -23,6 +23,7 @@ def test_pipeline_constructor_has_one_config_and_one_service_source(ra) -> None:
         "human_review_gate",
         "llm",
         "llm_concept_auditor_client",
+        "provider_hard_stop",
         "runner_factory",
         "visual_qa_adapter",
         "vlm_client",

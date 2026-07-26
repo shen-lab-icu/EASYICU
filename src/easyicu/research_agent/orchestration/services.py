@@ -24,6 +24,7 @@ class PipelineServices:
     human_review_gate: Optional[Any] = None
     runner_factory: Optional[Any] = None
     case_plugin_registry: Optional[Any] = None
+    provider_hard_stop: Optional[Any] = None
 
     @classmethod
     def split_legacy_kwargs(

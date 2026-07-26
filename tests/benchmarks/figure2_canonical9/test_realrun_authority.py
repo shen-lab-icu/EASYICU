@@ -25,6 +25,9 @@ from easyicu.research_agent.authority.execution_identity import (
     ExecutionIdentity,
     ExpectedExecutionIdentity,
 )
+from easyicu.research_agent.authority.provider_hard_stop import (
+    load_provider_hard_stop_ledger,
+)
 
 from benchmarks.figure2_canonical9.evaluator.input_freeze_v1 import (
     CanonicalInputFreezeError,
@@ -177,7 +180,20 @@ def _frozen_identity(
         network_policy="none",
         llm_seed=0,
         input_authority_sha256=input_authority,
-        provider_authorization={"clients": [{"authorization_mode": "operator_env"}]},
+        provider_authorization={
+            "schema_version": "easyicu.provider_authorization_manifest/2",
+            "reasoning_effort_profile": "provider_default",
+            "clients": [
+                {
+                    "provider": _PROVIDER,
+                    "model": _MODEL,
+                    "base_url": "https://openrouter.ai/api/v1",
+                    "destination": "external",
+                    "authorization_mode": "operator_env",
+                    "authorization_sha256": "c" * 64,
+                }
+            ],
+        },
         host_runner_authorized=False,
         code_version={"git_sha": _COMMIT, "git_dirty": git_dirty},
     )
@@ -1805,6 +1821,11 @@ def test_run_ehrflowbench_writes_receipt_and_ledger(tmp_path, monkeypatch) -> No
         provider=_PROVIDER,
         model=_MODEL,
         batch_binding=binding,
+        pipeline_options=bench._benchmark_pipeline_options(
+            max_total_steps=None,
+            disable_replanning=False,
+            max_code_repair_attempts=None,
+        ),
     )
 
     receipt = json.loads(
@@ -1816,6 +1837,11 @@ def test_run_ehrflowbench_writes_receipt_and_ledger(tmp_path, monkeypatch) -> No
     assert ledger["complete"] is True
     assert ledger["batch_id"] == _BATCH_ID
     assert len(ledger["children"]) == 9
+    progress = load_provider_hard_stop_ledger(
+        out_root / "figure2_batch_progress.json"
+    )
+    assert progress["terminal"] is True
+    assert [task["status"] for task in progress["tasks"]] == ["completed"] * 9
     canary = json.loads((out_root / "figure2_canary_gate.json").read_text())
     assert canary["status"] == "passed"
     assert canary["task_id"] == FIGURE2_TASK_IDS[0]
@@ -1879,6 +1905,11 @@ def test_formal_batch_does_not_start_e2_when_e1_canary_is_diagnostic(
             provider=_PROVIDER,
             model=_MODEL,
             batch_binding=binding,
+            pipeline_options=bench._benchmark_pipeline_options(
+                max_total_steps=None,
+                disable_replanning=False,
+                max_code_repair_attempts=None,
+            ),
         )
         == 2
     )

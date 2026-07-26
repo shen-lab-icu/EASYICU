@@ -87,6 +87,39 @@ def test_openai_client_disables_sdk_retries(monkeypatch, ra):
     assert client._max_retries == 5
 
 
+def test_openai_client_can_freeze_transport_environment(monkeypatch, ra):
+    from easyicu.research_agent.providers.llm import OpenAIClient
+
+    captured = {}
+
+    class _OpenAI:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+            self.chat = SimpleNamespace(completions=SimpleNamespace())
+
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=_OpenAI))
+    monkeypatch.setenv("EASYICU_LLM_TIMEOUT", "999")
+    monkeypatch.setenv("EASYICU_LLM_MAX_RETRIES", "77")
+    monkeypatch.setenv("EASYICU_LLM_STREAM", "1")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://mutated.example/v1")
+
+    client = OpenAIClient(
+        model="frozen-model",
+        api_key="test-key",
+        base_url="https://frozen.example/v1",
+        request_timeout=13.0,
+        max_retries=2,
+        stream_enabled=False,
+        allow_environment_overrides=False,
+    )
+
+    assert client._timeout == 13.0
+    assert client._max_retries == 2
+    assert client._stream_enabled is False
+    assert client._resolved_base_url == "https://frozen.example/v1"
+    assert str(captured["base_url"]) == "https://frozen.example/v1"
+
+
 def test_unmanaged_external_client_is_rejected_before_transport(ra):
     from easyicu.research_agent.providers.llm import LLMMessage, OpenAIClient
 
@@ -186,13 +219,13 @@ def test_openai_client_streaming_is_transport_only(monkeypatch, ra):
             assert "stream_options" not in kwargs
             return stream
 
+    monkeypatch.setenv("EASYICU_LLM_STREAM", "1")
     client = _mock_transport_client(
         monkeypatch,
         OpenAIClient,
         model="gpt-5.6-luna",
         completions=_Completions(),
     )
-    monkeypatch.setenv("EASYICU_LLM_STREAM", "1")
 
     out, call_usage = client.complete_with_usage(
         [LLMMessage(role="user", content="return json")]
@@ -258,13 +291,13 @@ def test_openai_client_stream_closes_on_iteration_error(monkeypatch, ra):
         def create(self, **kwargs):
             return stream
 
+    monkeypatch.setenv("EASYICU_LLM_STREAM", "1")
     client = _mock_transport_client(
         monkeypatch,
         OpenAIClient,
         model="gpt-5.6-luna",
         completions=_Completions(),
     )
-    monkeypatch.setenv("EASYICU_LLM_STREAM", "1")
 
     with pytest.raises(ValueError, match="broken stream"):
         client.complete([LLMMessage(role="user", content="return json")])

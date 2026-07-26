@@ -379,7 +379,7 @@ def load_production_input_authority(
 # Canonical execution config — every run-semantics knob folded into ONE digest
 # ---------------------------------------------------------------------------
 
-CANONICAL_EXECUTION_CONFIG_SCHEMA = "easyicu.figure2_canonical_execution_config/1"
+CANONICAL_EXECUTION_CONFIG_SCHEMA = "easyicu.figure2_canonical_execution_config/2"
 
 
 class CanonicalExecutionConfig(_StrictFrozenModel):
@@ -391,7 +391,7 @@ class CanonicalExecutionConfig(_StrictFrozenModel):
     A canonical run must have ``stop_after_step_id is None``.
     """
 
-    schema_version: Literal["easyicu.figure2_canonical_execution_config/1"]
+    schema_version: Literal["easyicu.figure2_canonical_execution_config/2"]
     stop_after_step_id: Optional[str]
     seed: int
     llm_seed: Optional[int]
@@ -399,9 +399,21 @@ class CanonicalExecutionConfig(_StrictFrozenModel):
     max_total_steps: Optional[int]
     max_code_repair_attempts: Optional[int]
     max_step_llm_repair_attempts: Optional[int]
+    max_step_provider_calls: int
+    max_provider_attempts_per_run: int
+    max_provider_attempts_per_batch: int
+    max_total_tokens_per_run: int
+    max_total_tokens_per_batch: int
+    max_estimated_cost_usd_per_batch: float
+    max_wall_clock_seconds_per_task: float
+    provider_input_cost_usd_per_million_tokens: float
+    provider_output_cost_usd_per_million_tokens: float
     timeout_seconds: float
     standard_executor_timeout_seconds: float
     request_timeout_seconds: float
+    transport_max_attempts: int
+    provider_base_url: str
+    llm_stream_enabled: bool
     enable_repro_envelope: bool
     enable_cost_tracking: bool
     strict_evidence: bool
@@ -431,6 +443,15 @@ def build_canonical_execution_config(
     max_total_steps: object = None,
     max_code_repair_attempts: object = None,
     max_step_llm_repair_attempts: object = None,
+    max_step_provider_calls: int = 9,
+    max_provider_attempts_per_run: int = 192,
+    max_provider_attempts_per_batch: int = 1_728,
+    max_total_tokens_per_run: int = 2_000_000,
+    max_total_tokens_per_batch: int = 18_000_000,
+    max_estimated_cost_usd_per_batch: float = 100.0,
+    max_wall_clock_seconds_per_task: float = 21_600.0,
+    provider_input_cost_usd_per_million_tokens: float = 10.0,
+    provider_output_cost_usd_per_million_tokens: float = 30.0,
     enable_repro_envelope: bool = True,
     enable_cost_tracking: bool = True,
     strict_evidence: bool = False,
@@ -441,6 +462,9 @@ def build_canonical_execution_config(
     development_sample_seed: int = 20260719,
     models: Sequence[str] = (),
     reasoning_effort_profile: str = "provider_default",
+    transport_max_attempts: int = 1,
+    provider_base_url: str = "https://openrouter.ai/api/v1",
+    llm_stream_enabled: bool = False,
 ) -> CanonicalExecutionConfig:
     """Normalize argv into the canonical config (pure — no Provider/runner/data)."""
 
@@ -458,9 +482,27 @@ def build_canonical_execution_config(
         max_total_steps=_opt_int(max_total_steps),
         max_code_repair_attempts=_opt_int(max_code_repair_attempts),
         max_step_llm_repair_attempts=_opt_int(max_step_llm_repair_attempts),
+        max_step_provider_calls=int(max_step_provider_calls),
+        max_provider_attempts_per_run=int(max_provider_attempts_per_run),
+        max_provider_attempts_per_batch=int(max_provider_attempts_per_batch),
+        max_total_tokens_per_run=int(max_total_tokens_per_run),
+        max_total_tokens_per_batch=int(max_total_tokens_per_batch),
+        max_estimated_cost_usd_per_batch=float(
+            max_estimated_cost_usd_per_batch
+        ),
+        max_wall_clock_seconds_per_task=float(max_wall_clock_seconds_per_task),
+        provider_input_cost_usd_per_million_tokens=float(
+            provider_input_cost_usd_per_million_tokens
+        ),
+        provider_output_cost_usd_per_million_tokens=float(
+            provider_output_cost_usd_per_million_tokens
+        ),
         timeout_seconds=float(timeout_seconds),
         standard_executor_timeout_seconds=float(standard_executor_timeout_seconds),
         request_timeout_seconds=float(request_timeout_seconds),
+        transport_max_attempts=int(transport_max_attempts),
+        provider_base_url=str(provider_base_url).strip(),
+        llm_stream_enabled=bool(llm_stream_enabled),
         enable_repro_envelope=bool(enable_repro_envelope),
         enable_cost_tracking=bool(enable_cost_tracking),
         strict_evidence=bool(strict_evidence),
@@ -805,6 +847,40 @@ def _verify_invocation_binding(
             "EXECUTION_CONFIG_INVALID",
             "a Canonical9 run must bind one concrete model, not a model matrix",
         )
+    try:
+        from easyicu.research_agent.authority.provider_hard_stop import (
+            ProviderHardStopLimits,
+        )
+
+        ProviderHardStopLimits(
+            max_provider_attempts_per_run=config.max_provider_attempts_per_run,
+            max_provider_attempts_per_batch=config.max_provider_attempts_per_batch,
+            max_total_tokens_per_run=config.max_total_tokens_per_run,
+            max_total_tokens_per_batch=config.max_total_tokens_per_batch,
+            max_estimated_cost_usd_per_batch=(
+                config.max_estimated_cost_usd_per_batch
+            ),
+            max_wall_clock_seconds_per_task=config.max_wall_clock_seconds_per_task,
+            input_cost_usd_per_million_tokens=(
+                config.provider_input_cost_usd_per_million_tokens
+            ),
+            output_cost_usd_per_million_tokens=(
+                config.provider_output_cost_usd_per_million_tokens
+            ),
+        )
+        if config.max_step_provider_calls <= 0:
+            raise ValueError("max_step_provider_calls must be positive")
+        if config.transport_max_attempts <= 0:
+            raise ValueError("transport_max_attempts must be positive")
+        if not config.provider_base_url:
+            raise ValueError("provider_base_url must be explicitly frozen")
+        if not config.enable_cost_tracking:
+            raise ValueError("formal runs require cost tracking")
+    except (TypeError, ValueError) as exc:
+        bad(
+            "EXECUTION_CONFIG_INVALID",
+            f"Provider hard-stop configuration is invalid: {exc}",
+        )
     if config.digest() != declaration.execution_config_sha256:
         bad(
             "EXECUTION_CONFIG_MISMATCH",
@@ -1098,6 +1174,23 @@ def verify_realrun_authorization(
             raise ValueError(
                 "execution identity input_authority_sha256 differs from the pin"
             )
+        provider_manifest = identity.provider_authorization
+        clients = provider_manifest.get("clients")
+        if not isinstance(clients, list) or not clients:
+            raise ValueError("execution identity has no Provider client binding")
+        expected_base_url = invocation.execution_config.provider_base_url.rstrip("/")
+        for client in clients:
+            if (
+                not isinstance(client, Mapping)
+                or str(client.get("provider") or "") != declaration.provider
+                or str(client.get("model") or "") != declaration.model
+                or str(client.get("base_url") or "").rstrip("/")
+                != expected_base_url
+            ):
+                raise ValueError(
+                    "execution identity Provider/model/base URL differs from "
+                    "the invocation freeze"
+                )
     except Exception as exc:  # noqa: BLE001
         issues.append(
             _issue("EXECUTION_IDENTITY_MISMATCH", f"{type(exc).__name__}: {exc}")
