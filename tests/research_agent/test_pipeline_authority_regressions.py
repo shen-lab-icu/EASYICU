@@ -343,9 +343,7 @@ def test_p1_1_audit_records_rows_actually_returned_not_the_cap(tmp_path, monkeyp
 
     store = EvidenceStore(tmp_path / "audit" / ".easyicu_mcp_audit")
     record = next(
-        r
-        for r in store.records()
-        if "patient_access_completed" in str(r.relative_path)
+        r for r in store.records() if "patient_access_completed" in str(r.relative_path)
     )
     payload = json.loads(
         (store.root / record.relative_path).read_text(encoding="utf-8")
@@ -364,7 +362,11 @@ def test_p0_2_plan_findings_become_typed_review_requests():
     from easyicu.research_agent.orchestration.workflow import (
         human_review_requests_for_plan,
     )
-    from easyicu.research_agent.schema import ValidationFinding
+    from easyicu.research_agent.schema import (
+        AnalysisPlan,
+        AnalysisStep,
+        ValidationFinding,
+    )
 
     requests = human_review_requests_for_plan(
         findings=[
@@ -380,7 +382,15 @@ def test_p0_2_plan_findings_become_typed_review_requests():
                 message="Nothing here needs a human.",
             ),
         ],
-        plan=SimpleNamespace(steps=[SimpleNamespace(step_id="01")]),
+        plan=AnalysisPlan(
+            research_question="Can this capability be used?",
+            steps=[
+                AnalysisStep(
+                    step_id="01",
+                    intent="Run the requested registered analysis.",
+                )
+            ],
+        ),
     )
 
     assert [item.kind for item in requests] == ["capability_request"]
@@ -394,7 +404,11 @@ def test_p0_2_run_stops_when_a_review_is_due_and_no_gate_is_configured(tmp_path)
     from easyicu.research_agent.orchestration.workflow import (
         build_pipeline_workflow,
     )
-    from easyicu.research_agent.schema import ValidationFinding
+    from easyicu.research_agent.schema import (
+        AnalysisPlan,
+        AnalysisStep,
+        ValidationFinding,
+    )
 
     blocking = ValidationFinding(
         validator="capability_workflow",
@@ -408,7 +422,15 @@ def test_p0_2_run_stops_when_a_review_is_due_and_no_gate_is_configured(tmp_path)
         return SimpleNamespace(
             aborted_result=None,
             findings=[blocking],
-            plan=SimpleNamespace(steps=()),
+            plan=AnalysisPlan(
+                research_question="Can this capability be used?",
+                steps=[
+                    AnalysisStep(
+                        step_id="01",
+                        intent="Run the requested registered analysis.",
+                    )
+                ],
+            ),
         )
 
     def _human_review_invoker(plan_result):
@@ -1124,6 +1146,11 @@ def test_p0_2_the_wired_recorder_binds_the_decision_into_run_evidence(
     import easyicu.research_agent.orchestration.workflow as workflow_module
     from easyicu.research_agent import pipeline as pipeline_module
     from easyicu.research_agent.authority.evidence_store import EvidenceStore
+    from easyicu.research_agent.schema import (
+        AnalysisPlan,
+        AnalysisStep,
+        ValidationFinding,
+    )
 
     captured = {}
 
@@ -1144,16 +1171,51 @@ def test_p0_2_the_wired_recorder_binds_the_decision_into_run_evidence(
     frame.to_parquet(cohort)
 
     agent = pipeline_module.ResearchAgentPipeline(
-        workdir=tmp_path / "wd", llm=MockLLMClient()
+        workdir=tmp_path / "wd",
+        llm=MockLLMClient(),
+        human_review_gate=lambda *_args, **_kwargs: None,
     )
     with pytest.raises(RuntimeError, match="stop after workflow construction"):
         agent.run(question="Does SOFA-2 predict death?", cohort=cohort)
 
     run_dir = next((tmp_path / "wd").glob("run_*"))
     store = EvidenceStore(run_dir)
-    captured["human_review_invoker"](
-        SimpleNamespace(findings=[], plan=SimpleNamespace(steps=()), evidence=store)
+    capsule = run_dir / "captured_run_input_capsule.json"
+    capsule.write_text('{"schema_version":"test"}\n', encoding="utf-8")
+    capsule_record = store.register_file(
+        kind="log",
+        description="test run input capsule",
+        source_path=capsule,
+        evidence_id="run_input_capsule",
+        producer="pipeline",
+        generation_mode="system",
     )
+    requests = captured["human_review_invoker"](
+        SimpleNamespace(
+            findings=[
+                ValidationFinding(
+                    validator="capability_gate",
+                    severity="error",
+                    message="This plan requests an unregistered capability.",
+                    detail={"reason": "capability_review_required"},
+                )
+            ],
+            plan=AnalysisPlan(
+                research_question="Can this capability be used?",
+                steps=[
+                    AnalysisStep(
+                        step_id="01",
+                        intent="Run the requested registered analysis.",
+                    )
+                ],
+            ),
+            evidence=store,
+        )
+    )
+    execution = requests[0].payload["plan_review_authority"]["execution"]
+    assert execution["pipeline_config_sha256"] == agent._config.canonical_digest()
+    assert execution["capability_activation_sha256"]
+    assert execution["run_input_capsule_sha256"] == capsule_record.sha256
     captured["human_review_recorder"](
         [
             {
@@ -1240,9 +1302,21 @@ def test_p0_2_a_warning_with_the_same_reason_does_not_halt_a_run():
     from easyicu.research_agent.orchestration.workflow import (
         human_review_requests_for_plan,
     )
-    from easyicu.research_agent.schema import ValidationFinding
+    from easyicu.research_agent.schema import (
+        AnalysisPlan,
+        AnalysisStep,
+        ValidationFinding,
+    )
 
-    plan = SimpleNamespace(steps=())
+    plan = AnalysisPlan(
+        research_question="Is raw-EHR provenance available?",
+        steps=[
+            AnalysisStep(
+                step_id="01",
+                intent="Assess the requested provenance.",
+            )
+        ],
+    )
     warning = ValidationFinding(
         validator="provenance",
         severity="warning",

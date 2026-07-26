@@ -691,7 +691,11 @@ def test_unreadable_review_evidence_fails_closed():
         HumanReviewAuthorityError,
         human_review_requests_for_plan,
     )
-    from easyicu.research_agent.schema import ValidationFinding
+    from easyicu.research_agent.schema import (
+        AnalysisPlan,
+        AnalysisStep,
+        ValidationFinding,
+    )
 
     class _BrokenEvidence:
         def records(self):
@@ -706,7 +710,15 @@ def test_unreadable_review_evidence_fails_closed():
     with pytest.raises(HumanReviewAuthorityError, match="binds no evidence"):
         human_review_requests_for_plan(
             findings=[finding],
-            plan=SimpleNamespace(revision=1, steps=[SimpleNamespace(step_id="s1")]),
+            plan=AnalysisPlan(
+                research_question="Can this capability be used?",
+                steps=[
+                    AnalysisStep(
+                        step_id="s1",
+                        intent="Run the requested registered analysis.",
+                    )
+                ],
+            ),
             evidence=_BrokenEvidence(),
         )
 
@@ -738,9 +750,7 @@ def test_a_differently_named_duration_no_longer_slips_past(tmp_path):
     from easyicu.table.duration import WindowContractError
 
     with pytest.raises(WindowContractError, match="different dur_var"):
-        rbind_tbl(
-            _win("duration_hours", "hours"), _win("duration_minutes", "minutes")
-        )
+        rbind_tbl(_win("duration_hours", "hours"), _win("duration_minutes", "minutes"))
 
 
 def test_a_different_index_var_is_refused():

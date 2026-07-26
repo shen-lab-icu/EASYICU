@@ -34,6 +34,7 @@ from typing import Any, Callable, Literal, Optional, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ..authority.plan_review import PlanReviewAuthority, ReviewExecutionAuthority
 from ..canonical_json import canonical_sha256
 from ..contracts.runtime import (
     _ExecutePhaseResult,
@@ -207,22 +208,19 @@ HUMAN_REVIEW_FINDING_REASONS: Mapping[str, str] = {
 }
 
 
-def _plan_authority_payload(plan: Any, evidence: Any) -> dict[str, Any]:
+def _plan_authority_payload(
+    plan: Any,
+    evidence: Any,
+    execution_authority: ReviewExecutionAuthority | Mapping[str, Any] | None,
+) -> dict[str, Any]:
     """The plan state a reviewer's signature is a signature *of*.
 
-    Binding only the finding text meant one approval covered any plan that
-    raised the same finding: the reviewer's authority digest did not move when
-    the plan was revised or when the evidence underneath it changed. Including
-    the revision and the source-artefact digests makes the approval specific to
-    what was actually shown, so an edited plan needs a new signature.
+    The nested :class:`PlanReviewAuthority` owns the complete typed plan rather
+    than a hand-maintained subset.  Compatibility fields remain at the top
+    level for existing clients, but they are derived from the same validated
+    packet and are not the security boundary.
     """
 
-    payload: dict[str, Any] = {
-        "plan_revision": getattr(plan, "revision", None),
-        "plan_step_ids": [
-            str(getattr(step, "step_id", "")) for step in getattr(plan, "steps", ())
-        ],
-    }
     digests: dict[str, str] = {}
     if evidence is not None:
         try:
@@ -239,8 +237,27 @@ def _plan_authority_payload(plan: Any, evidence: Any) -> dict[str, Any]:
                 f"store is unreadable ({exc}). An approval that binds no "
                 "evidence would cover any plan, so the review is not offered."
             ) from exc
-    payload["plan_evidence_sha256"] = dict(sorted(digests.items()))
-    return payload
+    try:
+        authority = PlanReviewAuthority.create(
+            plan=plan,
+            evidence_sha256=digests,
+            execution=execution_authority,
+        )
+    except Exception as exc:  # noqa: BLE001 - translated into a control-plane block
+        raise HumanReviewAuthorityError(
+            "cannot build a human-review authority digest from a complete "
+            f"typed analysis plan ({exc}). A partial plan must not be approved."
+        ) from exc
+
+    plan_payload = authority.plan_payload
+    return {
+        "plan_revision": plan_payload["revision"],
+        "plan_step_ids": [
+            str(step["step_id"]) for step in plan_payload.get("steps", ())
+        ],
+        "plan_evidence_sha256": authority.evidence_sha256,
+        "plan_review_authority": authority.model_dump(mode="json"),
+    }
 
 
 def human_review_requests_for_plan(
@@ -248,6 +265,7 @@ def human_review_requests_for_plan(
     findings: Sequence[Any],
     plan: Any = None,
     evidence: Any = None,
+    execution_authority: ReviewExecutionAuthority | Mapping[str, Any] | None = None,
 ) -> tuple[HumanReviewRequest, ...]:
     """Derive the review requests a completed plan phase implies.
 
@@ -260,9 +278,7 @@ def human_review_requests_for_plan(
     changes, so a stale approval cannot be replayed onto revised work.
     """
 
-    requests: list[HumanReviewRequest] = []
-    seen: set[str] = set()
-    plan_authority = _plan_authority_payload(plan, evidence)
+    reviewable: list[tuple[Any, str, str, Mapping[str, Any]]] = []
     for finding in findings or ():
         # Severity is the run's own statement about whether the state blocks.
         # The same reason code can be raised as a warning by a development
@@ -277,6 +293,19 @@ def human_review_requests_for_plan(
             kind = "scientific_stop"
         if kind is None:
             continue
+        reviewable.append((finding, reason, kind, detail))
+
+    if not reviewable:
+        return ()
+
+    requests: list[HumanReviewRequest] = []
+    seen: set[str] = set()
+    plan_authority = _plan_authority_payload(
+        plan,
+        evidence,
+        execution_authority,
+    )
+    for finding, reason, kind, detail in reviewable:
         payload = {
             "validator": getattr(finding, "validator", None),
             "severity": getattr(finding, "severity", None),
