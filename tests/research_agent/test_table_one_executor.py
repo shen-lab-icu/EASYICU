@@ -130,9 +130,17 @@ def _bind_typed_cohort(
 
 def test_table_one_executor_owns_only_the_closed_table_contract():
     assert table_one_executor_owns_step(_step())
-    assert not table_one_executor_owns_step(
-        _step(outputs=["table:table_one", "figure:table_one"])
+    assert table_one_executor_owns_step(
+        _step(
+            outputs=[
+                "table:table_one",
+                "table:cohort_flow",
+                "log:source_row_count_reconciliation",
+            ]
+        )
     )
+    with pytest.raises(ValueError, match="closed host-executable outputs"):
+        _step(outputs=["table:table_one", "figure:table_one"])
 
 
 def test_table_one_executor_does_not_ignore_a_second_typed_artifact():
@@ -224,6 +232,11 @@ def test_table_one_executor_code_passes_preflight_and_executes_exact_spec(
     assert summary["cohort_n"] == 6
     assert summary["output_files"] == {"table:table_one": "table_one.csv"}
     assert summary["adjusted_effect"] is None
+    assert summary["source_row_count_reconciliation"] == {
+        "source_rows": 6,
+        "analyzed_rows": 6,
+        "table_one_filtering_performed": False,
+    }
     assert summary["measurement_provenance_audit"] == {
         "source": "COHORT_PARQUET",
         "checks": [
@@ -237,6 +250,56 @@ def test_table_one_executor_code_passes_preflight_and_executes_exact_spec(
                 "role": "audit_only",
             }
         ],
+    }
+
+
+def test_table_one_executor_emits_optional_denominator_audits(
+    tmp_path, monkeypatch
+):
+    step = _step(
+        outputs=[
+            "table:table_one",
+            "table:cohort_flow",
+            "log:source_row_count_reconciliation",
+        ]
+    )
+    bound = _frame().iloc[[0, 1, 3, 4]].reset_index(drop=True)
+    _, out_dir = _bind_typed_cohort(
+        tmp_path,
+        monkeypatch,
+        bound_frame=bound,
+        raw_frame=_frame(),
+    )
+
+    code = table_one_executor_code(step)
+    assert audit_mechanical_code_contracts(code, step) == []
+    exec(compile(code, "<table-one-executor>", "exec"), {})
+
+    flow = pd.read_csv(out_dir / "cohort_flow.csv")
+    reconciliation = json.loads(
+        (out_dir / "source_row_count_reconciliation.json").read_text("utf-8")
+    )
+    summary = json.loads((out_dir / "step_summary.json").read_text("utf-8"))
+
+    assert flow["count"].tolist() == [6, 4, 4]
+    assert reconciliation == {
+        "schema_version": "easyicu.source_row_count_reconciliation/1",
+        "source": "COHORT_PARQUET",
+        "source_rows": 6,
+        "typed_cohort_input": "artifact:analysis_cohort",
+        "typed_cohort_rows": 4,
+        "final_analyzed_rows": 4,
+        "typed_minus_source": -2,
+        "final_minus_typed": 0,
+        "table_one_filtering_performed": False,
+        "denominator_policy": "All rows in the digest-verified typed cohort",
+    }
+    assert summary["output_files"] == {
+        "table:table_one": "table_one.csv",
+        "table:cohort_flow": "cohort_flow.csv",
+        "log:source_row_count_reconciliation": (
+            "source_row_count_reconciliation.json"
+        ),
     }
 
 
@@ -348,5 +411,5 @@ def test_host_receipt_never_marks_an_unconsumed_binding_loaded(tmp_path):
 
 
 def test_table_one_executor_does_not_silently_claim_a_figure_step():
-    with pytest.raises(ValueError, match="not owned"):
-        table_one_executor_code(_step(outputs=["table:table_one", "figure:table_one"]))
+    with pytest.raises(ValueError, match="closed host-executable outputs"):
+        _step(outputs=["table:table_one", "figure:table_one"])

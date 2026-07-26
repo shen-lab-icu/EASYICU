@@ -233,6 +233,17 @@ def test_fresh_planner_table_one_preserves_typed_design() -> None:
     assert plan.steps[0].table_one_spec.variables[0].test == ("mann_whitney_or_kruskal")
 
 
+def test_table_one_plan_rejects_outputs_without_a_closed_host_owner() -> None:
+    payload = _step(include_spec=True)
+    payload["expected_outputs"] = [
+        "table:table_one",
+        "statistic:locally_reconstructed_result",
+    ]
+
+    with pytest.raises(ValidationError, match="closed host-executable outputs"):
+        AnalysisStep.model_validate(payload)
+
+
 def test_planner_prompt_lists_exact_table_one_enums_and_rejects_shorthand() -> None:
     prompt = PlannerAgent.request_messages(_context())[1].content
 
