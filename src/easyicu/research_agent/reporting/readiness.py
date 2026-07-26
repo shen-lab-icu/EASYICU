@@ -1854,6 +1854,33 @@ def _replan_budget_demotes(
     return not converged_clean
 
 
+def _plan_truncation_status(
+    findings: Sequence[ValidationFinding],
+) -> Dict[str, Any]:
+    """Report whether the plan the run executed is the plan it was given.
+
+    The truncation finding names the expected outputs it dropped. Repeating
+    them here keeps the reason a reader needs — "no calibration figure" — next
+    to the gate it blocks, rather than buried in one warning among hundreds.
+    """
+
+    dropped: list[str] = []
+    truncated = False
+    for finding in findings:
+        detail = getattr(finding, "detail", None) or {}
+        if not isinstance(detail, Mapping) or not detail.get("plan_truncated"):
+            continue
+        truncated = True
+        for output in detail.get("dropped_expected_outputs") or ():
+            text = str(output).strip()
+            if text and text not in dropped:
+                dropped.append(text)
+    return {
+        "plan_truncated": truncated,
+        "plan_truncated_dropped_outputs": dropped,
+    }
+
+
 def _compute_readiness_gates(
     *,
     context: ResearchContext,
@@ -2121,6 +2148,10 @@ def _compute_readiness_gates(
             else None
         ),
     )
+    # Read the FULL findings list, not `active_findings`: supersession retires a
+    # finding when its step later succeeds, and a truncated plan has no such
+    # remedy. The steps were never run, so no later success can speak for them.
+    plan_truncation = _plan_truncation_status(findings)
     publication_ready = publication_authorized(
         manuscript_ready=manuscript_ready,
         publication_figure_bundle_ready=publication["publication_figure_bundle_ready"],
@@ -2132,6 +2163,7 @@ def _compute_readiness_gates(
         article_figure_strategy_complete=figure_strategy[
             "article_figure_strategy_complete"
         ],
+        plan_not_truncated=not plan_truncation["plan_truncated"],
     )
     return {
         **execution,
@@ -2145,6 +2177,7 @@ def _compute_readiness_gates(
         "numeric_verified": numeric_verified,
         "analysis_validated": analysis_validated,
         "manuscript_ready": manuscript_ready,
+        **plan_truncation,
         "replan_budget_exhausted": replan_budget_exhausted,
         "replan_budget_hit": replan_budget_hit,
         "replan_budget_advisory": replan_budget_hit and not replan_budget_exhausted,

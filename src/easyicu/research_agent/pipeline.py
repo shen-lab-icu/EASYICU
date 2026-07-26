@@ -161,7 +161,10 @@ from .reporting.article_contract import (
     validate_plan_against_article_contract,
 )
 from .planning.figure_strategy import build_article_figure_strategy
-from .orchestration.config import PipelineConfig
+from .orchestration.config import (
+    PipelineConfig,
+    assert_step_provider_budget_funds_its_repairs,
+)
 from .resources.capability_runtime import CapabilityWorkflowRuntime
 from .contracts.runtime import (
     RunResult,
@@ -1488,6 +1491,7 @@ class ResearchAgentPipeline:
         max_code_repair_attempts: int = 3,
         max_step_llm_repair_attempts: int = 2,
         max_step_provider_calls: int = 9,
+        allow_underfunded_step_provider_calls: bool = False,
         enable_deterministic_code_fallback: bool = False,
         enable_deterministic_planner_fallback: bool = False,
         enable_deterministic_runner_repair: bool = True,
@@ -1630,6 +1634,18 @@ class ResearchAgentPipeline:
         self._max_code_repair_attempts = max(0, int(max_code_repair_attempts))
         self._max_step_llm_repair_attempts = max(0, int(max_step_llm_repair_attempts))
         self._max_step_provider_calls = max(0, int(max_step_provider_calls))
+        # Checked here rather than only in PipelineConfig: this constructor is
+        # the path every caller in the tree actually takes, and it never builds
+        # a PipelineConfig, so a check that lived only there would guard the
+        # entry point nobody uses. `_enable_llm_concept_audit` is resolved
+        # above, so the reserved audit call is counted only when it is real.
+        assert_step_provider_budget_funds_its_repairs(
+            max_step_provider_calls=self._max_step_provider_calls,
+            max_code_repair_attempts=self._max_code_repair_attempts,
+            max_step_llm_repair_attempts=self._max_step_llm_repair_attempts,
+            llm_concept_audit_enabled=bool(self._enable_llm_concept_audit),
+            allow_underfunded=bool(allow_underfunded_step_provider_calls),
+        )
         self._enable_deterministic_code_fallback = bool(
             enable_deterministic_code_fallback
         )

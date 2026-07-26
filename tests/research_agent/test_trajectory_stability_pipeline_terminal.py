@@ -601,6 +601,25 @@ def test_trajectory_stability_terminal_failures_never_enter_repair_or_fallback(
     if expected_runner_calls:
         assert runner.timeout_seconds == 1_234.0
         assert stability_record["execution_timeout_seconds"] == 1_234.0
+    if stability_mode == "runtime_timeout":
+        # This executor holds the largest wall clock in the pipeline, so it is
+        # the one whose failures most need to be told apart: "it raised" and
+        # "it ran out of time" both arrive here as executor_runtime_failure.
+        # The class is what separates them, in the same vocabulary generated
+        # code already uses.
+        assert stability_record["runtime_failure_class"] == "execution_timeout"
+        timeout_findings = [
+            finding
+            for finding in partial.get("findings") or []
+            if finding.get("validator") == "runtime_execution_timeout"
+        ]
+        assert timeout_findings, "a killed executor must say which clock killed it"
+        assert timeout_findings[0]["detail"]["timeout_seconds"] == 1_234.0
+        assert timeout_findings[0]["detail"]["deterministic_executor_used"] is True
+    if stability_mode == "ok_contract_error":
+        # Negative control: a non-timeout terminal failure must not be
+        # relabelled as a timeout just because it reached the same branch.
+        assert stability_record.get("runtime_failure_class") != "execution_timeout"
     if stability_mode == "unsafe_runtime_timeout":
         assert stability_record["outputs_safe_to_collect"] is False
     assert "04_characterization" not in runner.calls

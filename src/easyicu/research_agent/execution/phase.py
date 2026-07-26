@@ -9739,6 +9739,34 @@ def run_execute_phase(
                 _remove_standard_executor_pending_artifacts(run_result.out_dir)
                 standard_executor_terminal_block = True
                 standard_executor_terminal_reason = "executor_runtime_failure"
+                # This branch is already terminal and already spends no repair,
+                # so it is safe. It is not diagnosable: the executor with the
+                # largest wall clock in the pipeline reports the same generic
+                # reason whether it raised in its first second or was killed an
+                # hour in. Name the timeout in the vocabulary generated code
+                # already uses, and leave the terminal decision above untouched.
+                #
+                # Only the timeout class is adopted. The classifier also reads a
+                # plan/data contract failure out of the log text, and this
+                # executor's log is not the log that vocabulary was written for.
+                timeout_decision = (
+                    classify_runtime_failure(
+                        run_log=run_log,
+                        timed_out=True,
+                        step_id=step.step_id,
+                        returncode=run_result.returncode,
+                        timeout_seconds=execution_timeout_seconds,
+                        deterministic_executor_used=True,
+                    )
+                    if run_result.timed_out
+                    else None
+                )
+                if timeout_decision is not None:
+                    step_record["runtime_failure_class"] = (
+                        timeout_decision.step_updates["runtime_failure_class"]
+                    )
+                    with shared_lock:
+                        findings.append(timeout_decision.finding)
                 break
             runtime_failure = classify_runtime_failure(
                 run_log=run_log,
