@@ -47,6 +47,48 @@ Dispatcher = Callable[[str, Optional[dict[str, Any]]], dict[str, Any]]
 ServerFactory = Callable[..., Server]
 
 
+class _BoundedDispatcher:
+    """Keep a concurrency slot until the real synchronous call returns.
+
+    AnyIO's ``abandon_on_cancel=True`` releases its capacity-limiter token when
+    the *waiting request* is cancelled, even though the worker thread continues.
+    Repeated request timeouts could therefore accumulate unbounded live
+    dispatchers. This supervisor separates request lifetime from worker
+    lifetime: cancellation abandons the result, not the occupied slot.
+    """
+
+    def __init__(self, capacity: int) -> None:
+        self._slots = asyncio.Semaphore(capacity)
+
+    async def run(
+        self,
+        invoke: Callable[[], dict[str, Any]],
+        *,
+        state: dict[str, bool],
+    ) -> dict[str, Any]:
+        await self._slots.acquire()
+        state["started"] = True
+        try:
+            # asyncio.to_thread preserves the request ContextVars carrying MCP
+            # scopes and patient-data authority.
+            task = asyncio.create_task(asyncio.to_thread(invoke))
+        except BaseException:
+            self._slots.release()
+            raise
+        task.add_done_callback(self._worker_finished)
+        # The request may time out or be cancelled; the synchronous dispatcher
+        # cannot be killed safely and retains the slot until this task finishes.
+        return await asyncio.shield(task)
+
+    def _worker_finished(self, task: asyncio.Task[dict[str, Any]]) -> None:
+        self._slots.release()
+        if not task.cancelled():
+            # Retrieve an abandoned worker exception so asyncio does not emit
+            # "Task exception was never retrieved". An active waiter still
+            # receives the same exception when awaiting the task.
+            task.exception()
+
+
 def _json_safe(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Return a JSON-compatible copy for both MCP result surfaces."""
 
@@ -63,9 +105,10 @@ def create_mcp_server(
 ) -> Server:
     """Build the official low-level SDK server around EasyICU contracts.
 
-    ``tool_timeout_seconds`` bounds how long the protocol request waits.  The
+    ``tool_timeout_seconds`` bounds how long the protocol request waits. The
     dispatcher is synchronous, so a timed-out worker is allowed to finish
-    inside the same bounded capacity limiter instead of being unsafely killed.
+    inside a slot that remains occupied until the actual call returns instead
+    of being unsafely killed or leaking concurrency capacity.
     """
 
     if max_concurrent_tool_calls <= 0:
@@ -81,7 +124,7 @@ def create_mcp_server(
             "scope, disclosure, evidence and patient-data audit policies."
         ),
     )
-    limiter = anyio.CapacityLimiter(max_concurrent_tool_calls)
+    dispatcher_supervisor = _BoundedDispatcher(max_concurrent_tool_calls)
 
     @server.list_tools()
     async def _list_tools() -> list[mcp_types.Tool]:
@@ -93,19 +136,18 @@ def create_mcp_server(
         arguments: dict[str, Any],
     ) -> mcp_types.CallToolResult:
         invoke = partial(dispatcher, name, dict(arguments))
+        dispatch_state = {"started": False}
         try:
             if tool_timeout_seconds is None:
-                result = await anyio.to_thread.run_sync(
+                result = await dispatcher_supervisor.run(
                     invoke,
-                    abandon_on_cancel=True,
-                    limiter=limiter,
+                    state=dispatch_state,
                 )
             else:
                 with anyio.fail_after(tool_timeout_seconds):
-                    result = await anyio.to_thread.run_sync(
+                    result = await dispatcher_supervisor.run(
                         invoke,
-                        abandon_on_cancel=True,
-                        limiter=limiter,
+                        state=dispatch_state,
                     )
         except TimeoutError:
             result = {
@@ -113,6 +155,11 @@ def create_mcp_server(
                     f"tool {name!r} exceeded the configured MCP request timeout"
                 ),
                 "error_code": "tool_timeout",
+                # True means the synchronous worker may still finish after this
+                # response; false means the request timed out waiting for a
+                # slot and its dispatcher was never started.
+                "dispatch_started": dispatch_state["started"],
+                "execution_may_continue": dispatch_state["started"],
             }
 
         safe_result = _json_safe(result)
