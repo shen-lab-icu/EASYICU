@@ -205,6 +205,54 @@ def test_planner_uses_enough_completion_budget(ra):
     assert llm.calls[0][1]["max_tokens"] >= 4096
 
 
+def test_planner_retry_projection_keeps_structure_and_bounds_prose() -> None:
+    from easyicu.research_agent.agents.core import (
+        _PLANNER_RETRY_PROJECTION_BYTE_LIMIT,
+        _planner_retry_response_projection,
+    )
+
+    raw = json.dumps(
+        {
+            "analysis_type": "association",
+            "rationale": "long prose " * 5_000,
+            "steps": [
+                {
+                    "step_id": "01_primary",
+                    "planned_analysis_role": "primary",
+                    "intent": "long intent " * 2_000,
+                    "inputs": ["exposure_max", "death"],
+                    "expected_outputs": ["table:adjusted_association_estimates"],
+                    "method": "adjusted_association_models",
+                    "model_requirements": [
+                        {
+                            "requirement_id": "primary",
+                            "outcome": "death",
+                            "exposure_source": "exposure_max",
+                        }
+                    ],
+                }
+            ],
+            "robustness_specs": [
+                {
+                    "spec_id": "complete_case",
+                    "axis": "missing",
+                    "missing_override": {"strategy": "complete_case"},
+                }
+            ],
+        }
+    )
+
+    projected = _planner_retry_response_projection(raw)
+    payload = json.loads(projected)
+
+    assert len(projected.encode("utf-8")) <= _PLANNER_RETRY_PROJECTION_BYTE_LIMIT
+    assert payload["steps"][0]["inputs"] == ["exposure_max", "death"]
+    assert payload["steps"][0]["model_requirements"][0]["outcome"] == "death"
+    assert payload["robustness_specs"][0]["spec_id"] == "complete_case"
+    assert "rationale" not in payload
+    assert "intent" not in payload["steps"][0]
+
+
 def test_planner_retries_dictionary_concept_absent_from_sealed_typed_input(
     tmp_path,
 ):

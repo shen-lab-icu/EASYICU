@@ -101,6 +101,7 @@ def call_llm_with_structured_retry(
     temperature: float = 0.2,
     format_reminder: str = "",
     include_failed_response_on_retry: bool = True,
+    failed_response_transform: Optional[Callable[[str], str]] = None,
     feedback_preamble: str = _DEFAULT_FEEDBACK_PREAMBLE,
     feedback_instructions: str = _DEFAULT_FEEDBACK_INSTRUCTIONS,
 ) -> T:
@@ -139,6 +140,11 @@ def call_llm_with_structured_retry(
         conversation. Disable this for large, self-contained structured
         outputs when the immutable base prompt plus validator feedback is
         sufficient to regenerate the object without inflating every retry.
+    failed_response_transform:
+        Optional host-owned projection applied to the failed response before
+        it is included in the next request. This lets callers preserve
+        corrective structure while removing bulky prose. The original
+        response remains unchanged in attempt and reproducibility records.
     feedback_preamble, feedback_instructions:
         Override the default natural-language feedback wrapping if a
         role needs different phrasing.
@@ -191,9 +197,13 @@ def call_llm_with_structured_retry(
             feedback_message = "\n".join(feedback_parts)
             retry_messages: List[LLMMessage] = []
             if include_failed_response_on_retry:
-                retry_messages.append(
-                    LLMMessage(role="assistant", content=raw or "")
-                )
+                failed_response = raw or ""
+                if failed_response_transform is not None:
+                    failed_response = failed_response_transform(failed_response)
+                if failed_response:
+                    retry_messages.append(
+                        LLMMessage(role="assistant", content=failed_response)
+                    )
             retry_messages.append(
                 LLMMessage(role="user", content=feedback_message)
             )
