@@ -32,6 +32,9 @@ jobs:
 
       - name: Enforce architecture and dependency boundaries
         run: |
+          # Deptry's configured DEP002 exception means this proves missing,
+          # transitive and misplaced dependency hygiene; intentionally unused
+          # optional/dev declarations remain outside this gate.
           lint-imports --no-cache
           python -m deptry src/easyicu --no-ansi
 

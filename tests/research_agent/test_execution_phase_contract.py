@@ -59,6 +59,25 @@ def test_llm_authority_signature_binds_endpoint_options_and_fallback_order() -> 
     assert llm_signature(fallback_ab) != llm_signature(fallback_ba)
 
 
+def test_pipeline_cache_identifies_contextual_mocks_without_importing_them() -> None:
+    from easyicu.research_agent.authority.pipeline_cache import (
+        iter_mock_clients,
+        llm_signature,
+    )
+    from easyicu.research_agent.providers.llm import LLMRouter
+    from easyicu.research_agent.providers.mocks import (
+        MockLLMClient,
+        PatternScriptedMockLLMClient,
+    )
+
+    default = MockLLMClient()
+    scripted = PatternScriptedMockLLMClient([])
+    router = LLMRouter(default=default, planner=scripted)
+
+    assert llm_signature(default) == "mock"
+    assert list(iter_mock_clients(router)) == [default, scripted]
+
+
 def test_capsule_checkpoint_upsert_never_overwrites_prior_terminal_attempt() -> None:
     from easyicu.research_agent.execution.phase import (
         _append_terminal_step_record,
