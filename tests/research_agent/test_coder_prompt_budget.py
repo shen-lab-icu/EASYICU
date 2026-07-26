@@ -10,6 +10,7 @@ from easyicu.research_agent.agents.core import (
     CoderAgent,
     CoderPromptBudgetError,
     _compact_repair_scope_contract,
+    _repair_specialization,
     _typed_input_scope_contract,
 )
 from easyicu.research_agent.repairs.patch import PATCH_FORMAT
@@ -180,6 +181,68 @@ def test_measurement_provenance_contract_never_binds_value_availability(ra):
     assert "`measured == (count > 0)`" in contract
     assert "does not require the related value column to be non-missing" in contract
     assert "Never compare value availability" in contract
+
+
+def test_typed_input_contract_exposes_exact_stable_descriptive_helper_apis(ra):
+    step = ra.AnalysisStep(
+        step_id="summarize",
+        intent="Summarize declared closed distributions.",
+        inputs=["status", "signal_measured", "signal_n"],
+        expected_outputs=["table:summary"],
+        method="descriptive",
+    )
+
+    contract = _typed_input_scope_contract(step)
+
+    assert (
+        "closed_categorical_counts(series, declared_levels=levels).table" in contract
+    )
+    assert "returns columns `level` and `count`" in contract
+    assert (
+        "measurement_provenance_receipt(frame, measured_column=..., "
+        "count_column=...)"
+    ) in contract
+    assert "Never inspect helper signatures" in contract
+    assert "build compatibility adapters" in contract
+
+
+def test_helper_signature_repair_receives_exact_stable_api_contract(ra):
+    authority = RepairPromptAuthority.create(
+        findings=[
+            ValidationFinding(
+                validator="mechanical_code_preflight",
+                severity="error",
+                message="A host helper call violates its stable argument contract.",
+                detail={
+                    "reason": "host_helper_call_signature_invalid",
+                    "helper_name": "closed_categorical_counts",
+                    "line": 4,
+                    "violations": [
+                        "required_keyword_only_argument_missing",
+                        "unknown_keyword_argument",
+                    ],
+                },
+            )
+        ]
+    )
+
+    guidance = _repair_specialization(
+        context=_wide_context(ra, n_families=1),
+        repair_authority=authority,
+        code=(
+            "closed_categorical_counts("
+            "series, allowed_values=levels, variable_name=name)"
+        ),
+    )
+
+    assert "DIAGNOSED HOST-HELPER API REPAIR" in guidance
+    assert (
+        "closed_categorical_counts(series, declared_levels=levels).table"
+        in guidance
+    )
+    assert "measurement_provenance_receipt(frame" in guidance
+    assert "`inspect.signature`" in guidance
+    assert "do not add inputs or choose new levels" in guidance
 
 
 def test_typed_input_contract_validates_used_values_without_fabricating_nulls(ra):
