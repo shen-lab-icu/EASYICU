@@ -34,6 +34,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 from pydantic import ValidationError
 
+from .authority.step_recovery import StepRecoverySignature
 from .contracts.declared_product import (
     PLAN_MATERIALIZABLE_TYPED_OUTPUT_KINDS,
     RUNTIME_BINDABLE_TYPED_INPUT_KINDS,
@@ -2712,6 +2713,20 @@ def _typed_plan_dag_findings(plan: AnalysisPlan) -> List[ValidationFinding]:
     return findings
 
 
+def _step_recovery_contract(step: AnalysisStep) -> dict[str, Any]:
+    """Persist the inspectable recovery identity of one dropped plan step."""
+
+    signature = StepRecoverySignature.from_step(step)
+    return {
+        "step_id": signature.step_id,
+        "planned_analysis_role": signature.planned_analysis_role,
+        "method": signature.method,
+        "expected_outputs": list(signature.expected_outputs),
+        "recovery_signature": signature.model_dump(mode="json"),
+        "recovery_signature_sha256": signature.canonical_digest(),
+    }
+
+
 def _cap_plan_preserving_figure_steps(
     *,
     plan: AnalysisPlan,
@@ -2936,21 +2951,7 @@ def _cap_plan_preserving_figure_steps(
         }
     )
     dropped_step_products = [
-        {
-            "step_id": str(step.step_id).strip(),
-            "planned_analysis_role": str(step.planned_analysis_role).strip(),
-            # Recorded so recovery can be judged on the scientific approach and
-            # not only on the step's shell: the same id, role and output name
-            # can come back carrying an entirely different method.
-            "method": str(getattr(step, "method", "") or "").strip(),
-            "expected_outputs": sorted(
-                {
-                    str(output).strip()
-                    for output in (step.expected_outputs or ())
-                    if str(output).strip()
-                }
-            ),
-        }
+        _step_recovery_contract(step)
         for step in steps
         if step.step_id in set(dropped_ids)
     ]

@@ -21,6 +21,7 @@ from easyicu.research_agent.orchestration.config import (
     PipelineConfig,
     step_provider_call_entitlement,
 )
+from easyicu.research_agent.canonical_json import canonical_sha256
 from easyicu.research_agent.plan_utils import _cap_plan_preserving_figure_steps
 from easyicu.research_agent.reporting.completion import publication_authorized
 from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
@@ -250,6 +251,23 @@ def test_truncation_names_the_products_the_analysis_no_longer_has() -> None:
         for contract in step_products
         for output in contract["expected_outputs"]
     } == set(dropped_outputs)
+    for contract in step_products:
+        signature = contract["recovery_signature"]
+        assert signature["schema_version"] == "easyicu.step_recovery_signature/1"
+        assert contract["recovery_signature_sha256"] == canonical_sha256(signature)
+        assert set(signature) == {
+            "schema_version",
+            "step_id",
+            "planned_analysis_role",
+            "method",
+            "inputs",
+            "expected_outputs",
+            "icu_rule_refs",
+            "model_requirements",
+            "input_consumption_contracts",
+            "table_one_spec",
+            "trajectory_stability_spec",
+        }
     # Every named product really belongs to a dropped step, and none belongs
     # to a step that survived.
     dropped_ids = set(detail["dropped_step_ids"])
@@ -466,6 +484,48 @@ def test_restoring_the_same_method_does_clear_the_block() -> None:
     assert status["plan_truncated"] is False
     assert status["plan_truncation_recorded"] is True
     assert _authorized(plan_not_truncated=not status["plan_truncated"]) is True
+
+
+@pytest.mark.parametrize(
+    ("field", "original", "replacement"),
+    [
+        (
+            "inputs",
+            ["table:primary_cox_model", "exposure:a", "covariate:age"],
+            ["table:secondary_cox_model", "exposure:b"],
+        ),
+        ("icu_rule_refs", ["rule:primary_adjustment"], ["rule:unadjusted"]),
+    ],
+)
+def test_recovery_signature_rejects_changed_structured_science(
+    field: str,
+    original: list[str],
+    replacement: list[str],
+) -> None:
+    """Same shell and method cannot hide a changed model/input contract."""
+
+    from easyicu.research_agent.reporting.readiness import _plan_truncation_status
+
+    over_cap = _plan_with_products(4)
+    over_cap.steps[3] = over_cap.steps[3].model_copy(
+        update={
+            "method": "schoenfeld_residual_test",
+            field: original,
+        }
+    )
+    _capped, findings = _cap_plan_preserving_figure_steps(plan=over_cap, cap=3)
+
+    final_plan = _plan_with_products(4)
+    final_plan.steps[3] = final_plan.steps[3].model_copy(
+        update={
+            "method": "schoenfeld_residual_test",
+            field: replacement,
+        }
+    )
+    status = _plan_truncation_status(findings, plan=final_plan)
+
+    assert status["plan_truncated"] is True
+    assert status["plan_truncated_dropped_step_ids"] == ["04_step"]
 
 
 def test_a_final_plan_that_never_regained_the_products_stays_blocked(
