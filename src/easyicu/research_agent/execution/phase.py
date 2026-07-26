@@ -150,7 +150,11 @@ from ..authority.execution_input import ExecutionInputAuthorityState
 from ..authority.execution_identity import (
     execution_identity_for_pipeline as _execution_identity,
 )
-from ..intake.materialized_metadata import MaterializedMetadataError
+from ..intake.materialized_metadata import (
+    MaterializedMetadataError,
+    load_verified_materialized_cohort_authority,
+    materialized_provenance_path,
+)
 from ..intake.materialized_trajectory import (
     MaterializedTrajectoryError,
     StagedTrajectoryBinding,
@@ -781,6 +785,117 @@ def _planner_locked_cohort_prompt_payload(plan: AnalysisPlan) -> str:
     cohort = plan.model_dump(mode="json", include={"cohort"}).get("cohort")
     return json.dumps(
         cohort,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _planner_materialized_cohort_prompt_payload(
+    *,
+    plan: AnalysisPlan,
+    universe_path: Path,
+    analysis_cohort_path: Path,
+) -> str:
+    """Return a verified execution receipt for the Planner-owned predicates.
+
+    The host already applies the locked cohort definition before execution.
+    This projection gives the Coder the resulting physical column bindings and
+    row-accounting checks without exposing row identities or choosing any new
+    scientific rule.
+    """
+
+    analysis_cohort_path = Path(analysis_cohort_path)
+    verified = load_verified_materialized_cohort_authority(analysis_cohort_path)
+    if verified is not None:
+        raw_provenance = verified.authority.to_dict()["semantic_provenance"]
+        if not isinstance(raw_provenance, Mapping):
+            raise MaterializedMetadataError(
+                "typed analysis cohort provenance is not an object"
+            )
+        provenance = dict(raw_provenance)
+        identity_column: Optional[str] = verified.authority.identity_column
+        row_identity_sha256: Optional[str] = verified.authority.row_identity_sha256
+        authority_sha256: Optional[str] = verified.reference.sha256
+        authoritative_rows = verified.authority.cohort_rows
+    else:
+        provenance_path = materialized_provenance_path(analysis_cohort_path)
+        if provenance_path.is_symlink() or not provenance_path.is_file():
+            raise MaterializedMetadataError(
+                "analysis cohort provenance is unavailable for Coder authority"
+            )
+        try:
+            provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise MaterializedMetadataError(
+                "analysis cohort provenance is unreadable for Coder authority"
+            ) from exc
+        if not isinstance(provenance, dict):
+            raise MaterializedMetadataError(
+                "analysis cohort provenance is not an object"
+            )
+        if provenance.get("cohort_parquet_sha256") != sha256_of_file(
+            analysis_cohort_path
+        ):
+            raise MaterializedMetadataError(
+                "legacy analysis cohort provenance digest changed"
+            )
+        identity_column = None
+        row_identity_sha256 = None
+        authority_sha256 = None
+        authoritative_rows = provenance.get("n_analysis_cohort")
+
+    planner_cohort = plan.model_dump(mode="json", include={"cohort"}).get("cohort")
+    flow = provenance.get("cohort_flow")
+    if (
+        provenance.get("cohort_definition") != planner_cohort
+        or not isinstance(flow, list)
+        or not flow
+        or any(not isinstance(row, dict) for row in flow)
+    ):
+        raise MaterializedMetadataError(
+            "analysis cohort execution receipt does not match the active plan"
+        )
+    try:
+        n_universe = int(provenance["n_universe"])
+        n_analysis_cohort = int(provenance["n_analysis_cohort"])
+        authoritative_rows_int = int(authoritative_rows)
+        first_before = int(flow[0]["n_before"])
+        first_remaining = int(flow[0]["n_remaining"])
+        final_remaining = int(flow[-1]["n_remaining"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise MaterializedMetadataError(
+            "analysis cohort execution receipt has invalid row accounting"
+        ) from exc
+    if (
+        flow[0].get("predicate_kind") != "universe"
+        or first_before != n_universe
+        or first_remaining != n_universe
+        or final_remaining != n_analysis_cohort
+        or authoritative_rows_int != n_analysis_cohort
+    ):
+        raise MaterializedMetadataError(
+            "analysis cohort execution receipt row accounting changed"
+        )
+
+    receipt = {
+        "schema_version": "easyicu.primary_cohort_execution_prompt/1",
+        "cohort_definition_sha256": provenance.get("cohort_sha256"),
+        "raw_universe": {
+            "rows": n_universe,
+            "sha256": sha256_of_file(universe_path),
+        },
+        "authoritative_analysis_cohort": {
+            "rows": n_analysis_cohort,
+            "sha256": sha256_of_file(analysis_cohort_path),
+            "identity_column": identity_column,
+            "row_identity_sha256": row_identity_sha256,
+            "authority_sha256": authority_sha256,
+        },
+        "ordered_predicate_flow": flow,
+    }
+    return json.dumps(
+        receipt,
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
@@ -5207,6 +5322,19 @@ def run_execute_phase(
             locked_cohort_payload=(
                 _planner_locked_cohort_prompt_payload(plan)
                 if primary_cohort_uses_universe
+                else None
+            ),
+            materialized_execution_payload=(
+                _planner_materialized_cohort_prompt_payload(
+                    plan=plan,
+                    universe_path=universe_path,
+                    analysis_cohort_path=run_input_authority_state.analysis_path,
+                )
+                if primary_cohort_uses_universe
+                and bool(
+                    getattr(plan.cohort, "inclusion", ())
+                    or getattr(plan.cohort, "exclusion", ())
+                )
                 else None
             ),
         )

@@ -109,7 +109,7 @@ def bind_step_execution_cohort(
     resolved_input_bindings: Mapping[str, Mapping[str, Any]],
     step_record: MutableMapping[str, Any],
 ) -> Path:
-    """Select the step cohort and record an exact typed-input override."""
+    """Select the step cohort and bind its exact bytes into the step record."""
 
     selected = bound_step_execution_cohort_path(
         run_dir=run_dir,
@@ -117,12 +117,13 @@ def bind_step_execution_cohort(
         resolved_input_bindings=resolved_input_bindings,
     )
     if selected != Path(fallback_path).resolve():
-        step_record.update(
-            {
-                "execution_cohort_role": "resolved_typed_analysis_cohort",
-                "execution_cohort_sha256": sha256_of_file(selected),
-            }
+        step_record["execution_cohort_role"] = "resolved_typed_analysis_cohort"
+    else:
+        step_record.setdefault(
+            "execution_cohort_role",
+            "run_level_execution_cohort",
         )
+    step_record["execution_cohort_sha256"] = sha256_of_file(selected)
     return selected
 
 
