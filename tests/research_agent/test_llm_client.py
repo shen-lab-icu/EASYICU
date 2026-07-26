@@ -383,11 +383,46 @@ def test_openai_client_supports_local_noauth_proxy_mode(monkeypatch, ra):
     assert http_client.calls[0][0] == "/chat/completions"
     assert http_client.calls[0][1]["model"] == "gpt-5.4"
     assert http_client.calls[0][1]["seed"] == 7
+    assert http_client.calls[0][1]["max_completion_tokens"] == 2048
+    assert "max_tokens" not in http_client.calls[0][1]
     assert client.last_usage == {
         "prompt_tokens": 12,
         "completion_tokens": 4,
         "total_tokens": 16,
     }
+
+
+def test_openai_client_uses_legacy_token_cap_for_non_reasoning_model(
+    monkeypatch, ra
+):
+    from easyicu.research_agent.providers.llm import LLMMessage, OpenAIClient
+
+    captured = {}
+
+    class _Completions:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+            message = SimpleNamespace(content="OK")
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(message=message, finish_reason="stop")
+                ],
+                usage=None,
+            )
+
+    client = _mock_transport_client(
+        monkeypatch,
+        OpenAIClient,
+        model="gpt-4o-mini",
+        completions=_Completions(),
+    )
+
+    assert client.complete(
+        [LLMMessage(role="user", content="return OK")],
+        max_tokens=77,
+    ) == "OK"
+    assert captured["max_tokens"] == 77
+    assert "max_completion_tokens" not in captured
 
 
 def test_openai_client_zero_manual_retry_budget_makes_one_attempt(monkeypatch, ra):

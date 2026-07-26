@@ -378,6 +378,40 @@ def test_usage_beyond_provider_overhead_reservation_still_fails_closed(tmp_path)
     assert record["accounted_tokens"] == 9_999
 
 
+def test_completion_usage_cannot_hide_inside_prompt_overhead_reservation(tmp_path):
+    from easyicu.research_agent.authority.provider_hard_stop import (
+        ProviderHardStopExceeded,
+        consume_active_provider_hard_stop_attempt,
+        provider_hard_stop_call_scope,
+    )
+
+    ledger = _ledger(tmp_path)
+    task = ledger.start_task("E1")
+    with provider_hard_stop_call_scope(
+        task=task,
+        role="writer",
+        model="gpt-5.6-luna",
+        messages=_message("repeat ALPHA"),
+        max_tokens=24,
+    ) as call:
+        consume_active_provider_hard_stop_attempt()
+        with pytest.raises(
+            ProviderHardStopExceeded,
+            match="PROVIDER_COMPLETION_USAGE_EXCEEDED_RESERVATION",
+        ):
+            call.complete(
+                {
+                    "prompt_tokens": 324,
+                    "completion_tokens": 500,
+                    "total_tokens": 824,
+                }
+            )
+
+    record = ledger.snapshot()["tasks"][0]["calls"][0]
+    assert record["state"] == "completed_usage_overflow"
+    assert record["reported_completion_tokens"] == 500
+
+
 def test_provider_request_timeout_is_capped_by_task_wall_clock(
     tmp_path, monkeypatch
 ):

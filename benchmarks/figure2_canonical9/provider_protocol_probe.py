@@ -33,7 +33,7 @@ from easyicu.research_agent.providers.hard_stop import HardStopClient
 from easyicu.research_agent.providers.protocol import LLMMessage
 
 
-PROVIDER_PROTOCOL_PROBE_SCHEMA = "easyicu.provider_protocol_probe/1"
+PROVIDER_PROTOCOL_PROBE_SCHEMA = "easyicu.provider_protocol_probe/2"
 PROVIDER_PROTOCOL_REPORT_FILENAME = "provider_protocol_probe.json"
 PROVIDER_PROTOCOL_LEDGER_FILENAME = "provider_protocol_ledger.json"
 PROVIDER_PROTOCOL_CALL_COUNT = 6
@@ -239,10 +239,10 @@ def _probe_specs() -> tuple[ProbeSpec, ...]:
                 ),
                 LLMMessage(
                     role="user",
-                    content="Repeat the token ALPHA exactly 200 times.",
+                    content="Repeat the token ALPHA exactly 1000 times.",
                 ),
             ),
-            max_tokens=24,
+            max_tokens=256,
             validator=_validate_nonempty,
         ),
     )
@@ -392,6 +392,12 @@ def run_provider_protocol_probe(
                 raise ProviderProtocolProbeError(
                     f"{spec.name} returned no authoritative usage"
                 )
+            completion_tokens = int(usage.get("completion_tokens") or 0)
+            if completion_tokens > spec.max_tokens:
+                raise ProviderProtocolProbeError(
+                    f"{spec.name} ignored the completion-token cap: "
+                    f"{completion_tokens}>{spec.max_tokens}"
+                )
             finish_reason = getattr(client, "last_finish_reason", None)
             if not isinstance(finish_reason, str) or not finish_reason:
                 raise ProviderProtocolProbeError(
@@ -420,6 +426,7 @@ def run_provider_protocol_probe(
                     },
                     "latency_seconds": latency,
                     "reasoning_marker_exposed": False,
+                    "completion_cap_enforced": True,
                     "validation": validation,
                 }
             )

@@ -704,7 +704,24 @@ class ProviderHardStopLedger:
                 max(0, int(usage.get("total_tokens") or 0)),
             )
             reserved_total = int(call.get("accounted_tokens") or 0)
-            if reported_total > reserved_total:
+            reserved_completion = int(
+                call.get("completion_token_reservation") or 0
+            )
+            overflow_code: Optional[str] = None
+            overflow_detail: Optional[str] = None
+            if completion_tokens > reserved_completion:
+                overflow_code = "PROVIDER_COMPLETION_USAGE_EXCEEDED_RESERVATION"
+                overflow_detail = (
+                    f"Provider reported {completion_tokens} completion tokens after "
+                    f"a {reserved_completion}-token completion reservation"
+                )
+            elif reported_total > reserved_total:
+                overflow_code = "PROVIDER_USAGE_EXCEEDED_RESERVATION"
+                overflow_detail = (
+                    f"Provider reported {reported_total} tokens after a "
+                    f"{reserved_total}-token reservation"
+                )
+            if overflow_code is not None:
                 call["state"] = "completed_usage_overflow"
                 call["reported_prompt_tokens"] = prompt_tokens
                 call["reported_completion_tokens"] = completion_tokens
@@ -724,11 +741,8 @@ class ProviderHardStopLedger:
                 ) / 1_000_000.0
                 self._persist_locked()
                 raise ProviderHardStopExceeded(
-                    code="PROVIDER_USAGE_EXCEEDED_RESERVATION",
-                    detail=(
-                        f"Provider reported {reported_total} tokens after a "
-                        f"{reserved_total}-token reservation"
-                    ),
+                    code=overflow_code,
+                    detail=str(overflow_detail),
                 )
             call["state"] = "completed"
             call["reported_prompt_tokens"] = prompt_tokens
