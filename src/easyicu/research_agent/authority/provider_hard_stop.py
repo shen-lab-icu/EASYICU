@@ -39,6 +39,12 @@ import uuid
 
 PROVIDER_HARD_STOP_SCHEMA = "easyicu.provider_hard_stop_ledger/1"
 PROVIDER_PROMPT_OVERHEAD_TOKEN_RESERVATION = 4096
+# OpenAI OAuth gateways can legitimately strip caller-supplied output caps
+# before forwarding to the ChatGPT internal endpoint. Reserve the published
+# GPT-5 maximum output envelope before every paid attempt so token/cost stop
+# losses remain pre-transport even when the serving path cannot enforce the
+# requested per-response cap. Successful calls release the difference.
+PROVIDER_COMPLETION_TOKEN_RESERVATION_FLOOR = 128_000
 _MAX_LEDGER_BYTES = 16 * 1024 * 1024
 _TERMINAL_TASK_STATES = frozenset(
     {"completed", "failed", "batch_canary_blocked", "budget_exhausted"}
@@ -569,7 +575,11 @@ class ProviderHardStopLedger:
             )
         self.assert_task_active(task_id)
         prompt_reserve = _prompt_token_reservation(messages)
-        completion_reserve = max(1, int(max_tokens))
+        requested_completion = max(1, int(max_tokens))
+        completion_reserve = max(
+            requested_completion,
+            PROVIDER_COMPLETION_TOKEN_RESERVATION_FLOOR,
+        )
         token_reserve = prompt_reserve + completion_reserve
         cost_reserve = (
             prompt_reserve * self.limits.input_cost_usd_per_million_tokens
@@ -653,7 +663,11 @@ class ProviderHardStopLedger:
                     "provider_prompt_overhead_token_reservation": (
                         PROVIDER_PROMPT_OVERHEAD_TOKEN_RESERVATION
                     ),
+                    "requested_completion_tokens": requested_completion,
                     "completion_token_reservation": completion_reserve,
+                    "provider_completion_token_reservation_floor": (
+                        PROVIDER_COMPLETION_TOKEN_RESERVATION_FLOOR
+                    ),
                     "accounted_tokens": token_reserve,
                     "reported_prompt_tokens": None,
                     "reported_completion_tokens": None,
@@ -925,6 +939,7 @@ def consume_active_provider_hard_stop_attempt() -> Optional[float]:
 
 __all__ = [
     "PROVIDER_HARD_STOP_SCHEMA",
+    "PROVIDER_COMPLETION_TOKEN_RESERVATION_FLOOR",
     "PROVIDER_PROMPT_OVERHEAD_TOKEN_RESERVATION",
     "ProviderHardStopError",
     "ProviderHardStopExceeded",

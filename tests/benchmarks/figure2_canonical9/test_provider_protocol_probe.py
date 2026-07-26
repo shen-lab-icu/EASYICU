@@ -62,6 +62,8 @@ def test_protocol_probe_is_six_call_bounded_and_stores_no_response_text(
     assert report["transport_attempts"] == 6
     assert report["transport_retries"] == 0
     assert report["truncation_finish_reason"] == "length"
+    assert report["provider_completion_cap_enforced"] is True
+    assert report["hard_stop_completion_token_reservation_per_attempt"] == 128_000
     serialized = json.dumps(report)
     assert "Toy result." not in serialized
     assert "def summarize" not in serialized

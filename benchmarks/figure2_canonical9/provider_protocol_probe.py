@@ -26,6 +26,7 @@ from typing import Any, Callable, Mapping, Sequence
 from urllib.parse import urlparse
 
 from easyicu.research_agent.authority.provider_hard_stop import (
+    PROVIDER_COMPLETION_TOKEN_RESERVATION_FLOOR,
     ProviderHardStopLedger,
     ProviderHardStopLimits,
 )
@@ -239,10 +240,10 @@ def _probe_specs() -> tuple[ProbeSpec, ...]:
                 ),
                 LLMMessage(
                     role="user",
-                    content="Repeat the token ALPHA exactly 1000 times.",
+                    content="Repeat the token ALPHA exactly 300 times.",
                 ),
             ),
-            max_tokens=256,
+            max_tokens=128,
             validator=_validate_nonempty,
         ),
     )
@@ -326,8 +327,8 @@ def _limits() -> ProviderHardStopLimits:
     return ProviderHardStopLimits(
         max_provider_attempts_per_run=PROVIDER_PROTOCOL_CALL_COUNT,
         max_provider_attempts_per_batch=PROVIDER_PROTOCOL_CALL_COUNT,
-        max_total_tokens_per_run=20_000,
-        max_total_tokens_per_batch=20_000,
+        max_total_tokens_per_run=500_000,
+        max_total_tokens_per_batch=500_000,
         max_estimated_cost_usd_per_batch=1.0,
         max_wall_clock_seconds_per_task=900.0,
         input_cost_usd_per_million_tokens=0.0,
@@ -393,11 +394,6 @@ def run_provider_protocol_probe(
                     f"{spec.name} returned no authoritative usage"
                 )
             completion_tokens = int(usage.get("completion_tokens") or 0)
-            if completion_tokens > spec.max_tokens:
-                raise ProviderProtocolProbeError(
-                    f"{spec.name} ignored the completion-token cap: "
-                    f"{completion_tokens}>{spec.max_tokens}"
-                )
             finish_reason = getattr(client, "last_finish_reason", None)
             if not isinstance(finish_reason, str) or not finish_reason:
                 raise ProviderProtocolProbeError(
@@ -426,7 +422,9 @@ def run_provider_protocol_probe(
                     },
                     "latency_seconds": latency,
                     "reasoning_marker_exposed": False,
-                    "completion_cap_enforced": True,
+                    "completion_cap_observed": (
+                        completion_tokens <= spec.max_tokens
+                    ),
                     "validation": validation,
                 }
             )
@@ -446,6 +444,35 @@ def run_provider_protocol_probe(
     elapsed = time.monotonic() - started_all
     if not math.isfinite(elapsed) or elapsed <= 0:
         raise ProviderProtocolProbeError("protocol probe duration is invalid")
+    raw_tasks = snapshot.get("tasks")
+    if (
+        not isinstance(raw_tasks, list)
+        or len(raw_tasks) != 1
+        or not isinstance(raw_tasks[0], Mapping)
+    ):
+        raise ProviderProtocolProbeError("protocol ledger task shape is invalid")
+    raw_calls = raw_tasks[0].get("calls")
+    if (
+        not isinstance(raw_calls, list)
+        or len(raw_calls) != PROVIDER_PROTOCOL_CALL_COUNT
+        or any(
+            not isinstance(call, Mapping)
+            or call.get("completion_token_reservation")
+            != PROVIDER_COMPLETION_TOKEN_RESERVATION_FLOOR
+            for call in raw_calls
+        )
+    ):
+        raise ProviderProtocolProbeError(
+            "protocol calls did not reserve the full unbounded completion envelope"
+        )
+    truncation_probe = next(
+        result
+        for result in results
+        if result["name"] == "bounded_finish_reason"
+    )
+    provider_completion_cap_enforced = bool(
+        truncation_probe["completion_cap_observed"]
+    )
     report: dict[str, Any] = {
         "schema_version": PROVIDER_PROTOCOL_PROBE_SCHEMA,
         "status": "passed",
@@ -463,6 +490,15 @@ def run_provider_protocol_probe(
         "transport_attempts": attempts,
         "transport_attempt_cap": PROVIDER_PROTOCOL_CALL_COUNT,
         "transport_retries": attempts - len(results),
+        "provider_completion_cap_enforced": provider_completion_cap_enforced,
+        "provider_completion_cap_mode": (
+            "observed_enforced"
+            if provider_completion_cap_enforced
+            else "not_enforced_conservative_reservation_required"
+        ),
+        "hard_stop_completion_token_reservation_per_attempt": (
+            PROVIDER_COMPLETION_TOKEN_RESERVATION_FLOOR
+        ),
         "total_latency_seconds": elapsed,
         "usage": dict(snapshot.get("totals") or {}),
         "monetary_cost_authoritative": False,
@@ -470,11 +506,7 @@ def run_provider_protocol_probe(
             "No locked provider price was supplied; token usage is authoritative "
             "but the zero-price ledger estimate is not a monetary claim."
         ),
-        "truncation_finish_reason": next(
-            result["finish_reason"]
-            for result in results
-            if result["name"] == "bounded_finish_reason"
-        ),
+        "truncation_finish_reason": truncation_probe["finish_reason"],
         "probes": results,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
