@@ -369,6 +369,76 @@ def test_shadow_envelope_rejects_hostile_paths_and_accepts_explicit_container_ro
     )
 
 
+def test_shadow_envelope_normalizes_container_paths_in_summary_scalars(
+    tmp_path: Path,
+) -> None:
+    figure = tmp_path / "measurement_availability.png"
+    source_data = tmp_path / "measurement_availability_source_data.csv"
+    figure.write_bytes(b"png")
+    source_data.write_text(
+        "variable,observed_finite_percentage\nlact_n,100.0\n",
+        encoding="utf-8",
+    )
+    summary = {
+        "status": "completed",
+        "availability_percentages": {"lact_n": 100.0},
+        "figure_files": [f"/easyicu-step-output/{figure.name}"],
+        "source_data_files": [f"/easyicu-step-output/{source_data.name}"],
+        "output_files": {
+            "figure:measurement_availability": (
+                f"/easyicu-step-output/{figure.name}"
+            ),
+            "table:measurement_availability_source_data": (
+                f"/easyicu-step-output/{source_data.name}"
+            ),
+        },
+    }
+    step = AnalysisStep(
+        step_id="03_missingness_figure",
+        intent="Render measurement availability.",
+    )
+
+    envelope = normalize_step_result_shadow(
+        step_id=step.step_id,
+        step_summary=summary,
+        output_dir=tmp_path,
+        status="ok",
+        container_output_roots=("/easyicu-step-output",),
+    )
+    findings = StepSummaryFractionEnvelopeDualReader().audit(
+        step=step,
+        step_summary=summary,
+        envelope=envelope,
+        current_status="ok",
+    )
+
+    assert "absolute_unbound_path" not in _issue_codes(envelope)
+    assert findings == []
+    observed = {
+        scalar.field_path: scalar.value for scalar in envelope.observed_scalars
+    }
+    assert observed["figure_files[0]"] == figure.name
+    assert observed["source_data_files[0]"] == source_data.name
+    assert sum(
+        receipt.operation == "container_path_to_relative"
+        for receipt in envelope.normalization_receipts
+    ) == 4
+
+
+def test_shadow_envelope_rejects_summary_path_outside_container_root(
+    tmp_path: Path,
+) -> None:
+    envelope = normalize_step_result_shadow(
+        step_id="hostile_summary_path",
+        step_summary={"figure_files": ["/etc/passwd"]},
+        output_dir=tmp_path,
+        container_output_roots=("/easyicu-step-output",),
+    )
+
+    assert "absolute_unbound_path" in _issue_codes(envelope)
+    assert envelope.observed_scalars == ()
+
+
 def test_shadow_envelope_fails_closed_on_conflicting_or_nonstandard_statistic_json(
     tmp_path: Path,
 ) -> None:

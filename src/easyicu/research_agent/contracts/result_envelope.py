@@ -415,6 +415,30 @@ def _path_field(field_path: str) -> bool:
     return bool(tokens & {"file", "files", "path", "paths"})
 
 
+def _container_relative_scalar_path(
+    rendered: str,
+    *,
+    container_output_roots: Sequence[str],
+) -> str | None:
+    """Return a safe relative form for an exact container output path."""
+
+    absolute = PurePosixPath(rendered)
+    if not absolute.is_absolute():
+        return None
+    for raw_root in container_output_roots:
+        root = PurePosixPath(raw_root)
+        if not root.is_absolute():
+            continue
+        try:
+            relative = absolute.relative_to(root)
+        except ValueError:
+            continue
+        if not relative.parts or any(part in {"", ".", ".."} for part in relative.parts):
+            continue
+        return relative.as_posix()
+    return None
+
+
 def _coerce_scalar(
     value: Any,
     *,
@@ -422,6 +446,7 @@ def _coerce_scalar(
     source: Literal["step_summary", "statistic_artifact"],
     product_id: str | None,
     authorized_path_refs: Mapping[str, str],
+    container_output_roots: Sequence[str],
     receipts: list[NormalizationReceipt],
     issues: list[NormalizationIssue],
 ) -> JsonScalar | object:
@@ -468,7 +493,35 @@ def _coerce_scalar(
     elif isinstance(value, Path):
         if value.is_absolute():
             bound_ref = authorized_path_refs.get(value.as_posix())
-            if bound_ref is None:
+            container_relative = _container_relative_scalar_path(
+                value.as_posix(),
+                container_output_roots=container_output_roots,
+            )
+            if bound_ref is not None:
+                normalized = bound_ref
+                path_was_authorized = True
+                receipts.append(
+                    NormalizationReceipt(
+                        operation="authorized_path_to_evidence_ref",
+                        field_path=field_path,
+                        before_type=_type_label(value),
+                        after_type="evidence.ref",
+                        product_id=product_id,
+                    )
+                )
+            elif container_relative is not None:
+                normalized = container_relative
+                path_was_authorized = True
+                receipts.append(
+                    NormalizationReceipt(
+                        operation="container_path_to_relative",
+                        field_path=field_path,
+                        before_type="container.absolute_path",
+                        after_type="host.relative_path",
+                        product_id=product_id,
+                    )
+                )
+            else:
                 issues.append(
                     NormalizationIssue(
                         severity="error",
@@ -479,17 +532,6 @@ def _coerce_scalar(
                     )
                 )
                 return _OMIT
-            normalized = bound_ref
-            path_was_authorized = True
-            receipts.append(
-                NormalizationReceipt(
-                    operation="authorized_path_to_evidence_ref",
-                    field_path=field_path,
-                    before_type=_type_label(value),
-                    after_type="evidence.ref",
-                    product_id=product_id,
-                )
-            )
         else:
             normalized = value.as_posix()
             receipts.append(
@@ -549,7 +591,35 @@ def _coerce_scalar(
     if isinstance(normalized, str):
         if _path_field(field_path) and normalized.startswith(("/", "\\")):
             bound_ref = authorized_path_refs.get(normalized)
-            if bound_ref is None:
+            container_relative = _container_relative_scalar_path(
+                normalized,
+                container_output_roots=container_output_roots,
+            )
+            if bound_ref is not None:
+                normalized = bound_ref
+                path_was_authorized = True
+                receipts.append(
+                    NormalizationReceipt(
+                        operation="authorized_path_to_evidence_ref",
+                        field_path=field_path,
+                        before_type="path.string",
+                        after_type="evidence.ref",
+                        product_id=product_id,
+                    )
+                )
+            elif container_relative is not None:
+                normalized = container_relative
+                path_was_authorized = True
+                receipts.append(
+                    NormalizationReceipt(
+                        operation="container_path_to_relative",
+                        field_path=field_path,
+                        before_type="container.absolute_path",
+                        after_type="host.relative_path",
+                        product_id=product_id,
+                    )
+                )
+            else:
                 issues.append(
                     NormalizationIssue(
                         severity="error",
@@ -560,17 +630,6 @@ def _coerce_scalar(
                     )
                 )
                 return _OMIT
-            normalized = bound_ref
-            path_was_authorized = True
-            receipts.append(
-                NormalizationReceipt(
-                    operation="authorized_path_to_evidence_ref",
-                    field_path=field_path,
-                    before_type="path.string",
-                    after_type="evidence.ref",
-                    product_id=product_id,
-                )
-            )
         if not path_was_authorized and (
             len(normalized) > 128 or not _safe_string_field(field_path)
         ):
@@ -596,6 +655,7 @@ def _flatten_scalars(
     source: Literal["step_summary", "statistic_artifact"],
     product_id: str | None,
     authorized_path_refs: Mapping[str, str],
+    container_output_roots: Sequence[str],
     receipts: list[NormalizationReceipt],
     issues: list[NormalizationIssue],
     prefix: str = "",
@@ -635,6 +695,7 @@ def _flatten_scalars(
                     source=source,
                     product_id=product_id,
                     authorized_path_refs=authorized_path_refs,
+                    container_output_roots=container_output_roots,
                     receipts=receipts,
                     issues=issues,
                     prefix=child_path,
@@ -663,6 +724,7 @@ def _flatten_scalars(
                     source=source,
                     product_id=product_id,
                     authorized_path_refs=authorized_path_refs,
+                    container_output_roots=container_output_roots,
                     receipts=receipts,
                     issues=issues,
                     prefix=child_path,
@@ -678,6 +740,7 @@ def _flatten_scalars(
         source=source,
         product_id=product_id,
         authorized_path_refs=authorized_path_refs,
+        container_output_roots=container_output_roots,
         receipts=receipts,
         issues=issues,
     )
@@ -946,6 +1009,7 @@ def _parse_statistic(
         source="statistic_artifact",
         product_id=product_id,
         authorized_path_refs={},
+        container_output_roots=(),
         receipts=receipts,
         issues=issues,
     )
@@ -2077,6 +2141,7 @@ def normalize_step_result_shadow(
         source="step_summary",
         product_id=None,
         authorized_path_refs=authorized_path_refs,
+        container_output_roots=container_output_roots,
         receipts=receipts,
         issues=issues,
     )
