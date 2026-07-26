@@ -154,6 +154,7 @@ pilot_runs/
 !docs/architecture_glossary.md
 !docs/capability_matrix.md
 !docs/analysis_method_suite.md
+!docs/deprecation_policy.md
 !benchmarks/meta_generalization/README.md
 !benchmarks/agent_experiments/README.md
 # Internal audit dumps — kept locally, not part of the public docs tree.

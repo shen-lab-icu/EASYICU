@@ -98,6 +98,23 @@ USE_MINIMAL_COLUMNS = True
 
 logger = logging.getLogger(__name__)
 
+
+def _is_missing_column_projection_error(exc: Exception) -> bool:
+    """Return whether *exc* explicitly reports a projected column is absent."""
+    message = str(exc).lower()
+    if isinstance(exc, KeyError):
+        return "columns " in message and " not found in table " in message
+    if isinstance(exc, ValueError):
+        return "usecols do not match columns" in message
+    return (
+        type(exc).__name__ == "ArrowInvalid"
+        and (
+            "no match for fieldref" in message
+            or ("field" in message and "not found" in message)
+        )
+    )
+
+
 class ConceptLoader:
     """概念加载器 - 复刻 R ricu 的 load_concepts"""
     
@@ -231,7 +248,12 @@ class ConceptLoader:
         table_name: str,
         columns: Optional[Iterable[str]],
     ) -> pd.DataFrame:
-        """在列过滤失败时回退到全表加载。"""
+        """Load a projection, with a tightly bounded compatibility fallback.
+
+        Only an explicit missing-column projection error may retry without a
+        projection. I/O, corruption, permission and memory failures propagate
+        unchanged. Low-memory mode never retries with a full-table read.
+        """
         # Check cache first
         if table_name in self._table_cache:
             return self._table_cache[table_name]
@@ -241,8 +263,14 @@ class ConceptLoader:
         if columns:
             try:
                 df = load_table(self._src_name, table_name, columns=list(columns), path=self.data_path)
-            except Exception:
-                # 回退到加载全部列，确保兼容缺少列描述的表
+            except Exception as exc:
+                if self._low_memory or not _is_missing_column_projection_error(exc):
+                    raise
+                logger.warning(
+                    "Table %s has an incomplete column descriptor; retrying "
+                    "without projection outside low-memory mode",
+                    table_name,
+                )
                 df = load_table(self._src_name, table_name, path=self.data_path)
         else:
             df = load_table(self._src_name, table_name, path=self.data_path)

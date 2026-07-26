@@ -7,7 +7,9 @@ metadata, and resolving clinical concepts across heterogeneous sources.
 
 import os
 import sys
-import warnings
+
+
+_IMPORT_ERRORS: dict[str, ImportError] = {}
 
 
 def _configure_stdio_encoding() -> None:
@@ -30,10 +32,6 @@ def _configure_stdio_encoding() -> None:
 
 
 _configure_stdio_encoding()
-
-# 全局忽略 pandas groupby.apply 相关的 FutureWarning
-warnings.filterwarnings('ignore', message='.*DataFrameGroupBy.apply.*', category=FutureWarning)
-warnings.filterwarnings('ignore', message='.*Downcasting behavior.*', category=FutureWarning)
 
 from .config import DataSourceConfig, DataSourceRegistry
 from .concept import ConceptDictionary, ConceptResolver
@@ -100,6 +98,8 @@ try:
         load_blood_gas,        # 血气分析
         load_hematology,       # 血液学检查
         load_medications,      # 药物治疗
+        MedicationLoadError,
+        MedicationMergeError,
         # 工具函数
         list_available_concepts,
         list_available_sources,
@@ -128,7 +128,7 @@ try:
     load_concepts = _load_concepts_api
     _HAS_API = True
 except ImportError as e:
-    print(f"Warning: Failed to import api module: {e}")
+    _IMPORT_ERRORS["api"] = e
     _HAS_API = False
 
 # 导入患者筛选模块（直接访问）
@@ -153,7 +153,7 @@ try:
     )
     _HAS_KDIGO_AKI = True
 except ImportError as e:
-    print(f"Warning: Failed to import kdigo_aki module: {e}")
+    _IMPORT_ERRORS["kdigo_aki"] = e
     _HAS_KDIGO_AKI = False
 
 # 导入 Circulatory Failure 模块 (circEWS定义)
@@ -171,12 +171,8 @@ try:
     )
     _HAS_CIRC_FAILURE = True
 except ImportError as e:
-    print(f"Warning: Failed to import circ_failure module: {e}")
+    _IMPORT_ERRORS["circ_failure"] = e
     _HAS_CIRC_FAILURE = False
-
-# 快速启动 API - 已移除 (现在使用统一API)
-# ICUQuickLoader等已被重构为BaseICULoader和统一的api.load_concepts
-_HAS_QUICKSTART = False
 
 # 导入并行配置模块（用于高级用户自定义配置）
 try:
@@ -189,7 +185,7 @@ try:
     )
     _HAS_PARALLEL_CONFIG = True
 except ImportError as e:
-    print(f"Warning: Failed to import parallel_config module: {e}")
+    _IMPORT_ERRORS["parallel_config"] = e
     _HAS_PARALLEL_CONFIG = False
 
 # 从 load_concepts 模块导入（保留向后兼容，但标记为废弃）
@@ -712,10 +708,6 @@ try:
 except ImportError:
     _HAS_MEMORY_OPTIMIZER = False
 
-# 优化的回调和数据源 - 已废弃，功能已整合到主模块
-_HAS_OPTIMIZED_CALLBACKS = False
-_HAS_OPTIMIZED_DATASOURCE = False
-
 # 统一工具函数库
 try:
     from .utils.common_utils import (
@@ -731,9 +723,6 @@ try:
     _HAS_COMMON_UTILS = True
 except ImportError:
     _HAS_COMMON_UTILS = False
-
-# 统一API - 已废弃，功能已整合到api.py
-_HAS_UNIFIED_API = False
 
 __all__ = [
     # === 推荐使用的API ===
@@ -757,6 +746,8 @@ __all__ = [
     "load_blood_gas",        # 血气分析
     "load_hematology",       # 血液学检查
     "load_medications",      # 药物治疗
+    "MedicationLoadError",
+    "MedicationMergeError",
     # 工具函数
     "list_available_concepts",
     "list_available_sources",
@@ -828,19 +819,6 @@ if _HAS_ENHANCED_API:
         "load_concept_cached",
         "align_to_icu_admission",
         "load_sofa_with_score",
-    ])
-
-if _HAS_QUICKSTART:
-    # Deprecated - 保留向后兼容
-    __all__.extend([
-        "ICUQuickLoader",  # DEPRECATED
-        "get_patient_ids",
-        # 向后兼容的别名
-        "MIMICQuickLoader",  # DEPRECATED
-        "load_mimic_sofa",  # DEPRECATED
-        "load_mimic_sepsis3",  # DEPRECATED
-        "load_mimic_vitals",  # DEPRECATED
-        "load_mimic_labs",  # DEPRECATED
     ])
 
 if _HAS_ASSERTIONS:
@@ -1234,21 +1212,6 @@ if _HAS_MEMORY_OPTIMIZER:
         "optimize_for_16gb",
     ])
 
-if _HAS_OPTIMIZED_CALLBACKS:
-    __all__.extend([
-        "OptimizedCallbacks",
-        "get_optimized_callbacks",
-        "sofa_score_optimized",
-        "sofa_resp_optimized",
-        "pafi_optimized",
-    ])
-
-if _HAS_OPTIMIZED_DATASOURCE:
-    __all__.extend([
-        "OptimizedDataSource",
-        "create_optimized_datasource",
-    ])
-
 if _HAS_COMMON_UTILS:
     __all__.extend([
         "SeriesUtils",
@@ -1259,20 +1222,6 @@ if _HAS_COMMON_UTILS:
         "safe_copy",
         "optimize_dtypes",
         "locf",
-    ])
-
-if _HAS_UNIFIED_API:
-    __all__.extend([
-        "UnifiedConceptLoader",
-        "get_loader",
-        "load_concepts_unified",
-        "load_concept_unified",
-        "list_available_concepts_unified",
-        "get_concept_info_unified",
-        "load_sofa_unified",
-        "load_sofa2_unified",
-        "load_vitals_unified",
-        "load_labs_unified",
     ])
 
 # 添加缓存管理功能到__all__

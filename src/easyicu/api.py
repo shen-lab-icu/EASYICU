@@ -31,6 +31,7 @@ from pathlib import Path
 import os
 import re
 import threading
+import warnings
 from collections import OrderedDict
 import numpy as np
 import pandas as pd
@@ -3037,6 +3038,98 @@ def load_hematology(
     )
 
 
+class MedicationLoadError(RuntimeError):
+    """Raised when a medication bundle would otherwise return partial data."""
+
+    def __init__(self, report: Dict[str, object]):
+        self.report = report
+        failures = report.get("failed", {})
+        failed_names = ", ".join(sorted(failures)) if isinstance(failures, dict) else ""
+        super().__init__(
+            "Medication loading was incomplete"
+            + (f" for: {failed_names}" if failed_names else "")
+            + ". Pass allow_partial=True only when a partial result is intentional."
+        )
+
+
+class MedicationMergeError(ValueError):
+    """Raised when independently loaded medication frames cannot be merged safely."""
+
+
+def _merge_medication_frames(
+    frames: List[pd.DataFrame],
+    concepts: List[str],
+) -> pd.DataFrame:
+    """Merge concept frames without heuristic many-to-many row multiplication."""
+    if not frames:
+        return pd.DataFrame()
+
+    id_candidates = (
+        "stay_id",
+        "icustay_id",
+        "subject_id",
+        "hadm_id",
+        "patientunitstayid",
+        "admissionid",
+        "patientid",
+        "patient_id",
+        "CaseID",
+        "caseid",
+    )
+    time_candidates = (
+        "charttime",
+        "starttime",
+        "endtime",
+        "time",
+        "datetime",
+        "timestamp",
+        "observationoffset",
+        "chartoffset",
+        "eventtime",
+        "realtime",
+    )
+
+    merged = frames[0].copy()
+    merged_concepts = [concepts[0]]
+    for concept, frame in zip(concepts[1:], frames[1:]):
+        shared_ids = [
+            column
+            for column in id_candidates
+            if column in merged.columns and column in frame.columns
+        ]
+        shared_times = [
+            column
+            for column in time_candidates
+            if column in merged.columns and column in frame.columns
+        ]
+        merge_columns = shared_ids + shared_times
+        if not shared_ids:
+            raise MedicationMergeError(
+                "Cannot safely merge medication concepts "
+                f"{merged_concepts!r} and {concept!r}: no shared patient/stay ID column."
+            )
+
+        left_duplicates = bool(merged.duplicated(merge_columns).any())
+        right_duplicates = bool(frame.duplicated(merge_columns).any())
+        if left_duplicates or right_duplicates:
+            raise MedicationMergeError(
+                "Cannot safely merge medication concepts "
+                f"{merged_concepts!r} and {concept!r}: merge keys {merge_columns!r} "
+                "are not unique, so an outer merge could multiply rows."
+            )
+
+        merged = pd.merge(
+            merged,
+            frame,
+            on=merge_columns,
+            how="outer",
+            validate="one_to_one",
+        )
+        merged_concepts.append(concept)
+
+    return merged
+
+
 def load_medications(
     patient_ids: Optional[Union[List, Dict]] = None,
     database: Optional[str] = None,
@@ -3046,6 +3139,7 @@ def load_medications(
     verbose: bool = False,
     groups: Optional[Union[str, List[str]]] = None,
     include_new: bool = True,
+    allow_partial: bool = False,
 ) -> pd.DataFrame:
     """
     加载药物治疗数据（参考ricu.R的data_med + EasyICU 扩展药物集）
@@ -3088,6 +3182,9 @@ def load_medications(
             例如 groups='sedation' 只加载镇静类药物。
         include_new: 是否包含 EasyICU 扩展药物。默认 True。
             设为 False 仅加载原 ricu 14 个概念（向后兼容老脚本）。
+        allow_partial: 是否显式接受部分结果。默认 False；任一概念加载异常或
+            返回空表时抛出 MedicationLoadError。设为 True 时返回已加载部分、
+            发出 RuntimeWarning，并在 DataFrame.attrs 中写入结构化加载报告。
 
     Returns:
         药物治疗DataFrame
@@ -3216,9 +3313,12 @@ def load_medications(
             print("  ❌ 没有可用的概念")
         return pd.DataFrame()
 
-    # 逐个尝试加载，跳过无法加载的概念（某些概念可能在特定数据库中没有配置）
-    results = []
-    loaded_concepts = []
+    # Per-concept loading preserves an exact audit of what succeeded. Failures
+    # are never silently discarded: the default is fail-closed, while callers
+    # that intentionally accept structural absence must opt in explicitly.
+    results: List[pd.DataFrame] = []
+    loaded_concepts: List[str] = []
+    failed_concepts: Dict[str, Dict[str, str]] = {}
     for concept in available_concepts:
         try:
             df = load_concepts(
@@ -3234,47 +3334,43 @@ def load_medications(
             if df is not None and not df.empty:
                 results.append(df)
                 loaded_concepts.append(concept)
-        except Exception:
-            pass  # 跳过无法加载的概念
+            else:
+                failed_concepts[concept] = {"reason": "empty_result"}
+        except Exception as exc:
+            failed_concepts[concept] = {
+                "reason": "load_error",
+                "error_type": type(exc).__name__,
+            }
+
+    report: Dict[str, object] = {
+        "requested": list(concepts),
+        "validated": list(available_concepts),
+        "loaded": list(loaded_concepts),
+        "failed": failed_concepts,
+    }
+
+    if failed_concepts and not allow_partial:
+        raise MedicationLoadError(report)
+    if failed_concepts:
+        warnings.warn(
+            "Medication loading returned an explicitly allowed partial result; "
+            f"failed concepts: {sorted(failed_concepts)}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
 
     if not results:
         if verbose:
             print("  ❌ 没有成功加载的概念")
-        return pd.DataFrame()
+        empty = pd.DataFrame()
+        empty.attrs["easyicu_medication_load_report"] = report
+        return empty
 
     if verbose:
         print(f"  ✅ 成功加载 {len(loaded_concepts)} 个概念: {loaded_concepts}")
 
-    # 合并结果
-    if len(results) == 1:
-        return results[0]
-
-    # 多个结果需要合并
-    merged = results[0]
-    for df in results[1:]:
-        # 找到共同的 ID 和时间列进行合并
-        id_cols = [
-            c
-            for c in merged.columns
-            if "id" in c.lower()
-            or c
-            in [
-                "stay_id",
-                "subject_id",
-                "patientunitstayid",
-                "admissionid",
-                "patientid",
-            ]
-        ]
-        time_cols = [
-            c for c in merged.columns if "time" in c.lower() or c == "charttime"
-        ]
-        merge_cols = list(set(id_cols + time_cols) & set(df.columns))
-        if merge_cols:
-            merged = pd.merge(merged, df, on=merge_cols, how="outer")
-        else:
-            merged = pd.concat([merged, df], ignore_index=True)
-
+    merged = _merge_medication_frames(results, loaded_concepts)
+    merged.attrs["easyicu_medication_load_report"] = report
     return merged
 
 
@@ -3300,6 +3396,8 @@ __all__ = [
     "load_blood_gas",  # 血气分析
     "load_hematology",  # 血液学检查
     "load_medications",  # 药物治疗
+    "MedicationLoadError",
+    "MedicationMergeError",
     # 工具函数
     "list_available_concepts",
     "list_available_sources",
@@ -3391,7 +3489,10 @@ def load_concept_cached(
         force_reload: If True, ignore cache and reload from source
         patient_ids: Optional patient ID filter
         merge: If True, merge concepts into wide format
-        align_time: If True, align charttime to ICU admission (hours since admission)
+        align_time: Deprecated compatibility flag. ``True`` raises
+            ``NotImplementedError`` because the historical helper never
+            performed alignment. ``load_concepts`` already provides the
+            canonical relative-time axis.
         verbose: Show progress messages
         use_pickle: If True, cache as pickle; if False, use CSV
         n_patients: If provided, randomly sample N patients (for testing)
@@ -3497,9 +3598,12 @@ def align_to_icu_admission(
     after_icu_hours: int = 0,
     verbose: bool = True,
 ) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
-    """
-    Align charttime to ICU admission time and aggregate to hourly intervals.
-    根据ricu的stay_windows逻辑，默认只保留ICU住院期间的数据。
+    """Reject a historical public stub that never performed time alignment.
+
+    The canonical ``load_concepts`` path already returns concept time on its
+    declared relative-time axis. This compatibility helper previously printed
+    a warning and returned its input unchanged, which made ``align_time=True``
+    look successful while preserving absolute timestamps.
 
     Args:
         data: Concept data with charttime
@@ -3512,34 +3616,15 @@ def align_to_icu_admission(
         after_icu_hours: Hours after ICU discharge to include (default: 0)
         verbose: Show progress
 
-    Returns:
-        Data with charttime as integer hours since ICU admission, one row per hour
+    Raises:
+        NotImplementedError: Always. Use the canonical ``load_concepts`` time
+            axis, or an explicitly configured low-level relative-time loader.
     """
-    if verbose:
-        print("⏰ 对齐时间到ICU入院时间...")
-
-    # Handle dict of DataFrames
-    if isinstance(data, dict):
-        return {
-            name: align_to_icu_admission(
-                df,
-                database,
-                data_path,
-                aggregate_hourly,
-                agg_func,
-                filter_icu_window,
-                before_icu_hours,
-                after_icu_hours,
-                verbose=False,
-            )
-            for name, df in data.items()
-        }
-
-    # Simplified implementation - users can extend with full logic from api_enhanced.py if needed
-    if verbose:
-        print("⚠️  完整的时间对齐功能需要从load_concepts返回的数据包含charttime列")
-
-    return data
+    raise NotImplementedError(
+        "align_to_icu_admission() is not implemented and no longer returns "
+        "unaligned data as if alignment succeeded. Use load_concepts() for "
+        "canonical relative-time output."
+    )
 
 
 def load_sofa_with_score(

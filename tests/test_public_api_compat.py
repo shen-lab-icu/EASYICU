@@ -580,3 +580,27 @@ def test_the_package_still_imports_without_deprecation_noise() -> None:
 
     noisy = [w for w in caught if issubclass(w.category, DeprecationWarning)]
     assert not noisy, [str(w.message) for w in noisy]
+
+
+def test_import_does_not_install_process_wide_warning_filters() -> None:
+    """A library import must not silence pandas warnings for the host process."""
+    import easyicu
+
+    before = list(warnings.filters)
+    importlib.reload(easyicu)
+
+    assert warnings.filters == before
+
+
+def test_removed_compatibility_features_do_not_leave_dead_feature_flags() -> None:
+    """Permanently false branches are not optional-feature detection."""
+    import easyicu
+
+    source = inspect.getsource(easyicu)
+    for flag in (
+        "_HAS_QUICKSTART",
+        "_HAS_OPTIMIZED_CALLBACKS",
+        "_HAS_OPTIMIZED_DATASOURCE",
+        "_HAS_UNIFIED_API",
+    ):
+        assert flag not in source
