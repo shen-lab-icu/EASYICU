@@ -46,6 +46,7 @@ from easyicu.research_agent.mcp_policy import (
     MCP_ALLOW_PATIENT_DATA_ENV,
     MCP_SCOPES_ENV,
     MIN_ROWS_FOR_AGGREGATE_STATS,
+    SCOPE_METADATA,
     SCOPE_READ_PATIENT_DATA,
     DisclosurePolicy,
     MCPPathError,
@@ -195,11 +196,55 @@ def test_p0_1_load_concepts_response_carries_no_rows_and_no_raw_data_path(
     assert str(data_path) not in json.dumps(result)
 
 
+def test_p0_1_patient_selector_requires_scope_before_any_data_read(
+    roots, monkeypatch
+):
+    import easyicu
+
+    from easyicu.research_agent.mcp_server import dispatch
+
+    called = False
+
+    def _load(**kwargs):
+        nonlocal called
+        called = True
+        return _cohort_frame()
+
+    monkeypatch.setattr(easyicu, "load_concepts", _load, raising=False)
+
+    result = dispatch(
+        "research_agent.load_concepts",
+        {
+            "concepts": ["sofa2"],
+            "database": "miiv",
+            "data_path": str(roots / "miiv"),
+            # Even an empty selector is patient-scoped. Treating it as absent
+            # would let API-specific empty-list semantics bypass the gate.
+            "patient_ids": [],
+        },
+    )
+
+    assert result["error_code"] == "scope_not_granted"
+    assert called is False
+
+    store = EvidenceStore(roots / "audit" / ".easyicu_mcp_audit")
+    denied = [
+        json.loads((store.root / record.relative_path).read_text())
+        for record in store.records()
+        if "patient_access_denied" in str(record.relative_path)
+    ]
+    assert len(denied) == 1
+    assert denied[0]["event"] == "patient_access_denied"
+    assert denied[0]["patient_selector_present"] is True
+    assert denied[0]["requested_patient_ids"] == 0
+
+
 def test_p0_1_patient_data_access_is_recorded_as_evidence(roots, monkeypatch):
     import easyicu
 
     from easyicu.research_agent.mcp_server import dispatch
 
+    monkeypatch.setenv(MCP_SCOPES_ENV, f"{SCOPE_METADATA},{SCOPE_READ_PATIENT_DATA}")
     monkeypatch.setattr(
         easyicu, "load_concepts", lambda **kw: _cohort_frame(), raising=False
     )
@@ -223,8 +268,18 @@ def test_p0_1_patient_data_access_is_recorded_as_evidence(roots, monkeypatch):
     audits = [r for r in records if "mcp_patient_data_access" in str(r.relative_path)]
     assert audits, [r.relative_path for r in records]
 
-    payload = json.loads((store.root / audits[0].relative_path).read_text())
-    assert payload["schema"] == "easyicu.mcp_patient_data_access/1"
+    payloads = [
+        json.loads((store.root / record.relative_path).read_text())
+        for record in audits
+    ]
+    assert {payload["event"] for payload in payloads} == {
+        "patient_access_requested",
+        "patient_access_completed",
+    }
+    payload = next(
+        item for item in payloads if item["event"] == "patient_access_completed"
+    )
+    assert payload["schema"] == "easyicu.mcp_patient_data_access/2"
     assert payload["requested_patient_ids"] == 3
     assert payload["disclosed_patient_rows"] == 0
     assert len(payload["data_path_sha256"]) == 64

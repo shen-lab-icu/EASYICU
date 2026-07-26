@@ -460,6 +460,8 @@ def patient_data_audit_root() -> Path:
 
 def patient_data_audit_payload(
     *,
+    request_id: str,
+    event: str,
     tool: str,
     concepts: Sequence[str],
     database: Any,
@@ -473,15 +475,26 @@ def patient_data_audit_payload(
 
     if isinstance(patient_ids, (list, tuple, set)):
         n_requested: Optional[int] = len(patient_ids)
+    elif isinstance(patient_ids, Mapping):
+        n_requested = sum(
+            len(value) if isinstance(value, (list, tuple, set)) else 1
+            for value in patient_ids.values()
+        )
     else:
         n_requested = None
     return {
-        "schema": "easyicu.mcp_patient_data_access/1",
+        "schema": "easyicu.mcp_patient_data_access/2",
+        "request_id": str(request_id),
+        "event": str(event),
         "tool": tool,
         "caller": "mcp_client",
         "concepts": [str(c) for c in concepts],
         "database": str(database) if database else None,
         "data_path_sha256": path_digest(data_path) if data_path else None,
+        "patient_selector_present": patient_ids is not None,
+        "patient_selector_shape": (
+            type(patient_ids).__name__ if patient_ids is not None else None
+        ),
         "requested_patient_ids": n_requested,
         "returned_rows": {
             str(name): int(summary.get("rows") or 0)

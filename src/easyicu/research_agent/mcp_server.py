@@ -61,6 +61,7 @@ from .mcp_policy import (
     SCOPE_BIND_EVIDENCE,
     SCOPE_METADATA,
     SCOPE_READ_INTERNAL_CONTEXT,
+    SCOPE_READ_PATIENT_DATA,
     SCOPE_RUN_PIPELINE,
     SCOPE_WRITE_ARTIFACTS,
     DisclosurePolicy,
@@ -666,10 +667,76 @@ def _tool_load_concepts(args: Dict[str, Any]) -> Dict[str, Any]:
             resolve_within_roots(kwargs["data_path"], field="data_path")
         )
 
+    # Patient rows are opt-in twice: the server must grant the scope and the
+    # caller must request a positive preview. Merely holding the scope must not
+    # make an otherwise metadata-only call disclose five rows by default.
+    policy = DisclosurePolicy.current(args.get("preview_rows") or 0)
+    audit_request_id = uuid.uuid4().hex
+    if "patient_ids" in args:
+        try:
+            require_scope(
+                SCOPE_READ_PATIENT_DATA,
+                tool="research_agent.load_concepts patient selector",
+            )
+        except MCPAuthorizationError:
+            _record_patient_data_access(
+                request_id=audit_request_id,
+                event="patient_access_denied",
+                tool="research_agent.load_concepts",
+                args=args,
+                concepts=[str(c) for c in concepts],
+                summary={},
+                output_paths=[],
+                policy=policy,
+                fail_closed=False,
+            )
+            raise
+
+    _record_patient_data_access(
+        request_id=audit_request_id,
+        event="patient_access_requested",
+        tool="research_agent.load_concepts",
+        args=args,
+        concepts=[str(c) for c in concepts],
+        summary={},
+        output_paths=[],
+        policy=policy,
+        fail_closed=True,
+    )
+
     availability_sink: Dict[str, Any] = {}
     kwargs["availability_sink"] = availability_sink
-    result = easyicu_load_concepts(**kwargs)
-    policy = DisclosurePolicy.current(args.get("preview_rows") or 5)
+    try:
+        result = easyicu_load_concepts(**kwargs)
+    except Exception:
+        _record_patient_data_access(
+            request_id=audit_request_id,
+            event="patient_access_failed",
+            tool="research_agent.load_concepts",
+            args=args,
+            concepts=[str(c) for c in concepts],
+            summary={},
+            output_paths=[],
+            policy=policy,
+            fail_closed=False,
+        )
+        raise
+
+    summary = _summarise_concept_result(result, policy=policy)
+    # Persist the completed read before any extracted frame is written,
+    # registered as evidence, or returned to the caller. An unavailable audit
+    # trail therefore fails closed without leaving a new patient-data output.
+    _record_patient_data_access(
+        request_id=audit_request_id,
+        event="patient_access_completed",
+        tool="research_agent.load_concepts",
+        args=args,
+        concepts=[str(c) for c in concepts],
+        summary=summary,
+        output_paths=[],
+        policy=policy,
+        fail_closed=True,
+    )
     output_paths = _write_concept_result_if_requested(
         result=result,
         args=args,
@@ -679,15 +746,6 @@ def _tool_load_concepts(args: Dict[str, Any]) -> Dict[str, Any]:
         output_paths=output_paths,
         args=args,
         concepts=[str(c) for c in concepts],
-    )
-    summary = _summarise_concept_result(result, policy=policy)
-    _record_patient_data_access(
-        tool="research_agent.load_concepts",
-        args=args,
-        concepts=[str(c) for c in concepts],
-        summary=summary,
-        output_paths=output_paths,
-        policy=policy,
     )
     return {
         "api": "easyicu.load_concepts",
@@ -850,26 +908,21 @@ def _frame_summaries(summary: Mapping[str, Any]) -> Dict[str, Any]:
 
 def _record_patient_data_access(
     *,
+    request_id: str,
+    event: str,
     tool: str,
     args: Dict[str, Any],
     concepts: List[str],
     summary: Mapping[str, Any],
     output_paths: List[Path],
     policy: DisclosurePolicy,
+    fail_closed: bool,
 ) -> None:
-    """Register a PHI-free audit record for one extraction call.
-
-    Fail-closed, and written to a **server-owned** root. The earlier version
-    keyed off the caller's ``workdir`` and swallowed registration errors, so a
-    client could receive patient rows with no trail simply by omitting
-    ``workdir`` — the two conditions that make an audit worth having were both
-    under the audited party's control.
-
-    Calls that disclose no rows still record the access, but a failure there is
-    logged rather than raised: there is nothing to withhold.
-    """
+    """Register one PHI-free, server-owned patient-access audit event."""
 
     payload = patient_data_audit_payload(
+        request_id=request_id,
+        event=event,
         tool=tool,
         concepts=concepts,
         database=args.get("database"),
@@ -879,15 +932,14 @@ def _record_patient_data_access(
         output_paths=output_paths,
         policy=policy,
     )
-    disclosed = int(payload.get("disclosed_patient_rows") or 0)
     try:
         root = patient_data_audit_root()
         root.mkdir(parents=True, exist_ok=True)
         EvidenceStore(root).register_json(
             kind="log",
-            description="Audit record for one MCP concept extraction call.",
+            description=f"MCP concept extraction audit event: {event}.",
             payload=payload,
-            filename="mcp_patient_data_access.json",
+            filename=f"mcp_patient_data_access_{event}.json",
             producer="mcp_server",
             generation_mode="system",
         )
@@ -897,10 +949,10 @@ def _record_patient_data_access(
             f"{type(exc).__name__}: {exc}",
             file=sys.stderr,
         )
-        if disclosed > 0:
+        if fail_closed:
             raise MCPAuthorizationError(
-                "patient-level rows are withheld because the access audit could "
-                "not be written; set "
+                "patient data access is blocked because the server-owned audit "
+                "trail could not be written; set "
                 f"{MCP_AUDIT_ROOT_ENV} to a writable directory"
             ) from exc
 
