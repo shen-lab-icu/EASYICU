@@ -38,6 +38,53 @@ import pandas as pd
 import pytest
 
 
+def test_primary_cohort_predicates_extend_only_raw_contract_authority() -> None:
+    from easyicu.research_agent.execution.phase import (
+        _raw_contract_inputs_for_step,
+    )
+
+    receipt = {
+        "ordered_predicate_flow": [
+            {"predicate_kind": "universe", "resolved_column": None},
+            {
+                "predicate_kind": "inclusion",
+                "resolved_column": "eligibility_max",
+            },
+        ]
+    }
+
+    assert _raw_contract_inputs_for_step(
+        planner_declared_inputs=["table:parent", "age"],
+        primary_cohort_execution_receipt=receipt,
+    ) == ("table:parent", "age", "eligibility_max")
+    assert _raw_contract_inputs_for_step(
+        planner_declared_inputs=["age"],
+        primary_cohort_execution_receipt=None,
+    ) == ("age",)
+
+
+def test_primary_cohort_predicate_contract_rejects_typed_or_invalid_coordinate() -> None:
+    from easyicu.research_agent.execution.phase import (
+        _raw_contract_inputs_for_step,
+    )
+    from easyicu.research_agent.intake.materialized_metadata import (
+        MaterializedMetadataError,
+    )
+
+    with pytest.raises(
+        MaterializedMetadataError,
+        match="invalid resolved column",
+    ):
+        _raw_contract_inputs_for_step(
+            planner_declared_inputs=[],
+            primary_cohort_execution_receipt={
+                "ordered_predicate_flow": [
+                    {"resolved_column": "table:not_a_raw_column"}
+                ]
+            },
+        )
+
+
 def test_llm_authority_signature_binds_endpoint_options_and_fallback_order() -> None:
     from easyicu.research_agent.authority.pipeline_cache import llm_signature
 

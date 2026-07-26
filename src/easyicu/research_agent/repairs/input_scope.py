@@ -8,6 +8,7 @@ from typing import Optional
 _PHYSICAL_SCOPE_ERROR = (
     "locked cohort columns do not match the exact declared input scope"
 )
+_RAW_CONTRACT_MAPPING_ERROR = "attributeerror: 'str' object has no attribute 'get'"
 
 
 def _physical_columns_owner(node: ast.AST) -> Optional[ast.AST]:
@@ -121,4 +122,90 @@ def patch_raw_input_physical_superset_guard(code: str, run_log: str) -> str:
     return repaired
 
 
-__all__ = ["patch_raw_input_physical_superset_guard"]
+def patch_raw_contract_mapping_iteration(code: str, run_log: str) -> str:
+    """Iterate values of the host's column-keyed raw-contract mapping.
+
+    The resolved-input schema defines ``contracts`` as a JSON object keyed by
+    column. Generated code occasionally treats that object as a list of
+    contract records, so Python yields string keys and ``contract.get(...)``
+    fails. Only the exact traceback and one unambiguous AST shape authorize
+    this syntax-only adapter.
+    """
+
+    if _RAW_CONTRACT_MAPPING_ERROR not in str(run_log or "").lower():
+        return code
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+
+    contract_mapping_names: set[str] = set()
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Attribute)
+            and node.value.func.attr == "get"
+            and node.value.args
+            and isinstance(node.value.args[0], ast.Constant)
+            and node.value.args[0].value == "contracts"
+        ):
+            continue
+        contract_mapping_names.add(node.targets[0].id)
+
+    candidates: list[ast.Name] = []
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.For)
+            and isinstance(node.target, ast.Name)
+            and isinstance(node.iter, ast.Name)
+            and node.iter.id in contract_mapping_names
+        ):
+            continue
+        item_name = node.target.id
+        reads_contract_column = any(
+            isinstance(child, ast.Call)
+            and isinstance(child.func, ast.Attribute)
+            and child.func.attr == "get"
+            and isinstance(child.func.value, ast.Name)
+            and child.func.value.id == item_name
+            and child.args
+            and isinstance(child.args[0], ast.Constant)
+            and child.args[0].value == "column"
+            for statement in node.body
+            for child in ast.walk(statement)
+        )
+        if reads_contract_column:
+            candidates.append(node.iter)
+    if len(candidates) != 1:
+        return code
+
+    iterable = candidates[0]
+    lines = code.splitlines(keepends=True)
+    line_starts: list[int] = []
+    offset = 0
+    for line in lines:
+        line_starts.append(offset)
+        offset += len(line)
+
+    def _absolute_offset(lineno: int, utf8_col: int) -> int:
+        line = lines[lineno - 1]
+        char_col = len(line.encode("utf-8")[:utf8_col].decode("utf-8"))
+        return line_starts[lineno - 1] + char_col
+
+    start = _absolute_offset(iterable.lineno, iterable.col_offset)
+    end = _absolute_offset(iterable.end_lineno, iterable.end_col_offset)
+    repaired = code[:start] + f"{iterable.id}.values()" + code[end:]
+    try:
+        ast.parse(repaired)
+    except SyntaxError:
+        return code
+    return repaired
+
+
+__all__ = [
+    "patch_raw_contract_mapping_iteration",
+    "patch_raw_input_physical_superset_guard",
+]
