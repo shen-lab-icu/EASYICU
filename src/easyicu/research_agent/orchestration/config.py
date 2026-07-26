@@ -20,23 +20,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from dataclasses import dataclass, fields, replace
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Dict, Mapping, Optional, Sequence, Union
 
-
-#: Field/key names whose *value* must never appear in run provenance. Matched
-#: on the name, not on the value, so a key rotated to a new format stays
-#: redacted.
-_SECRET_FIELD_RE = re.compile(
-    r"(?i)(?:^|_)(?:api_key|apikey|key|token|secret|password|passwd|credential)s?$"
-)
-
-
-def _is_secret_field(name: str) -> bool:
-    return bool(_SECRET_FIELD_RE.search(str(name)))
+from ..authority.secret_redaction import is_sensitive_key, string_contains_secret
 
 
 def step_provider_call_entitlement(
@@ -469,7 +458,11 @@ class PipelineConfig:
         """
 
         def _render(value: Any, *, key: str = "") -> Any:
-            if _is_secret_field(key) and isinstance(value, str) and value:
+            if (
+                isinstance(value, str)
+                and value
+                and (is_sensitive_key(key) or string_contains_secret(value))
+            ):
                 return "sha256:" + hashlib.sha256(value.encode("utf-8")).hexdigest()
             if value is None or isinstance(value, (bool, int, float, str)):
                 return value

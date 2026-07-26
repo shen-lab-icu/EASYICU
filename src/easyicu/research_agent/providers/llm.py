@@ -34,6 +34,10 @@ from ..authority.provider_budget import (
     active_provider_retry_available,
     consume_active_transport_attempt,
 )
+from ..authority.secret_redaction import (
+    debug_capture_enabled,
+    redact_debug_value,
+)
 from .protocol import LLMClient, LLMMessage
 
 #: Per-field ceiling for the optional LLM debug dump. A full prompt is tens of
@@ -846,16 +850,17 @@ class OpenAIClient:
         # Optional debug dump — ``EASYICU_LLM_DEBUG=1 …`` writes one
         # JSON file per call so the user can inspect what the model
         # actually returned (finish_reason, raw message, prompt).
-        if os.environ.get("EASYICU_LLM_DEBUG"):
+        if debug_capture_enabled(os.environ.get("EASYICU_LLM_DEBUG")) and (
+            configured_debug_dir := str(
+                os.environ.get("EASYICU_LLM_DEBUG_DIR") or ""
+            ).strip()
+        ):
             try:
                 from datetime import datetime
                 from pathlib import Path
 
-                log_dir = Path(
-                    os.environ.get("EASYICU_LLM_DEBUG_DIR")
-                    or "./research_output/llm_debug"
-                )
-                log_dir.mkdir(parents=True, exist_ok=True)
+                log_dir = Path(configured_debug_dir)
+                log_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
                 # The dump contains the full prompt: the research question,
                 # variable definitions, cohort description and every method
                 # detail the agent reasoned over. That is study-sensitive even
@@ -866,22 +871,25 @@ class OpenAIClient:
                 except OSError:
                     pass
                 ts = datetime.now().strftime("%Y%m%dT%H%M%S_%f")
-                payload = {
-                    "model": self._model,
-                    "finish_reason": getattr(choice, "finish_reason", None),
-                    "prompt_messages": _truncated_debug_messages(chat_messages),
-                    "raw_message_head": _truncated_debug_text(
-                        msg.model_dump_json()
-                        if hasattr(msg, "model_dump_json")
-                        else str(msg)
-                    ),
-                    "extracted_content_head": content[:1200],
-                    "extracted_content_chars": len(content),
-                    "note": (
-                        "Truncated debug dump. Contains study design detail; "
-                        "keep it out of shared or synced directories."
-                    ),
-                }
+                payload = redact_debug_value(
+                    {
+                        "model": self._model,
+                        "finish_reason": getattr(choice, "finish_reason", None),
+                        "prompt_messages": _truncated_debug_messages(chat_messages),
+                        "raw_message_head": _truncated_debug_text(
+                            msg.model_dump_json()
+                            if hasattr(msg, "model_dump_json")
+                            else str(msg)
+                        ),
+                        "extracted_content_head": content[:1200],
+                        "extracted_content_chars": len(content),
+                        "note": (
+                            "Truncated and recursively redacted debug dump. "
+                            "Contains study design detail; keep it out of shared "
+                            "or synced directories."
+                        ),
+                    }
+                )
                 target = log_dir / f"{ts}.json"
                 descriptor = os.open(
                     target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
@@ -1321,9 +1329,7 @@ class LLMRouter:
             client = self._roles.get(role) or self._default
             extra_body = getattr(client, "_extra_body", None)
             reasoning = (
-                extra_body.get("reasoning")
-                if isinstance(extra_body, dict)
-                else None
+                extra_body.get("reasoning") if isinstance(extra_body, dict) else None
             )
             actual_effort = (
                 reasoning.get("effort") if isinstance(reasoning, dict) else None

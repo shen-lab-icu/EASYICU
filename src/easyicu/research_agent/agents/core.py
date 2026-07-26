@@ -74,6 +74,11 @@ from ..repairs.patch import (
     render_minimal_patch_prompt,
 )
 from ..authority.coder_authority import HostCoderAuthority
+from ..authority.secret_redaction import (
+    debug_capture_enabled,
+    redact_debug_value,
+    redact_text_secrets,
+)
 from ..research_context.prompt_scope import (
     compact_rendering_coder_guide_for_step,
     coder_context_requires_method_constraints,
@@ -145,22 +150,48 @@ from ..research_context.temporal_semantics import (
 # Compatibility alias for callers/tests that imported the former local helper.
 _format_observed_domain = format_observed_domain
 
+LLM_PARSE_DEBUG_CHARS = 4000
+
 
 def _dump_raw(text: str, tag: str) -> Optional[Path]:
-    """Best-effort save of an LLM response that failed to parse (T1.3).
+    """Optionally save a bounded, redacted parse diagnostic.
 
-    Creates ``research_output/llm_debug/<tag>_<timestamp>.txt`` with the
-    full raw response. Silent on any IO failure so the debug aid never
-    masks the underlying parse error.
+    Capture is disabled unless both ``EASYICU_LLM_DEBUG`` is explicitly true
+    and ``EASYICU_LLM_DEBUG_DIR`` names the operator-selected run-local
+    directory.  The raw response is never written verbatim.
     """
+    if not debug_capture_enabled(os.environ.get("EASYICU_LLM_DEBUG")):
+        return None
+    configured_dir = str(os.environ.get("EASYICU_LLM_DEBUG_DIR") or "").strip()
+    if not configured_dir:
+        return None
     try:
-        log_dir = Path(
-            os.environ.get("EASYICU_LLM_DEBUG_DIR") or "./research_output/llm_debug"
-        )
-        log_dir.mkdir(parents=True, exist_ok=True)
+        log_dir = Path(configured_dir)
+        log_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        try:
+            os.chmod(log_dir, 0o700)
+        except OSError:
+            pass
         ts = datetime.now().strftime("%Y%m%dT%H%M%S_%f")
-        path = log_dir / f"{tag}_{ts}.txt"
-        path.write_text(text or "", encoding="utf-8")
+        safe_tag = re.sub(r"[^a-zA-Z0-9_-]+", "_", str(tag))[:80] or "parse"
+        path = log_dir / f"{safe_tag}_{ts}.json"
+        raw = text or ""
+        payload = redact_debug_value(
+            {
+                "schema_version": "easyicu.llm_parse_debug/1",
+                "tag": safe_tag,
+                "response_head": raw[:LLM_PARSE_DEBUG_CHARS],
+                "response_chars": len(raw),
+                "truncated": len(raw) > LLM_PARSE_DEBUG_CHARS,
+                "note": (
+                    "Redacted, bounded parse diagnostic. Not a replay or "
+                    "scientific evidence artifact."
+                ),
+            }
+        )
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2, ensure_ascii=False)
         return path
     except Exception:
         return None
@@ -829,18 +860,23 @@ class PlannerAgent:
             # Last-ditch: try to recover a JSON block from inside the response.
             match = _first_json_block(text)
             if match is None:
-                # T1.3 — be loud about exactly what came back. Dump the
-                # whole raw response so the user can hand it to a human
-                # debugger or back to Claude for prompt iteration.
-                _dump_raw(raw, "planner_unparseable")
-                head = (raw or "").strip().replace("\n", " ⏎ ")[:600]
+                diagnostic_path = _dump_raw(raw, "planner_unparseable")
+                head = redact_text_secrets((raw or "")[:LLM_PARSE_DEBUG_CHARS]).strip()
+                head = head.replace("\n", " ⏎ ")[:600]
+                diagnostic_note = (
+                    f"Redacted diagnostic written to {diagnostic_path}."
+                    if diagnostic_path is not None
+                    else (
+                        "No raw response was written. Set EASYICU_LLM_DEBUG=1 "
+                        "and EASYICU_LLM_DEBUG_DIR=<run_dir>/llm_debug to write "
+                        "a bounded, redacted diagnostic."
+                    )
+                )
                 raise ValueError(
                     f"Planner LLM did not return parseable JSON "
                     f"(len={len(raw or '')}). "
-                    f"First 600 chars: {head!r}. "
-                    "Full raw response written to "
-                    "research_output/llm_debug/planner_unparseable_*.txt; "
-                    "set EASYICU_LLM_DEBUG=1 to also capture every LLM call."
+                    f"Redacted first 600 chars: {head!r}. "
+                    f"{diagnostic_note}"
                 )
             data = json.loads(match)
         if not isinstance(data, dict):
