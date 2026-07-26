@@ -315,6 +315,69 @@ def test_total_only_usage_is_counted_at_the_more_expensive_rate(tmp_path):
     assert record["accounted_estimated_cost_usd"] == pytest.approx(0.000014)
 
 
+def test_provider_side_prompt_overhead_is_reserved_and_released(tmp_path):
+    from easyicu.research_agent.authority.provider_hard_stop import (
+        PROVIDER_PROMPT_OVERHEAD_TOKEN_RESERVATION,
+        consume_active_provider_hard_stop_attempt,
+        provider_hard_stop_call_scope,
+    )
+
+    ledger = _ledger(tmp_path)
+    task = ledger.start_task("E1")
+    with provider_hard_stop_call_scope(
+        task=task,
+        role="analyzer",
+        model="gpt-5.6-luna",
+        messages=_message("Return exactly READY"),
+        max_tokens=32,
+    ) as call:
+        consume_active_provider_hard_stop_attempt()
+        call.complete(
+            {
+                "prompt_tokens": 316,
+                "completion_tokens": 5,
+                "total_tokens": 321,
+            }
+        )
+
+    record = ledger.snapshot()["tasks"][0]["calls"][0]
+    assert record["state"] == "completed"
+    assert record["accounted_tokens"] == 321
+    assert (
+        record["provider_prompt_overhead_token_reservation"]
+        == PROVIDER_PROMPT_OVERHEAD_TOKEN_RESERVATION
+    )
+    assert record["prompt_token_reservation"] > record["reported_prompt_tokens"]
+
+
+def test_usage_beyond_provider_overhead_reservation_still_fails_closed(tmp_path):
+    from easyicu.research_agent.authority.provider_hard_stop import (
+        ProviderHardStopExceeded,
+        consume_active_provider_hard_stop_attempt,
+        provider_hard_stop_call_scope,
+    )
+
+    ledger = _ledger(tmp_path)
+    task = ledger.start_task("E1")
+    with provider_hard_stop_call_scope(
+        task=task,
+        role="analyzer",
+        model="test-model",
+        messages=_message(),
+        max_tokens=32,
+    ) as call:
+        consume_active_provider_hard_stop_attempt()
+        with pytest.raises(
+            ProviderHardStopExceeded,
+            match="PROVIDER_USAGE_EXCEEDED_RESERVATION",
+        ):
+            call.complete({"total_tokens": 9_999})
+
+    record = ledger.snapshot()["tasks"][0]["calls"][0]
+    assert record["state"] == "completed_usage_overflow"
+    assert record["accounted_tokens"] == 9_999
+
+
 def test_provider_request_timeout_is_capped_by_task_wall_clock(
     tmp_path, monkeypatch
 ):

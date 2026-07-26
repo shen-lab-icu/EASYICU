@@ -38,6 +38,7 @@ import uuid
 
 
 PROVIDER_HARD_STOP_SCHEMA = "easyicu.provider_hard_stop_ledger/1"
+PROVIDER_PROMPT_OVERHEAD_TOKEN_RESERVATION = 4096
 _MAX_LEDGER_BYTES = 16 * 1024 * 1024
 _TERMINAL_TASK_STATES = frozenset(
     {"completed", "failed", "batch_canary_blocked", "budget_exhausted"}
@@ -237,15 +238,31 @@ def load_provider_hard_stop_ledger(path: Path) -> Dict[str, object]:
 
 
 def _prompt_token_reservation(messages: Sequence[Any]) -> int:
-    """Conservative transport-independent upper bound for prompt tokens."""
+    """Conservative bound including provider-side prompt framing.
+
+    Message bytes alone bound tokens produced from caller-visible content, but
+    OpenAI-compatible gateways may prepend model instructions that are absent
+    from the request payload while still reporting them as prompt usage.  Luna
+    on the local gateway has demonstrated this behaviour.  Keep a fixed,
+    provider-independent allowance so a normal successful response is not
+    misclassified as a budget overflow; successful calls release the unused
+    reservation back to their provider-reported usage.
+    """
 
     prompt_bytes = sum(
         len(str(getattr(message, "content", "") or "").encode("utf-8"))
         for message in messages
     )
     # Every tokenizer token consumes at least one encoded byte for normal
-    # message content; the fixed allowance covers roles/framing/special tokens.
-    return max(1, prompt_bytes + 16 * len(messages) + 64)
+    # message content. The small term covers caller-visible roles/framing; the
+    # larger constant covers provider-owned instructions and special tokens.
+    return max(
+        1,
+        prompt_bytes
+        + 16 * len(messages)
+        + 64
+        + PROVIDER_PROMPT_OVERHEAD_TOKEN_RESERVATION,
+    )
 
 
 def _safe_score_summary(score: Optional[Mapping[str, object]]) -> Dict[str, object]:
@@ -633,6 +650,9 @@ class ProviderHardStopLedger:
                     "started_at": _utc_now(),
                     "finished_at": None,
                     "prompt_token_reservation": prompt_reserve,
+                    "provider_prompt_overhead_token_reservation": (
+                        PROVIDER_PROMPT_OVERHEAD_TOKEN_RESERVATION
+                    ),
                     "completion_token_reservation": completion_reserve,
                     "accounted_tokens": token_reserve,
                     "reported_prompt_tokens": None,
@@ -891,6 +911,7 @@ def consume_active_provider_hard_stop_attempt() -> Optional[float]:
 
 __all__ = [
     "PROVIDER_HARD_STOP_SCHEMA",
+    "PROVIDER_PROMPT_OVERHEAD_TOKEN_RESERVATION",
     "ProviderHardStopError",
     "ProviderHardStopExceeded",
     "ProviderHardStopLedger",
