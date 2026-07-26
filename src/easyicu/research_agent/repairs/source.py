@@ -5295,6 +5295,7 @@ def _patch_direct_bound_figure_source_projection(
 
     loaded_tables: Dict[str, str] = {}
     duplicate_products: Set[str] = set()
+    unkeyed_loaded_frames: List[str] = []
 
     def _register_loaded_table(*, input_key: str, frame_name: str) -> None:
         if not input_key.startswith("table:"):
@@ -5346,10 +5347,14 @@ def _patch_direct_bound_figure_source_projection(
                     and value.func.attr == "load_bound_table"
                 )
             )
-            and value.args
+        ):
+            continue
+        if not (
+            value.args
             and isinstance(value.args[0], ast.Constant)
             and isinstance(value.args[0].value, str)
         ):
+            unkeyed_loaded_frames.append(target.elts[0].id)
             continue
         _register_loaded_table(
             input_key=str(value.args[0].value),
@@ -5358,13 +5363,18 @@ def _patch_direct_bound_figure_source_projection(
     if duplicate_products:
         return code
     missing_products = [Path(name).stem for name in plain_missing_names]
+    unresolved_products = [
+        product for product in missing_products if product not in loaded_tables
+    ]
+    if len(unresolved_products) == 1 and len(unkeyed_loaded_frames) == 1:
+        loaded_tables[unresolved_products[0]] = unkeyed_loaded_frames[0]
     if len(missing_products) != len(set(missing_products)) or any(
         product not in loaded_tables for product in missing_products
     ):
         return code
     source_assignment = _figure_contract_source_assignment(
         tree,
-        source_value_type=(ast.Constant, ast.Attribute),
+        source_value_type=(ast.Constant, ast.Attribute, ast.Name),
     )
     if source_assignment is None:
         return code

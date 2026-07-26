@@ -325,6 +325,88 @@ def main():
     assert distribution["count"].tolist() == [17]
 
 
+def test_direct_bound_figure_repair_resolves_one_unkeyed_parent_from_finding(
+    tmp_path: Path,
+) -> None:
+    code = f"""
+from pathlib import Path
+import pandas as pd
+
+OUT_DIR = Path({str(tmp_path)!r})
+TABLE_INPUT = "table:absolute_risk_context"
+
+def load_bound_table(manifest, run_dir):
+    return (
+        pd.DataFrame({{
+            "row_type": ["exposure_group"],
+            "exposure_group": ["positive"],
+            "prevalence_pct": [100.0],
+            "prevalence_numerator": [20],
+            "prevalence_denominator": [20],
+        }}),
+        Path("absolute_risk_context.csv"),
+        {{"input_key": TABLE_INPUT}},
+    )
+
+def make_figure_contract(**kwargs):
+    return kwargs
+
+def save_publication_figure(*, fig, out_dir, stem, contract):
+    return None
+
+def main():
+    manifest = {{}}
+    run_dir = Path(".")
+    table, table_path, binding = load_bound_table(manifest, run_dir)
+    plotted = table.rename(columns={{"prevalence_pct": "value_pct"}})
+    source_data_name = "prevalence_mortality_source_data.csv"
+    source_path = OUT_DIR / source_data_name
+    plotted.to_csv(source_path, index=False)
+    contract = make_figure_contract(
+        figure_id="figure:prevalence_mortality",
+        source_data=source_data_name,
+    )
+    save_publication_figure(
+        fig=None,
+        out_dir=OUT_DIR,
+        stem="prevalence_mortality",
+        contract=contract,
+    )
+    return contract
+"""
+    finding = {
+        **_FINDING,
+        "detail": {
+            **_FINDING["detail"],
+            "missing_bound_tables": ["absolute_risk_context.csv"],
+        },
+    }
+
+    repair = deterministic_contract_repair(code=code, findings=[finding])
+
+    assert repair is not None
+    repair_id, repaired = repair
+    assert repair_id == "direct_bound_figure_source_projection_v1"
+    namespace: dict[str, object] = {}
+    exec(repaired, namespace)
+    contract = namespace["main"]()
+    assert contract["source_data"] == [
+        "bound_000_absolute_risk_context_source_data.csv"
+    ]
+    projection = pd.read_csv(tmp_path / contract["source_data"][0])
+    assert projection.to_dict(orient="records") == [
+        {
+            "source_row_index": 0,
+            "source_table": "absolute_risk_context.csv",
+            "row_type": "exposure_group",
+            "exposure_group": "positive",
+            "prevalence_pct": 100.0,
+            "prevalence_numerator": 20,
+            "prevalence_denominator": 20,
+        }
+    ]
+
+
 def test_direct_bound_figure_repair_materializes_prior_dataframe_dict_shape(
     tmp_path: Path,
 ) -> None:
