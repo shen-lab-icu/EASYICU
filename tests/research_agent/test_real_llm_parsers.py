@@ -483,8 +483,21 @@ def test_typed_binding_gate_rejects_identity_coordinate_as_raw_step_input(
         robustness_specs=[],
     )
 
-    with pytest.raises(CohortSchemaError, match="raw name 'stay_id'"):
+    with pytest.raises(CohortSchemaError, match="raw name 'stay_id'") as caught:
         validate_plan_typed_bindings_against_context(plan=plan, context=context)
+
+    message = str(caught.value)
+    assert "reserved for host navigation" in message
+    assert "reserved navigation coordinates=['stay_id']" in message
+    assert "'stay_id'" not in message.split("executable cohort columns=", 1)[1].split(
+        "; reserved navigation coordinates=", 1
+    )[0]
+
+    from easyicu.research_agent.agents.core import PlannerAgent
+
+    prompt = PlannerAgent.request_messages(context)[1].content
+    assert "HOST NAVIGATION COORDINATES" in prompt
+    assert "not executable analysis fields" in prompt
 
 
 def test_planner_retries_robustness_window_absent_from_sealed_input(tmp_path) -> None:

@@ -553,6 +553,7 @@ def _raw_typed_plan_reference_issues(
     *,
     plan: Any,
     columns: tuple[str, ...],
+    reserved_coordinates: tuple[str, ...] = (),
 ) -> list[str]:
     """Return Planner-owned raw fields absent from the sealed cohort.
 
@@ -562,6 +563,7 @@ def _raw_typed_plan_reference_issues(
     """
 
     available = set(columns)
+    reserved = set(reserved_coordinates)
     invalid_locations: dict[str, list[str]] = {}
 
     def require_column(label: str, value: Any) -> None:
@@ -634,13 +636,21 @@ def _raw_typed_plan_reference_issues(
             categories[category] = categories.get(category, 0) + 1
         return categories
 
-    return [
-        (
-            f"raw name {name!r} is not an exact sealed cohort column; "
-            f"locations={location_categories(locations)!r}"
-        )
-        for name, locations in invalid_locations.items()
-    ]
+    issues: list[str] = []
+    for name, locations in invalid_locations.items():
+        categories = location_categories(locations)
+        if name in reserved:
+            issues.append(
+                f"raw name {name!r} is a sealed identity/time coordinate "
+                "reserved for host navigation, not an executable analysis "
+                f"field; locations={categories!r}"
+            )
+        else:
+            issues.append(
+                f"raw name {name!r} is not an exact executable sealed cohort "
+                f"column; locations={categories!r}"
+            )
+    return issues
 
 
 def _closed_observed_levels(variable: Any) -> list[Any]:
@@ -843,9 +853,11 @@ def validate_plan_typed_bindings_against_context(
     # analysis variables. Runtime raw-input contracts intentionally omit them,
     # so reject them while the Planner still has structured-retry authority.
     executable_columns = tuple(getattr(typed_cohort, "column_bindings", {}).keys())
+    reserved_coordinates = tuple(sorted(set(columns) - set(executable_columns)))
     raw_issues = _raw_typed_plan_reference_issues(
         plan=plan,
         columns=executable_columns,
+        reserved_coordinates=reserved_coordinates,
     )
     issues = list(raw_issues)
     primary_definition: Optional[CohortDefinition] = None
@@ -900,7 +912,7 @@ def validate_plan_typed_bindings_against_context(
     if not issues:
         return
 
-    column_set = set(columns)
+    column_set = set(executable_columns)
     producer_columns = sorted(
         {
             str(value).strip()
@@ -922,10 +934,12 @@ def validate_plan_typed_bindings_against_context(
     if raw_issues:
         correction = (
             "For raw step inputs, Table 1, model requirements, and robustness "
-            "fields, copy exact column names from the materialized-input roster "
-            "in the original prompt; concept ids are only valid inside typed "
-            "cohort predicates, and kind:name is only valid for an explicit "
-            "upstream product."
+            "fields, copy exact names from the executable materialized-input "
+            "roster in the original prompt. Never list cohort id/time "
+            "coordinates as analysis inputs; the host owns row navigation and "
+            "cohort accounting. Concept ids are only valid inside typed cohort "
+            "predicates, and kind:name is only valid for an explicit upstream "
+            "product."
         )
     else:
         correction = (
@@ -938,7 +952,9 @@ def validate_plan_typed_bindings_against_context(
         f"Invalid references: {detail}. {correction} Additional binding context: "
         "declared "
         f"typed source concepts={typed_sources!r}; declared columns="
-        f"{producer_columns!r}; sealed cohort columns={sorted(columns)!r}."
+        f"{producer_columns!r}; executable cohort columns="
+        f"{sorted(executable_columns)!r}; reserved navigation coordinates="
+        f"{list(reserved_coordinates)!r}."
     )
 
 
