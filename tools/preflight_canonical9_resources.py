@@ -28,6 +28,15 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--docker-executable", default="docker")
     parser.add_argument("--timeout-seconds", type=float, default=900.0)
+    parser.add_argument(
+        "--h3-sample-stays",
+        type=int,
+        default=None,
+        help=(
+            "Development-only H3 stay sample. E1-H2 remain full-input qualified, "
+            "but the report explicitly does not qualify H3 or the full batch."
+        ),
+    )
     return parser
 
 
@@ -45,6 +54,7 @@ def main(argv: list[str] | None = None) -> int:
         image=args.image,
         timeout_seconds=args.timeout_seconds,
         docker_executable=args.docker_executable,
+        h3_sample_stays=args.h3_sample_stays,
     )
     print(
         json.dumps(
@@ -54,6 +64,15 @@ def main(argv: list[str] | None = None) -> int:
                 "task_order": report["task_order"],
                 "docker_image_id": report["docker_image_id"],
                 "peak_rss_bytes": report["peak_rss_bytes"],
+                "full_input_resource_qualified": report[
+                    "full_input_resource_qualified"
+                ],
+                "full_input_qualified_task_ids": report[
+                    "full_input_qualified_task_ids"
+                ],
+                "development_sample_task_ids": report[
+                    "development_sample_task_ids"
+                ],
                 "report": str(
                     args.out_dir.expanduser().resolve()
                     / RESOURCE_REPORT_FILENAME
