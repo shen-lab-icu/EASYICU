@@ -23,9 +23,23 @@ def test_release_gate_is_offline_and_covers_all_new_boundaries() -> None:
     assert "test_resource_scheduler.py" in flattened
     assert "test_permissioned_memory_store.py" in flattened
     assert "test_capability_requests.py" in flattened
-    assert "test_graph_poc.py" in flattened
+    assert "test_workflow.py" in flattened
+    assert "test_graph_poc.py" not in flattened
     assert "test_char_golden_run_bundle.py" in flattened
     assert "test_permissioned_quarantine_mirror_failure" in flattened
+
+
+def test_release_gate_references_only_existing_test_files() -> None:
+    module = _module()
+    missing = []
+    for _name, command in module.RELEASE_COMMANDS:
+        for token in command:
+            if token.startswith("tests/") and ".py" in token:
+                relative_path = token.split("::", maxsplit=1)[0]
+                if not (module.REPO_ROOT / relative_path).is_file():
+                    missing.append(relative_path)
+
+    assert missing == []
 
 
 def test_release_gate_stops_at_first_failure(monkeypatch) -> None:

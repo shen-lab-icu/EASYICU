@@ -168,12 +168,16 @@ def test_production_modules_do_not_import_langgraph() -> None:
     assert offenders == []
 
 
-def test_langgraph_is_not_a_core_dependency() -> None:
+def test_langgraph_is_not_a_packaged_dependency() -> None:
     root = Path(__file__).resolve().parents[2]
     project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
-    dependencies = project["project"]["dependencies"]
+    dependencies = list(project["project"]["dependencies"])
+    for extra_dependencies in project["project"].get(
+        "optional-dependencies", {}
+    ).values():
+        dependencies.extend(extra_dependencies)
 
-    assert not any(item.lower().startswith("langgraph") for item in dependencies)
+    assert not any("langgraph" in item.lower() for item in dependencies)
 
 
 def test_langgraph_is_not_in_the_runner_lock() -> None:
@@ -182,7 +186,17 @@ def test_langgraph_is_not_in_the_runner_lock() -> None:
         root / "src/easyicu/research_agent/runner_image/requirements.lock"
     ).read_text(encoding="utf-8").splitlines()
 
-    assert not any(line.lower().startswith("langgraph==") for line in lock_lines)
+    assert not any("langgraph" in line.lower() for line in lock_lines)
+
+
+def test_langgraph_is_not_installed_by_ci() -> None:
+    root = Path(__file__).resolve().parents[2]
+    offenders = []
+    for path in (root / ".github" / "workflows").glob("*.yml"):
+        if "langgraph" in path.read_text(encoding="utf-8").lower():
+            offenders.append(path.relative_to(root).as_posix())
+
+    assert offenders == []
 
 
 def test_run_with_graph_is_only_a_deprecated_alias() -> None:
