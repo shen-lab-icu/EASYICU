@@ -630,6 +630,17 @@ def test_lazy_facade_preserves_1x_exports_without_duplicates() -> None:
     )
 
 
+def test_legacy_loader_module_cannot_shadow_public_load_concepts() -> None:
+    import easyicu
+
+    legacy_module = importlib.import_module("easyicu.load_concepts")
+
+    assert legacy_module.ConceptLoader.__module__ == "easyicu.load_concepts"
+    assert easyicu.load_concepts is importlib.import_module(
+        "easyicu.api"
+    ).load_concepts
+
+
 def test_every_declared_top_level_target_resolves_from_its_owner() -> None:
     """The lazy table must not turn misspelled targets into delayed failures."""
 
