@@ -57,6 +57,7 @@ from .completion import (
     step_completion_projection,
 )
 from ..authority.evidence_store import EvidenceStore, sha256_of_file
+from ..authority.step_recovery import StepRecoverySignature
 from ..planning.figure_strategy import summarize_article_figure_strategy_coverage
 from ..planning.study_design import study_design_family_for_analysis_type
 from ..figures.publication import PUBLICATION_FIGURE_SKILL_POLICY_VERSION
@@ -1879,19 +1880,12 @@ def _plan_truncation_status(
     """
 
     declared: set[str] = set()
-    declared_by_step: dict[str, tuple[str, str, set[str]]] = {}
+    declared_by_step: dict[str, StepRecoverySignature] = {}
     for step in (plan.steps if plan is not None else None) or ():
-        step_id = str(getattr(step, "step_id", "") or "").strip()
-        role = str(getattr(step, "planned_analysis_role", "") or "").strip()
-        method = str(getattr(step, "method", "") or "").strip()
-        outputs: set[str] = set()
-        for output in getattr(step, "expected_outputs", None) or ():
-            text = str(output).strip()
-            if text:
-                declared.add(text)
-                outputs.add(text)
-        if step_id:
-            declared_by_step[step_id] = (role, method, outputs)
+        signature = StepRecoverySignature.from_step(step)
+        declared.update(signature.expected_outputs)
+        if signature.step_id:
+            declared_by_step[signature.step_id] = signature
 
     unresolved: list[str] = []
     unresolved_step_ids: list[str] = []
@@ -1910,21 +1904,6 @@ def _plan_truncation_status(
                     continue
                 step_id = str(contract.get("step_id") or "").strip()
                 role = str(contract.get("planned_analysis_role") or "").strip()
-                # The step id, role and output names are the step's shell. A
-                # replanner can restore all three while replacing the science:
-                # a dropped ``schoenfeld_residual_test`` returning as a
-                # ``descriptive_summary`` under the same id, role and output
-                # name is not the PH diagnostic coming back. Method is the
-                # field that carries the approach, so it joins the identity.
-                #
-                # Deliberately NOT the full ``_step_scientific_signature``:
-                # that fingerprint includes ``intent`` prose and is built to
-                # detect tampering with an already-sealed step, where any edit
-                # is suspect. Recovery is the opposite situation — the
-                # replanner is *expected* to author a fresh step — so
-                # demanding identical prose would fail-close on legitimate
-                # rewording. An absent method (findings written before this
-                # contract existed) stays permissive, as role already does.
                 method = str(contract.get("method") or "").strip()
                 expected = [
                     str(output).strip()
@@ -1932,11 +1911,44 @@ def _plan_truncation_status(
                     if str(output).strip()
                 ]
                 current = declared_by_step.get(step_id)
+
+                raw_signature = contract.get("recovery_signature")
+                if raw_signature is not None:
+                    try:
+                        required_signature = StepRecoverySignature.model_validate(
+                            raw_signature
+                        )
+                    except (TypeError, ValueError):
+                        unnamed = True
+                        required_signature = None
+                    recorded_digest = str(
+                        contract.get("recovery_signature_sha256") or ""
+                    ).strip()
+                    signature_valid = (
+                        required_signature is not None
+                        and recorded_digest == required_signature.canonical_digest()
+                        and step_id == required_signature.step_id
+                        and role == required_signature.planned_analysis_role
+                        and method == required_signature.method
+                        and tuple(sorted(expected))
+                        == required_signature.expected_outputs
+                    )
+                    if not signature_valid or current != required_signature:
+                        if step_id and step_id not in unresolved_step_ids:
+                            unresolved_step_ids.append(step_id)
+                        for text in expected:
+                            if text not in unresolved:
+                                unresolved.append(text)
+                    continue
+
+                # Legacy findings predate the structured recovery signature.
+                # Retain the prior shell + method comparison so archived runs
+                # remain readable; new findings always take the stricter path.
                 role_matches = current is not None and (
-                    not role or current[0] == role
+                    not role or current.planned_analysis_role == role
                 )
                 method_matches = current is not None and (
-                    not method or current[1] == method
+                    not method or current.method == method
                 )
                 if not step_id or not expected:
                     unnamed = True
@@ -1948,7 +1960,7 @@ def _plan_truncation_status(
                             unresolved.append(text)
                     continue
                 for text in expected:
-                    if text not in current[2] and text not in unresolved:
+                    if text not in current.expected_outputs and text not in unresolved:
                         unresolved.append(text)
             continue
 
