@@ -100,6 +100,7 @@ def call_llm_with_structured_retry(
     max_tokens: int = 4096,
     temperature: float = 0.2,
     format_reminder: str = "",
+    include_failed_response_on_retry: bool = True,
     feedback_preamble: str = _DEFAULT_FEEDBACK_PREAMBLE,
     feedback_instructions: str = _DEFAULT_FEEDBACK_INSTRUCTIONS,
 ) -> T:
@@ -133,6 +134,11 @@ def call_llm_with_structured_retry(
         required keys (e.g. ``"The JSON must include keys: research_question,
         steps, rationale."``). Domain-specific clinical guidance should
         live in the role's *system* prompt, not here.
+    include_failed_response_on_retry:
+        Preserve the latest failed assistant response in the retry
+        conversation. Disable this for large, self-contained structured
+        outputs when the immutable base prompt plus validator feedback is
+        sufficient to regenerate the object without inflating every retry.
     feedback_preamble, feedback_instructions:
         Override the default natural-language feedback wrapping if a
         role needs different phrasing.
@@ -170,10 +176,10 @@ def call_llm_with_structured_retry(
             last_exc = exc
             if i >= max_retries:
                 break
-            # Keep only the latest failed response beside the immutable base
-            # prompt.  Accumulating every full JSON attempt grows Planner
-            # retries quadratically (and can exceed the original prompt by
-            # tens of kilobytes) without adding useful correction context.
+            # When retained, keep only the latest failed response beside the
+            # immutable base prompt. Accumulating every full JSON attempt grows
+            # structured retries quadratically. Large self-contained outputs
+            # can opt out and regenerate from the base plus validator feedback.
             feedback_parts = [
                 feedback_preamble,
                 f"  {exc.__class__.__name__}: {str(exc)[:400]}",
@@ -183,10 +189,15 @@ def call_llm_with_structured_retry(
             if format_reminder:
                 feedback_parts.extend(["", format_reminder])
             feedback_message = "\n".join(feedback_parts)
-            current = base_messages + [
-                LLMMessage(role="assistant", content=raw or ""),
-                LLMMessage(role="user", content=feedback_message),
-            ]
+            retry_messages: List[LLMMessage] = []
+            if include_failed_response_on_retry:
+                retry_messages.append(
+                    LLMMessage(role="assistant", content=raw or "")
+                )
+            retry_messages.append(
+                LLMMessage(role="user", content=feedback_message)
+            )
+            current = base_messages + retry_messages
             continue
         else:
             attempts.append(

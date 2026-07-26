@@ -866,6 +866,7 @@ class PlannerAgent:
             max_retries=PLANNER_MAX_RETRIES,
             max_tokens=4096,
             temperature=0.2,
+            include_failed_response_on_retry=False,
             format_reminder=(
                 "The JSON must be a single object with keys: "
                 "research_question (string), optional analysis_type (string), "
