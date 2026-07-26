@@ -28,6 +28,9 @@ from easyicu.research_agent.authority.execution_identity import (
 from easyicu.research_agent.authority.provider_hard_stop import (
     load_provider_hard_stop_ledger,
 )
+from easyicu.research_agent.know_how.registry import (
+    reviewable_card_content_sha256,
+)
 
 from benchmarks.figure2_canonical9.evaluator.input_freeze_v1 import (
     CanonicalInputFreezeError,
@@ -58,6 +61,11 @@ from benchmarks.figure2_canonical9.realrun_authority import (
     verify_batch_authorization_receipt,
     verify_realrun_authorization,
     verify_results_frozen_input_authority,
+)
+from benchmarks.figure2_canonical9.scientific_protocol_authority import (
+    REQUIRED_SCIENTIFIC_PROTOCOLS,
+    ScientificProtocolAuthority,
+    ScientificProtocolTaskBinding,
 )
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -164,6 +172,50 @@ def _production_authority(
     return authority
 
 
+def _scientific_protocol_authority(
+    path: Path,
+) -> ScientificProtocolAuthority:
+    card_root = path.parent / "reviewed_protocols"
+    card_root.mkdir(exist_ok=True)
+    bindings: list[ScientificProtocolTaskBinding] = []
+    for task_id, card_id in REQUIRED_SCIENTIFIC_PROTOCOLS:
+        payload = json.loads(
+            (
+                _REPO_ROOT
+                / "src/easyicu/data/research_know_how"
+                / f"{card_id}.json"
+            ).read_text(encoding="utf-8")
+        )
+        payload["review_status"] = "clinical_reviewed"
+        payload["review_attestation"] = None
+        reviewed_content_sha256 = reviewable_card_content_sha256(payload)
+        payload["review_attestation"] = {
+            "reviewer_owner": "Synthetic clinical-and-methods test board",
+            "review_date": "2026-07-26",
+            "card_version": payload["version"],
+            "reviewed_content_sha256": reviewed_content_sha256,
+            "review_scope": ["clinical protocol", "statistical methods"],
+            "literature_search_cutoff": "2026-07-25",
+            "clinical_reviewed": True,
+            "methods_reviewed": True,
+        }
+        card_path = card_root / f"{task_id}.json"
+        card_path.write_text(json.dumps(payload), encoding="utf-8")
+        bindings.append(
+            ScientificProtocolTaskBinding(
+                task_id=task_id,
+                card_id=card_id,
+                card_version=payload["version"],
+                card_path=str(card_path),
+                card_file_sha256=_sha256_file(card_path),
+                reviewed_content_sha256=reviewed_content_sha256,
+            )
+        )
+    authority = ScientificProtocolAuthority.build(tasks=bindings)
+    path.write_text(authority.model_dump_json(), encoding="utf-8")
+    return authority
+
+
 def _frozen_identity(
     path: Path,
     *,
@@ -203,10 +255,17 @@ def _frozen_identity(
 
 
 def _declaration(path: Path, *, jsonl_path: Path, jsonl_sha: str, **overrides):
+    protocol_path = path.parent / "scientific_protocol_authority.json"
+    protocol_digest = (
+        str(json.loads(protocol_path.read_text(encoding="utf-8"))["authority_digest"])
+        if protocol_path.is_file()
+        else "0" * 64
+    )
     base = dict(
         schema_version=OPERATOR_FREEZE_DECLARATION_SCHEMA,
         expected_execution_identity_sha256="0" * 64,
         input_authority_digest="0" * 64,
+        scientific_protocol_authority_digest=protocol_digest,
         input_freeze_manifest_sha256="0" * 64,
         rubric_sha256="0" * 64,
         code_commit_sha=_COMMIT,
@@ -269,6 +328,8 @@ def _authorized_setup(tmp_path: Path):
     jsonl_sha = _write_jsonl(jsonl_path, cohort_paths)
     prod_path = tmp_path / "prod_authority.json"
     authority = _production_authority(prod_path, cohort_paths)
+    protocol_path = tmp_path / "scientific_protocol_authority.json"
+    protocol_authority = _scientific_protocol_authority(protocol_path)
     id_path = tmp_path / "identity.json"
     _frozen_identity(id_path, input_authority=authority.authority_digest)
     rubric_path = tmp_path / "rubric.json"
@@ -281,6 +342,7 @@ def _authorized_setup(tmp_path: Path):
         jsonl_sha=jsonl_sha,
         expected_execution_identity_sha256=_sha256_file(id_path),
         input_authority_digest=authority.authority_digest,
+        scientific_protocol_authority_digest=protocol_authority.authority_digest,
         input_freeze_manifest_sha256=canonical_input_freeze_manifest_sha256(_REAL_V1),
         rubric_sha256=_sha256_file(rubric_path),
         output_root=str(out_root),
@@ -295,6 +357,7 @@ def _authorized_setup(tmp_path: Path):
         rubric_path=rubric_path,
         invocation=invocation,
         production_input_authority_path=prod_path,
+        scientific_protocol_authority_path=protocol_path,
         live_code_version=_CLEAN_LIVE,
     )
     return request, {
@@ -302,6 +365,8 @@ def _authorized_setup(tmp_path: Path):
         "jsonl_path": jsonl_path,
         "jsonl_sha": jsonl_sha,
         "prod_path": prod_path,
+        "protocol_path": protocol_path,
+        "protocol_authority": protocol_authority,
         "id_path": id_path,
         "rubric_path": rubric_path,
         "decl_path": decl_path,
@@ -353,6 +418,59 @@ def test_authorized_with_synthetic_production_authority(tmp_path) -> None:
     assert auth.status == "authorized", auth.issues
     assert auth.issues == ()
     assert auth.input_authority_digest is not None
+    assert auth.scientific_protocol_authority_digest is not None
+
+
+def test_missing_scientific_protocol_blocks_before_any_cohort_read(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    import benchmarks.figure2_canonical9.realrun_authority as authority_module
+
+    request, _ = _authorized_setup(tmp_path)
+    request = dataclasses.replace(
+        request,
+        scientific_protocol_authority_path=None,
+    )
+
+    def forbidden_cohort_read(*_args, **_kwargs):
+        raise AssertionError("cohort bytes must not be read before protocol approval")
+
+    monkeypatch.setattr(
+        authority_module,
+        "production_cohort_input_sha256",
+        forbidden_cohort_read,
+    )
+    auth = verify_realrun_authorization(request)
+
+    assert auth.status == "blocked"
+    assert _codes(auth) == {"SCIENTIFIC_PROTOCOL_AUTHORITY_ABSENT"}
+
+
+def test_scientific_protocol_tamper_blocks_before_production_input(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    import benchmarks.figure2_canonical9.realrun_authority as authority_module
+
+    request, paths = _authorized_setup(tmp_path)
+    card_path = Path(paths["protocol_authority"].tasks[0].card_path)
+    card_path.write_text(
+        card_path.read_text(encoding="utf-8") + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        authority_module,
+        "production_cohort_input_sha256",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("production input verification must not start")
+        ),
+    )
+
+    auth = verify_realrun_authorization(request)
+
+    assert auth.status == "blocked"
+    assert _codes(auth) == {"SCIENTIFIC_PROTOCOL_AUTHORITY_INVALID"}
 
 
 def test_structural_retrofit_source_never_gains_paper_authority(
@@ -896,6 +1014,8 @@ def _launcher_files(tmp_path, *, with_identity=True):
     jsonl_sha = _write_jsonl(jsonl_path, cohort_paths)
     id_path = tmp_path / "identity.json"
     authority = _production_authority(tmp_path / "prod.json", cohort_paths)
+    protocol_path = tmp_path / "scientific_protocol_authority.json"
+    protocol_authority = _scientific_protocol_authority(protocol_path)
     if with_identity:
         _frozen_identity(id_path, input_authority=authority.authority_digest)
     decl_path = tmp_path / "declaration.json"
@@ -907,6 +1027,7 @@ def _launcher_files(tmp_path, *, with_identity=True):
             _sha256_file(id_path) if with_identity else "0" * 64
         ),
         input_authority_digest=authority.authority_digest,
+        scientific_protocol_authority_digest=protocol_authority.authority_digest,
         input_freeze_manifest_sha256=canonical_input_freeze_manifest_sha256(_REAL_V1),
         rubric_sha256=_sha256_file(_REAL_RUBRIC),
         output_root=str(tmp_path / _BATCH_ID),
@@ -915,6 +1036,7 @@ def _launcher_files(tmp_path, *, with_identity=True):
         "jsonl_path": jsonl_path,
         "id_path": id_path,
         "decl_path": decl_path,
+        "protocol_path": protocol_path,
         "out_root": tmp_path / _BATCH_ID,
     }
 
@@ -1083,6 +1205,8 @@ def test_launcher_no_production_authority_blocks(tmp_path, monkeypatch, capsys):
             str(files["decl_path"]),
             "--figure2-expected-execution-identity",
             str(files["id_path"]),
+            "--figure2-scientific-protocol-authority",
+            str(files["protocol_path"]),
             "--ehrflowbench-jsonl",
             str(files["jsonl_path"]),
             "--out-root",
@@ -1112,6 +1236,8 @@ def test_launcher_naive_arm_blocks_at_gate(tmp_path, monkeypatch, capsys):
             str(files["id_path"]),
             "--figure2-production-input-authority",
             str(tmp_path / "prod.json"),
+            "--figure2-scientific-protocol-authority",
+            str(files["protocol_path"]),
             "--ehrflowbench-jsonl",
             str(files["jsonl_path"]),
             "--out-root",
@@ -1141,6 +1267,8 @@ def test_launcher_mock_provider_blocks_at_gate(tmp_path, monkeypatch, capsys):
             str(files["id_path"]),
             "--figure2-production-input-authority",
             str(tmp_path / "prod.json"),
+            "--figure2-scientific-protocol-authority",
+            str(files["protocol_path"]),
             "--ehrflowbench-jsonl",
             str(files["jsonl_path"]),
             "--out-root",
@@ -1170,6 +1298,8 @@ def test_launcher_wrong_output_root_blocks_at_gate(tmp_path, monkeypatch, capsys
             str(files["id_path"]),
             "--figure2-production-input-authority",
             str(tmp_path / "prod.json"),
+            "--figure2-scientific-protocol-authority",
+            str(files["protocol_path"]),
             "--ehrflowbench-jsonl",
             str(files["jsonl_path"]),
             "--out-root",
@@ -1560,6 +1690,8 @@ def _launcher_config_argv(tmp_path, extra: list[str]) -> list[str]:
         str(files["id_path"]),
         "--figure2-production-input-authority",
         str(tmp_path / "prod.json"),
+        "--figure2-scientific-protocol-authority",
+        str(files["protocol_path"]),
         "--ehrflowbench-jsonl",
         str(files["jsonl_path"]),
         "--out-root",
@@ -1633,6 +1765,7 @@ def _binding(frozen, out_root: Path | None = None) -> RealRunBatchBinding:
         batch_id=_BATCH_ID,
         declaration_sha256="d" * 64,
         input_authority_digest="e" * 64,
+        scientific_protocol_authority_digest="f" * 64,
         frozen_input_by_task=frozen,
     )
     if out_root is not None:
@@ -2006,6 +2139,8 @@ def test_end_to_end_gate_authorizes_and_hands_batch_binding(
         submission_profile_ref=profile_ref, tasks=tasks
     )
     prod_path.write_text(authority.model_dump_json(), encoding="utf-8")
+    protocol_path = tmp_path / "scientific_protocol_authority.json"
+    protocol_authority = _scientific_protocol_authority(protocol_path)
 
     id_path = tmp_path / "identity.json"
     _frozen_identity(
@@ -2023,6 +2158,7 @@ def test_end_to_end_gate_authorizes_and_hands_batch_binding(
         submission_profile_ref=profile_ref,
         expected_execution_identity_sha256=_sha256_file(id_path),
         input_authority_digest=authority.authority_digest,
+        scientific_protocol_authority_digest=protocol_authority.authority_digest,
         input_freeze_manifest_sha256=canonical_input_freeze_manifest_sha256(_REAL_V1),
         rubric_sha256=_sha256_file(_REAL_RUBRIC),
         output_root=str(out_root),
@@ -2053,6 +2189,8 @@ def test_end_to_end_gate_authorizes_and_hands_batch_binding(
             str(id_path),
             "--figure2-production-input-authority",
             str(prod_path),
+            "--figure2-scientific-protocol-authority",
+            str(protocol_path),
             "--ehrflowbench-jsonl",
             str(jsonl_path),
             "--out-root",
@@ -2077,6 +2215,10 @@ def test_end_to_end_gate_authorizes_and_hands_batch_binding(
     assert binding is not None
     assert binding.batch_id == _BATCH_ID
     assert binding.declaration_sha256 == _sha256_file(decl_path)
+    assert (
+        binding.scientific_protocol_authority_digest
+        == protocol_authority.authority_digest
+    )
     assert set(binding.frozen_input_by_task) == set(FIGURE2_TASK_IDS)
     assert binding.frozen_input_by_task[FIGURE2_TASK_IDS[0]] == tasks[0].input_sha256
     assert binding.batch_root == out_root
@@ -2111,6 +2253,8 @@ def test_gate_does_not_reopen_production_authority_after_verification(
         submission_profile_ref=profile_ref, tasks=tasks
     )
     production_path.write_text(production.model_dump_json(), encoding="utf-8")
+    protocol_path = tmp_path / "scientific_protocol_authority.json"
+    protocol_authority = _scientific_protocol_authority(protocol_path)
     identity_path = tmp_path / "identity.json"
     _frozen_identity(
         identity_path,
@@ -2127,6 +2271,7 @@ def test_gate_does_not_reopen_production_authority_after_verification(
         submission_profile_ref=profile_ref,
         expected_execution_identity_sha256=_sha256_file(identity_path),
         input_authority_digest=production.authority_digest,
+        scientific_protocol_authority_digest=protocol_authority.authority_digest,
         input_freeze_manifest_sha256=canonical_input_freeze_manifest_sha256(_REAL_V1),
         rubric_sha256=_sha256_file(_REAL_RUBRIC),
         output_root=str(out_root),
@@ -2161,6 +2306,8 @@ def test_gate_does_not_reopen_production_authority_after_verification(
             str(identity_path),
             "--figure2-production-input-authority",
             str(production_path),
+            "--figure2-scientific-protocol-authority",
+            str(protocol_path),
             "--ehrflowbench-jsonl",
             str(jsonl_path),
             "--out-root",
