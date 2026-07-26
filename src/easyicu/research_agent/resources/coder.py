@@ -490,21 +490,35 @@ def bind_primary_cohort_role(
     *,
     authority: HostCoderAuthority,
     locked_cohort_payload: str | None,
+    materialized_execution_payload: str | None = None,
 ) -> HostCoderAuthority:
     """Bind the unique universe-to-analysis-cohort producer role."""
 
     if locked_cohort_payload is None:
         return authority
-    return authority.append(
+    attachment = (
         "CURRENT STEP INPUT ROLE (host-owned execution contract): this is the "
         "plan's unique primary analysis_cohort + attrition producer, so "
-        "COHORT_PARQUET is the raw study universe for this step only. Apply "
+        "COHORT_PARQUET is the raw study universe for this step only; it is not "
+        "already filtered to the analysis cohort. Apply "
         "exactly the Planner-locked cohort definition, report truthful "
         "universe-to-final attrition, and emit an analysis_cohort whose ordered "
         "row identity matches the locked host cohort. Downstream steps receive "
         "the filtered cohort. Planner-locked cohort definition JSON: "
         f"{locked_cohort_payload}."
     )
+    if materialized_execution_payload is not None:
+        attachment += (
+            " HOST-VERIFIED COHORT EXECUTION RECEIPT (binding): the host "
+            "deterministically resolved the Planner-owned predicates against "
+            "the sealed raw universe. Use every `resolved_column` and operation "
+            "in order, and assert the recorded before/excluded/remaining counts. "
+            "The counts and digests are integrity checks, not permission to "
+            "select rows by position, truncate, sample, or copy an arbitrary "
+            "same-sized frame. Receipt JSON: "
+            f"{materialized_execution_payload}."
+        )
+    return authority.append(attachment)
 
 
 def bind_execution_cohort_runtime(

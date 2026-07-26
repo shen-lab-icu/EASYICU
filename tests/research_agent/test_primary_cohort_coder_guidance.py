@@ -18,6 +18,8 @@ from easyicu.research_agent.schema import (
     ResearchContext,
 )
 from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
+from easyicu.research_agent.resources.coder import bind_primary_cohort_role
+from easyicu.research_agent.authority.coder_authority import HostCoderAuthority
 
 
 def _CaptureLLM(responses: list[str]):  # noqa: N802
@@ -83,6 +85,42 @@ def test_initial_coder_prompt_receives_primary_cohort_canonical_schema() -> None
     assert len(llm.calls) == 1
     _assert_canonical_schema_guidance(llm.calls[0][0][-1].content)
     _assert_partition_safety_guidance(llm.calls[0][0][-1].content)
+
+
+def test_primary_cohort_role_binds_resolved_predicate_receipt() -> None:
+    receipt = json.dumps(
+        {
+            "schema_version": "easyicu.primary_cohort_execution_prompt/1",
+            "raw_universe": {"rows": 10, "sha256": "a" * 64},
+            "authoritative_analysis_cohort": {
+                "rows": 8,
+                "sha256": "b" * 64,
+            },
+            "ordered_predicate_flow": [
+                {
+                    "predicate_kind": "inclusion",
+                    "concept_id": "registered_eligibility_concept",
+                    "resolved_column": "eligibility_flag",
+                    "op": "not_missing",
+                    "n_before": 10,
+                    "n_excluded": 2,
+                    "n_remaining": 8,
+                }
+            ],
+        },
+        sort_keys=True,
+    )
+    authority = bind_primary_cohort_role(
+        authority=HostCoderAuthority(),
+        locked_cohort_payload='{"name":"planned_cohort"}',
+        materialized_execution_payload=receipt,
+    )
+    text = authority.render()
+
+    assert "it is not already filtered" in text
+    assert "HOST-VERIFIED COHORT EXECUTION RECEIPT" in text
+    assert '"resolved_column": "eligibility_flag"' in text
+    assert "not permission to select rows by position" in text
 
 
 def test_repair_prompt_and_contract_guidance_share_primary_cohort_schema() -> None:

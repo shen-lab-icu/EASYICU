@@ -31,8 +31,10 @@ import inspect
 import json
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import fields
+from pathlib import Path
 from types import SimpleNamespace
 
+import pandas as pd
 import pytest
 
 
@@ -1665,6 +1667,78 @@ def test_primary_cohort_coder_receives_only_exact_locked_cohort_payload():
     assert payload["name"] == "eligible_stays"
     assert payload["inclusion"][0]["op"] == ">="
     assert "robustness_specs" not in payload
+
+
+def test_primary_cohort_coder_receives_verified_physical_predicate_receipt(
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.cohort.schema import (
+        CohortDefinition,
+        ConceptPredicate,
+        TimeWindow,
+        materialize_locked_analysis_cohort,
+    )
+    from easyicu.research_agent.execution.phase import (
+        _planner_materialized_cohort_prompt_payload,
+    )
+    from easyicu.research_agent.schema import AnalysisPlan
+
+    universe_path = tmp_path / "cohort.parquet"
+    pd.DataFrame(
+        {
+            "stay_id": [11, 12, 13],
+            "age": [31.0, None, 54.0],
+        }
+    ).to_parquet(universe_path, index=False)
+    plan = AnalysisPlan(
+        research_question="Apply the declared eligibility predicate.",
+        cohort=CohortDefinition(
+            name="eligible_stays",
+            inclusion=(
+                ConceptPredicate(
+                    concept_id="age",
+                    time_window=TimeWindow(
+                        anchor="icu_admit",
+                        start_offset_hours=0,
+                        end_offset_hours=24,
+                    ),
+                    aggregation="first",
+                    op=">=",
+                    value=18,
+                ),
+            ),
+        ),
+        robustness_specs=[],
+        steps=[],
+    )
+    result = materialize_locked_analysis_cohort(
+        run_dir=tmp_path,
+        plan=plan,
+        universe_path=universe_path,
+    )
+
+    payload = json.loads(
+        _planner_materialized_cohort_prompt_payload(
+            plan=plan,
+            universe_path=universe_path,
+            analysis_cohort_path=Path(result["path"]),
+        )
+    )
+
+    assert payload["raw_universe"]["rows"] == 3
+    assert payload["authoritative_analysis_cohort"]["rows"] == 2
+    assert payload["ordered_predicate_flow"][1] == {
+        "aggregation": "first",
+        "concept_id": "age",
+        "n_before": 3,
+        "n_excluded": 1,
+        "n_remaining": 2,
+        "op": ">=",
+        "predicate_kind": "inclusion",
+        "resolved_column": "age",
+        "step_order": 1,
+        "value": 18,
+    }
 
 
 def test_primary_cohort_raw_runner_is_scoped_and_authority_hashes_are_rechecked():

@@ -26,7 +26,7 @@
     "src/easyicu/research_agent/resources/capability.py": "f8259b717e1b19b77e78602b284343a03d105288a8f814b8208ab578870cb652",
     "src/easyicu/research_agent/resources/capability_runtime.py": "5e707e8a4b3a5f375ae579951b07c3e1f07d635b8db093109c613936c8b3bc71",
     "src/easyicu/research_agent/resources/catalog.py": "d1df9901759c3a323ac6a9bb4998cefa7ca2deb978ddd8409851a68f2beeff2f",
-    "src/easyicu/research_agent/resources/coder.py": "9d4345b0375e920353bd49e1b1cc3f5c1b779ba37b9460bcedd5b90b10cdb698",
+    "src/easyicu/research_agent/resources/coder.py": "1a4f7da3216e50d3e69ca745745f88457ef7421423b7a1a2282243aa22386b26",
     "src/easyicu/research_agent/resources/context.py": "8ce42accd83398ff9972b8e50f2f64f9ac926ad610d2c386f2b763adf77af2e1",
     "src/easyicu/research_agent/resources/scheduler.py": "2c127f23d369e5564353caf7d50bb4d6dfc16b1b60c719bcc768507c0be41be6",
     "src/easyicu/research_agent/resources/schema.py": "456053a9d96a8ee5fe0b3e8b2cfa22187f6bb0d8cc81b43d28569ffd311fd288",

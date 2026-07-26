@@ -7,9 +7,14 @@ from pathlib import Path
 
 import pytest
 
+from easyicu.research_agent.schema import AnalysisStep
 from easyicu.research_agent.execution.cohort_routing import (
     StepExecutionCohortRoutingError,
+    bind_step_execution_cohort,
     bound_step_execution_cohort_path,
+)
+from easyicu.research_agent.execution.envelope_sealing import (
+    compile_sealed_step_result_shadow,
 )
 from easyicu.research_agent.execution.phase import (
     _evaluate_final_deterministic_gates,
@@ -65,6 +70,51 @@ def test_non_cohort_typed_inputs_do_not_change_the_runner_surface(
     )
 
     assert selected == fallback.resolve()
+
+
+def test_run_level_fallback_is_digest_bound_for_the_result_envelope(
+    tmp_path: Path,
+) -> None:
+    fallback = tmp_path / "cohort_analysis.parquet"
+    fallback.write_bytes(b"sealed cohort bytes")
+    output_dir = tmp_path / "steps" / "02_summary" / "outputs"
+    output_dir.mkdir(parents=True)
+    step_record: dict[str, object] = {}
+
+    selected = bind_step_execution_cohort(
+        tmp_path,
+        fallback,
+        {},
+        step_record,
+    )
+    step = AnalysisStep(
+        step_id="02_summary",
+        intent="Summarize the locked cohort.",
+    )
+    snapshot = compile_sealed_step_result_shadow(
+        step=step,
+        step_summary={
+            "status": "ok",
+            "cohort_path": "/easyicu-run/cohort_analysis.parquet",
+        },
+        output_dir=output_dir,
+        run_dir=tmp_path,
+        execution_cohort_path=selected,
+        execution_cohort_sha256=str(step_record["execution_cohort_sha256"]),
+        current_status="ok",
+    )
+
+    assert selected == fallback.resolve()
+    assert step_record["execution_cohort_role"] == "run_level_execution_cohort"
+    assert step_record["execution_cohort_sha256"] == hashlib.sha256(
+        fallback.read_bytes()
+    ).hexdigest()
+    assert snapshot.ready is True
+    assert not [
+        issue
+        for issue in snapshot.envelope.normalization_issues
+        if issue.code == "absolute_unbound_path"
+    ]
 
 
 @pytest.mark.parametrize("mutation", ["absolute_path", "sha256", "relative_path"])
