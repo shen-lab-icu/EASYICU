@@ -233,12 +233,89 @@ def test_the_receipt_gate_runs_inside_the_final_deterministic_gates():
 
     from easyicu.research_agent.execution import phase
 
-    source = phase.__file__
-    with open(source, encoding="utf-8") as handle:
-        text = handle.read()
-    assert "plausibility_audit_receipt_findings(" in text
+    from .test_gate_evaluator_contract import gate_call_order
+
+    order = gate_call_order(
+        phase._evaluate_final_deterministic_gates,
+        [
+            "_demote_step_contract_for_primary_runner",
+            "_demote_result_figure_shape_for_family_renderer",
+            "plausibility_audit_receipt_findings",
+        ],
+    )
+    assert "plausibility_audit_receipt_findings" in order
     # After the demotion passes: a fail-closed obligation is not something a
     # narrow family demotion should be able to soften.
-    assert text.index(
-        "_demote_result_figure_shape_for_family_renderer(\n        context"
-    ) < text.index("plausibility_audit_receipt_findings(")
+    assert (
+        order["_demote_result_figure_shape_for_family_renderer"]
+        < order["plausibility_audit_receipt_findings"]
+    )
+
+
+def test_a_missing_receipt_enters_the_repair_loop_instead_of_sealing_the_step():
+    """Where the check runs decides whether the step can recover.
+
+    Evaluated only in the final gate, a missing or malformed receipt arrives
+    after evidence registration and becomes a terminal `contract_failed`
+    record -- the step dies holding a finding that says exactly what to write.
+    It has to be raised in the pre-registration gate, before the repair
+    dispatch, so the Coder gets its one attempt at it.
+    """
+
+    from easyicu.research_agent.execution import phase
+
+    from .test_gate_evaluator_contract import gate_call_order
+
+    order = gate_call_order(
+        phase.run_execute_phase,
+        [
+            "_step_deterministic_contract_findings",
+            "_demote_step_contract_for_primary_runner",
+            "plausibility_audit_receipt_findings",
+            "_deterministic_summary_repair",
+            "deterministic_contract_repair",
+            "_step_contract_repair_guidance",
+        ],
+    )
+    assert "plausibility_audit_receipt_findings" in order, (
+        "the receipt check never runs in the pre-registration gate, so a "
+        "missing receipt can only ever be terminal"
+    )
+    # Raised with the other early contract findings...
+    assert (
+        order["_step_deterministic_contract_findings"]
+        < order["plausibility_audit_receipt_findings"]
+    )
+    assert (
+        order["_demote_step_contract_for_primary_runner"]
+        < order["plausibility_audit_receipt_findings"]
+    )
+    # ...and before every repair the loop can spend on them.
+    for repair in (
+        "_deterministic_summary_repair",
+        "deterministic_contract_repair",
+        "_step_contract_repair_guidance",
+    ):
+        assert order["plausibility_audit_receipt_findings"] < order[repair], repair
+
+
+def test_a_receipt_finding_is_not_one_of_the_unrepairable_terminal_classes():
+    """Being early is not enough if the finding is classified as terminal.
+
+    `_locked_measurement_data_quality_issues` short-circuits the repair loop
+    for locked-cohort facts generated code cannot fix. A missing receipt is the
+    opposite of that: the script simply has to write one.
+    """
+
+    from easyicu.research_agent.execution.phase import (
+        _locked_measurement_data_quality_issues,
+    )
+
+    findings = plausibility_audit_receipt_findings(
+        step_summary={"rows": 1},
+        context=_context(),
+        step=_step(),
+        script_text=READS_THE_RANGE,
+    )
+    assert findings
+    assert _locked_measurement_data_quality_issues(findings) == []

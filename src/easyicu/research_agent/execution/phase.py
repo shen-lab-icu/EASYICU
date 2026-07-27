@@ -9553,6 +9553,19 @@ def run_execute_phase(
                 early_contract_findings = _demote_step_contract_for_primary_runner(
                     step_record, visual_step_summary, early_contract_findings
                 )
+                # The receipt check belongs here as well as in the final gate.
+                # A missing or malformed `plausibility_audit` is exactly the
+                # kind of mistake one Coder repair fixes, and evaluating it only
+                # after evidence registration turned it into a terminal record:
+                # the step would die holding a finding that says precisely what
+                # to write. The final gate keeps its own copy, so a repair that
+                # does not actually produce the receipt still cannot seal.
+                early_contract_findings += plausibility_audit_receipt_findings(
+                    step_summary=visual_step_summary,
+                    context=context,
+                    step=step,
+                    script_text=code,
+                )
                 early_contract_errors = [
                     f for f in early_contract_findings if f.severity == "error"
                 ]
