@@ -224,6 +224,38 @@ write_json("step_summary.json", {"audit": audit})
     assert _reasons(hard_coded) == {"plausibility_check_not_attributable"}
 
 
+@pytest.mark.parametrize(
+    "sink",
+    ["sys.stdout.write(json.dumps(plausibility_audit))", "print(plausibility_audit)"],
+)
+def test_printing_the_count_is_not_writing_it(sink):
+    """A console stream is not a declared output.
+
+    `.write` on a file handle is a real sink and `.write` on stdout is a print
+    with extra steps. Accepting the second would hand the step the cheapest
+    possible way to satisfy the policy while leaving nothing a reader can open.
+    """
+
+    printed = (
+        HEADER
+        + """
+import sys
+
+plausibility_audit = {}
+"""
+        + HELPER_HEAD
+        + """        plausibility_audit[column] = int(
+            (numeric < float(lower)).sum()
+        ) if lower is not None else 0
+
+
+"""
+        + sink
+        + "\n"
+    )
+    assert _reasons(printed) == {"out_of_range_record_not_in_declared_output"}
+
+
 def test_no_declared_range_means_no_obligation():
     """A run whose context declares no range never emitted this policy."""
 
