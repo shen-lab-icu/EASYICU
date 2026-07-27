@@ -32,9 +32,9 @@ from typing import (
 
 _T = TypeVar("_T")
 _RESERVATION_UNSPECIFIED = object()
-PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION = 6
-_SUPPORTED_RECEIPT_SCHEMA_VERSIONS = {1, 2, 3, 4, 5, 6}
-_LOGICAL_REPAIR_RECEIPT_SCHEMA_VERSIONS = {3, 4, 5, 6}
+PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION = 7
+_SUPPORTED_RECEIPT_SCHEMA_VERSIONS = {1, 2, 3, 4, 5, 6, 7}
+_LOGICAL_REPAIR_RECEIPT_SCHEMA_VERSIONS = {3, 4, 5, 6, 7}
 _LOGICAL_REPAIR_TRANSPORT_STATES = {
     "pending",
     "completed",
@@ -90,11 +90,17 @@ class ProviderCallBudgetReceiptState:
     categories: Tuple[str, ...]
     reserved_final_category: Optional[str]
     logical_repairs: Tuple[Dict[str, object], ...]
-    initial_generation: Optional[Dict[str, object]]
+    initial_generations: Tuple[Dict[str, object], ...]
     required_reservation_token: Optional[str]
     reservation_bound_provider_history_len: Optional[int]
     completed_reservation_token: Optional[str]
     reservation_released: bool
+
+    @property
+    def initial_generation(self) -> Optional[Dict[str, object]]:
+        """Return the current generation while preserving the append-only ledger."""
+
+        return self.initial_generations[-1] if self.initial_generations else None
 
 
 def provider_call_budget_receipt_path(
@@ -301,6 +307,53 @@ def _verified_initial_generation(
         "binding": dict(binding),
         "transport": dict(raw_transport),
     }
+
+
+def _verified_initial_generations(
+    raw_entries: object,
+    *,
+    categories: Tuple[str, ...],
+) -> Tuple[Dict[str, object], ...]:
+    """Verify an append-only sequence of explicit initial-generation epochs."""
+
+    if not isinstance(raw_entries, list):
+        raise ProviderCallBudgetReceiptError(
+            "Provider-call receipt initial-generation ledger is invalid"
+        )
+    verified: list[Dict[str, object]] = []
+    seen_transport_ids: set[str] = set()
+    previous_transport_number = 0
+    previous_terminal_history_len = 0
+    for index, raw_entry in enumerate(raw_entries):
+        entry = _verified_initial_generation(raw_entry, categories=categories)
+        if entry is None:
+            raise ProviderCallBudgetReceiptError(
+                "Provider-call receipt initial-generation ledger contains an empty entry"
+            )
+        transport_id = str(entry["provider_transport_id"])
+        transport_number = int(transport_id.removeprefix("initial_generation:"))
+        transport = dict(entry["transport"])
+        reserved_history_len = int(entry["provider_history_len"])
+        if (
+            transport_id in seen_transport_ids
+            or transport_number <= 0
+            or transport_number <= previous_transport_number
+            or reserved_history_len < previous_terminal_history_len
+            or (transport.get("state") == "pending" and index != len(raw_entries) - 1)
+            or (
+                index != len(raw_entries) - 1
+                and transport.get("state") not in {"completed", "failed"}
+            )
+        ):
+            raise ProviderCallBudgetReceiptError(
+                "Provider-call receipt initial-generation epochs are inconsistent"
+            )
+        seen_transport_ids.add(transport_id)
+        previous_transport_number = transport_number
+        if transport.get("state") in {"completed", "failed"}:
+            previous_terminal_history_len = int(transport["provider_history_len"])
+        verified.append(entry)
+    return tuple(verified)
 
 
 def _verified_repair_transport(
@@ -537,13 +590,7 @@ def load_provider_call_budget_state(
         raise ProviderCallBudgetReceiptError("Provider-call receipt history is invalid")
 
     stored_reservation: Optional[str] = None
-    if schema_version in {
-        2,
-        3,
-        4,
-        5,
-        PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION,
-    }:
+    if schema_version in {2, 3, 4, 5, 6, 7}:
         raw_reservation = payload.get("reserved_final_category")
         if raw_reservation is not None:
             if not isinstance(raw_reservation, str) or not raw_reservation.strip():
@@ -575,9 +622,7 @@ def load_provider_call_budget_state(
         _verified_logical_repairs(
             payload.get("logical_repairs"),
             categories=normalized,
-            require_transport=(
-                schema_version in {5, PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION}
-            ),
+            require_transport=(schema_version in {5, 6, 7}),
             receipt_schema_version=int(schema_version),
         )
         if schema_version in _LOGICAL_REPAIR_RECEIPT_SCHEMA_VERSIONS
@@ -593,17 +638,36 @@ def load_provider_call_budget_state(
                 migrated["transport"] = transport
             migrated_repairs.append(migrated)
         logical_repairs = tuple(migrated_repairs)
-    initial_generation = (
-        _verified_initial_generation(
+    if schema_version == 6:
+        if payload.get("initial_generations") is not None:
+            raise ProviderCallBudgetReceiptError(
+                "Schema-v6 provider-call receipt unexpectedly declares an "
+                "initial-generation ledger"
+            )
+        legacy_initial_generation = _verified_initial_generation(
             payload.get("initial_generation"),
             categories=normalized,
         )
-        if schema_version == PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION
-        else None
-    )
-    if (
-        schema_version != PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION
-        and payload.get("initial_generation") is not None
+        initial_generations = (
+            (legacy_initial_generation,)
+            if legacy_initial_generation is not None
+            else ()
+        )
+    elif schema_version == 7:
+        if payload.get("initial_generation") is not None:
+            raise ProviderCallBudgetReceiptError(
+                "Schema-v7 provider-call receipt unexpectedly declares the "
+                "legacy initial-generation field"
+            )
+        initial_generations = _verified_initial_generations(
+            payload.get("initial_generations"),
+            categories=normalized,
+        )
+    else:
+        initial_generations = ()
+    if schema_version not in {6, 7} and (
+        payload.get("initial_generation") is not None
+        or payload.get("initial_generations") is not None
     ):
         raise ProviderCallBudgetReceiptError(
             "Legacy provider-call receipt unexpectedly declares initial generation"
@@ -612,7 +676,7 @@ def load_provider_call_budget_state(
     reservation_bound_provider_history_len: Optional[int] = None
     completed_reservation_token: Optional[str] = None
     reservation_released = False
-    if schema_version in {4, 5, PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION}:
+    if schema_version in {4, 5, 6, 7}:
         raw_state = payload.get("final_reservation_state")
         if not isinstance(raw_state, dict):
             raise ProviderCallBudgetReceiptError(
@@ -660,8 +724,7 @@ def load_provider_call_budget_state(
             )
     elif payload.get("final_reservation_state") is not None:
         raise ProviderCallBudgetReceiptError(
-            "Legacy provider-call receipt unexpectedly declares final "
-            "reservation state"
+            "Legacy provider-call receipt unexpectedly declares final reservation state"
         )
     return ProviderCallBudgetReceiptState(
         schema_version=int(schema_version),
@@ -669,7 +732,7 @@ def load_provider_call_budget_state(
         categories=normalized,
         reserved_final_category=stored_reservation,
         logical_repairs=logical_repairs,
-        initial_generation=initial_generation,
+        initial_generations=initial_generations,
         required_reservation_token=required_reservation_token,
         reservation_bound_provider_history_len=(reservation_bound_provider_history_len),
         completed_reservation_token=completed_reservation_token,
@@ -704,6 +767,8 @@ class StepProviderCallBudget:
         consumed_categories: Tuple[str, ...] = (),
         logical_repair_entries: Sequence[Mapping[str, object]] = (),
         initial_generation_entry: Optional[Mapping[str, object]] = None,
+        initial_generation_entries: Sequence[Mapping[str, object]] = (),
+        allow_terminal_initial_generation_restart: bool = False,
         receipt_path: Optional[Path] = None,
         reserved_final_category: Optional[str] = None,
         required_reservation_token: Optional[str] = None,
@@ -740,13 +805,33 @@ class StepProviderCallBudget:
                 receipt_schema_version=PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION,
             )
         ]
-        self._initial_generation = _verified_initial_generation(
-            (
-                dict(initial_generation_entry)
+        if initial_generation_entry is not None and initial_generation_entries:
+            raise ValueError(
+                "restore either one legacy initial generation or the generation "
+                "ledger, not both"
+            )
+        restored_initial_generations = (
+            [dict(entry) for entry in initial_generation_entries]
+            if initial_generation_entries
+            else (
+                [dict(initial_generation_entry)]
                 if initial_generation_entry is not None
-                else None
-            ),
-            categories=restored,
+                else []
+            )
+        )
+        self._initial_generations: list[Dict[str, object]] = [
+            dict(entry)
+            for entry in _verified_initial_generations(
+                restored_initial_generations,
+                categories=restored,
+            )
+        ]
+        if not isinstance(allow_terminal_initial_generation_restart, bool):
+            raise TypeError(
+                "terminal initial-generation restart authorization must be boolean"
+            )
+        self._terminal_initial_generation_restart_available = (
+            allow_terminal_initial_generation_restart
         )
         self._receipt_path = Path(receipt_path) if receipt_path is not None else None
         self._reserved_final_category = (
@@ -814,15 +899,14 @@ class StepProviderCallBudget:
             "categories": list(self._categories),
             "reserved_final_category": self._reserved_final_category,
             "logical_repairs": [dict(entry) for entry in self._logical_repairs],
-            "initial_generation": (
+            "initial_generations": [
                 {
-                    **dict(self._initial_generation),
-                    "binding": dict(self._initial_generation["binding"]),
-                    "transport": dict(self._initial_generation["transport"]),
+                    **dict(entry),
+                    "binding": dict(entry["binding"]),
+                    "transport": dict(entry["transport"]),
                 }
-                if self._initial_generation is not None
-                else None
-            ),
+                for entry in self._initial_generations
+            ],
             "final_reservation_state": {
                 "required_token": self._required_reservation_token,
                 "bound_provider_history_len": (
@@ -930,34 +1014,57 @@ class StepProviderCallBudget:
             raise ValueError("initial-generation binding must be an object")
         binding_sha256 = _receipt_digest(normalized_binding)
         with self._lock:
-            existing = self._initial_generation
+            existing = (
+                self._initial_generations[-1] if self._initial_generations else None
+            )
             if existing is not None:
-                if (
-                    existing.get("binding_sha256") != binding_sha256
-                    or existing.get("binding") != normalized_binding
-                ):
-                    raise ProviderCallBudgetReceiptError(
-                        "Initial-generation reservation belongs to different authority"
-                    )
                 transport = dict(existing.get("transport") or {})
                 state = transport.get("state")
-                if state != "pending":
+                if state == "pending":
+                    if (
+                        existing.get("binding_sha256") != binding_sha256
+                        or existing.get("binding") != normalized_binding
+                    ):
+                        raise ProviderCallBudgetReceiptError(
+                            "Initial-generation reservation belongs to different "
+                            "authority"
+                        )
+                    history_len = int(existing["provider_history_len"])
+                    paid_calls = sum(
+                        category == "initial_generation"
+                        for category in self._categories[history_len:]
+                    )
+                    if paid_calls:
+                        raise ProviderCallBudgetReceiptError(
+                            "Initial generation has paid provider calls but no durable "
+                            "result; refusing to pay twice"
+                        )
+                    return str(existing["provider_transport_id"])
+                if not self._terminal_initial_generation_restart_available:
+                    if (
+                        existing.get("binding_sha256") != binding_sha256
+                        or existing.get("binding") != normalized_binding
+                    ):
+                        raise ProviderCallBudgetReceiptError(
+                            "Initial-generation reservation belongs to different "
+                            "authority"
+                        )
                     raise ProviderCallBudgetReceiptError(
                         "Initial-generation transport is already terminal"
                     )
-                history_len = int(existing["provider_history_len"])
-                paid_calls = sum(
-                    category == "initial_generation"
-                    for category in self._categories[history_len:]
-                )
-                if paid_calls:
-                    raise ProviderCallBudgetReceiptError(
-                        "Initial generation has paid provider calls but no durable "
-                        "result; refusing to pay twice"
-                    )
-                return str(existing["provider_transport_id"])
 
-            transport_id = f"initial_generation:{len(self._categories) + 1}"
+            previous_transport_number = max(
+                (
+                    int(
+                        str(entry["provider_transport_id"]).removeprefix(
+                            "initial_generation:"
+                        )
+                    )
+                    for entry in self._initial_generations
+                ),
+                default=len(self._categories),
+            )
+            transport_id = f"initial_generation:{previous_transport_number + 1}"
             entry: Dict[str, object] = {
                 "binding": normalized_binding,
                 "binding_sha256": binding_sha256,
@@ -966,11 +1073,16 @@ class StepProviderCallBudget:
                 "provider_transport_id": transport_id,
                 "transport": {"state": "pending"},
             }
-            self._initial_generation = entry
+            restart_was_available = self._terminal_initial_generation_restart_available
+            self._initial_generations.append(entry)
+            self._terminal_initial_generation_restart_available = False
             try:
                 self._persist_locked()
             except Exception:
-                self._initial_generation = None
+                self._initial_generations.pop()
+                self._terminal_initial_generation_restart_available = (
+                    restart_was_available
+                )
                 raise
             return transport_id
 
@@ -981,7 +1093,7 @@ class StepProviderCallBudget:
         transport: Mapping[str, object],
     ) -> None:
         with self._lock:
-            entry = self._initial_generation
+            entry = self._initial_generations[-1] if self._initial_generations else None
             if entry is None or entry.get("provider_transport_id") != str(
                 provider_transport_id
             ):
@@ -1019,11 +1131,11 @@ class StepProviderCallBudget:
                 raise AssertionError(
                     "verified initial-generation transport disappeared"
                 )
-            self._initial_generation = verified
+            self._initial_generations[-1] = verified
             try:
                 self._persist_locked()
             except Exception:
-                self._initial_generation = entry
+                self._initial_generations[-1] = entry
                 raise
 
     def complete_initial_generation_transport(
@@ -1073,7 +1185,7 @@ class StepProviderCallBudget:
         """Return the verified crash-resume state of initial generation."""
 
         with self._lock:
-            entry = self._initial_generation
+            entry = self._initial_generations[-1] if self._initial_generations else None
             if entry is None:
                 return "absent"
             transport = dict(entry.get("transport") or {})
@@ -1607,16 +1719,38 @@ class StepProviderCallBudget:
 
     @property
     def initial_generation_entry(self) -> Optional[Dict[str, object]]:
-        """Return a detached verified copy of the initial transport ledger."""
+        """Return a detached copy of the current initial-generation epoch."""
 
         with self._lock:
-            if self._initial_generation is None:
+            if not self._initial_generations:
                 return None
+            entry = self._initial_generations[-1]
             return {
-                **dict(self._initial_generation),
-                "binding": dict(self._initial_generation["binding"]),
-                "transport": dict(self._initial_generation["transport"]),
+                **dict(entry),
+                "binding": dict(entry["binding"]),
+                "transport": dict(entry["transport"]),
             }
+
+    @property
+    def initial_generation_entries(self) -> Tuple[Dict[str, object], ...]:
+        """Return detached copies of every append-only generation epoch."""
+
+        with self._lock:
+            return tuple(
+                {
+                    **dict(entry),
+                    "binding": dict(entry["binding"]),
+                    "transport": dict(entry["transport"]),
+                }
+                for entry in self._initial_generations
+            )
+
+    @property
+    def terminal_initial_generation_restart_allowed(self) -> bool:
+        """Return whether this explicit execution window may append one epoch."""
+
+        with self._lock:
+            return self._terminal_initial_generation_restart_available
 
     def snapshot(self) -> Dict[str, object]:
         """Return a JSON-serializable, internally consistent counter snapshot."""
@@ -1643,14 +1777,15 @@ class StepProviderCallBudget:
                     str(dict(entry.get("transport") or {}).get("state") or "")
                     for entry in self._logical_repairs
                 ],
+                "initial_generation_epochs": len(self._initial_generations),
                 "initial_generation_transport_state": (
                     str(
-                        dict(self._initial_generation.get("transport") or {}).get(
+                        dict(self._initial_generations[-1].get("transport") or {}).get(
                             "state"
                         )
                         or ""
                     )
-                    if self._initial_generation is not None
+                    if self._initial_generations
                     else None
                 ),
                 "reserved_final_category": self._reserved_final_category,

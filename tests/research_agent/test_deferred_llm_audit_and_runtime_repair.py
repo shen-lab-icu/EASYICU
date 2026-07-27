@@ -8,6 +8,9 @@ from types import SimpleNamespace
 import pandas as pd
 import pytest
 
+from easyicu.research_agent.authority.provider_budget import (
+    PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION,
+)
 from easyicu.research_agent.providers.mocks import (
     PatternScriptedMockLLMClient,
     ScriptedMockLLMClient,
@@ -773,7 +776,10 @@ def test_exact_capsule_resume_skips_generation_audit_and_execution_but_reruns_ga
     assert first_capsule.capsule.stage == "executed_concept_audited"
     assert first_capsule.capsule.execution is not None
     assert first_capsule.capsule.concept_audit is not None
-    assert first_record["step_provider_call_receipt_version"] == 6
+    assert (
+        first_record["step_provider_call_receipt_version"]
+        == PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION
+    )
     assert first_record["step_provider_call_receipt"].endswith(".json")
     assert _call_count(llm, "WRITE THE PYTHON CODE") == 1
     assert _call_count(llm, "CONSERVATIVE ICU CONCEPT-USE AUDITOR") == 0

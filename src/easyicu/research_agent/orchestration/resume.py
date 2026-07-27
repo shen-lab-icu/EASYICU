@@ -323,6 +323,11 @@ class ResumeController:
         )
         return step_ids
 
+    def explicitly_reruns_step(self, step_id: str) -> bool:
+        """Return whether the user's explicit resume window reruns this step."""
+
+        return self.resume_state is not None and step_id in self._rerun_step_ids()
+
     def apply(self) -> ResumeApplication:
         if self.resume_state is None:
             return ResumeApplication([], set(), [], {})
