@@ -2801,18 +2801,20 @@ def _records_out_of_range_evidence(
 
     # The mask is usually bound before it is used, so following the names it
     # is bound to is what lets `mask = a | b` / `n = int(mask.sum())` count as
-    # one record rather than two unrelated statements.
+    # one record rather than two unrelated statements. Each pass adds at least
+    # one name or stops, so the assignment count bounds it.
     compared = {id(node) for node in comparisons}
+    name_assignments = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+    ]
     mask_names: Set[str] = set()
-    for _ in range(len(parents) + 1):
+    for _ in range(len(name_assignments) + 1):
         grew = False
-        for node in ast.walk(tree):
-            if not (
-                isinstance(node, ast.Assign)
-                and len(node.targets) == 1
-                and isinstance(node.targets[0], ast.Name)
-            ):
-                continue
+        for node in name_assignments:
             target = node.targets[0].id
             if target in mask_names:
                 continue
