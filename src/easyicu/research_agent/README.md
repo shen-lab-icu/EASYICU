@@ -159,6 +159,14 @@ Two invariants enforce this split:
    `providers/llm.py`). Adding `CLIAgentLLMClient` did **not** introduce a hard
    dependency.
 
+   **The ladder is in the builder, not in `run()`.** `ResearchAgentPipeline`
+   requires an explicit `llm=` client and raises if one is absent; it will not
+   substitute a mock on its own. That is deliberate — a silent fall back to the
+   offline floor would let a run that was meant to be real quietly produce
+   deterministic mock output under a real-looking manifest. So the offline floor
+   is reached by *asking* for it: call `build_llm_client(...)` (or pass
+   `MockLLMClient()`) and hand the result to `run(llm=...)`.
+
 2. **No engine bypasses `NumericClaim` binding — engine-agnostic provenance.**
    `manuscript_post.bind_numeric_values` takes only the manuscript *string* plus
    the `EvidenceStore`; in STRICT mode every printed number must trace to a

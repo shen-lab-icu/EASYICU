@@ -168,6 +168,7 @@ from .orchestration.config import (
     assert_step_provider_budget_funds_its_repairs,
 )
 from .orchestration.services import PipelineServices
+from .orchestration.workflow import PipelineRunOutcome
 from .resources.capability_runtime import CapabilityWorkflowRuntime
 from .contracts.runtime import (
     RunResult,
@@ -3766,8 +3767,14 @@ class ResearchAgentPipeline:
         source_files: Optional[Sequence[Any]] = None,
         progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
         force_writer_probe: bool = False,
-    ) -> PipelineResult:
-        """Run the explicit Plan → Review → Execute → Write workflow."""
+    ) -> PipelineRunOutcome:
+        """Run the explicit Plan → Review → Execute → Write workflow.
+
+        Returns a :class:`PipelineResult` for a run that finished, or a
+        :class:`HumanReviewPending` for a run that stopped at the human-review
+        gate. The pause is not an error and carries no result: nothing
+        downstream of it executed. Answer it with :meth:`resume_human_review`.
+        """
         skill_obj: Optional[ClinicalSkill] = None
         if skill is not None:
             skill_obj = get_skill(skill) if isinstance(skill, str) else skill
@@ -3790,6 +3797,26 @@ class ResearchAgentPipeline:
         if resume_run_id and self._capability_runtime.activation is not None:
             raise ValueError(
                 "Approved capability activation requires a new run; resume is forbidden"
+            )
+        # One instance holds exactly one pause. Starting a second run here used
+        # to overwrite ``_pending_human_review`` (on pause) or clear it (on
+        # completion), silently destroying a paused run that an operator was
+        # still deciding on: its live plan handoff cannot be rebuilt, so the
+        # Planner work was simply gone and ``resume_human_review`` reported no
+        # pending review at all. Refuse instead of discarding it. Each run also
+        # gets a fresh run id, so the run-level file lock cannot catch this.
+        blocking_pause = self._pending_human_review
+        if blocking_pause:
+            blocked_by = blocking_pause["pending"]
+            raise RuntimeError(
+                f"run {blocked_by.run_id!r} on this pipeline instance is paused "
+                "for human review and would be discarded by starting another "
+                "run. A pause holds a live plan handoff that cannot be "
+                "reconstructed, so it must be answered with "
+                "resume_human_review() (or abandoned by using a separate "
+                "ResearchAgentPipeline instance for the new run) before this "
+                "instance can start again. Pending review ids: "
+                + ", ".join(blocked_by.review_ids)
             )
         verified_source_authority = None
         authority_declared = (
@@ -4813,8 +4840,11 @@ class ResearchAgentPipeline:
         spec: Union[ExperimentSpec, Dict[str, Any]],
         *,
         progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
-    ) -> PipelineResult:
-        """Run the pipeline from a typed YAML/JSON experiment specification."""
+    ) -> PipelineRunOutcome:
+        """Run the pipeline from a typed YAML/JSON experiment specification.
+
+        Same two outcomes as :meth:`run`, which this delegates to.
+        """
         spec_obj = (
             spec
             if isinstance(spec, ExperimentSpec)
@@ -4825,11 +4855,11 @@ class ResearchAgentPipeline:
         kwargs["progress_callback"] = progress_callback
         return self.run(**kwargs)
 
-    async def run_async(self, **kwargs: Any) -> PipelineResult:
+    async def run_async(self, **kwargs: Any) -> PipelineRunOutcome:
         """Async wrapper for UI/API runtimes that need non-blocking orchestration."""
         return await asyncio.to_thread(self.run, **kwargs)
 
-    def run_with_graph(self, **kwargs: Any) -> PipelineResult:
+    def run_with_graph(self, **kwargs: Any) -> PipelineRunOutcome:
         """Deprecated alias retained for EasyICU 1.x callers."""
         warnings.warn(
             "run_with_graph() is deprecated; run() uses the sole explicit "

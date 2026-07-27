@@ -30,7 +30,15 @@ import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable, Literal, Optional, Protocol, runtime_checkable
+from typing import (
+    Any,
+    Callable,
+    Literal,
+    Optional,
+    Protocol,
+    Union,
+    runtime_checkable,
+)
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -52,7 +60,9 @@ __all__ = [
     "HumanReviewPending",
     "HumanReviewRejected",
     "HumanReviewRequest",
+    "HumanReviewStateDrift",
     "OrchestrationRuntimeReceipt",
+    "PipelineRunOutcome",
     "PipelineWorkflow",
     "WorkflowEngine",
     "WorkflowCompleted",
@@ -82,6 +92,22 @@ class HumanReviewAuthorityError(RuntimeError):
     Distinct from a validation error: nothing about the plan is wrong. The run
     simply cannot prove *what* a reviewer would be signing, and an approval
     that binds nothing would cover anything.
+    """
+
+
+class HumanReviewStateDrift(RuntimeError):
+    """Raised when what was approved is no longer what would execute.
+
+    A decision's ``authority_sha256`` proves it answers *the request that was
+    made*. It cannot prove the run still holds the plan that request described:
+    the plan handoff is a live mutable object held across the pause, so
+    anything that touched it while the operator was deciding would execute
+    under a signature that never covered it. Resume therefore re-derives the
+    authority from the live handoff and refuses when it no longer matches.
+
+    Distinct from :class:`HumanReviewAuthorityError`, which means the run
+    cannot *tell* what is bound (transient, still resumable). Drift is a
+    definitive integrity violation and terminalizes the run.
     """
 
 
@@ -196,6 +222,17 @@ class HumanReviewPending(BaseModel):
         return self.resume_pid == os.getpid()
 
 
+#: What :meth:`ResearchAgentPipeline.run` and its wrappers actually return.
+#:
+#: Annotating those entry points as ``PipelineResult`` alone was a promise the
+#: pipeline does not keep: a run that stops for review returns
+#: :class:`HumanReviewPending` instead, and nothing downstream of the pause has
+#: produced a result to return. A caller typed against the narrower annotation
+#: reads ``.manuscript`` off the pause and fails at runtime with an attribute
+#: error rather than being told at the type level to handle the pause.
+PipelineRunOutcome = Union[PipelineResult, HumanReviewPending]
+
+
 #: Plan-phase finding reasons that must not be walked past unattended, mapped
 #: to the review kind they raise. Keyed on the typed ``detail["reason"]`` rather
 #: than on message text so a reworded finding cannot silently drop out of the
@@ -258,6 +295,24 @@ def _plan_authority_payload(
         "plan_evidence_sha256": authority.evidence_sha256,
         "plan_review_authority": authority.model_dump(mode="json"),
     }
+
+
+def _shared_plan_authority(
+    requests: Sequence[HumanReviewRequest],
+) -> Optional[dict[str, Any]]:
+    """Return the one plan-authority packet every request in a pause shares.
+
+    ``_plan_authority_payload`` is computed once per pause and spread into
+    every request's payload, so any single request carries the whole approved
+    plan. Reading it back is how resume compares what was approved with what
+    the run currently holds.
+    """
+
+    for request in requests:
+        authority = request.payload.get("plan_review_authority")
+        if isinstance(authority, Mapping):
+            return dict(authority)
+    return None
 
 
 def human_review_requests_for_plan(
@@ -480,6 +535,10 @@ class PipelineWorkflow:
         self._state = "created"
         self._plan_result: Optional[_PlanPhaseResult] = None
         self._requests: tuple[HumanReviewRequest, ...] = ()
+        #: Built decision records, keyed by the digest of the decision set that
+        #: produced them. See :meth:`_decision_records_for` for why a resubmitted
+        #: decision must not be re-stamped.
+        self._decision_record_cache: dict[str, tuple[dict[str, Any], ...]] = {}
 
     @property
     def state(self) -> str:
@@ -544,28 +603,33 @@ class PipelineWorkflow:
         if set(observed) != set(expected):
             raise ValueError("human review decisions must cover exact paused requests")
 
-        records: list[dict[str, Any]] = []
-        rejected_ids: list[str] = []
         # Request order is the host-owned order. Client map/list ordering must
         # not change evidence record order or downstream manifest digests.
-        for request in self._requests:
-            review_id = request.review_id
-            decision = observed[review_id]
+        ordered = tuple(observed[request.review_id] for request in self._requests)
+        for request, decision in zip(self._requests, ordered):
             if decision.authority_sha256 != request.authority_sha256:
                 raise ValueError("human review decision authority digest mismatch")
-            records.append(
-                _human_review_decision_record(
-                    request=request,
-                    decision=decision,
-                    reviewer_identity=(
-                        self._reviewer_identity_resolver()
-                        if self._reviewer_identity_resolver is not None
-                        else None
-                    ),
-                )
-            )
-            if decision.decision == "rejected":
-                rejected_ids.append(review_id)
+
+        # A matching digest proves the decision answers the request that was
+        # made. It says nothing about whether the run still holds the plan that
+        # request described, and the plan handoff is live and mutable across
+        # the pause. Re-derive the authority from the current handoff before
+        # anything is recorded or executed.
+        try:
+            self._verify_pause_still_binds_live_state()
+        except HumanReviewStateDrift:
+            # Definitive: the approved state and the executable state differ.
+            # Terminalize rather than leave a pause that a caller could retry
+            # into executing unapproved work.
+            self._discard_live_pause(state="failed")
+            raise
+
+        records = self._decision_records_for(ordered)
+        rejected_ids = [
+            decision.review_id
+            for decision in ordered
+            if decision.decision == "rejected"
+        ]
 
         # Recording the decision and acting on it are separate acts, and only
         # the second one is irreversible. The recorder writes two files and
@@ -587,6 +651,119 @@ class PipelineWorkflow:
             self._discard_live_pause(state="failed")
             raise
 
+    def _verify_pause_still_binds_live_state(self) -> None:
+        """Re-derive the approved authority and refuse if the run has moved.
+
+        The three parts are compared differently, on purpose:
+
+        * ``plan_sha256`` must be **identical** -- it is the scientific plan
+          the reviewer read.
+        * The execution identity must be **identical** -- pipeline config,
+          capability activation, submission profile and run input capsule are
+          the environment the reviewer signed off.
+        * Evidence is checked as a **subset**: every artefact bound at the
+          pause must still be present with the same digest, but additions are
+          allowed. Resubmitting a decision after a failed recorder write
+          legitimately adds the decision log itself, and treating that growth
+          as tampering would deadlock the retry this engine promises.
+        """
+
+        if self._human_review_invoker is None or self._plan_result is None:
+            return
+        approved = _shared_plan_authority(self._requests)
+        if approved is None:
+            return
+        try:
+            current_requests = tuple(self._human_review_invoker(self._plan_result))
+        except Exception as exc:  # noqa: BLE001 - re-raised as a typed blocker
+            # The run cannot *tell* what is bound. That is the transient,
+            # still-resumable case: same class the recorder uses, so the
+            # operator can retry rather than lose the Planner work.
+            raise HumanReviewAuthorityError(
+                "cannot re-derive the human-review authority from the live run "
+                f"state ({exc}), so an approval cannot be shown to still bind "
+                "what would execute. The pause is left resumable."
+            ) from exc
+        current = _shared_plan_authority(current_requests)
+        if current is None:
+            raise HumanReviewStateDrift(
+                "the human-review condition that paused this run no longer "
+                "derives from its own plan state, so the decision on record "
+                "approves a run state that no longer exists."
+            )
+        approved_plan = str(approved.get("plan_sha256") or "")
+        current_plan = str(current.get("plan_sha256") or "")
+        if current_plan != approved_plan:
+            raise HumanReviewStateDrift(
+                "the analysis plan changed after it was sent for review "
+                f"(approved plan_sha256={approved_plan[:8]}, live "
+                f"plan_sha256={current_plan[:8]}). The decision on record "
+                "approves the earlier plan, so the current one must not "
+                "execute under it."
+            )
+        if current.get("execution") != approved.get("execution"):
+            raise HumanReviewStateDrift(
+                "the execution identity changed after the plan was sent for "
+                "review (pipeline config, capability activation, submission "
+                "profile or run input capsule). The approval covers the "
+                "identity the reviewer saw, not this one."
+            )
+        approved_evidence = dict(approved.get("evidence_sha256") or {})
+        current_evidence = dict(current.get("evidence_sha256") or {})
+        for evidence_id, digest in sorted(approved_evidence.items()):
+            live = current_evidence.get(evidence_id)
+            if live is None:
+                raise HumanReviewStateDrift(
+                    f"evidence {evidence_id!r} was bound into the approved "
+                    "authority but is no longer in the run's evidence store, "
+                    "so the approval rests on an artefact the run cannot show."
+                )
+            if str(live) != str(digest):
+                raise HumanReviewStateDrift(
+                    f"evidence {evidence_id!r} changed after review (approved "
+                    f"sha256={str(digest)[:8]}, live sha256={str(live)[:8]})."
+                )
+
+    def _decision_records_for(
+        self,
+        ordered: Sequence[HumanReviewDecision],
+    ) -> list[dict[str, Any]]:
+        """Build the auditable records once per decision set, then reuse them.
+
+        Building is *not* idempotent on its own: every build stamps a fresh
+        ``server_decided_at``, which changes the decision file's bytes and so
+        its SHA-256. The recorder registers that file under a fixed evidence
+        id, and the evidence store refuses a fixed id whose digest changed.
+        A resubmission after a partially failed write would therefore have been
+        rejected forever -- turning the resumable pause this engine promises
+        into a permanent deadlock. Caching by decision-set digest makes a retry
+        present byte-identical content, which the store accepts as the same
+        artefact.
+
+        A genuinely *different* decision set gets its own fresh record, so the
+        cache cannot backdate a decision the operator has not made yet.
+        """
+
+        key = canonical_sha256([item.model_dump(mode="json") for item in ordered])
+        cached = self._decision_record_cache.get(key)
+        if cached is not None:
+            return [dict(record) for record in cached]
+        reviewer_identity = (
+            self._reviewer_identity_resolver()
+            if self._reviewer_identity_resolver is not None
+            else None
+        )
+        records = [
+            _human_review_decision_record(
+                request=request,
+                decision=decision,
+                reviewer_identity=reviewer_identity,
+            )
+            for request, decision in zip(self._requests, ordered)
+        ]
+        self._decision_record_cache[key] = tuple(dict(item) for item in records)
+        return records
+
     def _record_human_review(self, records: list[dict[str, Any]]) -> None:
         """Persist the decision, leaving the pause resumable if that fails."""
 
@@ -599,6 +776,9 @@ class PipelineWorkflow:
         self._state = state
         self._requests = ()
         self._plan_result = None
+        # The run is over; nothing can be resubmitted, so the retry cache has
+        # no remaining purpose and should not outlive the decisions it holds.
+        self._decision_record_cache.clear()
 
     def _finish(
         self,
