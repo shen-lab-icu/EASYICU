@@ -137,6 +137,105 @@ def test_an_untouched_plan_resumes_normally() -> None:
     assert calls == ["plan", "execute", "write", "finalise"]
 
 
+def test_a_rewritten_request_payload_is_refused() -> None:
+    """`frozen=True` freezes the attributes; the payload dict stays mutable.
+
+    So the drift guard cannot read "what was approved" out of the live request:
+    rewrite the embedded authority to describe the new plan and the guard
+    compares the new plan against itself. Demonstrated end-to-end before the
+    fix -- an unapproved output executed under the original signature.
+    """
+
+    workflow, calls, handoff, _evidence, _identity = _live_workflow()
+    paused = workflow.start()
+    request = paused.requests[0]
+    decision = _approve(request)
+
+    handoff.plan.steps[0].expected_outputs.append("table:never_approved")
+    fresh = human_review_requests_for_plan(
+        findings=handoff.findings,
+        plan=handoff.plan,
+        evidence=handoff.evidence,
+    )[0].payload["plan_review_authority"]
+    embedded = request.payload["plan_review_authority"]
+    embedded.clear()
+    embedded.update(fresh)
+
+    # The frozen fields are untouched, so every digest comparison still agrees.
+    assert decision.authority_sha256 == request.authority_sha256
+
+    with pytest.raises(HumanReviewStateDrift, match="were modified after the pause"):
+        workflow.resume([decision])
+
+    assert calls == ["plan"]
+    assert workflow.state == "failed"
+
+
+def test_a_swapped_request_tuple_is_refused() -> None:
+    """A self-consistent replacement request is still not the one offered.
+
+    Every per-request check compares a decision against the request the engine
+    is holding, so replacing both together agrees with itself. Only the
+    snapshot taken when the pause was offered can tell.
+    """
+
+    workflow, calls, handoff, _evidence, _identity = _live_workflow()
+    paused = workflow.start()
+
+    handoff.plan.steps[0].expected_outputs.append("table:never_approved")
+    replacement = human_review_requests_for_plan(
+        findings=handoff.findings,
+        plan=handoff.plan,
+        evidence=handoff.evidence,
+    )
+    workflow._requests = replacement
+
+    with pytest.raises(HumanReviewStateDrift, match="not the one that was offered"):
+        workflow.resume([_approve(replacement[0])])
+
+    assert calls == ["plan"]
+    assert workflow.state == "failed"
+
+
+def test_the_approved_side_is_read_from_the_snapshot_not_the_request() -> None:
+    """Defence in depth: the comparison is correct without the byte check.
+
+    Two independent guards cover the rewrite. This one asserts the second is
+    load-bearing on its own, so a later refactor of either cannot silently
+    leave the engine comparing a mutated value against itself.
+    """
+
+    workflow, _calls, handoff, _evidence, _identity = _live_workflow()
+    paused = workflow.start()
+    request = paused.requests[0]
+
+    handoff.plan.steps[0].expected_outputs.append("table:never_approved")
+    fresh = human_review_requests_for_plan(
+        findings=handoff.findings,
+        plan=handoff.plan,
+        evidence=handoff.evidence,
+    )[0].payload["plan_review_authority"]
+    embedded = request.payload["plan_review_authority"]
+    embedded.clear()
+    embedded.update(fresh)
+
+    with pytest.raises(HumanReviewStateDrift, match="plan changed after"):
+        workflow._verify_pause_still_binds_live_state()
+
+
+def test_the_snapshot_does_not_alias_the_request_payload() -> None:
+    """The snapshot must be a copy, not another reference to the same dicts."""
+
+    workflow, _calls, _handoff, _evidence, _identity = _live_workflow()
+    paused = workflow.start()
+
+    request = paused.requests[0]
+    request.payload["plan_review_authority"]["plan_sha256"] = "0" * 64
+    snapshot = workflow._pause_snapshot[0]["payload"]["plan_review_authority"]
+
+    assert snapshot["plan_sha256"] != "0" * 64
+
+
 def test_a_step_added_after_the_pause_is_refused() -> None:
     """The reported exploit: the digest still matches, the plan does not."""
 

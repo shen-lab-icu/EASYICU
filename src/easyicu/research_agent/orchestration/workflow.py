@@ -27,7 +27,7 @@ handoffs have a complete artifact-rehydration contract.
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import (
@@ -308,8 +308,26 @@ def _shared_plan_authority(
     the run currently holds.
     """
 
-    for request in requests:
-        authority = request.payload.get("plan_review_authority")
+    return _shared_plan_authority_payload(
+        {"payload": request.payload} for request in requests
+    )
+
+
+def _shared_plan_authority_payload(
+    records: Iterable[Mapping[str, Any]],
+) -> Optional[dict[str, Any]]:
+    """Same lookup over serialized request records rather than live models.
+
+    Resume reads the *approved* authority out of its private snapshot, which
+    holds plain dicts, and the *live* one out of the current requests. Both go
+    through this so the two sides cannot drift apart in how they are read.
+    """
+
+    for record in records:
+        payload = record.get("payload")
+        if not isinstance(payload, Mapping):
+            continue
+        authority = payload.get("plan_review_authority")
         if isinstance(authority, Mapping):
             return dict(authority)
     return None
@@ -535,6 +553,18 @@ class PipelineWorkflow:
         self._state = "created"
         self._plan_result: Optional[_PlanPhaseResult] = None
         self._requests: tuple[HumanReviewRequest, ...] = ()
+        #: The pause exactly as it was offered, as JSON-serialized deep copies.
+        #:
+        #: ``HumanReviewRequest`` is ``frozen=True``, which freezes its
+        #: *attributes* -- it does not stop anyone holding the request from
+        #: mutating the ``payload`` dict in place. Reading the approved plan
+        #: back out of the live request therefore compares the run against a
+        #: value the run itself no longer controls: rewrite that dict to
+        #: describe the new plan and the comparison is mutated-against-live,
+        #: which passes. These copies are private, are never handed out, and
+        #: are what resume compares against.
+        self._pause_snapshot: tuple[dict[str, Any], ...] = ()
+        self._pause_digest: str = ""
         #: Built decision records, keyed by the digest of the decision set that
         #: produced them. See :meth:`_decision_records_for` for why a resubmitted
         #: decision must not be re-stamped.
@@ -576,6 +606,12 @@ class PipelineWorkflow:
                 )
             if requests:
                 self._requests = requests
+                # Take the snapshot before the pause is visible to anyone, so
+                # what resume compares against is what the operator was asked.
+                self._pause_snapshot = tuple(
+                    item.model_dump(mode="json") for item in requests
+                )
+                self._pause_digest = canonical_sha256(list(self._pause_snapshot))
                 self._state = "paused"
                 return WorkflowPaused(requests=requests)
             return self._finish(())
@@ -594,6 +630,15 @@ class PipelineWorkflow:
             raise RuntimeError(
                 f"workflow resume requires state 'paused', found {self._state!r}"
             )
+        # Before any comparison that reads the requests: the requests must
+        # still be the ones that were offered. Everything below compares a
+        # decision against `self._requests`, so a request rewritten during the
+        # pause would be checked against itself and agree with itself.
+        try:
+            self._verify_requests_match_the_pause_offered()
+        except HumanReviewStateDrift:
+            self._discard_live_pause(state="failed")
+            raise
         parsed = tuple(HumanReviewDecision.model_validate(item) for item in decisions)
         decision_ids = [item.review_id for item in parsed]
         if len(decision_ids) != len(set(decision_ids)):
@@ -651,6 +696,48 @@ class PipelineWorkflow:
             self._discard_live_pause(state="failed")
             raise
 
+    def _verify_requests_match_the_pause_offered(self) -> None:
+        """Refuse when the paused requests are not the ones that were offered.
+
+        ``authority_sha256`` and ``review_id`` are frozen strings, but the
+        ``payload`` they bind is a plain dict that anything holding the pause
+        can rewrite in place -- including the embedded plan authority that
+        :meth:`_verify_pause_still_binds_live_state` reads back as "what was
+        approved". Rewriting it to describe the new plan makes that check
+        compare the new plan with itself, so the drift guard passes and
+        unapproved work executes under the old signature.
+
+        Comparing the live requests with the private snapshot closes both that
+        rewrite and a wholesale swap of the request tuple, because it checks
+        the bytes rather than any single field. It is a definitive integrity
+        violation, so it terminalizes like other drift.
+        """
+
+        if not self._pause_digest:
+            return
+        live = [item.model_dump(mode="json") for item in self._requests]
+        if canonical_sha256(live) == self._pause_digest:
+            return
+        offered = {item["review_id"] for item in self._pause_snapshot}
+        present = {str(item.get("review_id") or "") for item in live}
+        if offered != present:
+            detail = (
+                f"the pause offered {sorted(offered)} but the run now holds "
+                f"{sorted(present)}"
+            )
+        else:
+            changed = sorted(
+                item["review_id"]
+                for item, was in zip(live, self._pause_snapshot)
+                if item != was
+            )
+            detail = f"request(s) {changed} were modified after the pause"
+        raise HumanReviewStateDrift(
+            "the paused review request is not the one that was offered for "
+            f"review ({detail}). A decision can only authorize the request the "
+            "operator was actually shown."
+        )
+
     def _verify_pause_still_binds_live_state(self) -> None:
         """Re-derive the approved authority and refuse if the run has moved.
 
@@ -670,7 +757,12 @@ class PipelineWorkflow:
 
         if self._human_review_invoker is None or self._plan_result is None:
             return
-        approved = _shared_plan_authority(self._requests)
+        # Read the approved side from the private snapshot, never from the live
+        # request: the request's payload is mutable in place, so deriving both
+        # sides from it would compare the run against a value the run does not
+        # own. `_verify_requests_match_the_pause_offered` already refuses a
+        # rewritten request; this keeps the comparison correct on its own.
+        approved = _shared_plan_authority_payload(self._pause_snapshot)
         if approved is None:
             return
         try:
@@ -775,6 +867,8 @@ class PipelineWorkflow:
 
         self._state = state
         self._requests = ()
+        self._pause_snapshot = ()
+        self._pause_digest = ""
         self._plan_result = None
         # The run is over; nothing can be resubmitted, so the retry cache has
         # no remaining purpose and should not outlive the decisions it holds.
