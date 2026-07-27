@@ -79,13 +79,20 @@ def cohort_patient_ids(patient_ids) -> Optional[set]:
     """Normalize a caller's cohort selector to a set, or ``None`` for "all".
 
     ``patient_ids`` reaches the concept layer as a list, as a ``{id_col: ids}``
-    mapping, or absent. **Only absence means "every patient".** An explicitly
-    empty selector is an empty cohort, which is a different question with a
-    different answer, and the package's own normalizers
+    mapping, or absent. **Only the top-level absence means "every patient".** An
+    explicitly empty selector is an empty cohort, which is a different question
+    with a different answer, and the package's own normalizers
     (``api.concepts._patient_filter_values``, ``scores.outcomes._patient_values``)
     already keep the two apart. Collapsing ``[]`` into "all" here made this
     helper answer for the whole database when the caller had asked about
     nobody -- the same class of mistake as the guard it was written to fix.
+
+    ``{id_col: None}`` is refused rather than read as either one. It has no
+    settled meaning: read as "all" it widens a filtered request to the whole
+    database, read as "none" it empties it, and the two reference normalizers
+    above accept neither -- both reach ``list(None)`` and raise. Guessing here
+    would make this helper the one place in the package where that shape
+    silently acquires a population.
     """
 
     if patient_ids is None:
@@ -93,11 +100,13 @@ def cohort_patient_ids(patient_ids) -> Optional[set]:
     if isinstance(patient_ids, dict):
         if not patient_ids:
             return set()
-        values = next(iter(patient_ids.values()))
+        column, values = next(iter(patient_ids.items()))
         if values is None:
-            # ``{id_col: None}`` carries no ids for that column: the dict
-            # spelling of an unfiltered request, not of an empty one.
-            return None
+            raise ValueError(
+                f"patient_ids={{{column!r}: None}} does not select a cohort: "
+                "pass patient_ids=None for every patient, or an explicit "
+                "sequence (possibly empty) for a filtered one."
+            )
     else:
         values = patient_ids
     if isinstance(values, (str, bytes, int)):
