@@ -451,3 +451,103 @@ def god():
     # tool deliberately does NOT attribute the annotation as a read/capture.
     assert _captured(src, "god") == set()
     assert _bound(src, "god") == {"T", "child"}
+
+
+# --- baseline provenance -----------------------------------------------------
+#
+# The ratchet drifted 166 commits before CI noticed, because ``--emit`` used to
+# overwrite the file leaving no trace of what had been accepted. ``--reason``
+# was added for that, and then the very next emit demonstrated the remaining
+# hole: a first emit recorded +2,641 LOC across 12 files, a follow-up emit
+# eleven lines later replaced it, and the file went on to claim the whole batch
+# had grown the package by 11 lines. History has to accumulate, not replace.
+
+
+def _emit(tmp_path, monkeypatch, *, locs, reason, with_reason=True):
+    """Run ``--emit`` over a synthetic measurement, and return (rc, file)."""
+
+    payload = {
+        "tool_version": 1,
+        "tool_sha256": "deadbeef",
+        "shim_import_paths": [],
+        "functions": {},
+        "files": {name: {"loc": loc} for name, loc in locs.items()},
+    }
+    monkeypatch.setattr(arch_measure, "measure", lambda: copy.deepcopy(payload))
+    out = tmp_path / "baseline.json"
+    argv = ["arch_measure.py", "--emit", str(out)]
+    if with_reason:
+        argv += ["--reason", reason]
+    monkeypatch.setattr(sys, "argv", argv)
+    return arch_measure.main(), out
+
+
+def test_emit_without_a_reason_writes_nothing(tmp_path, monkeypatch) -> None:
+    rc, out = _emit(
+        tmp_path, monkeypatch, locs={"a.py": 10}, reason="", with_reason=False
+    )
+
+    assert rc == 2
+    assert not out.exists(), "a refused emit must not leave a half-moved ratchet"
+
+
+def test_consecutive_emits_keep_every_move_in_the_history(
+    tmp_path, monkeypatch
+) -> None:
+    """The exact sequence that erased the real record."""
+
+    _emit(tmp_path, monkeypatch, locs={"a.py": 100, "b.py": 50}, reason="first move")
+    rc, out = _emit(
+        tmp_path,
+        monkeypatch,
+        locs={"a.py": 2_741, "b.py": 50},
+        reason="second move",
+    )
+    assert rc == 0
+
+    recorded = json.loads(out.read_text(encoding="utf-8"))
+    history = recorded["baseline_history"]
+
+    assert [item["reason"] for item in history] == ["first move", "second move"]
+    # The growth the first move accepted is still legible after the second.
+    assert history[1]["accepted_growth"] == {"a.py": {"loc_was": 100, "loc_now": 2_741}}
+    # And the top-level keys still describe only the latest move, which is why
+    # they cannot be the record on their own.
+    assert recorded["baseline_reason"] == "second move"
+    assert recorded["baseline_accepted_growth"] == history[1]["accepted_growth"]
+
+
+def test_a_third_emit_appends_rather_than_truncating(tmp_path, monkeypatch) -> None:
+    for step, loc in enumerate((100, 200, 300), start=1):
+        rc, out = _emit(
+            tmp_path, monkeypatch, locs={"a.py": loc}, reason=f"move {step}"
+        )
+        assert rc == 0
+
+    history = json.loads(out.read_text(encoding="utf-8"))["baseline_history"]
+    assert [item["reason"] for item in history] == ["move 1", "move 2", "move 3"]
+    lifetime = sum(
+        v["loc_now"] - v["loc_was"]
+        for item in history
+        for v in (item.get("accepted_growth") or {}).values()
+    )
+    assert lifetime == 200, "the whole accepted growth, not just the last step"
+
+
+def test_the_history_keys_do_not_reach_the_gate(tmp_path, monkeypatch) -> None:
+    """Provenance must not be able to change a pass/fail verdict.
+
+    ``diff`` reads only ``functions`` and ``files``. Pinning that here keeps a
+    later reader from moving a metric into the history block and quietly
+    exempting it.
+    """
+
+    _emit(tmp_path, monkeypatch, locs={"a.py": 100}, reason="first move")
+    _, out = _emit(tmp_path, monkeypatch, locs={"a.py": 100}, reason="second move")
+    baseline = json.loads(out.read_text(encoding="utf-8"))
+
+    assert baseline["baseline_history"], "precondition: history is populated"
+    unchanged = {"functions": {}, "files": {"a.py": {"loc": 100}}}
+    grown = {"functions": {}, "files": {"a.py": {"loc": 101}}}
+    assert arch_measure.diff(baseline, unchanged) == 0
+    assert arch_measure.diff(baseline, grown) == 1

@@ -593,24 +593,44 @@ def main() -> int:
             return 2
         out = Path(args.emit)
         out.parent.mkdir(parents=True, exist_ok=True)
-        # Carry the superseded numbers, so the accepted growth is legible in
-        # the file itself rather than only in a commit message that a later
-        # re-emit will bury.
-        superseded: Dict[str, Any] = {}
+        previous: Dict[str, Any] = {}
         if out.exists():
             try:
                 previous = json.loads(out.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 previous = {}
-            for name, cur in current.get("files", {}).items():
-                was = previous.get("files", {}).get(name, {}).get("loc")
-                now = cur.get("loc")
-                if isinstance(was, int) and isinstance(now, int) and now > was:
-                    superseded[name] = {"loc_was": was, "loc_now": now}
+        # Carry the superseded numbers, so the accepted growth is legible in
+        # the file itself rather than only in a commit message that a later
+        # re-emit will bury.
+        superseded: Dict[str, Any] = {}
+        for name, cur in current.get("files", {}).items():
+            was = previous.get("files", {}).get(name, {}).get("loc")
+            now = cur.get("loc")
+            if isinstance(was, int) and isinstance(now, int) and now > was:
+                superseded[name] = {"loc_was": was, "loc_now": now}
+        reason = args.reason.strip()
+        entry: Dict[str, Any] = {"reason": reason}
+        if superseded:
+            entry["accepted_growth"] = superseded
+        # Append, never replace. The top-level `baseline_reason` /
+        # `baseline_accepted_growth` keys describe only the most recent move,
+        # so on their own the next emit erases the one before it -- which is
+        # exactly what happened here: a first emit recorded +2,641 LOC across
+        # 12 files, and a follow-up emit eleven lines later overwrote it, so
+        # the file claimed the whole batch had grown the package by 11 lines.
+        # A ratchet that forgets why it moved is a ratchet nobody has to
+        # justify moving.
+        history = [
+            item
+            for item in (previous.get("baseline_history") or [])
+            if isinstance(item, dict)
+        ]
+        history.append(entry)
         recorded = dict(current)
-        recorded["baseline_reason"] = args.reason.strip()
+        recorded["baseline_reason"] = reason
         if superseded:
             recorded["baseline_accepted_growth"] = superseded
+        recorded["baseline_history"] = history
         out.write_text(json.dumps(recorded, indent=2) + "\n", encoding="utf-8")
         print(f"wrote baseline -> {out}")
         if superseded:
@@ -619,6 +639,15 @@ def main() -> int:
                 f"  accepted +{total} LOC across {len(superseded)} file(s); "
                 "recorded in baseline_accepted_growth"
             )
+        lifetime = sum(
+            v["loc_now"] - v["loc_was"]
+            for item in history
+            for v in (item.get("accepted_growth") or {}).values()
+        )
+        print(
+            f"  baseline_history now holds {len(history)} move(s), "
+            f"+{lifetime} LOC accepted in total"
+        )
         return 0
     if args.diff:
         baseline = json.loads(Path(args.diff).read_text(encoding="utf-8"))

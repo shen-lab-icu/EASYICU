@@ -1,6 +1,6 @@
 {
   "tool_version": "1.8.0",
-  "tool_sha256": "ca7dfaf8643e3b5763906d0d132f556a480e1e8f6b42d5b122c8c2dc78ac557f",
+  "tool_sha256": "cd96c78ba7d411f6479e61fcd68ab32db65baa9c7cec79f004b827ac9c48af49",
   "shim_import_paths": [],
   "files": {
     "execution/phase.py": {
@@ -136,11 +136,76 @@
       "callable_closure_captured_names": 79
     }
   },
-  "baseline_reason": "Follow-up to the same batch: 58355ab added 11 lines to audits/validators.py recording which half of retain_and_flag the flag-only downgrade settles. Baseline re-taken at the batch's final state so --diff is green on what actually ships.",
-  "baseline_accepted_growth": {
-    "audits/validators.py": {
-      "loc_was": 13225,
-      "loc_now": 13236
+  "baseline_reason": "History-preserving re-emit at the same measured state. No metric moves: this run exists so the file carries a baseline_history, and so the +2,641 LOC across 12 files that the 2026-07-27 follow-up emit erased can be restored alongside it.",
+  "baseline_history": [
+    {
+      "reason": "Re-baselined after the 2026-07-24..2026-07-27 external-review hardening batch (19 commits): fail-closed concept outcomes, human-review state drift + payload-tamper guards, provider budget/resume accounting, three deterministic executors, scientific-table validation. All growth is reviewed hardening, not drift. Decomposing pipeline.py / execution/phase.py / repairs/source.py remains the open architectural workstream and is NOT authorized by this refresh.",
+      "accepted_growth": {
+        "execution/phase.py": {
+          "loc_was": 11648,
+          "loc_now": 11938
+        },
+        "pipeline.py": {
+          "loc_was": 10736,
+          "loc_now": 11283
+        },
+        "reporting/readiness.py": {
+          "loc_was": 2971,
+          "loc_now": 3138
+        },
+        "authority/typed_binding.py": {
+          "loc_was": 1512,
+          "loc_now": 1628
+        },
+        "gates/preflight.py": {
+          "loc_was": 8366,
+          "loc_now": 8606
+        },
+        "repairs/source.py": {
+          "loc_was": 7531,
+          "loc_now": 8007
+        },
+        "audits/validators.py": {
+          "loc_was": 13135,
+          "loc_now": 13225
+        },
+        "plan_utils.py": {
+          "loc_was": 4976,
+          "loc_now": 5044
+        },
+        "agents/core.py": {
+          "loc_was": 4034,
+          "loc_now": 4453
+        },
+        "contracts/declared_product.py": {
+          "loc_was": 3509,
+          "loc_now": 3536
+        },
+        "figures/skill.py": {
+          "loc_was": 3468,
+          "loc_now": 3573
+        },
+        "authority/evidence_store.py": {
+          "loc_was": 3151,
+          "loc_now": 3247
+        }
+      },
+      "recovered_from_commit": "3c195c7",
+      "recovery_note": "Reconstructed verbatim from the baseline file as committed at this sha. --emit replaced the file rather than appending, so this move was erased by the next one; nothing here is re-derived or estimated."
+    },
+    {
+      "reason": "Follow-up to the same batch: 58355ab added 11 lines to audits/validators.py recording which half of retain_and_flag the flag-only downgrade settles. Baseline re-taken at the batch's final state so --diff is green on what actually ships.",
+      "accepted_growth": {
+        "audits/validators.py": {
+          "loc_was": 13225,
+          "loc_now": 13236
+        }
+      },
+      "recovered_from_commit": "84e335e",
+      "recovery_note": "Reconstructed verbatim from the baseline file as committed at this sha. --emit replaced the file rather than appending, so this move was erased by the next one; nothing here is re-derived or estimated."
+    },
+    {
+      "reason": "History-preserving re-emit at the same measured state. No metric moves: this run exists so the file carries a baseline_history, and so the +2,641 LOC across 12 files that the 2026-07-27 follow-up emit erased can be restored alongside it."
     }
-  }
+  ]
 }
