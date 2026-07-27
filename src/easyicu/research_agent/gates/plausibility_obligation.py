@@ -66,10 +66,14 @@ _RECORDING_REDUCTIONS = frozenset(
 #: Calls that put a value somewhere outside the process.  Deliberately narrow:
 #: ``print`` and logging are not declared outputs, and treating them as such
 #: would let a step satisfy the policy by writing to a stream nobody keeps.
+#: ``dumps`` is deliberately absent: it renders a string and writes nothing, so
+#: counting it made ``sys.stdout.write(json.dumps(audit))`` look like a
+#: declared output. The enclosing call that actually writes is the sink, and
+#: the rendered string is one of its arguments, so nothing is lost by leaving
+#: it out.
 _SERIALIZING_CALLS = frozenset(
     {
         "dump",
-        "dumps",
         "savez",
         "to_csv",
         "to_excel",
@@ -86,6 +90,12 @@ _SERIALIZING_CALLS = frozenset(
         "writerows",
     }
 )
+
+#: Streams that are not a declared output. ``.write`` on a file handle is a
+#: real sink; the same call on stdout is a print with extra steps, and letting
+#: it count would hand the step the easiest possible way to satisfy the policy
+#: without leaving anything a reader can open.
+_TRANSIENT_STREAMS = frozenset({"stdout", "stderr", "__stdout__", "__stderr__"})
 
 #: Names whose call terminates the step.
 _TERMINATING_CALLS = frozenset({"exit", "_exit", "sys_exit"})
@@ -271,6 +281,15 @@ def _subscript_root(node: ast.AST) -> Optional[str]:
     if isinstance(node, ast.Attribute) and node.attr in {"at", "loc", "iloc"}:
         node = node.value
     return node.id if isinstance(node, ast.Name) else None
+
+
+def _writes_to_a_transient_stream(callee: ast.Attribute) -> bool:
+    """Whether a ``.write`` goes to a console stream rather than to a file."""
+
+    receiver = callee.value
+    if isinstance(receiver, ast.Attribute):
+        return receiver.attr in _TRANSIENT_STREAMS
+    return isinstance(receiver, ast.Name) and receiver.id in _TRANSIENT_STREAMS
 
 
 def _is_terminal_failure(statements: Sequence[ast.stmt]) -> bool:
@@ -518,6 +537,8 @@ class _FlagFlow:
                 continue
             callee = node.func
             if isinstance(callee, ast.Attribute) and callee.attr in _SERIALIZING_CALLS:
+                if _writes_to_a_transient_stream(callee):
+                    continue
                 sinks.append(callee.value)
             elif isinstance(callee, ast.Name) and callee.id in _SERIALIZING_CALLS:
                 pass
