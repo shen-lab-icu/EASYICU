@@ -4582,7 +4582,12 @@ class ResearchAgentPipeline:
                                 "execution_complete": False,
                                 "manuscript_ready": False,
                                 "publication_ready": False,
+                                # The paper-authority contract is three axes.
+                                # State all three: a consumer that has to tell
+                                # "absent" from "explicitly false" is reading a
+                                # different schema from a completed run's.
                                 "publication_artifacts_ready": False,
+                                "execution_paper_eligible": False,
                                 "paper_authorized": False,
                             },
                             "canonical_outputs": {

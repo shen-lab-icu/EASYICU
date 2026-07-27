@@ -567,23 +567,31 @@ class PipelineWorkflow:
             if decision.decision == "rejected":
                 rejected_ids.append(review_id)
 
+        # Recording the decision and acting on it are separate acts, and only
+        # the second one is irreversible. The recorder writes two files and
+        # registers two evidence entries, so a full disk, a permission change
+        # or an evidence-store hiccup can fail it -- and discarding the live
+        # handoff there would throw away Planner work the operator already
+        # paid for, to recover from a transient write. Stay paused instead:
+        # `_requests` and `_plan_result` are intact, so the same decision can
+        # be resubmitted. Only a failure past this point is terminal.
         if rejected_ids:
-            try:
-                if self._human_review_recorder is not None:
-                    self._human_review_recorder(tuple(records))
-            except Exception:
-                self._discard_live_pause(state="failed")
-                raise
+            self._record_human_review(records)
             self._discard_live_pause(state="rejected")
             raise HumanReviewRejected(rejected_ids)
 
+        self._record_human_review(records)
         try:
-            if self._human_review_recorder is not None:
-                self._human_review_recorder(tuple(records))
             return self._finish(tuple(records))
         except Exception:
             self._discard_live_pause(state="failed")
             raise
+
+    def _record_human_review(self, records: list[dict[str, Any]]) -> None:
+        """Persist the decision, leaving the pause resumable if that fails."""
+
+        if self._human_review_recorder is not None:
+            self._human_review_recorder(tuple(records))
 
     def _discard_live_pause(self, *, state: str) -> None:
         """Terminalize the engine and release non-rehydratable live handoffs."""
