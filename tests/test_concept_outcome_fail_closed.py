@@ -57,11 +57,12 @@ class _GeneralSource:
         return SimpleNamespace(data=self._general)
 
 
-def _apply(data_source):
+def _apply(data_source, *, frame=None, patient_ids=None):
     return _apply_callback(
-        _frame(),
+        _frame() if frame is None else frame,
         _source(),
         concept_name="death",
+        patient_ids=patient_ids,
         data_source=data_source,
     )
 
@@ -109,6 +110,91 @@ def test_a_cohort_with_no_deaths_still_returns_an_empty_result():
     assert result.empty
 
 
+def test_a_cohort_of_survivors_is_zero_even_when_the_database_records_deaths(tmp_path):
+    """The guard has to be about *this* cohort, not about the whole source.
+
+    A guard written against every death in the database answers a question
+    nobody asked: for a cohort of survivors it reports a failure while the
+    correct answer, zero, was sitting right there. Asking about one living
+    patient in a database where somebody else died must return an empty
+    result, not raise.
+    """
+
+    general = pd.DataFrame({"patientid": [1, 2], "discharge_status": ["alive", "dead"]})
+    frame = pd.DataFrame(
+        {"patientid": [1, 1], "datetime": [10, 20], "variableid": [110, 200]}
+    )
+
+    result = _apply(
+        _GeneralSource(general=general, base_path=tmp_path),
+        frame=frame,
+        patient_ids=[1],
+    )
+
+    assert isinstance(result, pd.DataFrame)
+    assert result.empty
+
+
+def test_a_dead_patient_in_the_cohort_still_fails_closed(tmp_path):
+    """The other half of the same narrowing: it must not weaken the guard."""
+
+    general = pd.DataFrame({"patientid": [1, 2], "discharge_status": ["alive", "dead"]})
+    # Patient 2 died but has no observation to time the death.
+    frame = pd.DataFrame(
+        {"patientid": [1, 1], "datetime": [10, 20], "variableid": [110, 200]}
+    )
+
+    with pytest.raises(ConceptExtractionUnavailable) as excinfo:
+        _apply(
+            _GeneralSource(general=general, base_path=tmp_path),
+            frame=frame,
+            patient_ids=[2],
+        )
+
+    assert excinfo.value.stage == "last_observation"
+    assert "1 patient(s) in this cohort" in str(excinfo.value)
+
+
+def test_a_dict_cohort_selector_narrows_the_same_way(tmp_path):
+    """`patient_ids` also arrives as a {id_column: ids} mapping."""
+
+    general = pd.DataFrame({"patientid": [1, 2], "discharge_status": ["alive", "dead"]})
+    frame = pd.DataFrame(
+        {"patientid": [1, 1], "datetime": [10, 20], "variableid": [110, 200]}
+    )
+
+    result = _apply(
+        _GeneralSource(general=general, base_path=tmp_path),
+        frame=frame,
+        patient_ids={"patientid": [1]},
+    )
+
+    assert result.empty
+
+
+def test_deaths_dropped_for_want_of_a_timestamp_are_reported(tmp_path):
+    """Partial loss is legitimate, but it must not be silent.
+
+    A death the extraction cannot time simply does not appear in the result,
+    which lowers the mortality it reports with nothing to show for it. That is
+    not fatal — a patient can genuinely lack the observation — so it warns with
+    the count rather than failing the whole extraction.
+    """
+
+    general = pd.DataFrame({"patientid": [1, 2], "discharge_status": ["dead", "dead"]})
+    # Patient 1 can be timed; patient 2 cannot.
+    frame = pd.DataFrame(
+        {"patientid": [1, 1], "datetime": [10, 20], "variableid": [110, 200]}
+    )
+
+    with pytest.warns(RuntimeWarning, match="1 of 2 recorded deaths"):
+        result = _apply(
+            _GeneralSource(general=general, base_path=tmp_path), frame=frame
+        )
+
+    assert list(result["patientid"]) == [1]
+
+
 def test_deaths_that_cannot_be_timed_are_not_reported_as_no_deaths(tmp_path):
     """The general table says these patients died; the result said they did not."""
 
@@ -121,7 +207,7 @@ def test_deaths_that_cannot_be_timed_are_not_reported_as_no_deaths(tmp_path):
         _apply(source)
 
     assert excinfo.value.stage == "last_observation"
-    assert "2 patient(s) are recorded as deceased" in str(excinfo.value)
+    assert "2 patient(s) in this cohort are recorded as deceased" in str(excinfo.value)
 
 
 def test_a_successful_read_still_produces_the_death_rows(tmp_path):
@@ -156,3 +242,10 @@ def test_both_copies_of_the_logic_fail_closed():
     assert (
         "dead_pids = set()" not in fast_path
     ), "swallowing the general-table read back into an empty set is the bug"
+    assert "deaths_within_cohort" in fast_path, (
+        "the fast path must narrow to the cohort through the same shared helper, "
+        "or the two copies drift on which population their guards are about"
+    )
+    assert (
+        "_warn_untimed_deaths" in fast_path
+    ), "a death the query cannot time silently lowers the mortality reported"
