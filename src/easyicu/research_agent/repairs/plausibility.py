@@ -108,21 +108,30 @@ def patch_flag_only_plausibility_range_rejection(
     The ConceptDescriptor plausibility range is not an exclusion contract.  A
     deterministic repair is permitted only when the typed auditor identifies
     one variable and the script contains exactly one closed range-rejection
-    shape.  Supported shapes are a direct adjacent
-    ``range-mask = lower | upper`` / ``if range-mask.any(): raise`` pair, or a
-    mask/count/terminal-failure chain where the mask and count remain available
-    for audit reporting and only the failure guard is removed.  A unique pair
-    of lower/upper terminal guards may also be retained when both bounds are
-    read from the sealed ``analysis_plausibility_range`` minimum/maximum
-    schema, whether the bound is compared directly or narrowed once through
-    ``float(...)``.  Any ambiguity, scientific filtering use, or side effect
-    leaves the code unchanged for provider repair.
+    shape.  Supported shapes are a mask/count/terminal-failure chain where the
+    mask and count remain available for audit reporting and only the failure
+    guard is removed, or a unique pair of lower/upper terminal guards whose
+    bounds are both read from the sealed ``analysis_plausibility_range``
+    minimum/maximum schema, whether the bound is compared directly or narrowed
+    once through ``float(...)``.  Any ambiguity, scientific filtering use, or
+    side effect leaves the code unchanged for provider repair.
 
     This repair proves only the retention half of ``retain_and_flag``: it
     deletes a terminal guard, so no row is excluded.  It cannot supply the
     structured flag or count, which belongs to the generated script's declared
     outputs.  A step whose only evidence of policy compliance is this marker
     has satisfied retention, not flagging.
+
+    That boundary is why the direct adjacent ``range-mask = lower | upper`` /
+    ``if range-mask.any(): raise`` pair is **not** repaired here, though it
+    once was.  In that shape the guard is the mask's only reader, so removing
+    it removed the mask too, and the script was left computing nothing at all
+    about the out-of-range rows: retention satisfied by destroying the record
+    of what had been retained.  It also erased the evidence the audit
+    downgrade in ``audits/validators.py`` looks for, so the step went on to
+    pass having neither excluded nor flagged.  A shape a deterministic patch
+    cannot leave better than it found belongs to provider repair, where the
+    Coder is told to keep every row and record the count.
     """
 
     matching: list[set[str] | None] = []
@@ -576,39 +585,12 @@ def patch_flag_only_plausibility_range_rejection(
         for parent in ast.walk(tree)
         for child in ast.iter_child_nodes(parent)
     }
-    direct_candidates: list[tuple[ast.Assign, ast.If]] = []
     counted_candidates: list[tuple[ast.Assign, ast.Assign, ast.If]] = []
     for parent in ast.walk(tree):
         for field in ("body", "orelse", "finalbody"):
             statements = getattr(parent, field, None)
             if not isinstance(statements, list):
                 continue
-            for first, second in zip(statements, statements[1:]):
-                range_variable_name = (
-                    range_mask_variable(first.value)
-                    if isinstance(first, ast.Assign)
-                    else None
-                )
-                if not (
-                    isinstance(first, ast.Assign)
-                    and len(first.targets) == 1
-                    and isinstance(first.targets[0], ast.Name)
-                    and range_variable_name is not None
-                    and variable_is_authorized(range_variable_name)
-                ):
-                    continue
-                mask_name = first.targets[0].id
-                if not is_raise_guard(second, mask_name):
-                    continue
-                loads = [
-                    node
-                    for node in ast.walk(tree)
-                    if isinstance(node, ast.Name)
-                    and isinstance(node.ctx, ast.Load)
-                    and node.id == mask_name
-                ]
-                if len(loads) == 1:
-                    direct_candidates.append((first, second))
             for first, second, third in zip(statements, statements[1:], statements[2:]):
                 range_variable_name = (
                     range_mask_variable(first.value)
@@ -654,14 +636,10 @@ def patch_flag_only_plausibility_range_rejection(
                 ):
                     continue
                 counted_candidates.append((first, second, third))
-    if len(direct_candidates) + len(counted_candidates) != 1:
+    if len(counted_candidates) != 1:
         return code
-    if direct_candidates:
-        assignment, guard = direct_candidates[0]
-        replace_start = assignment.lineno
-    else:
-        _, _, guard = counted_candidates[0]
-        replace_start = guard.lineno
+    _, _, guard = counted_candidates[0]
+    replace_start = guard.lineno
     if guard.end_lineno is None:
         return code
     lines = code.splitlines(keepends=True)

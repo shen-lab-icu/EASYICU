@@ -32,7 +32,18 @@ import json
 import math
 import re
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Set, Tuple
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterator,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+)
 
 import pandas as pd
 
@@ -2660,10 +2671,195 @@ def _downgrade_finalized_exposure_reconciliation_findings(
     return downgraded
 
 
+# Pandas reductions that turn a boolean mask into a reportable number. The
+# vocabulary is the library's, not the clinical domain's, which is why it can
+# be a closed set here without becoming the kind of guessed keyword list that
+# goes stale.
+_OUT_OF_RANGE_REDUCTIONS = frozenset(
+    {"sum", "count", "mean", "size", "nunique", "value_counts"}
+)
+
+
+def _named_series(node: ast.AST) -> Optional[str]:
+    """The name a bare series reference denotes: ``x`` or ``df["x"]``."""
+
+    if isinstance(node, ast.Name):
+        return node.id
+    if (
+        isinstance(node, ast.Subscript)
+        and isinstance(node.slice, ast.Constant)
+        and isinstance(node.slice.value, str)
+    ):
+        return node.slice.value
+    return None
+
+
+def _carries_one_of(node: ast.AST, names: Set[str]) -> bool:
+    """Whether an expression carries the values of one of ``names`` forward.
+
+    Checks membership rather than extracting a single source, which is what
+    keeps ``pd.to_numeric(df["lactate"])`` (the value is the argument) and
+    ``numeric.astype(float)`` (the value is the receiver) from needing two
+    incompatible rules.
+    """
+
+    named = _named_series(node)
+    if named is not None:
+        return named in names
+    if isinstance(node, ast.Call):
+        if isinstance(node.func, ast.Attribute) and _carries_one_of(
+            node.func.value, names
+        ):
+            return True
+        return any(_carries_one_of(argument, names) for argument in node.args)
+    return False
+
+
+def _plausibility_variable_aliases(tree: ast.AST, variable: str) -> Set[str]:
+    """Local names that carry ``variable``'s values.
+
+    A script rarely compares the column in place: it binds ``df["lactate"]``
+    or ``pd.to_numeric(df["lactate"])`` to a local first. Following those
+    bindings is what lets the check below be about the variable the auditor
+    named rather than about whatever happens to be spelled the same way.
+    """
+
+    aliases = {variable}
+    assignments = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+    ]
+    for _ in range(len(assignments) + 1):
+        grew = False
+        for node in assignments:
+            target = node.targets[0].id
+            if target not in aliases and _carries_one_of(node.value, aliases):
+                aliases.add(target)
+                grew = True
+        if not grew:
+            break
+    return aliases
+
+
+def _records_out_of_range_evidence(
+    *, script_text: str, variable: str
+) -> Optional[bool]:
+    """Whether the script keeps a structured record of the out-of-range rows.
+
+    ``retain_and_flag`` is two obligations. Retention is settled by removing
+    the rejection; flagging is the script's own declared output, and until
+    something observes it, "no error" means only that nobody looked.
+
+    Returns True when a bound comparison on ``variable`` is written to a column
+    or reduced to a kept number, False when such a comparison exists but its
+    result is discarded, and None when no comparison on ``variable`` can be
+    located at all -- in which case this check has nothing to say and must not
+    be the thing that decides. AST rather than text on purpose: the repair
+    leaves a ``_flag``-bearing marker *comment* behind, which no comment-blind
+    parse can mistake for evidence.
+
+    The boundary, stated so a later reader does not over-read a pass: this
+    observes that the script computes and keeps the count or indicator. It does
+    not verify that the number reaches a particular declared artifact. That
+    belongs to the step's scientific requirements, not to an audit downgrade.
+    """
+
+    try:
+        tree = ast.parse(script_text or "")
+    except SyntaxError:
+        return None
+
+    aliases = _plausibility_variable_aliases(tree, variable)
+    comparisons = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Compare)
+        and len(node.ops) == 1
+        and isinstance(node.ops[0], (ast.Lt, ast.LtE, ast.Gt, ast.GtE))
+        and (
+            _carries_one_of(node.left, aliases)
+            or _carries_one_of(node.comparators[0], aliases)
+        )
+    ]
+    if not comparisons:
+        return None
+
+    parents = {
+        id(child): parent
+        for parent in ast.walk(tree)
+        for child in ast.iter_child_nodes(parent)
+    }
+
+    def ancestors(node: ast.AST) -> Iterator[ast.AST]:
+        current = parents.get(id(node))
+        while current is not None:
+            yield current
+            current = parents.get(id(current))
+
+    # The mask is usually bound before it is used, so following the names it
+    # is bound to is what lets `mask = a | b` / `n = int(mask.sum())` count as
+    # one record rather than two unrelated statements.
+    compared = {id(node) for node in comparisons}
+    mask_names: Set[str] = set()
+    for _ in range(len(parents) + 1):
+        grew = False
+        for node in ast.walk(tree):
+            if not (
+                isinstance(node, ast.Assign)
+                and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+            ):
+                continue
+            target = node.targets[0].id
+            if target in mask_names:
+                continue
+            holds_mask = any(
+                id(inner) in compared for inner in ast.walk(node.value)
+            ) or _carries_one_of(node.value, mask_names)
+            if holds_mask:
+                mask_names.add(target)
+                grew = True
+        if not grew:
+            break
+
+    def holds_the_mask(node: ast.AST) -> bool:
+        return any(id(inner) in compared for inner in ast.walk(node)) or (
+            _carries_one_of(node, mask_names) if mask_names else False
+        )
+
+    for node in ast.walk(tree):
+        # A new column holding the indicator.
+        if (
+            isinstance(node, ast.Assign)
+            and any(isinstance(target, ast.Subscript) for target in node.targets)
+            and holds_the_mask(node.value)
+        ):
+            return True
+        # A reduction to a number, kept rather than tested and dropped.
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in _OUT_OF_RANGE_REDUCTIONS
+            and holds_the_mask(node.func.value)
+        ):
+            for outer in ancestors(node):
+                if isinstance(outer, (ast.Assign, ast.Dict, ast.keyword)):
+                    return True
+                if isinstance(outer, (ast.If, ast.Assert, ast.Raise)):
+                    # Reduced only to decide whether to fail: that is the
+                    # rejection this policy forbids, not a record of it.
+                    break
+    return False
+
+
 def _reclassify_flag_only_plausibility_range_findings(
     *,
     findings: Sequence[ValidationFinding],
     context: ResearchContext,
+    script_text: str,
 ) -> List[ValidationFinding]:
     """Keep plausible-range metadata from silently changing the analysis set."""
 
@@ -2724,17 +2920,39 @@ def _reclassify_flag_only_plausibility_range_findings(
             "locks another action.",
         )
         detail.setdefault("range_policy_authority", "concept_descriptor_flag_only")
-        # The downgrade settles *retention* only. Nothing here observes a count
-        # or a per-row indicator, so a later reader must not take the absence
-        # of an error as evidence that the flagging half happened -- that is
-        # the generated script's declared output, and it is still owed.
-        detail.setdefault("retain_and_flag_half_satisfied", "retain")
-        detail.setdefault(
-            "flag_obligation",
-            "The script still owes a structured out-of-range count or "
-            "indicator in its declared outputs; this downgrade does not "
-            "observe one and is not evidence that one exists.",
+
+        # `retain_and_flag` is two obligations, and the downgrade only ever
+        # settled retention. Recording that the other half was owed was an
+        # improvement on claiming it was done, but a note nothing reads is not
+        # a gate: a step could retain the values, flag nothing, and pass.
+        # Downgrade only where the flagging half is observable in the script.
+        records_flag = _records_out_of_range_evidence(
+            script_text=script_text, variable=variable
         )
+        if records_flag is False:
+            detail["retain_and_flag_half_satisfied"] = "retain"
+            detail["flag_obligation"] = (
+                "The plausibility range is flag-only, so do NOT exclude, clip, "
+                "impute or raise on these values -- keep every row. The "
+                "flagging half is still owed: record the out-of-range rows as "
+                "a structured count or per-row indicator in this step's "
+                "declared outputs. This finding stays an error because the "
+                "script compares the value against its bound and then discards "
+                "the result."
+            )
+            detail["flag_evidence"] = "absent"
+            reclassified.append(finding.model_copy(update={"detail": detail}))
+            continue
+
+        detail.setdefault("retain_and_flag_half_satisfied", "retain_and_flag")
+        if records_flag is None:
+            # No bound comparison on this variable could be located, so this
+            # check observed nothing and says so rather than letting silence
+            # read as compliance.
+            detail["retain_and_flag_half_satisfied"] = "retain"
+            detail["flag_evidence"] = "not_attributable"
+        else:
+            detail["flag_evidence"] = "observed_count_or_indicator"
         reclassified.append(
             finding.model_copy(update={"severity": "warning", "detail": detail})
         )
@@ -2761,6 +2979,7 @@ def _reclassify_llm_concept_findings(
     reclassified = _reclassify_flag_only_plausibility_range_findings(
         findings=reclassified,
         context=context,
+        script_text=script_text,
     )
     return _downgrade_finalized_exposure_reconciliation_findings(
         findings=reclassified,
