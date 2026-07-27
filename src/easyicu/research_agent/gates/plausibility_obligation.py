@@ -16,12 +16,22 @@ three questions of the script itself:
 1. **Retention.**  No plausibility comparison may gate a terminal failure or
    filter rows out.
 2. **Flagging into a declared output.**  A structured count or per-row
-   indicator must reach something the step actually writes.  Computing it into
-   a local that is never serialized is not a record; nobody can read it.
+   indicator must reach a write whose *destination* this step declared -- the
+   canonical step summary, or a path it registers in ``output_files``.  An
+   earlier draft asked only whether some serializer had been called, which
+   proved that the script had touched something that writes and nothing more:
+   ``json.dump(audit, sys.stdout)``, a scratch file under ``/tmp``, and
+   ``DataFrame(...).to_json()`` with no destination at all each satisfied it.
 3. **An unconditional receipt.**  The count must be computed and delivered on
    every path, not only when it is positive.  "No out-of-range rows" and "we
    never looked" are different facts, and a receipt that only appears when the
    count is nonzero cannot tell them apart.
+
+Being shaped to record a count is still not the same as having recorded one --
+a script can be shaped correctly and never run, or run and write an empty
+summary.  ``plausibility_receipt`` closes that half by reading the sealed
+artifact after execution; this module and that one share the same trigger and
+the same published contract.
 
 A script the gate cannot attribute is **blocked**, not passed.  Silence from a
 structural check means nobody looked, which is exactly the reading this module
@@ -35,26 +45,24 @@ knows which study, benchmark, column or bound is in play.
 from __future__ import annotations
 
 import ast
+from pathlib import PurePosixPath
 from typing import Iterator, Optional, Sequence, Set
 
 from ..audits.validators import _unwrapped_bound_name
 from ..schema import AnalysisStep, ResearchContext, ValidationFinding
-
-#: The sealed host contract key a script reads to obtain the bounds.  Its
-#: presence is what proves the script is exercising the typed policy rather
-#: than doing arithmetic that happens to involve a comparison.
-POLICY_CONTRACT_KEY = "analysis_plausibility_range"
+from .plausibility_receipt import (
+    CANONICAL_STEP_SUMMARY_FILENAME,
+    OUTPUT_REGISTRATION_KEY,
+    POLICY_CONTRACT_KEY,
+    RECEIPT_CONTRACT_SENTENCE,
+    REPAIR_RECEIPT_MARKER,
+    ranged_variable_names,
+    step_is_under_the_flag_only_obligation,
+)
 
 #: The bound keys inside that contract, in both the sealed mapping spelling
 #: and the two-item sequence a script sometimes still guesses.
 _BOUND_KEYS: frozenset[object] = frozenset({"minimum", "maximum", 0, 1})
-
-#: The breadcrumb ``repairs/plausibility.py`` leaves after it removes a
-#: rejection.  Reading it from the source text rather than the tree is
-#: deliberate -- it is a comment, so it cannot be seen any other way, and the
-#: asymmetry is safe in this direction: a marker only ever *adds* an
-#: obligation, so a forged or stale one costs a repair and never buys a pass.
-REPAIR_RECEIPT_MARKER = "_easyicu_flag_only_plausibility_range_retained_v1"
 
 _VALIDATOR = "mechanical_code_preflight"
 
@@ -63,15 +71,18 @@ _RECORDING_REDUCTIONS = frozenset(
     {"sum", "count", "mean", "size", "nunique", "value_counts"}
 )
 
-#: Calls that put a value somewhere outside the process.  Deliberately narrow:
-#: ``print`` and logging are not declared outputs, and treating them as such
-#: would let a step satisfy the policy by writing to a stream nobody keeps.
-#: ``dumps`` is deliberately absent: it renders a string and writes nothing, so
-#: counting it made ``sys.stdout.write(json.dumps(audit))`` look like a
-#: declared output. The enclosing call that actually writes is the sink, and
-#: the rendered string is one of its arguments, so nothing is lost by leaving
-#: it out.
-_SERIALIZING_CALLS = frozenset(
+#: Library calls that put bytes somewhere.  This set is a *necessary* condition
+#: only -- it says a call could write, never that the write is declared -- and
+#: it is deliberately not growing.  An earlier draft used it as the whole test,
+#: which proved only that a script had touched something that serializes:
+#: ``json.dump(audit, sys.stdout)``, a scratch file under ``/tmp``, and
+#: ``DataFrame(...).to_json()`` with no destination at all all satisfied it.
+#: The destination is what the gate actually decides on now; keeping this set
+#: alongside it is what stops a log line that merely *names* the summary file
+#: from counting as a write.  ``write_json`` was removed from it: locally
+#: defined helpers are resolved structurally below, by what their body does
+#: rather than by what they were named.
+_WRITER_ATTRIBUTES = frozenset(
     {
         "dump",
         "savez",
@@ -84,45 +95,146 @@ _SERIALIZING_CALLS = frozenset(
         "to_parquet",
         "to_pickle",
         "write",
-        "write_json",
         "write_text",
         "writerow",
         "writerows",
     }
 )
 
-#: Streams that are not a declared output. ``.write`` on a file handle is a
-#: real sink; the same call on stdout is a print with extra steps, and letting
-#: it count would hand the step the easiest possible way to satisfy the policy
-#: without leaving anything a reader can open.
-_TRANSIENT_STREAMS = frozenset({"stdout", "stderr", "__stdout__", "__stderr__"})
-
 #: Names whose call terminates the step.
 _TERMINATING_CALLS = frozenset({"exit", "_exit", "sys_exit"})
 
-
-def _string_constants(tree: ast.AST) -> Set[str]:
-    return {
-        node.value
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Constant) and isinstance(node.value, str)
-    }
+#: Ways of naming a file on disk, for resolving a destination expression down
+#: to the filename it ends at.
+_PATH_CONSTRUCTORS = frozenset({"Path", "PosixPath", "PurePath", "PurePosixPath"})
+_PATH_JOINS = frozenset({"join", "joinpath", "with_name", "with_suffix"})
+_PATH_IDENTITY = frozenset({"absolute", "expanduser", "resolve"})
 
 
-def _mentions_a_plausibility_range(tree: ast.AST) -> bool:
-    """Whether the script names a plausibility range at all.
+def _basename(value: str) -> str:
+    return PurePosixPath(str(value).replace("\\", "/")).name
 
-    Generous on purpose, and only in the direction of asking the question.
-    Scripts reach the same bounds through more than one projection of the
-    contract, and a step that reads one of them and records nothing should be
-    told so whichever spelling it used.  Precision belongs to the checks
-    below, which decide the answer.
+
+def _destination_names(node: ast.AST, resolved: dict[str, Set[str]]) -> Set[str]:
+    """The filenames a path expression can end at.
+
+    Only the last component matters: the host owns the output directory, and a
+    step that writes ``<out_dir>/step_summary.json`` and one that writes
+    ``step_summary.json`` relative to it are writing the same artifact.  What
+    the caller does with this is compare it against the declared set, so an
+    expression this cannot read yields nothing and the write is refused.
     """
 
-    return any(
-        value == POLICY_CONTRACT_KEY or value.endswith("plausibility_range")
-        for value in _string_constants(tree)
-    )
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return {_basename(node.value)}
+    if isinstance(node, ast.Name):
+        return set(resolved.get(node.id, ()))
+    if isinstance(node, ast.JoinedStr):
+        for part in reversed(node.values):
+            if isinstance(part, ast.Constant) and isinstance(part.value, str):
+                name = _basename(part.value)
+                if name:
+                    return {name}
+        return set()
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+        return _destination_names(node.right, resolved)
+    if isinstance(node, ast.Call):
+        callee = node.func
+        if isinstance(callee, ast.Name) and callee.id in _PATH_CONSTRUCTORS:
+            return _destination_names(node.args[-1], resolved) if node.args else set()
+        if isinstance(callee, ast.Attribute):
+            if callee.attr in _PATH_JOINS:
+                if node.args:
+                    return _destination_names(node.args[-1], resolved)
+                return _destination_names(callee.value, resolved)
+            if callee.attr in _PATH_IDENTITY:
+                return _destination_names(callee.value, resolved)
+    return set()
+
+
+def _resolved_path_names(tree: ast.AST) -> dict[str, Set[str]]:
+    """Local names that denote a path, and the filenames they end at."""
+
+    assignments = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+    ]
+    resolved: dict[str, Set[str]] = {}
+    for _ in range(len(assignments) + 1):
+        grew = False
+        for node in assignments:
+            target = node.targets[0]
+            assert isinstance(target, ast.Name)
+            found = _destination_names(node.value, resolved)
+            if found - resolved.get(target.id, set()):
+                resolved.setdefault(target.id, set()).update(found)
+                grew = True
+        if not grew:
+            break
+    return resolved
+
+
+def _subscript_key_chain(node: ast.AST) -> list[object]:
+    keys: list[object] = []
+    while isinstance(node, ast.Subscript):
+        if isinstance(node.slice, ast.Constant):
+            keys.append(node.slice.value)
+        node = node.value
+    return keys
+
+
+def _registered_output_names(tree: ast.AST, resolved: dict[str, Set[str]]) -> Set[str]:
+    """Filenames the step registers as its own declared outputs.
+
+    ``output_files`` is the host's own registration surface -- the same mapping
+    the cross-step output validator reads -- so a path filed there is declared
+    by the step itself, and a path that is not is a scratch file.
+    """
+
+    containers: list[ast.AST] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Dict):
+            for key, value in zip(node.keys, node.values):
+                if (
+                    isinstance(key, ast.Constant)
+                    and key.value == OUTPUT_REGISTRATION_KEY
+                ):
+                    containers.append(value)
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if (
+                    isinstance(target, ast.Name)
+                    and target.id == OUTPUT_REGISTRATION_KEY
+                ):
+                    containers.append(node.value)
+                elif OUTPUT_REGISTRATION_KEY in _subscript_key_chain(target):
+                    containers.append(node.value)
+        elif (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in {"update", "setdefault"}
+            and OUTPUT_REGISTRATION_KEY in _subscript_key_chain(node.func.value)
+        ):
+            containers.extend(node.args)
+
+    registered: Set[str] = set()
+    seen: Set[int] = set()
+    while containers:
+        item = containers.pop()
+        if id(item) in seen:
+            continue
+        seen.add(id(item))
+        if isinstance(item, ast.Dict):
+            containers.extend(value for value in item.values if value is not None)
+        elif isinstance(item, (ast.List, ast.Tuple, ast.Set)):
+            containers.extend(item.elts)
+        else:
+            registered |= _destination_names(item, resolved)
+    registered.discard("")
+    return registered
 
 
 def _accessed_key(node: ast.AST) -> Optional[tuple[ast.AST, object]]:
@@ -283,13 +395,74 @@ def _subscript_root(node: ast.AST) -> Optional[str]:
     return node.id if isinstance(node, ast.Name) else None
 
 
-def _writes_to_a_transient_stream(callee: ast.Attribute) -> bool:
-    """Whether a ``.write`` goes to a console stream rather than to a file."""
+def _call_arguments(node: ast.Call) -> list[ast.AST]:
+    return [*node.args, *(keyword.value for keyword in node.keywords)]
 
-    receiver = callee.value
-    if isinstance(receiver, ast.Attribute):
-        return receiver.attr in _TRANSIENT_STREAMS
-    return isinstance(receiver, ast.Name) and receiver.id in _TRANSIENT_STREAMS
+
+def _opens_a_declared_output(
+    node: ast.AST,
+    resolved: dict[str, Set[str]],
+    declared: Set[str],
+) -> bool:
+    """Whether an expression opens one of this step's declared outputs."""
+
+    if not isinstance(node, ast.Call):
+        return False
+    callee = node.func
+    candidates = _call_arguments(node)
+    if isinstance(callee, ast.Name) and callee.id == "open":
+        pass
+    elif isinstance(callee, ast.Attribute) and callee.attr == "open":
+        candidates.append(callee.value)
+    else:
+        return False
+    return any(_destination_names(arg, resolved) & declared for arg in candidates)
+
+
+def _declared_output_handles(
+    tree: ast.AST,
+    resolved: dict[str, Set[str]],
+    declared: Set[str],
+) -> Set[str]:
+    """Names bound to an open handle on one of this step's declared outputs."""
+
+    handles: Set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.With, ast.AsyncWith)):
+            for item in node.items:
+                if isinstance(
+                    item.optional_vars, ast.Name
+                ) and _opens_a_declared_output(item.context_expr, resolved, declared):
+                    handles.add(item.optional_vars.id)
+        elif (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and _opens_a_declared_output(node.value, resolved, declared)
+        ):
+            handles.add(node.targets[0].id)
+    return handles
+
+
+def _writer_functions(tree: ast.AST) -> Set[str]:
+    """Locally defined helpers that write, recognised by body rather than name.
+
+    Generated scripts routinely funnel every artifact through one small helper.
+    Recognising it structurally is what lets the writer-name set stay put
+    instead of growing a new entry each time a script invents a name for it.
+    """
+
+    return {
+        function.name
+        for function in ast.walk(tree)
+        if isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and any(
+            isinstance(inner, ast.Call)
+            and isinstance(inner.func, ast.Attribute)
+            and inner.func.attr in _WRITER_ATTRIBUTES
+            for inner in ast.walk(function)
+        )
+    }
 
 
 def _is_terminal_failure(statements: Sequence[ast.stmt]) -> bool:
@@ -363,6 +536,16 @@ class _FlagFlow:
         }
         self.carriers: Set[str] = set()
         self.returning_functions: Set[str] = set()
+        #: Which files this step may write to, and how it reaches them.  A
+        #: sink is a write *to one of these*; see `sink_expressions`.
+        self.path_names = _resolved_path_names(tree)
+        self.registered_outputs = _registered_output_names(tree, self.path_names)
+        self.handles = _declared_output_handles(
+            tree,
+            self.path_names,
+            {CANONICAL_STEP_SUMMARY_FILENAME} | self.registered_outputs,
+        )
+        self.writer_functions = _writer_functions(tree)
         self._resolve()
         #: The mask and count themselves, without the containers they are
         #: later filed into. A guard on `mask.any()` or on `n_out > 0` is a
@@ -529,23 +712,45 @@ class _FlagFlow:
         return None
 
     def sink_expressions(self) -> list[ast.AST]:
-        """Expressions handed to something that writes outside the process."""
+        """Expressions handed to a write whose destination this step declared.
 
+        Both halves are load-bearing.  Without the destination, the check
+        proved only that the script had touched something that serializes --
+        a scratch file, ``sys.stdout``, or a ``to_json()`` with nowhere to go
+        each satisfied it.  Without the write, any call that merely *mentions*
+        the summary filename, a log line included, would qualify.
+        """
+
+        declared = {CANONICAL_STEP_SUMMARY_FILENAME} | self.registered_outputs
         sinks: list[ast.AST] = []
         for node in ast.walk(self.tree):
             if not isinstance(node, ast.Call):
                 continue
             callee = node.func
-            if isinstance(callee, ast.Attribute) and callee.attr in _SERIALIZING_CALLS:
-                if _writes_to_a_transient_stream(callee):
+            arguments = _call_arguments(node)
+            receiver = callee.value if isinstance(callee, ast.Attribute) else None
+            addressed = any(
+                _destination_names(argument, self.path_names) & declared
+                or (isinstance(argument, ast.Name) and argument.id in self.handles)
+                for argument in arguments
+            ) or (
+                receiver is not None
+                and (
+                    bool(_destination_names(receiver, self.path_names) & declared)
+                    or (isinstance(receiver, ast.Name) and receiver.id in self.handles)
+                )
+            )
+            if not addressed:
+                continue
+            if isinstance(callee, ast.Attribute):
+                if callee.attr not in _WRITER_ATTRIBUTES:
                     continue
                 sinks.append(callee.value)
-            elif isinstance(callee, ast.Name) and callee.id in _SERIALIZING_CALLS:
+            elif isinstance(callee, ast.Name) and callee.id in self.writer_functions:
                 pass
             else:
                 continue
-            sinks.extend(node.args)
-            sinks.extend(keyword.value for keyword in node.keywords)
+            sinks.extend(arguments)
         return sinks
 
     def reaches_a_declared_output(self) -> bool:
@@ -647,36 +852,21 @@ def flag_only_plausibility_obligation_findings(
 ) -> list[ValidationFinding]:
     """Check both halves of ``retain_and_flag`` without consulting an auditor."""
 
-    ranged = [
-        descriptor.name
-        for descriptor in context.variables
-        if descriptor.valid_range is not None
-    ]
-    if not ranged:
-        # No variable carries a plausibility range, so the host never emitted a
-        # `plausibility_policy` for this run and no step can be under this
-        # obligation.  Reading the trigger off the typed policy rather than off
-        # the script alone is what keeps a defensive `contract.get(...)` in a
-        # rangeless run from being blocked for not flagging nothing.
-        return []
-
     text = str(script_text or "")
-    carries_receipt = REPAIR_RECEIPT_MARKER in text
     if tree is None:
         try:
             tree = ast.parse(text)
         except SyntaxError:
             return []
-    exercises_policy = _mentions_a_plausibility_range(tree)
-    if not (exercises_policy or carries_receipt):
-        # The obligation attaches to a step that exercises the policy.  A step
-        # that never reads the sealed range is out of scope here **and is not
-        # thereby proven compliant**: it has retained every row and recorded
-        # nothing, and no host check currently observes that.  Widening the
-        # trigger to every step that merely touches a ranged variable would put
-        # a domain audit on every step in every study, which is a scientific
-        # scope decision for the run's owner, not something a gate should take
-        # by implication.
+    # The trigger is the host's typed policy plus the script's use of it, and
+    # it is shared with the post-execution receipt check so the two halves of
+    # the obligation can never disagree about which steps owe one.
+    trigger = step_is_under_the_flag_only_obligation(
+        script_text=text,
+        tree=tree,
+        context=context,
+    )
+    if trigger is None:
         return []
 
     step_id = str(step.step_id)
@@ -685,12 +875,8 @@ def flag_only_plausibility_obligation_findings(
         "issue_code": "flag_only_plausibility_obligation",
         "policy": "retain_and_flag",
         "policy_authority": "typed_research_context_plausibility_policy",
-        "trigger": (
-            "declared_range_read"
-            if exercises_policy
-            else "deterministic_repair_receipt"
-        ),
-        "ranged_variables": sorted(ranged),
+        "trigger": trigger,
+        "ranged_variables": ranged_variable_names(context),
     }
 
     comparisons = _plausibility_comparisons(tree)
@@ -735,7 +921,7 @@ def flag_only_plausibility_obligation_findings(
                     f"Step {step_id} compares values against their declared "
                     "plausibility range and keeps no record of the result. "
                     "`retain_and_flag` owes a structured count or per-row "
-                    "indicator, not only the retention."
+                    f"indicator, not only the retention. {RECEIPT_CONTRACT_SENTENCE}"
                 ),
                 detail={
                     **detail_base,
@@ -750,10 +936,11 @@ def flag_only_plausibility_obligation_findings(
                 validator=_VALIDATOR,
                 severity="error",
                 message=(
-                    f"Step {step_id} counts the out-of-range rows into a local "
-                    "value that is never written. Put the count or indicator "
-                    "into a declared output of this step, so a reader can see "
-                    "it."
+                    f"Step {step_id} counts the out-of-range rows but never "
+                    "writes them to a declared output of this step. A value "
+                    "left in a local, printed to the console, or written to a "
+                    "scratch path is not a record a reader can open. "
+                    f"{RECEIPT_CONTRACT_SENTENCE}"
                 ),
                 detail={
                     **detail_base,
@@ -786,6 +973,7 @@ def flag_only_plausibility_obligation_findings(
 
 
 __all__ = [
+    "CANONICAL_STEP_SUMMARY_FILENAME",
     "POLICY_CONTRACT_KEY",
     "REPAIR_RECEIPT_MARKER",
     "flag_only_plausibility_obligation_findings",
