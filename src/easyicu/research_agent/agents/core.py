@@ -2176,7 +2176,11 @@ def _typed_input_scope_contract(step: AnalysisStep) -> str:
     if raw_inputs:
         raw_input_contract = (
             "- manifest['raw_input_contracts']['contracts'] is the unique "
-            "host-generated executable metadata for untyped Planner inputs. Use "
+            "host-generated executable metadata for untyped Planner inputs. It "
+            "is a JSON object keyed by the exact resolved column, already in "
+            "by-column form: read `contracts.get(column)` and never assert it "
+            "is a list, iterate it as a list of records, or rebuild a by-column "
+            "mapping from it. Use "
             "exact allowed_values and analysis_plausibility_range + "
             "plausibility_policy. `analysis_plausibility_range` is a JSON object "
             "with `minimum` and `maximum` keys; either bound may be null, so "
@@ -2349,7 +2353,11 @@ def _compact_repair_scope_contract(step: AnalysisStep) -> str:
     if raw_inputs:
         lines.append(
             "- manifest['raw_input_contracts']['contracts'] is unique host-generated "
-            "executable metadata for untyped inputs: use exact allowed_values and "
+            "executable metadata for untyped inputs. It is a JSON object keyed by "
+            "the exact resolved column, already in by-column form: read "
+            "`contracts.get(column)` and never assert it is a list, iterate it as "
+            "a list of records, or rebuild a by-column mapping from it. Use "
+            "exact allowed_values and "
             "analysis_plausibility_range + plausibility_policy. The range is a "
             "JSON object with `minimum` and `maximum` keys; either may be null, "
             "so apply only non-null bounds and never index it as a list or use "

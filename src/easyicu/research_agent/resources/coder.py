@@ -563,7 +563,11 @@ def bind_execution_cohort_runtime(
         'int(os.environ["EASYICU_COHORT_ROWS"]); the runner owns that value. '
         "For every Planner-declared raw input, "
         "manifest['raw_input_contracts']['contracts'] is the sole executable "
-        "domain authority. Use its exact allowed_values when present. "
+        "domain authority. It is a JSON object keyed by the exact resolved "
+        "column, already in by-column form: read `contracts.get(column)` and "
+        "never assert it is a list, iterate it as a list of records, or "
+        "rebuild a by-column mapping from it. Use its exact allowed_values "
+        "when present. "
         "`analysis_plausibility_range` is a JSON object with `minimum` and "
         "`maximum` keys; either may be null, so apply only non-null bounds and "
         "never index it as a list or use `lower`/`upper` aliases. Keep source "

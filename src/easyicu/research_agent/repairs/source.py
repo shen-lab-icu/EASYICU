@@ -108,6 +108,7 @@ from .import_repair import (
 )
 from .input_scope import (
     patch_raw_contract_document_fallback,
+    patch_raw_contract_list_type_assertion,
     patch_raw_contract_mapping_iteration,
     patch_raw_input_physical_superset_guard,
 )
@@ -6163,6 +6164,12 @@ def _deterministic_runner_repair(
         repaired = patch_raw_contract_mapping_iteration(code, run_log)
         if repaired != code:
             return raw_contract_mapping_repair, repaired
+
+    raw_contract_type_repair = "raw_contract_list_type_assertion_v1"
+    if previous_repair != raw_contract_type_repair:
+        repaired = patch_raw_contract_list_type_assertion(code, run_log)
+        if repaired != code:
+            return raw_contract_type_repair, repaired
 
     raw_contract_document_repair = "raw_contract_document_fallback_v1"
     if previous_repair != raw_contract_document_repair:
