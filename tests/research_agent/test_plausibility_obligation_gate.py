@@ -226,20 +226,47 @@ write_json("step_summary.json", {"audit": audit})
 
 @pytest.mark.parametrize(
     "sink",
-    ["sys.stdout.write(json.dumps(plausibility_audit))", "print(plausibility_audit)"],
+    [
+        # Reported against the shipped gate: each of these returned no finding
+        # because the check asked only whether *some* serializer had been
+        # called, never where the bytes went.
+        pytest.param(
+            'with open("/tmp/not_declared.json", "w") as scratch:\n'
+            "    json.dump(plausibility_audit, scratch)",
+            id="scratch_file",
+        ),
+        pytest.param("json.dump(plausibility_audit, sys.stdout)", id="stdout"),
+        pytest.param(
+            "pd.DataFrame([plausibility_audit]).to_json()", id="no_destination"
+        ),
+        # Same class, found while closing the three above.
+        pytest.param(
+            "sys.stdout.write(json.dumps(plausibility_audit))", id="stdout_write"
+        ),
+        pytest.param("print(plausibility_audit)", id="print"),
+        pytest.param(
+            'logging.info("wrote step_summary.json: %s", plausibility_audit)',
+            id="log_naming_the_summary",
+        ),
+    ],
 )
-def test_printing_the_count_is_not_writing_it(sink):
-    """A console stream is not a declared output.
+def test_a_write_with_no_declared_destination_is_not_a_record(sink):
+    """Touching a serializer is not writing to a declared output.
 
-    `.write` on a file handle is a real sink and `.write` on stdout is a print
-    with extra steps. Accepting the second would hand the step the cheapest
-    possible way to satisfy the policy while leaving nothing a reader can open.
+    A scratch path under `/tmp`, a console stream, and a `to_json()` with
+    nowhere to go all serialize; none of them leaves an artifact a reader can
+    open. The last case is the mirror image: a log line that merely *names* the
+    summary file must not count either, which is why the destination check is
+    ANDed with the write and does not replace it.
     """
 
     printed = (
         HEADER
         + """
+import logging
 import sys
+
+import pandas as pd
 
 plausibility_audit = {}
 """
@@ -254,6 +281,97 @@ plausibility_audit = {}
         + "\n"
     )
     assert _reasons(printed) == {"out_of_range_record_not_in_declared_output"}
+
+
+@pytest.mark.parametrize(
+    "sink",
+    [
+        pytest.param(
+            '(OUT / "step_summary.json").write_text(json.dumps(summary))',
+            id="write_text",
+        ),
+        pytest.param(
+            'with (OUT / "step_summary.json").open("w") as handle:\n'
+            "    json.dump(summary, handle)",
+            id="open_handle",
+        ),
+        pytest.param(
+            'summary_path = OUT / "step_summary.json"\n'
+            'with summary_path.open("w", encoding="utf-8") as handle:\n'
+            "    json.dump(summary, handle)",
+            id="path_through_a_local",
+        ),
+        pytest.param(
+            "def persist(path, payload):\n"
+            '    with open(path, "w") as handle:\n'
+            "        json.dump(payload, handle)\n"
+            '\n\npersist(OUT / "step_summary.json", summary)',
+            id="helper_the_gate_never_heard_of",
+        ),
+    ],
+)
+def test_every_way_the_corpus_reaches_the_canonical_summary_is_accepted(sink):
+    """Each of these writes the summary in a real generated script.
+
+    The last one matters most: `persist` is in no list anywhere. Helpers are
+    recognised by what their body does, which is what lets the writer-name set
+    stop growing an entry every time a script invents a name for one.
+    """
+
+    code = (
+        HEADER
+        + """
+from pathlib import Path
+
+OUT = Path("outputs")
+plausibility_audit = {}
+"""
+        + HELPER_HEAD
+        + """        plausibility_audit[column] = {
+            "below_n": int((numeric < float(lower)).sum()) if lower is not None else 0,
+            "above_n": int((numeric > float(upper)).sum()) if upper is not None else 0,
+        }
+
+
+summary = {"plausibility_audit": plausibility_audit}
+"""
+        + sink
+        + "\n"
+    )
+    assert _reasons(code) == set()
+
+
+def test_a_path_the_step_registers_as_its_own_output_is_declared():
+    """`output_files` is the host's registration surface, so a path filed there
+    is declared by the step itself -- unlike the sibling scratch file beside it,
+    which is exactly the difference the gate has to see."""
+
+    code = (
+        HEADER
+        + """
+from pathlib import Path
+
+import pandas as pd
+
+OUT = Path("outputs")
+plausibility_audit = {}
+"""
+        + HELPER_HEAD
+        + """        plausibility_audit[column] = int(
+            (numeric < float(lower)).sum()
+        ) if lower is not None else 0
+
+
+pd.DataFrame([plausibility_audit]).to_csv(OUT / "range_audit.csv")
+write_json("step_summary.json", {"output_files": {"table:range": "range_audit.csv"}})
+"""
+    )
+    assert _reasons(code) == set()
+
+    unregistered = code.replace(
+        '"table:range": "range_audit.csv"', '"table:other": "other.csv"'
+    )
+    assert _reasons(unregistered) == {"out_of_range_record_not_in_declared_output"}
 
 
 def test_no_declared_range_means_no_obligation():
