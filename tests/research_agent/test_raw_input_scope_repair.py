@@ -236,3 +236,142 @@ contracts = (
         code=ambiguous,
         run_log=error,
     ) is None
+
+
+def test_runner_repair_accepts_column_keyed_contracts_asserted_as_a_list() -> None:
+    """The real E1 step 06 shape: a list guard fires before any AttributeError."""
+
+    code = """
+def get_raw_contracts(manifest, required):
+    contracts = manifest.get("raw_input_contracts", {}).get("contracts")
+    if not isinstance(contracts, list):
+        raise ValueError("raw_input_contracts.contracts is missing")
+    by_name = {}
+    for contract in contracts:
+        if not isinstance(contract, dict) or not contract.get("column"):
+            raise ValueError("Malformed raw input contract")
+        by_name[contract["column"]] = contract
+    for name in required:
+        if name not in by_name:
+            raise ValueError("Missing executable raw input contract for " + name)
+    return by_name
+"""
+    run_log = (
+        "ValueError: raw_input_contracts.contracts is missing\n"
+        '  File "/easyicu-analysis.py", line 102, in get_raw_contracts\n'
+    )
+
+    repair = _deterministic_runner_repair(code=code, run_log=run_log)
+
+    assert repair is not None
+    repair_id, repaired = repair
+    assert repair_id == "raw_contract_list_type_assertion_v1"
+    assert "isinstance(contracts, dict)" in repaired
+    assert "for contract in contracts.values():" in repaired
+
+    namespace: dict[str, object] = {}
+    exec(repaired, namespace)  # noqa: S102 - generated-code regression
+    manifest = {
+        "raw_input_contracts": {
+            "contracts": {
+                "exposure_max": {"column": "exposure_max", "allowed_values": [0, 1]},
+                "outcome": {"column": "outcome", "allowed_values": [0, 1]},
+            }
+        }
+    }
+    assert sorted(
+        namespace["get_raw_contracts"](manifest, ["exposure_max", "outcome"])
+    ) == ["exposure_max", "outcome"]
+
+    # A genuinely absent contract still fails closed after the repair.
+    try:
+        namespace["get_raw_contracts"](manifest, ["exposure_max", "never_declared"])
+    except ValueError as exc:
+        assert "never_declared" in str(exc)
+    else:
+        raise AssertionError("an undeclared column was accepted after repair")
+
+    metadata = repair_metadata_for(repair_id)
+    assert metadata.repair_class is RepairClass.SYNTACTIC
+    assert metadata.introduces_numbers is False
+    assert automatic_repair_allowed(repair_id)
+    assert _untrusted_runtime_repair_allowed(
+        repair_id=repair_id,
+        source="deterministic_runner_repair",
+    )
+
+
+def test_list_type_assertion_repair_reads_a_wrapped_manifest_too() -> None:
+    code = """
+def get_raw_contracts(document):
+    manifest = document.get("manifest", document)
+    contracts = manifest.get("raw_input_contracts", {}).get("contracts")
+    if not isinstance(contracts, list):
+        raise ValueError("raw_input_contracts['contracts'] is not available")
+    by_name = {}
+    for contract in contracts:
+        by_name[contract["column"]] = contract
+    return by_name
+"""
+    run_log = "ValueError: raw_input_contracts['contracts'] is not available"
+
+    repair = _deterministic_runner_repair(code=code, run_log=run_log)
+    assert repair is not None
+    repair_id, repaired = repair
+    assert repair_id == "raw_contract_list_type_assertion_v1"
+
+    namespace: dict[str, object] = {}
+    exec(repaired, namespace)  # noqa: S102 - generated-code regression
+    contracts = {"age": {"column": "age"}}
+    unwrapped = {"raw_input_contracts": {"contracts": contracts}}
+    assert namespace["get_raw_contracts"](unwrapped) == contracts
+    assert namespace["get_raw_contracts"]({"manifest": unwrapped}) == contracts
+
+
+def test_list_type_assertion_repair_is_failure_and_shape_bound() -> None:
+    code = """
+contracts = manifest.get("raw_input_contracts", {}).get("contracts")
+if not isinstance(contracts, list):
+    raise ValueError("raw_input_contracts.contracts is missing")
+for contract in contracts:
+    print(contract.get("column"))
+"""
+    error = "ValueError: raw_input_contracts.contracts is missing"
+
+    # An unrelated failure must not license the rewrite.
+    assert _deterministic_runner_repair(code=code, run_log="") is None
+    assert (
+        _deterministic_runner_repair(
+            code=code,
+            run_log="ZeroDivisionError: division by zero",
+        )
+        is None
+    )
+    # A list assertion over some other mapping is not this defect.
+    assert (
+        _deterministic_runner_repair(
+            code=code.replace('.get("contracts")', '.get("other_records")'),
+            run_log=error,
+        )
+        is None
+    )
+    # A loop that never re-keys by column is not the recognised shape.
+    assert (
+        _deterministic_runner_repair(
+            code=code.replace('contract.get("column")', "contract"),
+            run_log=error,
+        )
+        is None
+    )
+    # Two candidate assertions are ambiguous, so nothing is rewritten.
+    ambiguous = (
+        code
+        + """
+other = payload.get("raw_input_contracts", {}).get("contracts")
+if not isinstance(other, list):
+    raise ValueError("raw_input_contracts.contracts is missing")
+for entry in other:
+    print(entry.get("column"))
+"""
+    )
+    assert _deterministic_runner_repair(code=ambiguous, run_log=error) is None

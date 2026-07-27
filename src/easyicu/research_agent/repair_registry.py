@@ -283,6 +283,7 @@ _SYNTACTIC_REPAIRS = {
     "prediction_calibration_import_fix_v1",
     "publication_export_audit_paths_v1",
     "raw_contract_document_fallback_v1",
+    "raw_contract_list_type_assertion_v1",
     "raw_contract_mapping_iteration_v1",
     "relocate_known_host_helper_import_v1",
     "resolved_context_digest_load_v1",
