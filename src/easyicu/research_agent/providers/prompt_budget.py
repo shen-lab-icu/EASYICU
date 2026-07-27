@@ -286,6 +286,12 @@ class PromptBudgetClient:
         return self._budget.limit_tokens
 
     @property
+    def budget(self) -> PromptConsumerBudget:
+        """The whole envelope, so a re-wrap can compare it rather than its name."""
+
+        return self._budget
+
+    @property
     def inner(self) -> Any:
         """The client this wrapper bounds, for re-wrapping under a new budget."""
 
@@ -393,16 +399,23 @@ def budgeted_client(
     budget = _declared_budget(consumer=consumer, role=role)
     if base is None:
         return None
+    effective = budget.with_limit_tokens(limit_tokens)
     if isinstance(base, PromptBudgetClient):
-        if base.consumer == str(consumer):
+        if base.budget == effective:
+            # Already this consumer under exactly this ceiling: nothing to do.
             return base
-        # Wrapped, but for somebody else. Returning it as-is hands this
-        # consumer the other one's name and ceiling -- so its calls are
-        # attributed to a consumer that did not make them, and it is measured
-        # against a limit that was never sized for it. Re-wrap the client
-        # underneath instead of stacking a second envelope on top.
+        # Otherwise the existing envelope is the wrong one, in one of two ways.
+        # Wrapped for somebody else, it would hand this consumer the other
+        # one's name and ceiling -- calls attributed to a consumer that did not
+        # make them, measured against a limit never sized for them. Wrapped for
+        # this consumer under a different ceiling, comparing names alone
+        # returned it unchanged and silently discarded the ceiling this call
+        # asked for, so whichever caller happened to run first set the limit for
+        # everyone after. Re-wrap the client underneath rather than stacking a
+        # second envelope on top: re-wrapping must land exactly where a first
+        # wrap would.
         base = base.inner
-    return PromptBudgetClient(base, budget=budget.with_limit_tokens(limit_tokens))
+    return PromptBudgetClient(base, budget=effective)
 
 
 def budgeted_vlm_client(
