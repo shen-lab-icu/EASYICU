@@ -2931,10 +2931,16 @@ def test_llm_concept_auditor_reclassifies_typed_flag_only_range_demand(ra):
     )
 
     assert len(findings) == 1
-    assert findings[0].severity == "warning"
+    # The exclusion demand is still overturned -- the range is flag-only, so
+    # the auditor does not get to shrink the analysis set. What it does not buy
+    # is a pass: this script never compares `marker` against a bound, so the
+    # flagging half was never observed and the finding stays blocking.
     assert findings[0].detail["range_policy_authority"] == (
         "concept_descriptor_flag_only"
     )
+    assert "do NOT exclude" in findings[0].detail["flag_obligation"]
+    assert findings[0].severity == "error"
+    assert findings[0].detail["flag_evidence"] == "not_attributable"
 
 
 def test_llm_concept_auditor_reclassifies_scoped_flag_only_range_demand(ra):
@@ -2966,14 +2972,15 @@ def test_llm_concept_auditor_reclassifies_scoped_flag_only_range_demand(ra):
     )
 
     assert len(findings) == 1
-    assert findings[0].severity == "warning"
     assert findings[0].detail["range_policy_authority"] == (
         "concept_descriptor_flag_only"
     )
     # This script never compares `marker` against a bound, so the flagging
-    # check has nothing to attribute and abstains rather than blocking. The
-    # detail records that, so a downgrade reached without evidence is not read
-    # later as a downgrade backed by it.
+    # check has nothing to attribute. It used to abstain and downgrade anyway,
+    # which let the weakest possible evidence -- none -- buy the same pass as
+    # an observed count. Silence now blocks and says which kind of silence it
+    # was.
+    assert findings[0].severity == "error"
     assert findings[0].detail["flag_evidence"] == "not_attributable"
     assert findings[0].detail["retain_and_flag_half_satisfied"] == "retain"
 
