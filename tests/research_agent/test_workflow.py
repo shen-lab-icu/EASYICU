@@ -318,3 +318,117 @@ def test_run_with_graph_is_only_a_deprecated_alias() -> None:
         result = pipeline.run_with_graph(question="q")
 
     assert result == {"question": "q"}
+
+
+def _paused_workflow_with_failing_recorder(*, failures: list[bool]):
+    """A workflow whose recorder fails while `failures` says so."""
+
+    recorded: list[dict] = []
+    request = HumanReviewRequest.create(
+        kind="scientific_stop",
+        summary="Confirm an unresolved scientific stop",
+        authority_sha256="e" * 64,
+        payload={"finding": "positivity_not_established"},
+    )
+
+    def recorder(records):
+        if failures and failures.pop(0):
+            raise OSError("[Errno 28] No space left on device")
+        recorded.extend(records)
+
+    workflow, calls = _workflow(
+        human_review_invoker=lambda _plan: (request,),
+        human_review_recorder=recorder,
+    )
+    assert isinstance(workflow.start(), WorkflowPaused)
+    return workflow, calls, recorded, request
+
+
+def _decision(request, verdict: str) -> HumanReviewDecision:
+    return HumanReviewDecision(
+        review_id=request.review_id,
+        authority_sha256=request.authority_sha256,
+        decision=verdict,
+        reviewer="maintainer",
+        decided_at="2026-07-27T09:00:00Z",
+    )
+
+
+def test_a_failed_decision_write_leaves_the_pause_resumable() -> None:
+    """Recording a decision and acting on it are separate acts.
+
+    The recorder writes two files and registers two evidence entries, so a
+    full disk or a permission change can fail it. Terminalising the workflow
+    there would discard Planner work the operator has already paid for in
+    order to recover from a transient write, forcing the whole run to be
+    redone. The decision is simply unrecorded: stay paused.
+    """
+
+    workflow, calls, recorded, request = _paused_workflow_with_failing_recorder(
+        failures=[True]
+    )
+
+    with pytest.raises(OSError, match="No space left on device"):
+        workflow.resume([_decision(request, "approved")])
+
+    assert workflow.state == "paused"
+    assert recorded == []
+    assert "execute" not in calls
+
+    # The same decision, resubmitted, proceeds normally.
+    completed = workflow.resume([_decision(request, "approved")])
+
+    assert isinstance(completed, WorkflowCompleted)
+    assert workflow.state == "completed"
+    assert len(recorded) == 1
+    assert calls == ["plan", "execute", "write", "finalise"]
+
+
+def test_a_failed_rejection_write_also_leaves_the_pause_resumable() -> None:
+    """A rejection that was never persisted is not a recorded rejection."""
+
+    workflow, _calls, recorded, request = _paused_workflow_with_failing_recorder(
+        failures=[True]
+    )
+
+    with pytest.raises(OSError, match="No space left on device"):
+        workflow.resume([_decision(request, "rejected")])
+
+    assert workflow.state == "paused"
+    assert recorded == []
+
+    with pytest.raises(HumanReviewRejected):
+        workflow.resume([_decision(request, "rejected")])
+
+    assert workflow.state == "rejected"
+    assert len(recorded) == 1
+
+
+def test_a_failure_after_the_decision_is_recorded_is_still_terminal() -> None:
+    """Past the recorder, the run has acted; that failure is not retryable."""
+
+    request = HumanReviewRequest.create(
+        kind="scientific_stop",
+        summary="Confirm an unresolved scientific stop",
+        authority_sha256="f" * 64,
+        payload={"finding": "positivity_not_established"},
+    )
+    recorded: list[dict] = []
+
+    def failing_execute(_plan):
+        raise RuntimeError("execution runtime unavailable")
+
+    workflow, _calls = _workflow(
+        human_review_invoker=lambda _plan: (request,),
+        human_review_recorder=recorded.extend,
+        execute_invoker=failing_execute,
+    )
+    assert isinstance(workflow.start(), WorkflowPaused)
+
+    with pytest.raises(RuntimeError, match="execution runtime unavailable"):
+        workflow.resume([_decision(request, "approved")])
+
+    assert workflow.state == "failed"
+    assert len(recorded) == 1
+    with pytest.raises(RuntimeError, match="requires state 'paused'"):
+        workflow.resume([_decision(request, "approved")])
