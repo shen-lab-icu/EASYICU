@@ -1256,6 +1256,7 @@ def _migrate_legacy_resume_model_requirements(
     evidence: EvidenceStore,
     prompt_version: str,
     llm_signature: str,
+    max_prompt_tokens: Optional[int] = None,
 ) -> tuple[AnalysisPlan, Optional[Path], tuple[str, ...]]:
     """Ask the planner LLM to migrate an old empty typed-model roster.
 
@@ -1371,7 +1372,10 @@ def _migrate_legacy_resume_model_requirements(
 
         packet = call_llm_with_structured_retry(
             budgeted_role_client(
-                role_resolver, "planner", "legacy_model_roster_migration"
+                role_resolver,
+                "planner",
+                "legacy_model_roster_migration",
+                limit_tokens=max_prompt_tokens,
             ),
             messages,
             parser=lambda raw: _parse_legacy_model_roster_packet(
@@ -1623,6 +1627,9 @@ class ResearchAgentPipeline:
             0, int(config.max_step_llm_repair_attempts)
         )
         self._max_step_provider_calls = max(0, int(config.max_step_provider_calls))
+        self._max_prompt_tokens_per_call = max(
+            1, int(config.max_prompt_tokens_per_call)
+        )
         # Re-check after resolving the optional service-dependent concept-audit
         # flag. PipelineConfig cannot know whether an injected client makes an
         # ``enable_llm_concept_audit=None`` decision true, so only this layer
@@ -2891,6 +2898,7 @@ class ResearchAgentPipeline:
                     evidence=evidence,
                     prompt_version=prompt_version,
                     llm_signature=llm_signature,
+                    max_prompt_tokens=self._max_prompt_tokens_per_call,
                 )
             )
             if migrated_plan_path is not None:

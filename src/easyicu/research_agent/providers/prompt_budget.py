@@ -20,15 +20,25 @@ reviewed number.
 This module deliberately does not truncate. A prompt over its envelope is an
 error, because the payloads involved (evidence digests, typed bindings, concept
 drafts) carry binding scientific coordinates that must not be silently dropped.
+
+**The budget is a local design ceiling, not the model's context window.** It
+answers "did this projection grow beyond what it was designed to carry", which
+is a question about our own assembly. Only the provider knows its own limit,
+and nothing here should pretend otherwise: no model context window is declared
+anywhere in this package, and the current provider does not report one.
 """
 
 from __future__ import annotations
 
+import math
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Mapping, Optional, Sequence
 
 __all__ = [
+    "DEFAULT_MAX_PROMPT_TOKENS",
+    "CONSERVATIVE_BYTES_PER_TOKEN",
+    "OBSERVED_BYTES_PER_TOKEN",
     "PROMPT_TRANSPORT_BUDGETS",
     "PromptBudgetClient",
     "PromptConsumerBudget",
@@ -36,8 +46,62 @@ __all__ = [
     "UndeclaredPromptConsumerError",
     "active_prompt_consumer",
     "budgeted_role_client",
+    "estimate_prompt_tokens",
     "prompt_payload_bytes",
 ]
+
+
+# Tokens are what the provider meters; bytes are all we can see before the
+# call. The conversion is not assumed -- it is measured. Every completed
+# transport receipt records both ``prompt_bytes`` and the provider's own
+# ``usage.prompt_tokens``, so the ratio is re-derivable from any run:
+#
+#     bytes/token over the 2026-07-23 E1 replay (8 real calls, all roles)
+#       min 3.7685   max 4.3812   mean 3.99
+#
+# That sample is entirely English prose and JSON. It is not the whole story:
+# ``PipelineConfig.manuscript_language`` allows a Chinese manuscript, and CJK
+# text is ~3 UTF-8 bytes per character at roughly one token per character, so
+# its bytes/token can fall to ~2-3. A constant taken from the English sample
+# would quietly under-count tokens on exactly that content.
+#
+# So the estimator deliberately divides by a value *below* everything observed.
+# Estimating high is the safe direction: it can refuse a prompt that would have
+# fit, but it cannot let one through by under-counting. Re-derive from receipts
+# rather than adjusting this by feel -- and if you lower it, re-check the
+# default ceiling below, which is sized in terms of it.
+CONSERVATIVE_BYTES_PER_TOKEN = 3.0
+
+# The observed English/JSON minimum, kept separate so the margin above is
+# visible rather than folded invisibly into one number.
+OBSERVED_BYTES_PER_TOKEN = 3.7685
+
+
+# The default ceiling, in tokens.
+#
+# The old ceilings were written in bytes and, converted at the observed ratio,
+# landed at roughly 12,700-21,200 tokens. The largest prompt this system has
+# ever actually produced is 26,040 tokens / 101,878 bytes (a planner call in
+# the same replay). So the guard was set *below* normal operating traffic --
+# which is exactly why it kept tripping, and why past work went into shrinking
+# prompts to fit rather than questioning the number.
+#
+# A guard meant to catch runaway assembly belongs above normal traffic, not
+# inside it. Under the conservative estimator that largest real payload scores
+# 33,959 tokens, so the ceiling has to clear that: 40,000 does, with headroom,
+# and still sits far below any current model's context window, so a projection
+# that has genuinely run away is still caught.
+#
+# It is a default, not a decree: set ``PipelineConfig.max_prompt_tokens_per_call``
+# to change it, and the change is recorded in the run authority digest because
+# the config is hashed into it.
+DEFAULT_MAX_PROMPT_TOKENS = 40_000
+
+
+def estimate_prompt_tokens(payload_bytes: int) -> int:
+    """Estimate provider-metered tokens from the bytes we can see."""
+
+    return int(math.ceil(int(payload_bytes) / CONSERVATIVE_BYTES_PER_TOKEN))
 
 
 @dataclass(frozen=True)
@@ -46,54 +110,50 @@ class PromptConsumerBudget:
 
     consumer: str
     role: str
-    limit_bytes: int
     rationale: str
+    limit_tokens: int = DEFAULT_MAX_PROMPT_TOKENS
+
+    def with_limit_tokens(self, limit_tokens: Optional[int]) -> "PromptConsumerBudget":
+        """Return this budget under an operator-supplied ceiling."""
+
+        if limit_tokens is None:
+            return self
+        return PromptConsumerBudget(
+            consumer=self.consumer,
+            role=self.role,
+            rationale=self.rationale,
+            limit_tokens=max(1, int(limit_tokens)),
+        )
 
 
-# Every consumer of a budgeted role, with the reviewed number it must fit in.
+# Every consumer of a budgeted role.
 #
-# The numbers are not new. Each one is the ceiling this repository had already
-# reviewed for that transport; this table only makes them apply to every
-# consumer instead of to one agent class:
-#
-#   * 48,000 -- ``_ANALYZER_PROMPT_BYTE_LIMIT``
-#   * 80,000 -- ``_PLANNER_PROMPT_BYTE_LIMIT``
-#
-# ``concept_audit`` is the one consumer that does not take its role's 48,000.
-# That number was sized for the Analyzer's fixed projection (a step summary,
-# evidence ids, a scoped context, four sentences out). The concept auditor
-# carries the concept draft and its audit findings -- a different prompt shape
-# that was never measured against 48,000, and that real receipts show running
-# larger. It is declared at 80,000, this repository's largest reviewed text
-# envelope, so the check is real without breaking observed traffic.
-#
-# These ceilings are bytes, and bytes are a proxy for the tokens the provider
-# actually meters (measured ~0.248 tokens/byte on this workload). Re-sizing
-# them against a declared model context window is separate work; it needs the
-# window, which the current provider does not report.
+# They share one ceiling on purpose. The old per-class numbers (48,000 and
+# 80,000 bytes) differed for no measured reason -- each was the size someone
+# expected that particular projection to reach, not a property of the
+# transport, and neither survived contact with real traffic. A single declared
+# ceiling with a documented derivation is more honest than five numbers whose
+# differences nobody can justify. A consumer that genuinely needs a different
+# ceiling should get one here, with the evidence that says so.
 PROMPT_TRANSPORT_BUDGETS: Mapping[str, PromptConsumerBudget] = {
     budget.consumer: budget
     for budget in (
         PromptConsumerBudget(
             consumer="analyzer_interpretation",
             role="analyzer",
-            limit_bytes=48_000,
-            rationale="AnalyzerAgent step interpretation (_ANALYZER_PROMPT_BYTE_LIMIT).",
+            rationale="AnalyzerAgent step interpretation.",
         ),
         PromptConsumerBudget(
             consumer="concept_audit",
             role="analyzer",
-            limit_bytes=80_000,
             rationale=(
-                "LLM concept auditor; carries the concept draft, so it is sized "
-                "at the largest reviewed text envelope rather than the "
-                "Analyzer's projection budget."
+                "LLM concept auditor; carries the concept draft and its audit "
+                "findings, so it grows with the concept rather than the step."
             ),
         ),
         PromptConsumerBudget(
             consumer="vlm_visual_qa",
             role="analyzer",
-            limit_bytes=48_000,
             rationale=(
                 "VLM figure review. Bounds the text prompt only -- attached "
                 "image bytes are not text payload and are not counted here."
@@ -102,13 +162,11 @@ PROMPT_TRANSPORT_BUDGETS: Mapping[str, PromptConsumerBudget] = {
         PromptConsumerBudget(
             consumer="cohort_extraction",
             role="planner",
-            limit_bytes=80_000,
-            rationale="Cohort definition extraction (_PLANNER_PROMPT_BYTE_LIMIT).",
+            rationale="Cohort definition extraction.",
         ),
         PromptConsumerBudget(
             consumer="legacy_model_roster_migration",
             role="planner",
-            limit_bytes=80_000,
             rationale=(
                 "Legacy model-roster migration. Embeds the full serialised "
                 "ResearchContext, so it is the planner-role consumer most "
@@ -133,18 +191,24 @@ class PromptTransportBudgetError(RuntimeError):
         consumer: str,
         role: Optional[str],
         actual_bytes: int,
-        limit_bytes: int,
+        limit_tokens: int,
     ) -> None:
         self.consumer = str(consumer)
         self.role = str(role) if role else ""
         self.actual_bytes = int(actual_bytes)
-        self.limit_bytes = int(limit_bytes)
+        self.actual_tokens = estimate_prompt_tokens(actual_bytes)
+        self.limit_tokens = int(limit_tokens)
         super().__init__(
-            f"{self.consumer} prompt transport budget exceeded: "
-            f"{self.actual_bytes} > {self.limit_bytes} bytes "
-            f"(role {self.role or 'unknown'}). No evidence digest or binding "
-            "scientific coordinate was truncated; reduce the consumer-scoped "
-            "projection or split the payload."
+            f"{self.consumer} prompt budget exceeded: about "
+            f"{self.actual_tokens} tokens ({self.actual_bytes} bytes) against a "
+            f"ceiling of {self.limit_tokens} (role {self.role or 'unknown'}). "
+            "This ceiling is a local design budget for how large this "
+            "projection is expected to grow -- it is NOT the model's context "
+            "window, which this package does not know and does not guess. "
+            "No evidence digest or binding scientific coordinate was "
+            "truncated. Either reduce the consumer-scoped projection, or raise "
+            "PipelineConfig.max_prompt_tokens_per_call if the payload is "
+            "legitimately this large."
         )
 
 
@@ -216,17 +280,17 @@ class PromptBudgetClient:
         return self._budget.consumer
 
     @property
-    def limit_bytes(self) -> int:
-        return self._budget.limit_bytes
+    def limit_tokens(self) -> int:
+        return self._budget.limit_tokens
 
     def _enforce(self, messages: Sequence[Any]) -> None:
         actual_bytes = prompt_payload_bytes(messages)
-        if actual_bytes > self._budget.limit_bytes:
+        if estimate_prompt_tokens(actual_bytes) > self._budget.limit_tokens:
             raise PromptTransportBudgetError(
                 consumer=self._budget.consumer,
                 role=self._budget.role,
                 actual_bytes=actual_bytes,
-                limit_bytes=self._budget.limit_bytes,
+                limit_tokens=self._budget.limit_tokens,
             )
 
     def _attributed(self, call: Callable[[], Any]) -> Any:
@@ -284,11 +348,15 @@ def budgeted_role_client(
     role_resolver: Callable[[str], Any],
     role: str,
     consumer: str,
+    *,
+    limit_tokens: Optional[int] = None,
 ) -> Any:
-    """Resolve ``role`` for ``consumer``, holding it to its declared envelope.
+    """Resolve ``role`` for ``consumer``, holding it to its declared ceiling.
 
     Fails closed when ``consumer`` was never declared, so adding a new user of
     a shared role transport is a decision someone has to make explicitly.
+    ``limit_tokens`` carries the operator's configured ceiling; omitting it
+    uses the declared default.
     """
 
     budget = PROMPT_TRANSPORT_BUDGETS.get(str(consumer))
@@ -301,7 +369,7 @@ def budgeted_role_client(
         return None
     if isinstance(base, PromptBudgetClient):
         return base
-    return PromptBudgetClient(base, budget=budget)
+    return PromptBudgetClient(base, budget=budget.with_limit_tokens(limit_tokens))
 
 
 def declared_consumers_for_role(role: str) -> Dict[str, PromptConsumerBudget]:

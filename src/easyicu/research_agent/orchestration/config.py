@@ -26,6 +26,7 @@ from types import MappingProxyType
 from typing import Any, Dict, Mapping, Optional, Sequence, Union
 
 from ..authority.secret_redaction import is_sensitive_key, string_contains_secret
+from ..providers.prompt_budget import DEFAULT_MAX_PROMPT_TOKENS
 
 
 def step_provider_call_entitlement(
@@ -226,6 +227,16 @@ class PipelineConfig:
     # invisible until a step fails, and a step that was never funded to finish
     # is indistinguishable in the record from one whose science failed.
     allow_underfunded_step_provider_calls: bool = False
+    # How large one outbound prompt is expected to grow, in provider-metered
+    # tokens. This is a *local design ceiling*, not the model's context window:
+    # nothing in this package knows that window, and the current provider does
+    # not report one, so nothing here guesses it. The default clears the
+    # largest prompt this system has ever actually produced (26,040 tokens) and
+    # stays far below any current model, so it catches a runaway projection
+    # without being the routine binding constraint. Raise it when a payload is
+    # legitimately larger; the change lands in the run authority digest because
+    # this config is hashed into it. See providers/prompt_budget.py.
+    max_prompt_tokens_per_call: int = DEFAULT_MAX_PROMPT_TOKENS
     enable_deterministic_code_fallback: bool = False
     enable_deterministic_planner_fallback: bool = False
     enable_deterministic_runner_repair: bool = True
