@@ -122,6 +122,18 @@ def patch_flag_only_plausibility_range_rejection(
     outputs.  A step whose only evidence of policy compliance is this marker
     has satisfied retention, not flagging.
 
+    **The marker is a breadcrumb, not a receipt: nothing reads it today.**  The
+    flagging half is gated in ``audits/validators.py``, and that gate binds
+    only while the auditor is still reporting the exclusion demand.  In the
+    sealed-guard shape the repair neuters the guard bodies, so the script stops
+    requesting exclusion, the auditor goes quiet, and the finding the gate
+    attaches to never arrives -- leaving a script that has kept every row and
+    recorded nothing.  Closing that needs the obligation to be checked from
+    this marker (or from the step's declared ``plausibility_policy``) rather
+    than from a finding.  Deliberately not done here: it would newly block any
+    repaired step that does not flag, which is a scope and cost decision for
+    the run's owner, not a side effect of this repair.
+
     That boundary is why the direct adjacent ``range-mask = lower | upper`` /
     ``if range-mask.any(): raise`` pair is **not** repaired here, though it
     once was.  In that shape the guard is the mask's only reader, so removing
