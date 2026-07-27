@@ -130,6 +130,77 @@ def test_legacy_reviewed_client_is_reserved_before_invocation(tmp_path):
     assert "hello" not in json.dumps(payload)
 
 
+def test_explicit_resume_reopens_completed_task_without_resetting_limits(
+    tmp_path,
+):
+    from easyicu.research_agent.authority.provider_hard_stop import (
+        ProviderHardStopExceeded,
+        ProviderHardStopLedger,
+    )
+    from easyicu.research_agent.providers.hard_stop import HardStopClient
+    from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
+
+    limits = _limits(
+        max_provider_attempts_per_run=2,
+        max_provider_attempts_per_batch=2,
+    )
+    ledger = _ledger(tmp_path, limits=limits)
+    first = ledger.start_task("E1")
+    assert (
+        HardStopClient(
+            ScriptedMockLLMClient(["first"]),
+            role="planner",
+            task=first,
+        ).complete(_message(), max_tokens=8)
+        == "first"
+    )
+    first.finish(score={"aware": {"run_id": "run-first"}})
+    first_terminal = ledger.snapshot()
+    ledger = ProviderHardStopLedger(
+        path=ledger.path,
+        task_ids=("E1",),
+        limits=limits,
+        batch_id="test-batch",
+        resume_existing=True,
+    )
+
+    # Ordinary reuse never reopens or downgrades a completed task.
+    completed = ledger.start_task("E1")
+    completed.finish(error="RuntimeError: later caller failure")
+    assert ledger.snapshot()["tasks"][0]["status"] == "completed"
+
+    resumed = ledger.start_task("E1", reopen_terminal=True)
+    reopened = ledger.snapshot()
+    reopened_task = reopened["tasks"][0]
+    assert reopened_task["status"] == "running"
+    assert reopened["terminal"] is False
+    assert reopened_task["resume_count"] == 1
+    assert len(reopened_task["calls"]) == 1
+    assert reopened_task["terminal_attempts"][0]["status"] == "completed"
+    assert (
+        reopened_task["terminal_attempts"][0]["score_summary"]["run_id"]
+        == "run-first"
+    )
+
+    second_client = HardStopClient(
+        ScriptedMockLLMClient(["second", "must-not-run"]),
+        role="coder",
+        task=resumed,
+    )
+    assert second_client.complete(_message("resume"), max_tokens=8) == "second"
+    with pytest.raises(ProviderHardStopExceeded, match="RUN_PROVIDER_ATTEMPT_LIMIT"):
+        second_client.complete(_message("third"), max_tokens=8)
+    resumed.finish(score={"aware": {"run_id": "run-first"}})
+
+    final = ledger.snapshot()
+    assert final["tasks"][0]["status"] == "completed"
+    assert final["totals"]["provider_attempts"] == 2
+    assert (
+        final["tasks"][0]["elapsed_seconds"]
+        >= first_terminal["tasks"][0]["elapsed_seconds"]
+    )
+
+
 def test_run_attempt_limit_blocks_before_second_client_call(tmp_path):
     from easyicu.research_agent.authority.provider_hard_stop import (
         ProviderHardStopExceeded,
@@ -500,6 +571,7 @@ def test_provider_request_timeout_is_capped_by_task_wall_clock(
 def test_wall_clock_exhaustion_is_terminal_and_persisted(tmp_path):
     from easyicu.research_agent.authority.provider_hard_stop import (
         ProviderHardStopExceeded,
+        ProviderHardStopLedgerError,
     )
 
     ledger = _ledger(
@@ -515,6 +587,11 @@ def test_wall_clock_exhaustion_is_terminal_and_persisted(tmp_path):
     snapshot = ledger.snapshot()
     assert snapshot["tasks"][0]["status"] == "budget_exhausted"
     assert snapshot["terminal"] is True
+    with pytest.raises(
+        ProviderHardStopLedgerError,
+        match="cannot start from 'budget_exhausted'",
+    ):
+        ledger.start_task("E1", reopen_terminal=True)
 
 
 def test_tampered_ledger_and_nonfinite_limits_fail_closed(tmp_path):
