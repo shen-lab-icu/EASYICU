@@ -8,11 +8,17 @@ had *touched* something that writes: ``json.dump(audit, sys.stdout)``, a debug
 file under ``/tmp``, and ``DataFrame(...).to_json()`` with no destination at all
 each satisfied it while leaving nothing behind.
 
+Naming the destination is not the same as reaching it, either.  A second draft
+did decide on the destination but compared only the last path component, so a
+script could write its real counts to ``/tmp/step_summary.json`` and leave the
+summary the host actually opens saying whatever it liked.  A destination is a
+directory *and* a name.
+
 So the obligation is settled in two places, and this module owns both halves of
 the contract that joins them:
 
-* the **destination** the static gate will accept -- the canonical step summary
-  the host itself reads, or a path the script registers in ``output_files``;
+* the **destination** the static gate will accept -- ``step_summary.json``
+  inside the output directory the host hands the step, and nothing else;
 * the **receipt** the sealed summary must actually carry once the step has run.
 
 Publishing one spelling is deliberate.  A gate that demands a shape nobody was
@@ -50,9 +56,33 @@ CANONICAL_STEP_SUMMARY_FILENAME = "step_summary.json"
 #: Where the receipt lives inside that artifact.
 RECEIPT_SUMMARY_KEY = "plausibility_audit"
 
+#: The environment variables through which the host hands a step its own output
+#: directory -- the directory whose ``step_summary.json`` the host itself opens
+#: afterwards.  The filename alone is not a destination: an earlier draft
+#: compared only the last path component, so ``/tmp/step_summary.json`` matched
+#: the canonical artifact and a script could put its real counts in a scratch
+#: file while the summary the host reads carried whatever it liked.
+#:
+#: Duplicated from ``execution/runner.py`` rather than imported, so a read-only
+#: gate does not take a dependency on the execution layer;
+#: ``test_plausibility_obligation_gate`` locks the two against drift.
+HOST_OUTPUT_DIR_ENV_KEYS = frozenset(
+    {
+        "STEP_OUT_DIR",
+        "STEP_OUTPUT_DIR",
+        "STEP_OUTPUT",
+        "OUT_DIR",
+        "OUTPUT_DIR",
+        "EASYICU_OUTPUT_DIR",
+        "EASYICU_STEP_OUT_DIR",
+    }
+)
+
 #: The mapping in a step summary through which a script registers any other
-#: file it wrote.  A path that appears there is a declared output; a path that
-#: does not is a scratch file.
+#: file it wrote.  Registering a companion file is how a step declares its other
+#: outputs; it is **not** an alternative home for this receipt, because the
+#: post-execution half reads exactly one place and a receipt the host does not
+#: read is not a receipt.
 OUTPUT_REGISTRATION_KEY = "output_files"
 
 RECEIPT_POLICY_FIELD = "policy"
@@ -69,29 +99,35 @@ _VALIDATOR = "mechanical_code_preflight"
 #: the gate cannot disagree about a field name -- which is the only part of the
 #: wording that has to match.
 RECEIPT_CONTRACT_CLAUSE = (
-    f"Record the counts in `step_summary[{RECEIPT_SUMMARY_KEY!r}]` as an object "
-    "keyed by the exact resolved column, each value "
+    f"Record the counts under the key {RECEIPT_SUMMARY_KEY!r} of the "
+    f"`{CANONICAL_STEP_SUMMARY_FILENAME}` you write into `STEP_OUT_DIR`, as an "
+    "object keyed by the exact resolved column, each value "
     f"`{{{RECEIPT_POLICY_FIELD!r}: {RECEIPT_POLICY_VALUE!r}, "
     f"{RECEIPT_BELOW_FIELD!r}: <int>, {RECEIPT_ABOVE_FIELD!r}: <int>, "
     f"{RECEIPT_TOTAL_FIELD!r}: <int>}}`, written on every path including when "
-    "every count is 0. Printing it or writing it to an unregistered scratch "
-    "path does not satisfy the policy."
+    "every count is 0. Printing it, filing it under another key, or writing it "
+    "to any other file -- including a companion you register in "
+    f"`{OUTPUT_REGISTRATION_KEY}` -- does not satisfy the policy."
 )
 
 #: The full contract quoted back in a finding, where the extra words are the
 #: repair instruction.
 RECEIPT_CONTRACT_SENTENCE = (
-    f"Record the result in `step_summary[{RECEIPT_SUMMARY_KEY!r}]` as a JSON "
-    "object keyed by the exact resolved column, each value "
+    f"Write `{CANONICAL_STEP_SUMMARY_FILENAME}` into the directory the host "
+    "gives you in `STEP_OUT_DIR`, and record the result under its "
+    f"{RECEIPT_SUMMARY_KEY!r} key as a JSON object keyed by the exact resolved "
+    "column, each value "
     f"`{{{RECEIPT_POLICY_FIELD!r}: {RECEIPT_POLICY_VALUE!r}, "
     f"{RECEIPT_BELOW_FIELD!r}: <int>, {RECEIPT_ABOVE_FIELD!r}: <int>, "
     f"{RECEIPT_TOTAL_FIELD!r}: <int>}}` with "
     f"{RECEIPT_TOTAL_FIELD} equal to {RECEIPT_BELOW_FIELD} + "
     f"{RECEIPT_ABOVE_FIELD}. Write it on every path, including when every "
     "count is 0: a count of zero is a result, and its absence cannot be told "
-    "apart from never having looked. Printing it, or writing it to a scratch "
-    "path this step does not register in "
-    f"`step_summary[{OUTPUT_REGISTRATION_KEY!r}]`, does not satisfy this."
+    "apart from never having looked. That one file is the whole contract: "
+    "printing the counts, nesting them under another key, or writing them to "
+    "any other file -- a scratch path, or a companion you register in "
+    f"`{OUTPUT_REGISTRATION_KEY}` -- leaves them somewhere the host does not "
+    "read, and does not satisfy this."
 )
 
 
@@ -398,6 +434,7 @@ def plausibility_audit_receipt_findings(
 
 __all__ = [
     "CANONICAL_STEP_SUMMARY_FILENAME",
+    "HOST_OUTPUT_DIR_ENV_KEYS",
     "OUTPUT_REGISTRATION_KEY",
     "POLICY_CONTRACT_KEY",
     "RECEIPT_ABOVE_FIELD",
