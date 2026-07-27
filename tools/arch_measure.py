@@ -567,6 +567,15 @@ def main() -> int:
         "--emit", metavar="PATH", help="write current metrics as a baseline JSON"
     )
     ap.add_argument(
+        "--reason",
+        metavar="TEXT",
+        help=(
+            "why the baseline is being moved (required with --emit). A ratchet "
+            "whose reset leaves no trace is a ratchet nobody has to justify "
+            "turning: this one went 166 commits stale before CI noticed."
+        ),
+    )
+    ap.add_argument(
         "--diff", metavar="PATH", help="diff current metrics against a baseline JSON"
     )
     args = ap.parse_args()
@@ -574,10 +583,42 @@ def main() -> int:
     current = measure()
 
     if args.emit:
+        if not (args.reason or "").strip():
+            print(
+                "refusing to emit a baseline without --reason: moving a ratchet "
+                "is a decision, and the next reader needs to know what was "
+                "accepted and why.",
+                file=sys.stderr,
+            )
+            return 2
         out = Path(args.emit)
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(current, indent=2) + "\n", encoding="utf-8")
+        # Carry the superseded numbers, so the accepted growth is legible in
+        # the file itself rather than only in a commit message that a later
+        # re-emit will bury.
+        superseded: Dict[str, Any] = {}
+        if out.exists():
+            try:
+                previous = json.loads(out.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                previous = {}
+            for name, cur in current.get("files", {}).items():
+                was = previous.get("files", {}).get(name, {}).get("loc")
+                now = cur.get("loc")
+                if isinstance(was, int) and isinstance(now, int) and now > was:
+                    superseded[name] = {"loc_was": was, "loc_now": now}
+        recorded = dict(current)
+        recorded["baseline_reason"] = args.reason.strip()
+        if superseded:
+            recorded["baseline_accepted_growth"] = superseded
+        out.write_text(json.dumps(recorded, indent=2) + "\n", encoding="utf-8")
         print(f"wrote baseline -> {out}")
+        if superseded:
+            total = sum(v["loc_now"] - v["loc_was"] for v in superseded.values())
+            print(
+                f"  accepted +{total} LOC across {len(superseded)} file(s); "
+                "recorded in baseline_accepted_growth"
+            )
         return 0
     if args.diff:
         baseline = json.loads(Path(args.diff).read_text(encoding="utf-8"))

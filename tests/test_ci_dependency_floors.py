@@ -11,7 +11,10 @@ from __future__ import annotations
 
 from pathlib import Path
 import re
-import tomllib
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10 runtime
+    import tomli as tomllib
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PYPROJECT = REPO_ROOT / "pyproject.toml"
@@ -85,3 +88,43 @@ def test_pyarrow_floor_is_locked_in_both_places() -> None:
     """The specific pair that had already drifted."""
 
     assert _declared_floors()["pyarrow"] == _workflow_floors()["pyarrow"]
+
+
+def test_no_test_module_imports_tomllib_without_a_310_fallback() -> None:
+    """`requires-python = ">=3.10"` but tomllib is stdlib only from 3.11.
+
+    Three test modules imported it unconditionally, so the entire Python 3.10
+    matrix leg died at collection -- before a single test ran, on a version the
+    package publicly claims to support. The failure is invisible locally
+    (development runs 3.11+), which is exactly why it needs a test.
+    """
+
+    offenders: list[str] = []
+    for path in sorted((REPO_ROOT / "tests").rglob("*.py")):
+        text = path.read_text(encoding="utf-8")
+        if "import tomllib" not in text:
+            continue
+        if "import tomli as tomllib" not in text:
+            offenders.append(str(path.relative_to(REPO_ROOT)))
+
+    assert not offenders, (
+        "import tomllib inside try/except ModuleNotFoundError with a "
+        "`import tomli as tomllib` fallback, or Python 3.10 CI dies at "
+        f"collection: {offenders}"
+    )
+
+
+def test_the_tomli_fallback_is_actually_installed_on_310() -> None:
+    """A fallback to a package nobody installs is not a fallback."""
+
+    data = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))
+    dev = data["project"]["optional-dependencies"]["dev"]
+    assert any(
+        req.startswith("tomli") and "python_version" in req for req in dev
+    ), "dev extra must ship tomli for the Python versions lacking tomllib"
+
+    workflow = AGENT_WORKFLOW.read_text(encoding="utf-8")
+    assert "tomli" in workflow, (
+        "research_agent CI installs an explicit list without extras, so the "
+        "fallback has to be named there too"
+    )

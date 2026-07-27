@@ -1,29 +1,29 @@
 {
   "tool_version": "1.8.0",
-  "tool_sha256": "0975ad7ce136ed60980dc261a32ea09917ae3abc689b53aaf47ee964868391b4",
+  "tool_sha256": "ca7dfaf8643e3b5763906d0d132f556a480e1e8f6b42d5b122c8c2dc78ac557f",
   "shim_import_paths": [],
   "files": {
     "execution/phase.py": {
-      "loc": 11648,
-      "sha256": "2cd9110ab517485784455640de9b20a88ce787cd11126f913615f9e7d1824f85",
-      "intra_package_import_edges": 78,
+      "loc": 11938,
+      "sha256": "57960a6c48f3a776a8c5f38ff15e9c071a3c6e767b2f2bbf36f0baff8f31c7b4",
+      "intra_package_import_edges": 79,
       "shim_bypass_violations": []
     },
     "pipeline.py": {
-      "loc": 10736,
-      "sha256": "0805199b35097ca9cfe2cba919e40874d3c284761e96f84536bbe3591c5a5c98",
-      "intra_package_import_edges": 93,
+      "loc": 11283,
+      "sha256": "5b61cbd6344124228d793eb57d614f8d6309b76da4db128cbe2549a2f1bd9198",
+      "intra_package_import_edges": 100,
       "shim_bypass_violations": []
     },
     "reporting/readiness.py": {
-      "loc": 2971,
-      "sha256": "7f6bec05aac7b0d326103dba1a09098af280975c4d0328c0edc8104ed2931ada",
-      "intra_package_import_edges": 13,
+      "loc": 3138,
+      "sha256": "29968add8ff916e655f2e181649d1be6a5d77bdfa117d9493b68e0e50894dee5",
+      "intra_package_import_edges": 14,
       "shim_bypass_violations": []
     },
     "authority/typed_binding.py": {
-      "loc": 1512,
-      "sha256": "bdcfabf008b34fef28055ac79ebe2d2532fed66f2855cfa1a3bdbdba46a9d0c7",
+      "loc": 1628,
+      "sha256": "7ce0f1a43e796a53cf785117278b193f6bbc320b6c66df79a8652c22a83ac939",
       "intra_package_import_edges": 11,
       "shim_bypass_violations": []
     },
@@ -34,9 +34,9 @@
       "shim_bypass_violations": []
     },
     "authority/typed_input_receipt.py": {
-      "loc": 1067,
-      "sha256": "844e8a015622764ce7fe8f0efda02a01e5d3951a16f6b7274a9f19e253e58c14",
-      "intra_package_import_edges": 3,
+      "loc": 1058,
+      "sha256": "4cf802c3d82e43644539fdbbbbc40af36a103d28c2343c145a65bc3ee06f933f",
+      "intra_package_import_edges": 4,
       "shim_bypass_violations": []
     },
     "authority/typed_input_sdk.py": {
@@ -52,9 +52,9 @@
       "shim_bypass_violations": []
     },
     "gates/preflight.py": {
-      "loc": 8366,
-      "sha256": "0d192113e2ea5daea3f0d84e7835da6ebaca666741780f11be49d11c46dba966",
-      "intra_package_import_edges": 8,
+      "loc": 8606,
+      "sha256": "ed3536fe04612e18bf452cc9a26f9046a438dd9e818ce5fafcdbfafe16fea287",
+      "intra_package_import_edges": 9,
       "shim_bypass_violations": []
     },
     "gates/typed_input.py": {
@@ -64,8 +64,8 @@
       "shim_bypass_violations": []
     },
     "repairs/source.py": {
-      "loc": 7531,
-      "sha256": "d15ec19221f4c5aee8620c4803a4c020ff28455f9c651755ad5a5118b49e4833",
+      "loc": 8007,
+      "sha256": "6dc05ee5920c78ba6e629f0d1f7465634be0e9eb9bdf5090dbf2af357c65b41f",
       "intra_package_import_edges": 26,
       "shim_bypass_violations": []
     },
@@ -76,49 +76,49 @@
       "shim_bypass_violations": []
     },
     "audits/validators.py": {
-      "loc": 13135,
-      "sha256": "b2bdb15a4752c282b88997c8bc247a1251777bec07cabd6c623b2800b573cab7",
+      "loc": 13225,
+      "sha256": "d2d55bd5bf43311f579b47b90a78387227aa95c9ce1221282d1ddde8cec8d77f",
       "intra_package_import_edges": 13,
       "shim_bypass_violations": []
     },
     "plan_utils.py": {
-      "loc": 4976,
-      "sha256": "03760d9d4922da4ab52c2b1ab6ef5bebbc929d2cfe360e3abf0d6c8a38dccc63",
-      "intra_package_import_edges": 9,
+      "loc": 5044,
+      "sha256": "3ed671903d5ecd4d8609f2d308eed5a3d512cbb73b84e4d15616aa4a78971e87",
+      "intra_package_import_edges": 10,
       "shim_bypass_violations": []
     },
     "agents/core.py": {
-      "loc": 4034,
-      "sha256": "4fd9041cd64c5fd078b321f2ec191011c9b29c4dc7e691129a291836bf5cbfde",
-      "intra_package_import_edges": 31,
+      "loc": 4453,
+      "sha256": "09ecf067b5bb8b93828b17963615b3c759c79bad29a7956b401d690624d9e531",
+      "intra_package_import_edges": 32,
       "shim_bypass_violations": []
     },
     "contracts/declared_product.py": {
-      "loc": 3509,
-      "sha256": "020191665aaffa6aaf0066bfbb32d1cbb4691eb198a752a17027e9c6b602824e",
+      "loc": 3536,
+      "sha256": "21ddfd5f729f710f0fdb8e1e5623ec3017c051523a207272abbcbfcd63ab8936",
       "intra_package_import_edges": 5,
       "shim_bypass_violations": []
     },
     "figures/skill.py": {
-      "loc": 3468,
-      "sha256": "aa067a5597e703497e0f6c8e9d3b51dd0ce7f20d4031f2c1c9414d604f05f98d",
-      "intra_package_import_edges": 7,
+      "loc": 3573,
+      "sha256": "c3559aed662a55e634ae943555ea422002b9463d02fa6742f67af3bc70c289bc",
+      "intra_package_import_edges": 8,
       "shim_bypass_violations": []
     },
     "authority/evidence_store.py": {
-      "loc": 3151,
-      "sha256": "1234f9367f207623a6d8a34e6fec3dea344fc8601620fe976807b8eb99c144be",
+      "loc": 3247,
+      "sha256": "66ce83069fe0bd3595773f23e589a8f222e48c9f970a707cba26b4fedb1eacdf",
       "intra_package_import_edges": 3,
       "shim_bypass_violations": []
     }
   },
   "functions": {
     "execution/phase.py::_execute_one_step": {
-      "lines": 6309,
-      "line_start": 4870,
+      "lines": 6381,
+      "line_start": 5090,
       "direct_nested_funcs": 22,
       "total_nested_funcs": 24,
-      "own_bound_names": 353,
+      "own_bound_names": 355,
       "own_nonlocal_names": [
         "runtime_state"
       ],
@@ -126,14 +126,65 @@
       "callable_closure_captured_names": 30
     },
     "execution/phase.py::run_execute_phase": {
-      "lines": 8052,
-      "line_start": 3585,
+      "lines": 8151,
+      "line_start": 3788,
       "direct_nested_funcs": 15,
       "total_nested_funcs": 43,
       "own_bound_names": 145,
       "own_nonlocal_names": [],
       "own_nonlocal_count": 0,
       "callable_closure_captured_names": 79
+    }
+  },
+  "baseline_reason": "Re-baselined after the 2026-07-24..2026-07-27 external-review hardening batch (19 commits): fail-closed concept outcomes, human-review state drift + payload-tamper guards, provider budget/resume accounting, three deterministic executors, scientific-table validation. All growth is reviewed hardening, not drift. Decomposing pipeline.py / execution/phase.py / repairs/source.py remains the open architectural workstream and is NOT authorized by this refresh.",
+  "baseline_accepted_growth": {
+    "execution/phase.py": {
+      "loc_was": 11648,
+      "loc_now": 11938
+    },
+    "pipeline.py": {
+      "loc_was": 10736,
+      "loc_now": 11283
+    },
+    "reporting/readiness.py": {
+      "loc_was": 2971,
+      "loc_now": 3138
+    },
+    "authority/typed_binding.py": {
+      "loc_was": 1512,
+      "loc_now": 1628
+    },
+    "gates/preflight.py": {
+      "loc_was": 8366,
+      "loc_now": 8606
+    },
+    "repairs/source.py": {
+      "loc_was": 7531,
+      "loc_now": 8007
+    },
+    "audits/validators.py": {
+      "loc_was": 13135,
+      "loc_now": 13225
+    },
+    "plan_utils.py": {
+      "loc_was": 4976,
+      "loc_now": 5044
+    },
+    "agents/core.py": {
+      "loc_was": 4034,
+      "loc_now": 4453
+    },
+    "contracts/declared_product.py": {
+      "loc_was": 3509,
+      "loc_now": 3536
+    },
+    "figures/skill.py": {
+      "loc_was": 3468,
+      "loc_now": 3573
+    },
+    "authority/evidence_store.py": {
+      "loc_was": 3151,
+      "loc_now": 3247
     }
   }
 }

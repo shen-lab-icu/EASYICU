@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
-import tomllib
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10 runtime
+    import tomli as tomllib
 
 import pytest
 
