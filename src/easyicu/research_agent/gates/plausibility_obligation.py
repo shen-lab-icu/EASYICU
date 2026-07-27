@@ -173,18 +173,82 @@ def _reads_the_host_output_directory(node: ast.AST) -> bool:
     return isinstance(callee, ast.Name) and callee.id == "getenv"
 
 
-def _host_output_directory_names(tree: ast.AST) -> Set[str]:
-    """Local names bound to the host's own step-output directory."""
-
-    assignments = [
+def _single_name_assignments(tree: ast.AST) -> list[ast.Assign]:
+    return [
         node
         for node in ast.walk(tree)
         if isinstance(node, ast.Assign)
         and len(node.targets) == 1
         and isinstance(node.targets[0], ast.Name)
     ]
+
+
+def _function_definitions(tree: ast.AST) -> list[ast.AST]:
+    return [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    ]
+
+
+def _parameter_bindings(function: ast.AST, calls: Sequence[ast.Call]) -> dict:
+    """What every call to ``function`` passes for each of its parameters.
+
+    Generated scripts routinely funnel the write through a helper that takes the
+    output directory (or the summary mapping) as a parameter -- the corpus has
+    ``def write_summary(summary, out_dir)`` writing
+    ``out_dir / "step_summary.json"`` inside.  A recogniser that only follows
+    assignments cannot read that, and in a fail-closed gate a legal spelling it
+    cannot read is a wrong block, not a missed one.
+
+    A parameter therefore inherits what its call sites give it, but only when
+    *every* call gives it the same kind of thing: a ``None`` here means one call
+    did not bind it, which is enough to disqualify the name.  Returns ``{}``
+    when the call sites cannot be read positionally at all.
+    """
+
+    positional = [*function.args.posonlyargs, *function.args.args]
+    parameters = {argument.arg for argument in (*positional, *function.args.kwonlyargs)}
+    index_of = {argument.arg: index for index, argument in enumerate(positional)}
+    bound: dict = {name: [] for name in parameters}
+    called = False
+    for call in calls:
+        callee = call.func
+        name = (
+            callee.id
+            if isinstance(callee, ast.Name)
+            else callee.attr if isinstance(callee, ast.Attribute) else None
+        )
+        if name != function.name:
+            continue
+        if any(isinstance(argument, ast.Starred) for argument in call.args) or any(
+            keyword.arg is None for keyword in call.keywords
+        ):
+            # `f(*args)` / `f(**kwargs)` -- positions are unknowable.
+            return {}
+        called = True
+        for parameter in parameters:
+            index = index_of.get(parameter)
+            value = (
+                call.args[index]
+                if index is not None and index < len(call.args)
+                else None
+            )
+            for keyword in call.keywords:
+                if keyword.arg == parameter:
+                    value = keyword.value
+            bound[parameter].append(value)
+    return bound if called else {}
+
+
+def _host_output_directory_names(tree: ast.AST) -> Set[str]:
+    """Local names bound to the host's own step-output directory."""
+
+    assignments = _single_name_assignments(tree)
+    functions = _function_definitions(tree)
+    calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
     names: Set[str] = set()
-    for _ in range(len(assignments) + 1):
+    for _ in range(len(assignments) + len(functions) + 1):
         grew = False
         for node in assignments:
             target = node.targets[0]
@@ -197,6 +261,16 @@ def _host_output_directory_names(tree: ast.AST) -> Set[str]:
             ):
                 names.add(target.id)
                 grew = True
+        for function in functions:
+            for parameter, values in _parameter_bindings(function, calls).items():
+                if parameter in names or not values:
+                    continue
+                if all(
+                    value is not None and _is_the_host_output_directory(value, names)
+                    for value in values
+                ):
+                    names.add(parameter)
+                    grew = True
         if not grew:
             break
     return names
@@ -861,18 +935,9 @@ class _FlagFlow:
                 if root is not None:
                     names.add(root)
 
-        assignments = [
-            node
-            for node in ast.walk(self.tree)
-            if isinstance(node, ast.Assign)
-            and len(node.targets) == 1
-            and isinstance(node.targets[0], ast.Name)
-        ]
-        functions = [
-            node
-            for node in ast.walk(self.tree)
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        ]
+        assignments = _single_name_assignments(self.tree)
+        functions = _function_definitions(self.tree)
+        calls = [node for node in ast.walk(self.tree) if isinstance(node, ast.Call)]
         returning: Set[str] = set()
         for _ in range(len(assignments) + len(functions) + 1):
             grew = False
@@ -890,6 +955,19 @@ class _FlagFlow:
                     names.add(target.id)
                     grew = True
             for function in functions:
+                # A helper the script hands the summary to carries it inside,
+                # the same way one it hands the output directory to does.  Only
+                # when every call site agrees: one call that does not bind the
+                # parameter is enough to leave it unproven.
+                for parameter, values in _parameter_bindings(function, calls).items():
+                    if parameter in names or not values:
+                        continue
+                    if all(
+                        value is not None and self._is_receipt_mapping(value, names)
+                        for value in values
+                    ):
+                        names.add(parameter)
+                        grew = True
                 if function.name in returning:
                     continue
                 if any(
