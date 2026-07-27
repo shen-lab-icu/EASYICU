@@ -368,6 +368,7 @@ from .providers.llm import (
     resolve_role_client,
 )
 from .providers.mocks import MockLLMClient
+from .providers.prompt_budget import budgeted_role_client
 from .providers.protocol import LLMClient, LLMMessage
 from .learning.memory import RunMemory
 from .learning.runtime import ReviewedMemoryRuntime
@@ -1369,7 +1370,9 @@ def _migrate_legacy_resume_model_requirements(
         from .providers.structured_retry import call_llm_with_structured_retry
 
         packet = call_llm_with_structured_retry(
-            role_resolver("planner"),
+            budgeted_role_client(
+                role_resolver, "planner", "legacy_model_roster_migration"
+            ),
             messages,
             parser=lambda raw: _parse_legacy_model_roster_packet(
                 raw,

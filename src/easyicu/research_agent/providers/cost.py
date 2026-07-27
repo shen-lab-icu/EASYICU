@@ -181,11 +181,18 @@ class CostMeter:
             request_hasher.update(b"\0")
             request_hasher.update(encoded)
             request_hasher.update(b"\0")
+        # A role client serves several consumers, so the role alone cannot say
+        # which one produced this call. Without it an over-budget prompt is
+        # visible but unattributable, which is how the analyzer envelope stayed
+        # broken. None means the caller is not on a budgeted role.
+        from .prompt_budget import active_prompt_consumer
+
         payload: Dict[str, Any] = {
             "schema_version": "easyicu.provider_transport_receipt/1",
             "call_id": call_id,
             "state": "in_progress",
             "role": role,
+            "consumer": active_prompt_consumer.get(),
             "model": model,
             "request_sha256": request_hasher.hexdigest(),
             "prompt_bytes": prompt_bytes,
