@@ -138,6 +138,7 @@ from ..gates.concept import (
     quarantined_deterministic_errors_resolved_by_current_gate as _quarantined_deterministic_errors_resolved_by_current_gate,
     quarantined_errors_superseded_by_current_policy as _quarantined_errors_superseded_by_current_policy,
 )
+from ..gates.plausibility_receipt import plausibility_audit_receipt_findings
 from ..authority.coder_authority import HostCoderAuthority
 from ..cohort.repair import extract_cohort_definition_from_prose
 from ..cohort.schema import (
@@ -2845,6 +2846,7 @@ def _evaluate_final_deterministic_gates(
     step_record: Mapping[str, Any],
     completed_step_records: Sequence[Mapping[str, Any]],
     resolved_input_bindings: Mapping[str, Mapping[str, Any]],
+    script_text: str,
     attempt_id: str,
     checkpoint_id: str,
     stat_validator: StatisticalValidator,
@@ -2972,6 +2974,18 @@ def _evaluate_final_deterministic_gates(
     contract_findings = _demote_result_figure_shape_for_family_renderer(
         context,
         contract_findings,
+    )
+    # Deliberately after the demotions: the pre-execution gate can only prove a
+    # script is *shaped* to record its out-of-range counts, and a shape is not a
+    # result.  This reads what the step actually produced, so a script that
+    # claims to write the summary and leaves no receipt in it still fails.
+    contract_findings.extend(
+        plausibility_audit_receipt_findings(
+            step_summary=step_summary,
+            context=context,
+            step=step,
+            script_text=script_text,
+        )
     )
     figure_source_findings = figure_source_validator.audit(
         step=step,
@@ -3486,6 +3500,7 @@ def _selectively_revalidate_resume_successes(
                     step_record=prior_record,
                     completed_step_records=completed_records,
                     resolved_input_bindings=resolved_bindings,
+                    script_text=script_text,
                     attempt_id=attempt_id,
                     checkpoint_id=checkpoint_id,
                     stat_validator=StatisticalValidator(),
@@ -11023,6 +11038,7 @@ def run_execute_phase(
             step_record=step_record,
             completed_step_records=completed_records_snapshot,
             resolved_input_bindings=resolved_input_bindings,
+            script_text=code,
             attempt_id=attempt_id,
             checkpoint_id=review_checkpoint_id,
             stat_validator=stat_validator,
