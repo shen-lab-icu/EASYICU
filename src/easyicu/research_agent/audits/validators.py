@@ -2999,33 +2999,32 @@ def _reclassify_flag_only_plausibility_range_findings(
         # improvement on claiming it was done, but a note nothing reads is not
         # a gate: a step could retain the values, flag nothing, and pass.
         # Downgrade only where the flagging half is observable in the script.
+        #
+        # Silence is not the same as compliance, so `None` -- no comparison
+        # located at all -- keeps the error too. A structural check that found
+        # nothing has established that nobody looked, and a warning would let
+        # the weakest possible evidence buy the same pass as the strongest.
         records_flag = _records_out_of_range_evidence(
             script_text=script_text, variable=variable
         )
-        if records_flag is False:
+        if records_flag is not True:
             detail["retain_and_flag_half_satisfied"] = "retain"
+            detail["flag_evidence"] = (
+                "absent" if records_flag is False else "not_attributable"
+            )
             detail["flag_obligation"] = (
                 "The plausibility range is flag-only, so do NOT exclude, clip, "
                 "impute or raise on these values -- keep every row. The "
                 "flagging half is still owed: record the out-of-range rows as "
                 "a structured count or per-row indicator in this step's "
                 "declared outputs. This finding stays an error because the "
-                "script compares the value against its bound and then discards "
-                "the result."
+                "script does not keep that record where it can be read."
             )
-            detail["flag_evidence"] = "absent"
             reclassified.append(finding.model_copy(update={"detail": detail}))
             continue
 
         detail.setdefault("retain_and_flag_half_satisfied", "retain_and_flag")
-        if records_flag is None:
-            # No bound comparison on this variable could be located, so this
-            # check observed nothing and says so rather than letting silence
-            # read as compliance.
-            detail["retain_and_flag_half_satisfied"] = "retain"
-            detail["flag_evidence"] = "not_attributable"
-        else:
-            detail["flag_evidence"] = "observed_count_or_indicator"
+        detail["flag_evidence"] = "observed_count_or_indicator"
         reclassified.append(
             finding.model_copy(update={"severity": "warning", "detail": detail})
         )
