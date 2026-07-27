@@ -384,6 +384,10 @@ from .schema import (  # noqa: F401
     ConceptDictionary,
     ConceptSource,
 )
+from .errors import (  # noqa: F401
+    ConceptError,
+    ConceptExtractionUnavailable,
+)
 
 
 
@@ -2661,17 +2665,36 @@ class ConceptResolver:
                         _hd_conn.execute("SET memory_limit = '2GB'")
                         
                         # 先获取死亡患者ID
+                        #
+                        # This fast path is a second copy of the ``hirid_death``
+                        # logic in ``callback_apply``; it had the same silent
+                        # failure. Swallowing the read error left ``dead_pids``
+                        # empty, which fell through to an empty frame below and
+                        # reported HiRID mortality as zero. Fail closed here too,
+                        # or the optimisation quietly changes the science.
                         try:
                             general_tbl = data_source.load_table('general', columns=['patientid', 'discharge_status'], verbose=False)
                             general_df = general_tbl.data if hasattr(general_tbl, 'data') else general_tbl
                             if not isinstance(general_df, pd.DataFrame):
                                 general_df = pd.DataFrame(general_df)
+                            if 'discharge_status' not in general_df.columns:
+                                raise KeyError("general table has no 'discharge_status' column")
                             dead_pids = set(general_df.loc[
                                 general_df['discharge_status'].astype(str).str.lower() == 'dead',
                                 'patientid'
                             ].unique())
-                        except Exception:
-                            dead_pids = set()
+                        except Exception as _hd_general_exc:
+                            _hd_conn.close()
+                            raise ConceptExtractionUnavailable(
+                                concept_id=concept_name,
+                                database='hirid',
+                                stage='load_general',
+                                detail=(
+                                    'the general table could not be read '
+                                    f'({_hd_general_exc})'
+                                ),
+                                cause=_hd_general_exc,
+                            ) from _hd_general_exc
                         
                         # 确定要查询的死亡患者列表
                         _query_pids = dead_pids
@@ -2682,6 +2705,22 @@ class ConceptResolver:
                                 pid_list = list(patient_ids)
                             _query_pids = set(p for p in pid_list if p in dead_pids)
                         
+                        if dead_pids and not bucket_dir.exists():
+                            # Patients are recorded as deceased but the table
+                            # that times their last observation is not there.
+                            # The empty frame the old ``else`` produced is a
+                            # missing input, not a cohort without deaths.
+                            _hd_conn.close()
+                            raise ConceptExtractionUnavailable(
+                                concept_id=concept_name,
+                                database='hirid',
+                                stage='observations_bucket',
+                                detail=(
+                                    f'{len(dead_pids)} patient(s) are recorded '
+                                    'as deceased but the observations bucket '
+                                    f'is missing at {bucket_dir}'
+                                ),
+                            )
                         if _query_pids and bucket_dir.exists():
                             # 显式文件列表，过滤 AppleDouble (._*.parquet) — 见 datasource._enumerate_bucket_parquet_files
                             _hd_files = _enumerate_bucket_parquet_files(bucket_dir)

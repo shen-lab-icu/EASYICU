@@ -55,6 +55,7 @@ import numpy as np
 import pandas as pd
 
 from .schema import ConceptSource
+from .errors import ConceptExtractionUnavailable
 from .loader import _get_concept_bounds
 from .expr_parser import (
     _apply_binary_op,
@@ -193,25 +194,51 @@ def _apply_callback(
         id_col = 'patientid'
         
         # Step 1: Load general table and find dead patients
-        dead_pids = set()
-        if data_source is not None:
-            try:
-                general_tbl = data_source.load_table('general', columns=[id_col, 'discharge_status'])
-                general_df = general_tbl.data if hasattr(general_tbl, 'data') else general_tbl
-                if not isinstance(general_df, pd.DataFrame):
-                    general_df = pd.DataFrame(general_df)
-                dead_pids = set(general_df.loc[
-                    general_df['discharge_status'].astype(str).str.lower() == 'dead',
-                    id_col
-                ].unique())
-            except Exception:
-                pass
-        
+        #
+        # Every failure below used to be swallowed into ``dead_pids = set()``,
+        # which returns an empty frame — indistinguishable from "nobody in this
+        # cohort died". A missing file, a permission change, an upstream rename
+        # of ``discharge_status`` or a DuckDB error therefore reported HiRID
+        # mortality as zero, and the analysis downstream ran normally on it.
+        # An outcome concept must not have a silent zero as its failure mode.
+        if data_source is None:
+            raise ConceptExtractionUnavailable(
+                concept_id=concept_name,
+                database='hirid',
+                stage='load_general',
+                detail=(
+                    'no data source was supplied, so discharge status could '
+                    'not be read'
+                ),
+            )
+        try:
+            general_tbl = data_source.load_table('general', columns=[id_col, 'discharge_status'])
+            general_df = general_tbl.data if hasattr(general_tbl, 'data') else general_tbl
+            if not isinstance(general_df, pd.DataFrame):
+                general_df = pd.DataFrame(general_df)
+            if 'discharge_status' not in general_df.columns:
+                raise KeyError("general table has no 'discharge_status' column")
+            dead_pids = set(general_df.loc[
+                general_df['discharge_status'].astype(str).str.lower() == 'dead',
+                id_col
+            ].unique())
+        except Exception as exc:
+            raise ConceptExtractionUnavailable(
+                concept_id=concept_name,
+                database='hirid',
+                stage='load_general',
+                detail=f'the general table could not be read ({exc})',
+                cause=exc,
+            ) from exc
+
+        # Reached only after a successful read: the source was legible and
+        # nobody in it died. That is a real answer, so return the real empty.
         if not dead_pids:
             return frame.head(0) if hasattr(frame, 'head') else pd.DataFrame()
         
         # Step 2: 🚀 使用 DuckDB 直接聚合获取最后观测时间（避免加载 115M 行）
         last_obs = None
+        aggregation_error: Optional[BaseException] = None
         if data_source is not None and hasattr(data_source, 'base_path'):
             bucket_dir = data_source.base_path / 'observations_bucket'
             if bucket_dir.exists():
@@ -260,9 +287,13 @@ def _apply_callback(
                         except Exception:
                             pass
                     conn.close()
-                except Exception:
-                    pass
-        
+                except Exception as exc:
+                    # Kept as a fallback, not as a result: the in-memory frame
+                    # below may still be able to answer. Remembered so that if
+                    # it cannot, the raise reports the real cause instead of
+                    # an empty table.
+                    aggregation_error = exc
+
         # Fallback: 使用已加载的 frame（旧行为）
         if last_obs is None or last_obs.empty:
             df = frame.copy() if hasattr(frame, 'copy') else pd.DataFrame()
@@ -271,9 +302,28 @@ def _apply_callback(
                 if time_col:
                     last_obs = df.groupby(id_col, as_index=False).agg({time_col: 'max'})
                     last_obs = last_obs[last_obs[id_col].isin(dead_pids)]
-        
+
         if last_obs is None or last_obs.empty:
-            return frame.head(0) if hasattr(frame, 'head') else pd.DataFrame()
+            # ``dead_pids`` is non-empty here — the general table says these
+            # patients died. Returning an empty frame would report zero deaths
+            # while the source we just read says otherwise, so the emptiness is
+            # a failure to time the deaths, not an absence of them.
+            raise ConceptExtractionUnavailable(
+                concept_id=concept_name,
+                database='hirid',
+                stage='last_observation',
+                detail=(
+                    f'{len(dead_pids)} patient(s) are recorded as deceased in '
+                    'the general table, but no last observation time could be '
+                    'obtained for any of them'
+                    + (
+                        f' (aggregation failed: {aggregation_error})'
+                        if aggregation_error is not None
+                        else ''
+                    )
+                ),
+                cause=aggregation_error,
+            )
         
         # Step 3: Set death = TRUE
         result = last_obs.copy()
