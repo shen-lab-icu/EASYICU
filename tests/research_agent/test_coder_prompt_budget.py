@@ -14,6 +14,7 @@ from easyicu.research_agent.agents.core import (
     _typed_input_scope_contract,
 )
 from easyicu.research_agent.repairs.patch import PATCH_FORMAT
+from easyicu.research_agent.resources.coder import bind_execution_cohort_runtime
 from easyicu.research_agent.authority.coder_authority import HostCoderAuthority
 from easyicu.research_agent.research_context.prompt_scope import (
     compact_quality_audit_coder_guide_for_step,
@@ -2198,3 +2199,71 @@ def test_full_rewrite_keeps_scoped_guide_context_and_capability_contract(ra):
     assert "STEP-SCOPED RESEARCH CONTEXT:" in payload
     assert "COMPLETE PREVIOUS SCRIPT:" in payload
     assert "HOST-BOUND SCHEMA RECEIPT" in payload
+
+
+_RAW_INPUT_PROMPT_SURFACES = (
+    "typed_input_scope",
+    "compact_repair_scope",
+    "execution_cohort_runtime",
+)
+
+
+def _raw_input_prompt_surfaces(ra) -> dict[str, str]:
+    """Render every prompt surface that states the raw-input domain contract."""
+
+    step = ra.AnalysisStep(
+        step_id="06_primary_adjusted_association",
+        intent="Fit the declared adjusted association model.",
+        inputs=["age", "sex", "death", "exposure_max"],
+        expected_outputs=["table:adjusted_association_estimates"],
+        method="adjusted_association_models",
+    )
+    return {
+        "typed_input_scope": _typed_input_scope_contract(step),
+        "compact_repair_scope": _compact_repair_scope_contract(step),
+        "execution_cohort_runtime": bind_execution_cohort_runtime(
+            authority=HostCoderAuthority()
+        ).render(),
+    }
+
+
+@pytest.mark.parametrize("surface", _RAW_INPUT_PROMPT_SURFACES)
+def test_range_alias_sentence_is_never_interrupted_by_a_later_clause(ra, surface):
+    """The rendered prompt is the contract; assembling it from fragments is not.
+
+    A clause appended into the middle of an existing sentence still satisfies
+    every substring assertion about either fragment while the model reads
+    "... never index it as a list or use <other clause> `lower`/`upper`
+    aliases." Assert on the delivered text instead.
+    """
+
+    text = _raw_input_prompt_surfaces(ra)[surface]
+
+    assert "`lower`/`upper` aliases" in text
+    assert (
+        "never index it as a list or use `lower`/`upper` aliases." in text
+    ), f"{surface} splits the range-alias sentence"
+
+
+@pytest.mark.parametrize("surface", _RAW_INPUT_PROMPT_SURFACES)
+def test_out_of_range_policy_clause_opens_its_own_sentence(ra, surface):
+    """Every raw-input surface must bind the policy, and bind it readably.
+
+    The host publishes `out_of_range_action`, so a surface that names the
+    contract without saying the action is binding leaves the model to invent
+    one -- which is how a `retain_and_flag` column came back as a hard raise.
+    Requiring the clause to begin a sentence is what stops the fix from being
+    pasted into the middle of a neighbouring one.
+    """
+
+    text = _raw_input_prompt_surfaces(ra)[surface]
+    clause = "`plausibility_policy.out_of_range_action` is binding"
+
+    index = text.find(clause)
+    assert index != -1, f"{surface} never states that the range policy is binding"
+    prefix = text[:index]
+    assert (
+        prefix.endswith(". ") or prefix.endswith("\n") or not prefix
+    ), f"{surface} inserts the policy clause mid-sentence: ...{prefix[-60:]!r}"
+    assert "`retain_and_flag` means keep every such row" in text
+    assert "never drop, clip, impute, or raise on it" in text

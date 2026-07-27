@@ -2185,12 +2185,13 @@ def _typed_input_scope_contract(step: AnalysisStep) -> str:
             "plausibility_policy. `analysis_plausibility_range` is a JSON object "
             "with `minimum` and `maximum` keys; either bound may be null, so "
             "apply only non-null bounds and never index it as a list or use "
+            "`lower`/`upper` aliases. "
             "`plausibility_policy.out_of_range_action` is binding, not a "
             "suggestion: `retain_and_flag` means keep every such row and "
             "record a flag column or count -- never drop, clip, impute, or "
             "raise on it. Treat a finite out-of-range value as a fatal input "
             "error only where the policy itself says so. "
-            "`lower`/`upper` aliases. Do not rediscover metadata from prompt "
+            "Do not rediscover metadata from prompt "
             "prose or ResearchContext.\n"
         )
     return (
@@ -2366,12 +2367,13 @@ def _compact_repair_scope_contract(step: AnalysisStep) -> str:
             "analysis_plausibility_range + plausibility_policy. The range is a "
             "JSON object with `minimum` and `maximum` keys; either may be null, "
             "so apply only non-null bounds and never index it as a list or use "
+            "`lower`/`upper` aliases. "
             "`plausibility_policy.out_of_range_action` is binding, not a "
             "suggestion: `retain_and_flag` means keep every such row and "
             "record a flag column or count -- never drop, clip, impute, or "
             "raise on it. Treat a finite out-of-range value as a fatal input "
             "error only where the policy itself says so. "
-            "`lower`/`upper` aliases. Never rediscover metadata from prompt prose "
+            "Never rediscover metadata from prompt prose "
             "or ResearchContext."
         )
     if effect_authorized:
