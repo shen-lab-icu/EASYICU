@@ -32,7 +32,20 @@ def _repair(code: str, finding: ValidationFinding):
     )
 
 
-def test_exact_flag_only_raise_pair_is_removed_without_changing_cohort_rule():
+def test_a_mask_the_guard_alone_reads_is_left_for_provider_repair():
+    """Removing that guard removes the mask, and with it the whole record.
+
+    This shape used to be repaired here, and the old test asserted the
+    deletion -- `"age_out_of_domain" not in repaired` -- as the correct
+    outcome. It is not: the guard is the mask's only reader, so deleting the
+    guard deletes the one computation that says anything about the
+    out-of-range rows. The script then neither excludes them nor flags them,
+    and the audit downgrade that looks for that computation finds nothing and
+    lets the step pass. `retain_and_flag` is two obligations; a deterministic
+    patch can discharge only one, so this shape goes to provider repair, where
+    the Coder is told to keep every row and record the count.
+    """
+
     code = """
 age = strict_numeric(df["age"], "age")
 age_out_of_domain = (age < 0.0) | (age > 120.0)
@@ -43,18 +56,22 @@ adult_mask = age >= 18.0
 
     repaired, names = _repair(code, _finding())
 
-    assert names == ["flag_only_plausibility_range_retention_v1"]
-    assert "age_out_of_domain" not in repaired
-    assert "age >= 18.0" in repaired
-    assert "_easyicu_flag_only_plausibility_range_retained_v1" in repaired
+    assert names == []
+    assert repaired == code
+    # The claim the old test shared with this one: an unrelated cohort rule on
+    # the same variable is never touched either way.
+    assert "adult_mask = age >= 18.0" in repaired
 
 
 def test_repair_is_idempotent():
+    """Idempotence, shown on the shape that is still repaired."""
+
     code = """
 age_out_of_domain = (age < 0.0) | (age > 120.0)
-if age_out_of_domain.any():
+age_out_of_domain_n = int(age_out_of_domain.sum())
+if age_out_of_domain_n > 0:
     raise ValueError("Age outside plausibility range")
-next_step()
+summary = {"out_of_domain_n": age_out_of_domain_n}
 """
     once, names = _repair(code, _finding())
     twice, second_names = _repair(once, _finding())
@@ -64,7 +81,9 @@ next_step()
     assert second_names == []
 
 
-def test_semantic_column_family_repairs_one_loop_local_range_guard():
+def test_semantic_column_family_loop_local_mask_is_also_left_alone():
+    """The same refusal inside a loop, where the family is named as a list."""
+
     code = """
 for column, values in numeric_columns.items():
     nonfinite = values.notna() & ~np.isfinite(values)
@@ -81,10 +100,37 @@ publish(values)
         _finding(variable=["score_h0_6", "score_h6_12"]),
     )
 
-    assert names == ["flag_only_plausibility_range_retention_v1"]
-    assert "out_of_domain" not in repaired
+    assert names == []
+    assert repaired == code
+    # The unrelated non-finite guard was never this repair's business.
     assert "nonfinite.any()" in repaired
-    assert "publish(values)" in repaired
+
+
+def test_a_loop_local_counted_family_guard_is_still_repaired():
+    """The refusal above is about the missing record, not about loops.
+
+    Without this, removing the direct shape would look like "loop-local range
+    guards are out of scope", and the next reader would have no case showing
+    the family form still repairs when the count survives.
+    """
+
+    code = """
+for column, values in numeric_columns.items():
+    out_of_domain = values.notna() & ((values < 0.0) | (values > 24.0))
+    out_of_domain_n = int(out_of_domain.sum())
+    if out_of_domain_n > 0:
+        raise ValueError(f"{column} outside plausibility range")
+    audit[column] = {"out_of_domain_n": out_of_domain_n}
+"""
+
+    repaired, names = _repair(
+        code,
+        _finding(variable=["score_h0_6", "score_h6_12"]),
+    )
+
+    assert names == ["flag_only_plausibility_range_retention_v1"]
+    assert "out_of_domain_n = int(out_of_domain.sum())" in repaired
+    assert "if out_of_domain_n > 0" not in repaired
 
 
 def test_semantic_column_family_does_not_choose_between_two_range_guards():
@@ -105,8 +151,10 @@ def test_stale_single_variable_finding_does_not_block_current_grouped_repair():
 # _easyicu_flag_only_plausibility_range_retained_v1
 for column, values in numeric_columns.items():
     out_of_domain = values.notna() & ((values < 0.0) | (values > 24.0))
-    if out_of_domain.any():
+    out_of_domain_n = int(out_of_domain.sum())
+    if out_of_domain_n > 0:
         raise ValueError(f"{column} outside plausibility range")
+    audit[column] = {"out_of_domain_n": out_of_domain_n}
 """
     findings = [
         _finding(variable="age"),
@@ -121,7 +169,9 @@ for column, values in numeric_columns.items():
     )
 
     assert names == ["flag_only_plausibility_range_retention_v1"]
-    assert "out_of_domain" not in repaired
+    assert "if out_of_domain_n > 0" not in repaired
+    # The count the repair exists to preserve is still there.
+    assert "out_of_domain_n = int(out_of_domain.sum())" in repaired
 
 
 def test_wrong_value_class_or_variable_is_not_rewritten():
@@ -408,3 +458,117 @@ def test_the_repair_marker_alone_does_not_claim_the_flagging_half(tmp_path) -> N
     ]
     assert residue == ["_flag"]
     assert repaired.count("_easyicu_flag_only_plausibility_range_retained_v1") == 2
+
+
+# --- the flagging half is now gated, not merely noted ------------------------
+#
+# `retain_and_flag` is two obligations. The host downgrade settles retention by
+# overriding the auditor's demand to exclude; flagging is the generated
+# script's declared output. Until something observed it, "no error" meant only
+# that nobody had looked -- a step could retain the values, flag nothing, and
+# pass. These pin what the check can and cannot see.
+
+
+def _records(script: str, variable: str = "lactate"):
+    from easyicu.research_agent.audits.validators import (
+        _records_out_of_range_evidence,
+    )
+
+    return _records_out_of_range_evidence(script_text=script, variable=variable)
+
+
+def test_a_bound_comparison_whose_result_is_discarded_is_not_a_flag():
+    assert (
+        _records(
+            """
+numeric = pd.to_numeric(df["lactate"])
+if lower is not None and (numeric < float(lower)).any():
+    pass  # _easyicu_flag_only_plausibility_range_retained_v1
+"""
+        )
+        is False
+    )
+
+
+def test_a_count_computed_only_to_reject_is_not_a_flag():
+    assert (
+        _records(
+            """
+numeric = pd.to_numeric(df["lactate"])
+if int((numeric > 30.0).sum()) > 0:
+    raise ValueError("out of range")
+"""
+        )
+        is False
+    )
+
+
+def test_an_indicator_column_counts_as_the_flag():
+    assert (
+        _records(
+            """
+numeric = df["lactate"].astype(float)
+df["lactate_out_of_range"] = (numeric < 0.1) | (numeric > 30.0)
+"""
+        )
+        is True
+    )
+
+
+def test_a_kept_count_counts_as_the_flag_even_when_the_mask_is_named_first():
+    """The counted shape the deterministic repair leaves behind."""
+
+    assert (
+        _records(
+            """
+numeric = pd.to_numeric(df["lactate"])
+mask = (numeric < 0.1) | (numeric > 30.0)
+n_out = int(mask.sum())
+summary = {"lactate_out_of_range_n": n_out}
+"""
+        )
+        is True
+    )
+
+
+def test_the_repair_marker_comment_is_not_mistaken_for_a_flag():
+    """The marker contains the substring `_flag`, and is a comment.
+
+    A text search over the repaired script reports the repair's own marker as
+    structured-flag evidence -- that false positive is exactly what an earlier
+    replay of a real Step 06 script turned up. Parsing rather than grepping
+    makes it structurally impossible: comments are not in the tree.
+    """
+
+    script = """
+numeric = pd.to_numeric(df["lactate"])
+pass  # _easyicu_flag_only_plausibility_range_retained_v1
+"""
+
+    assert "_flag" in script, "precondition: the marker is textually present"
+    assert _records(script) is None
+
+
+def test_another_variables_flag_does_not_settle_this_ones():
+    assert (
+        _records(
+            """
+other = pd.to_numeric(df["sodium"])
+df["sodium_out_of_range"] = other > 150.0
+"""
+        )
+        is None
+    )
+
+
+def test_an_unobservable_flag_abstains_rather_than_blocking():
+    """No comparison on the variable at all: the check has nothing to say.
+
+    Deciding here would block a compliant script whose shape this parse does
+    not model, so it abstains -- and the finding detail records that it
+    abstained, which is the difference between reporting what was observed and
+    letting silence read as compliance.
+    """
+
+    assert _records('df = df.dropna(subset=["lactate"])') is None
+    assert _records("x = 1") is None
