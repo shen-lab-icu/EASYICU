@@ -48,7 +48,6 @@ from __future__ import annotations
 
 import operator
 import re
-import warnings
 from dataclasses import replace
 from typing import TYPE_CHECKING, List, Optional, Union
 
@@ -80,23 +79,33 @@ def cohort_patient_ids(patient_ids) -> Optional[set]:
     """Normalize a caller's cohort selector to a set, or ``None`` for "all".
 
     ``patient_ids`` reaches the concept layer as a list, as a ``{id_col: ids}``
-    mapping, or absent. An empty selector means the caller did not narrow, and
-    is treated the same as absent.
+    mapping, or absent. **Only absence means "every patient".** An explicitly
+    empty selector is an empty cohort, which is a different question with a
+    different answer, and the package's own normalizers
+    (``api.concepts._patient_filter_values``, ``scores.outcomes._patient_values``)
+    already keep the two apart. Collapsing ``[]`` into "all" here made this
+    helper answer for the whole database when the caller had asked about
+    nobody -- the same class of mistake as the guard it was written to fix.
     """
 
     if patient_ids is None:
         return None
     if isinstance(patient_ids, dict):
-        values = next(iter(patient_ids.values()), None)
+        if not patient_ids:
+            return set()
+        values = next(iter(patient_ids.values()))
         if values is None:
+            # ``{id_col: None}`` carries no ids for that column: the dict
+            # spelling of an unfiltered request, not of an empty one.
             return None
-        return set(values) or None
-    if isinstance(patient_ids, (str, bytes, int)):
-        return {patient_ids}
+    else:
+        values = patient_ids
+    if isinstance(values, (str, bytes, int)):
+        return {values}
     try:
-        return set(patient_ids) or None
+        return set(values)
     except TypeError:
-        return {patient_ids}
+        return {values}
 
 
 def deaths_within_cohort(dead_pids, patient_ids) -> set:
@@ -116,26 +125,42 @@ def deaths_within_cohort(dead_pids, patient_ids) -> set:
     return {pid for pid in dead_pids if pid in cohort}
 
 
-def _warn_untimed_deaths(*, database: str, concept_id: str, timed: int, untimed) -> None:
-    """Report deaths that were found but could not be placed on the timeline.
+def _refuse_untimed_deaths(
+    *, database: str, concept_id: str, timing_ids, timed: int, untimed
+) -> None:
+    """Refuse a mortality that silently omits deaths it could not place in time.
 
-    Dropping them silently lowers the reported mortality with no trace, which
-    is the same class of defect as reporting zero: the number changes and
-    nothing says so. Partial loss is not fatal (a patient can legitimately
-    lack the observation that times their death), so this states the shortfall
-    rather than failing the extraction.
+    A death that cannot be timed does not come back from the query, so it is
+    absent from the result and the mortality computed downstream is lower than
+    the source says -- with nothing anywhere to show a number was lost. That is
+    the defect this module exists to refuse, and a partial loss is the same
+    defect as a total one: only the size differs.
+
+    An earlier version warned instead, on the assumption that a patient could
+    legitimately lack the observation that times their death. Measured against
+    the real HiRID export that assumption is false: all 2,062 recorded deaths
+    are timeable from variables 110/200, so the shortfall is 0 and this raise
+    costs a correct run nothing. If a future source does carry untimed deaths,
+    the answer is to widen the timing variables for that source, not to let a
+    quiet undercount through.
     """
 
     if not untimed:
         return
-    warnings.warn(
-        f"{database} {concept_id}: {len(untimed)} of {timed + len(untimed)} "
-        "recorded deaths in this cohort have no observation to time them and "
-        "are absent from the result, which lowers the mortality it reports. "
-        f"Untimed patient ids: {sorted(untimed)[:10]}"
-        + ("..." if len(untimed) > 10 else ""),
-        RuntimeWarning,
-        stacklevel=3,
+    total = timed + len(untimed)
+    shown = sorted(untimed)[:10]
+    raise ConceptExtractionUnavailable(
+        concept_id=concept_id,
+        database=database,
+        stage='last_observation',
+        detail=(
+            f'{len(untimed)} of {total} recorded deaths in this cohort have no '
+            f'observation of variable(s) {sorted(timing_ids)} to time them'
+            + (' (none of them could be timed)' if not timed else '')
+            + f'. Omitting them would report a mortality of {timed}/{total} of '
+            f'the deaths the source records. Untimed patient ids: {shown}'
+            + ('...' if len(untimed) > 10 else '')
+        ),
     )
 
 
@@ -396,11 +421,12 @@ def _apply_callback(
                 cause=aggregation_error,
             )
 
-        # Some deaths timed, some not: the result silently under-reports unless
-        # the shortfall is stated.
-        _warn_untimed_deaths(
+        # Some deaths timed, some not: the result under-reports mortality by
+        # exactly the shortfall, and nothing downstream can see it happened.
+        _refuse_untimed_deaths(
             database='hirid',
             concept_id=concept_name,
+            timing_ids=(110, 200),
             timed=len(last_obs),
             untimed=cohort_dead - set(last_obs[id_col]),
         )

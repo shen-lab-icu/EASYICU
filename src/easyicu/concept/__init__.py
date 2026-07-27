@@ -2703,7 +2703,7 @@ class ConceptResolver:
                         # below is about the deaths *in this cohort*, not every
                         # death in the database.
                         from .callback_apply import (
-                            _warn_untimed_deaths,
+                            _refuse_untimed_deaths,
                             deaths_within_cohort,
                         )
 
@@ -2785,25 +2785,20 @@ class ConceptResolver:
                                 set(frame['patientid']) if len(frame) else set()
                             )
                             _hd_untimed = set(_query_pids) - _hd_timed
-                            if _hd_untimed and not _hd_timed:
-                                # None of them could be timed: that is the
-                                # silent zero this whole path exists to refuse.
+                            if _hd_untimed:
+                                # Closed before the raise below: this frame is
+                                # about to be left and the connection has no
+                                # other owner.
                                 _hd_conn.close()
-                                raise ConceptExtractionUnavailable(
-                                    concept_id=concept_name,
-                                    database='hirid',
-                                    stage='last_observation',
-                                    detail=(
-                                        f'{len(_hd_untimed)} patient(s) in this '
-                                        'cohort are recorded as deceased but '
-                                        'none of them has an observation of '
-                                        f'variable(s) {sorted(src_ids)} to time '
-                                        'the death'
-                                    ),
-                                )
-                            _warn_untimed_deaths(
+                            # Total loss and partial loss are the same defect
+                            # here -- deaths absent from the result, mortality
+                            # reported lower than the source, no trace. One
+                            # helper answers for both so the two copies of this
+                            # callback cannot drift on where the line sits.
+                            _refuse_untimed_deaths(
                                 database='hirid',
                                 concept_id=concept_name,
+                                timing_ids=src_ids,
                                 timed=len(_hd_timed),
                                 untimed=_hd_untimed,
                             )
