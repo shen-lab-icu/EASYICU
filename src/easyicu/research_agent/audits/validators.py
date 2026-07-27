@@ -2744,6 +2744,54 @@ def _plausibility_variable_aliases(tree: ast.AST, variable: str) -> Set[str]:
     return aliases
 
 
+def _unwrapped_bound_name(node: ast.AST) -> Optional[str]:
+    """The name a comparison operand denotes, through one ``float(...)``.
+
+    A host bound arrives as JSON, so generated code narrows it at the
+    comparison itself (``numeric < float(lower)``). Same convention as the
+    deterministic repair, for the same reason.
+    """
+
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "float"
+        and len(node.args) == 1
+        and not node.keywords
+    ):
+        node = node.args[0]
+    return node.id if isinstance(node, ast.Name) else None
+
+
+def _sealed_plausibility_bound_names(tree: ast.AST) -> Set[str]:
+    """Names holding a sealed ``analysis_plausibility_range`` minimum/maximum."""
+
+    assignments = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Attribute)
+        and node.value.func.attr == "get"
+        and node.value.args
+        and isinstance(node.value.args[0], ast.Constant)
+    ]
+    ranges = {
+        node.targets[0].id
+        for node in assignments
+        if node.value.args[0].value == "analysis_plausibility_range"
+    }
+    return {
+        node.targets[0].id
+        for node in assignments
+        if node.value.args[0].value in {"minimum", "maximum"}
+        and isinstance(node.value.func.value, ast.Name)
+        and node.value.func.value.id in ranges
+    }
+
+
 def _records_out_of_range_evidence(
     *, script_text: str, variable: str
 ) -> Optional[bool]:
@@ -2773,17 +2821,40 @@ def _records_out_of_range_evidence(
         return None
 
     aliases = _plausibility_variable_aliases(tree, variable)
+
+    def ordering_comparison(node: ast.AST) -> bool:
+        return (
+            isinstance(node, ast.Compare)
+            and len(node.ops) == 1
+            and isinstance(node.ops[0], (ast.Lt, ast.LtE, ast.Gt, ast.GtE))
+        )
+
     comparisons = [
         node
         for node in ast.walk(tree)
-        if isinstance(node, ast.Compare)
-        and len(node.ops) == 1
-        and isinstance(node.ops[0], (ast.Lt, ast.LtE, ast.Gt, ast.GtE))
+        if ordering_comparison(node)
         and (
             _carries_one_of(node.left, aliases)
             or _carries_one_of(node.comparators[0], aliases)
         )
     ]
+    if not comparisons:
+        # Real generated code checks plausibility in a per-column helper, where
+        # the series is a parameter and the variable's name appears nowhere in
+        # the comparison -- the shape the r25 Step 06 script actually uses. Fall
+        # back to the bound instead of the series: a comparison against the
+        # sealed `analysis_plausibility_range` minimum/maximum is a plausibility
+        # check whatever the column is called.
+        bounds = _sealed_plausibility_bound_names(tree)
+        comparisons = [
+            node
+            for node in ast.walk(tree)
+            if ordering_comparison(node)
+            and (
+                _unwrapped_bound_name(node.left) in bounds
+                or _unwrapped_bound_name(node.comparators[0]) in bounds
+            )
+        ]
     if not comparisons:
         return None
 
