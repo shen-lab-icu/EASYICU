@@ -161,8 +161,14 @@ def test_the_notes_filter_passes_what_the_renderer_then_discards() -> None:
     )
     inner = getattr(context_without_notes, "context", context_without_notes)
 
-    assert format_repair_authority_context(
+    scientific_context = format_repair_authority_context(
         inner, include_scientific_authority=True, user_notes=NOTES
-    ) == format_repair_authority_context(
+    )
+    mechanical_context = format_repair_authority_context(
         inner, include_scientific_authority=False, user_notes=""
+    )
+    assert SENTINEL not in scientific_context
+    assert SENTINEL not in mechanical_context
+    assert len(mechanical_context.encode("utf-8")) < len(
+        scientific_context.encode("utf-8")
     )

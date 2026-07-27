@@ -1672,7 +1672,7 @@ def test_oversized_typed_ticket_fails_before_patch_provider_call(ra):
 def test_oversized_host_binding_notes_fail_without_silent_truncation(ra):
     host_authority = HostCoderAuthority().append(
         "HOST-VERIFIED TYPED PARENT TABLE SCHEMAS (binding facts only):\n"
-        + "x" * 16_000
+        + "x" * 24_000
     )
     llm = _CaptureLLM([])
 
