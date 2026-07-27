@@ -17,6 +17,8 @@ from easyicu.research_agent.execution.runners.missingness_measurement_figure_exe
     MEASUREMENT_PROCESS_AUDIT_INPUT,
     MISSINGNESS_MEASUREMENT_AUDIT_INPUT,
     MISSINGNESS_MEASUREMENT_FIGURE_INPUTS,
+    _validate_audit_rows,
+    _validate_process_rows,
     missingness_measurement_figure_executor_owns_step,
     run_missingness_measurement_figure,
 )
@@ -755,3 +757,101 @@ def test_real_e1_row_kind_mix_is_accepted(tmp_path: Path) -> None:
     assert summary["status"] == "ok"
     assert summary["audited_variable_count"] == 14
     assert summary["source_rows_consumed"][MISSINGNESS_MEASUREMENT_AUDIT_INPUT] == 55
+
+
+# --- Fail-closed gaps in the row validators -------------------------------
+#
+# The real E1 tables satisfy all of these, so none of them blocked the run.
+# A sealed executor that publishes a figure straight from an upstream table is
+# the only thing standing between an inconsistent audit and a manuscript
+# panel, so each invariant it silently assumed is asserted here instead.
+
+
+def _audit_rows_error(mutate) -> str:
+    frame = _audit_frame()
+    mutate(frame)
+    with pytest.raises(ValueError) as excinfo:
+        _validate_audit_rows(frame)
+    return str(excinfo.value)
+
+
+def _process_rows_error(mutate) -> str:
+    frame = _process_frame()
+    mutate(frame)
+    with pytest.raises(ValueError) as excinfo:
+        _validate_process_rows(frame)
+    return str(excinfo.value)
+
+
+def test_real_tables_still_pass_every_tightened_check():
+    per_variable = _validate_audit_rows(_audit_frame())
+    cells = _validate_process_rows(_process_frame())
+
+    assert set(per_variable) == {"lact_first", "sep3_sofa2_max", "sex"}
+    assert cells
+
+
+def test_a_median_outside_its_own_quartiles_is_rejected():
+    """``q1 <= q3`` passes a median copied from a different variable."""
+
+    def mutate(frame: pd.DataFrame) -> None:
+        target = (frame["variable"] == "lact_first") & (frame["metric"] == "median")
+        frame.loc[target, "summary_value"] = 99.0
+
+    assert "does not reconcile with its own q1-q3 range" in _audit_rows_error(mutate)
+
+
+def test_an_iqr_that_is_not_the_reported_range_width_is_rejected():
+    def mutate(frame: pd.DataFrame) -> None:
+        target = (frame["variable"] == "lact_first") & (frame["metric"] == "iqr")
+        frame.loc[target, "summary_value"] = 7.0
+
+    assert "does not reconcile with its own q1-q3 range" in _audit_rows_error(mutate)
+
+
+def test_level_counts_must_agree_with_a_valid_observed_total_reported_beside_them():
+    """A variable stating both is stating the same observed rows twice."""
+
+    def mutate(frame: pd.DataFrame) -> None:
+        extra = frame.loc[frame["variable"] == "sex"].iloc[[0]].copy()
+        extra["metric"] = "valid_observed"
+        extra["level"] = ""
+        extra["count"] = 900.0
+        extra["percentage"] = 100.0 * 900.0 / _N
+        frame.loc[len(frame)] = extra.iloc[0]
+
+    message = _audit_rows_error(mutate)
+    assert "level counts sum to 1000" in message
+    assert "valid-observed total is 900" in message
+
+
+def test_consistent_level_counts_and_valid_observed_total_are_accepted():
+    frame = _audit_frame()
+    extra = frame.loc[frame["variable"] == "sex"].iloc[[0]].copy()
+    extra["metric"] = "valid_observed"
+    extra["level"] = ""
+    extra["count"] = 1000.0
+    extra["percentage"] = 100.0
+    frame.loc[len(frame)] = extra.iloc[0]
+
+    per_variable = _validate_audit_rows(frame)
+
+    assert per_variable["sex"]["valid_observed"] == 1000
+
+
+def test_a_repeated_unlevelled_process_cell_is_rejected():
+    """Levelled rows are covered by the partition check; a lone measure was not."""
+
+    def mutate(frame: pd.DataFrame) -> None:
+        duplicate = frame.loc[frame["process_measure"] == "count_missing"].iloc[[0]]
+        frame.loc[len(frame)] = duplicate.iloc[0]
+
+    assert "repeats the cell 'count_missing'" in _process_rows_error(mutate)
+
+
+def test_a_process_median_outside_its_own_quartiles_is_rejected():
+    def mutate(frame: pd.DataFrame) -> None:
+        target = frame["process_measure"] == "count_frequency_summary"
+        frame.loc[target, "median"] = 50.0
+
+    assert "median outside its own q1-q3 range" in _process_rows_error(mutate)

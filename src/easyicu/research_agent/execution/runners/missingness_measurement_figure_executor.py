@@ -316,6 +316,18 @@ def _percentage_matches(value: Any, count: int, denominator: int) -> bool:
     )
 
 
+def _summary_reconciles(
+    metric: str, summary_value: float, q1: float, q3: float
+) -> bool:
+    """Check a distribution summary against the quartiles reported with it."""
+
+    if metric == "median":
+        return q1 <= summary_value <= q3
+    if metric == "iqr":
+        return math.isclose(summary_value, q3 - q1, rel_tol=1e-6, abs_tol=1e-6)
+    return True
+
+
 def _validate_audit_rows(frame: pd.DataFrame) -> dict[str, dict[str, Any]]:
     """Validate every audit row against the kind its ``metric`` declares."""
 
@@ -364,6 +376,15 @@ def _validate_audit_rows(frame: pd.DataFrame) -> dict[str, dict[str, Any]]:
                 raise ValueError(
                     f"missingness audit row {index} has an incomplete {metric!r} summary"
                 )
+            # ``q1 <= q3`` alone accepts a summary_value belonging to another
+            # variable. Each summary must reconcile with the quartiles printed
+            # beside it: a median falls inside its own range, an IQR is that
+            # range's width.
+            if not _summary_reconciles(metric, summary_value, q1, q3):
+                raise ValueError(
+                    f"missingness audit row {index} reports a {metric!r} that "
+                    "does not reconcile with its own q1-q3 range"
+                )
             entry["summary_metrics"].add(metric)
             continue
 
@@ -407,6 +428,18 @@ def _validate_audit_rows(frame: pd.DataFrame) -> dict[str, dict[str, Any]]:
             raise ValueError(
                 f"variable {variable!r} summarises a distribution it never counted"
             )
+        if (
+            observed is not None
+            and entry["level_rows"]
+            and entry["level_total"] != observed
+        ):
+            # A variable that reports both is reporting the same observed rows
+            # twice; if the two disagree the figure would draw one of them and
+            # silently contradict the other.
+            raise ValueError(
+                f"variable {variable!r} level counts sum to {entry['level_total']} "
+                f"but its valid-observed total is {observed}"
+            )
         closure = observed if observed is not None else entry["level_total"]
         if entry["missing"] + closure != denominator:
             raise ValueError(
@@ -423,6 +456,7 @@ def _validate_process_rows(frame: pd.DataFrame) -> list[dict[str, Any]]:
 
     cells: list[dict[str, Any]] = []
     partitions: dict[tuple[str, str], dict[str, int]] = {}
+    seen_cells: set[tuple[str, str, str]] = set()
     for index, row in frame.iterrows():
         variable = _text(row["variable"])
         measure = _text(row["process_measure"])
@@ -449,7 +483,22 @@ def _validate_process_rows(frame: pd.DataFrame) -> list[dict[str, Any]]:
                 raise ValueError(
                     f"measurement-process row {index} has an incomplete summary"
                 )
+            if not _summary_reconciles("median", median, q1, q3):
+                raise ValueError(
+                    f"measurement-process row {index} reports a median outside "
+                    "its own q1-q3 range"
+                )
         level = _text(row["level"])
+        # Every cell is one point on the panel, so the same coordinate may not
+        # be stated twice. Levelled rows are additionally a partition, checked
+        # below; an unlevelled measure is a single cell and has no such cover.
+        coordinate = (variable, measure, level)
+        if coordinate in seen_cells:
+            raise ValueError(
+                f"measurement-process row {index} repeats the cell "
+                f"{measure!r} for {variable!r}"
+            )
+        seen_cells.add(coordinate)
         if level:
             # Levels of one measure are a partition of that measure's
             # denominator; this is structural and never keyed on the measure's
