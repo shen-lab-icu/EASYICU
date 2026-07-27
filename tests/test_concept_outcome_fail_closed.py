@@ -228,6 +228,32 @@ def test_an_explicitly_empty_cohort_is_empty_not_everybody(tmp_path):
     assert deaths_within_cohort({2}, None) == {2}
 
 
+def test_a_dict_holding_no_ids_selects_nothing_rather_than_everybody():
+    """`{col: None}` is refused, because it has no settled meaning.
+
+    Reading it as "all" widens a filtered request to the whole database;
+    reading it as "none" empties it. Neither reference normalizer accepts it —
+    both reach `list(None)` and raise — so a helper that quietly answered
+    "everybody" would be the single place in the package where this shape
+    acquires a population.
+    """
+
+    import pytest
+
+    from easyicu.concept.callback_apply import (
+        cohort_patient_ids,
+        deaths_within_cohort,
+    )
+
+    with pytest.raises(ValueError, match="does not select a cohort"):
+        cohort_patient_ids({"patientid": None})
+    with pytest.raises(ValueError, match="does not select a cohort"):
+        deaths_within_cohort({2}, {"patientid": None})
+
+    # The refusal is specific to the missing ids, not to the dict spelling.
+    assert cohort_patient_ids({"patientid": [2]}) == {2}
+
+
 def test_an_empty_cohort_returns_empty_rather_than_failing_on_someone_elses_death(
     tmp_path,
 ):
