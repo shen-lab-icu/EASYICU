@@ -491,6 +491,47 @@ write_json(
     assert _reasons(code) == {"out_of_range_record_not_in_declared_output"}
 
 
+def test_a_helper_handed_the_directory_and_the_summary_is_followed_into():
+    """Copied from a real generated script, which writes exactly this way.
+
+    `out_dir` and `summary` are *parameters*, so a recogniser that only follows
+    assignments sees a write to an unknown directory of an unknown payload and
+    blocks a compliant script. Every call site binds both to the right thing,
+    which is what makes the parameter readable.
+    """
+
+    code = (
+        HEADER
+        + """
+plausibility_audit = {}
+
+
+def write_summary(summary, out_dir):
+    out_dir.mkdir(parents=True, exist_ok=True)
+    with open(out_dir / "step_summary.json", "w", encoding="utf-8") as handle:
+        json.dump(summary, handle, indent=2, allow_nan=False)
+"""
+        + HELPER_HEAD
+        + """        plausibility_audit[column] = int(
+            (numeric < float(lower)).sum()
+        ) if lower is not None else 0
+
+
+write_summary({"plausibility_audit": plausibility_audit}, STEP_OUT_DIR)
+"""
+    )
+    assert _reasons(code) == set()
+
+    # One call site that hands it somewhere else leaves the parameter unproven,
+    # so the write is no longer attributable to the host's own directory.
+    ambiguous = code.replace(
+        'write_summary({"plausibility_audit": plausibility_audit}, STEP_OUT_DIR)',
+        'write_summary({"plausibility_audit": plausibility_audit}, STEP_OUT_DIR)\n'
+        'write_summary({"rows": 1}, Path("/tmp"))',
+    )
+    assert _reasons(ambiguous) == {"out_of_range_record_not_in_declared_output"}
+
+
 def test_the_gate_reads_the_output_directory_the_host_actually_sets():
     """The env aliases are the host's own, not a guess, so they must not drift.
 
