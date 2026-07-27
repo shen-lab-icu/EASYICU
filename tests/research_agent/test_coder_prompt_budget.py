@@ -1140,11 +1140,12 @@ def test_interrupted_initial_generation_records_terminal_transport_failure(
     receipt = json.loads(receipt_path.read_text("utf-8"))
     assert budget.categories == ("initial_generation",)
     assert budget.initial_generation_resume_status() == "failed"
-    assert receipt["initial_generation"]["transport"] == {
+    initial_generation = receipt["initial_generations"][-1]
+    assert initial_generation["transport"] == {
         "state": "failed",
         "error_type": "KeyboardInterrupt",
         "provider_history_len": 1,
-        "provider_history_sha256": receipt["initial_generation"]["transport"][
+        "provider_history_sha256": initial_generation["transport"][
             "provider_history_sha256"
         ],
         "provider_calls": 1,

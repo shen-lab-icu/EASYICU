@@ -269,6 +269,125 @@ def test_cohort_translation_preserves_existing_single_ledger_state(tmp_path):
     assert state.logical_repairs[0]["transport"]["state"] == "completed"
 
 
+def test_explicit_resume_appends_initial_generation_without_resetting_history(
+    tmp_path,
+):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="resume_generation")
+    first = StepProviderCallBudget(
+        5,
+        step_id="resume_generation",
+        receipt_path=path,
+    )
+    first_transport = first.reserve_initial_generation({"authority": "A"})
+    first.consume("initial_generation")
+    first.complete_initial_generation_transport(
+        provider_transport_id=first_transport,
+        after_code_sha256="a" * 64,
+        after_code_size_bytes=10,
+    )
+    first_state = load_provider_call_budget_state(
+        path,
+        step_id="resume_generation",
+    )
+    first_entry = first_state.initial_generations[0]
+
+    resumed = StepProviderCallBudget(
+        first_state.limit,
+        step_id="resume_generation",
+        consumed_categories=first_state.categories,
+        logical_repair_entries=first_state.logical_repairs,
+        initial_generation_entries=first_state.initial_generations,
+        allow_terminal_initial_generation_restart=True,
+        receipt_path=path,
+    )
+    second_transport = resumed.reserve_initial_generation({"authority": "B"})
+    resumed.consume("initial_generation")
+    resumed.complete_initial_generation_transport(
+        provider_transport_id=second_transport,
+        after_code_sha256="b" * 64,
+        after_code_size_bytes=20,
+    )
+
+    state = load_provider_call_budget_state(path, step_id="resume_generation")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert state.schema_version == 7
+    assert state.categories == ("initial_generation", "initial_generation")
+    assert len(state.initial_generations) == 2
+    assert state.initial_generations[0] == first_entry
+    assert state.initial_generations[1]["binding"] == {"authority": "B"}
+    assert state.initial_generations[1]["transport"]["state"] == "completed"
+    assert second_transport != first_transport
+    assert "initial_generation" not in payload
+    assert len(payload["initial_generations"]) == 2
+    assert resumed.terminal_initial_generation_restart_allowed is False
+
+
+def test_terminal_initial_generation_cannot_restart_without_explicit_authority(
+    tmp_path,
+):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="no_restart")
+    budget = StepProviderCallBudget(3, step_id="no_restart", receipt_path=path)
+    transport_id = budget.reserve_initial_generation({"authority": "A"})
+    budget.consume("initial_generation")
+    budget.complete_initial_generation_transport(
+        provider_transport_id=transport_id,
+        after_code_sha256="a" * 64,
+        after_code_size_bytes=1,
+    )
+
+    with pytest.raises(ProviderCallBudgetReceiptError, match="different authority"):
+        budget.reserve_initial_generation({"authority": "B"})
+    assert len(budget.initial_generation_entries) == 1
+
+
+def test_explicit_restart_cannot_bypass_paid_pending_initial_generation(tmp_path):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="paid_pending")
+    first = StepProviderCallBudget(3, step_id="paid_pending", receipt_path=path)
+    first.reserve_initial_generation({"authority": "A"})
+    first.consume("initial_generation")
+    state = load_provider_call_budget_state(path, step_id="paid_pending")
+    resumed = StepProviderCallBudget(
+        state.limit,
+        step_id="paid_pending",
+        consumed_categories=state.categories,
+        initial_generation_entries=state.initial_generations,
+        allow_terminal_initial_generation_restart=True,
+        receipt_path=path,
+    )
+
+    assert resumed.initial_generation_resume_status() == "paid_pending"
+    with pytest.raises(ProviderCallBudgetReceiptError, match="paid provider calls"):
+        resumed.reserve_initial_generation({"authority": "A"})
+    assert len(resumed.initial_generation_entries) == 1
+    assert resumed.categories == ("initial_generation",)
+
+
+def test_schema_v6_initial_generation_loads_into_generation_ledger(tmp_path):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="legacy_v6")
+    budget = StepProviderCallBudget(3, step_id="legacy_v6", receipt_path=path)
+    transport_id = budget.reserve_initial_generation({"authority": "legacy"})
+    budget.consume("initial_generation")
+    budget.complete_initial_generation_transport(
+        provider_transport_id=transport_id,
+        after_code_sha256="a" * 64,
+        after_code_size_bytes=1,
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload.pop("sha256")
+    payload["schema_version"] = 6
+    payload["initial_generation"] = payload.pop("initial_generations")[0]
+    payload["sha256"] = _canonical_digest(payload)
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    state = load_provider_call_budget_state(path, step_id="legacy_v6")
+    assert state.schema_version == 6
+    assert len(state.initial_generations) == 1
+    assert state.initial_generation == state.initial_generations[0]
+
+
 def test_cohort_translation_budget_owner_is_structural_not_prose_routed():
     cohort_only = SimpleNamespace(
         step_id="01_cohort",
@@ -1247,6 +1366,7 @@ def test_schema_v2_receipt_loads_without_inventing_logical_repairs(tmp_path):
     payload.pop("sha256")
     payload["schema_version"] = 2
     payload.pop("logical_repairs")
+    payload.pop("initial_generations")
     payload.pop("final_reservation_state")
     canonical = json.dumps(
         payload,
@@ -1283,6 +1403,7 @@ def test_schema_v3_receipt_keeps_logical_repairs_without_audit_phase(tmp_path):
     payload = json.loads(path.read_text(encoding="utf-8"))
     payload.pop("sha256")
     payload["schema_version"] = 3
+    payload.pop("initial_generations")
     payload.pop("final_reservation_state")
     canonical = json.dumps(
         payload,
@@ -1795,7 +1916,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as hand
             ),
             (
                 "INTERPRET THE RESULTS",
-                ["Cohort summary completed " "{evidence:baseline_characteristics}."],
+                ["Cohort summary completed {evidence:baseline_characteristics}."],
             ),
         ]
     )

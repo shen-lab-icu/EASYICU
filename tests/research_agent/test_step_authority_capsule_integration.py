@@ -639,7 +639,7 @@ def test_initial_generation_transport_persists_before_candidate_seal(
     )
 
     state = load_provider_call_budget_state(receipt_path, step_id="01_summary")
-    assert state.schema_version == 6
+    assert state.schema_version == 7
     assert state.initial_generation is not None
     assert state.initial_generation["transport"]["state"] == "completed"
     assert budget.initial_generation_resume_status() == "completed"

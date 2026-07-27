@@ -2061,6 +2061,33 @@ def test_implicit_resume_offers_only_latest_contract_failed_code_once(
     )
 
 
+def test_explicit_resume_window_marks_selected_and_downstream_steps(
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.orchestration.resume import ResumeController
+
+    steps = [
+        AnalysisStep(
+            step_id=step_id,
+            intent=f"Execute {step_id}.",
+            inputs=["stay_id"],
+            expected_outputs=[f"table:{step_id}"],
+            method="descriptive_summary",
+        )
+        for step_id in ("01_first", "02_selected", "03_downstream")
+    ]
+    controller = ResumeController(
+        plan=AnalysisPlan(research_question="Test explicit resume.", steps=steps),
+        run_dir=tmp_path,
+        resume_state={"per_step_records": []},
+        resume_from_step_id="02_selected",
+    )
+
+    assert controller.explicitly_reruns_step("01_first") is False
+    assert controller.explicitly_reruns_step("02_selected") is True
+    assert controller.explicitly_reruns_step("03_downstream") is True
+
+
 def test_partial_manifest_is_written_after_run(ra, synthetic_cohort, tmp_path: Path):
     result = _run_full(ra, synthetic_cohort, tmp_path)
     run_dir = Path(result.workdir)

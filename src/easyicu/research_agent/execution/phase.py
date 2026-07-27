@@ -587,7 +587,7 @@ def _extract_cohort_definition_with_provider_budget(
     effective_limit = max(0, int(configured_limit))
     consumed_categories: Tuple[str, ...] = ()
     logical_repair_entries: tuple[Dict[str, object], ...] = ()
-    initial_generation_entry: Optional[Dict[str, object]] = None
+    initial_generation_entries: tuple[Dict[str, object], ...] = ()
     required_reservation_token: Optional[str] = None
     reservation_bound_provider_history_len: Optional[int] = None
     completed_reservation_token: Optional[str] = None
@@ -601,7 +601,7 @@ def _extract_cohort_definition_with_provider_budget(
         effective_limit = min(effective_limit, receipt_state.limit)
         consumed_categories = receipt_state.categories
         logical_repair_entries = receipt_state.logical_repairs
-        initial_generation_entry = receipt_state.initial_generation
+        initial_generation_entries = receipt_state.initial_generations
         required_reservation_token = receipt_state.required_reservation_token
         reservation_bound_provider_history_len = (
             receipt_state.reservation_bound_provider_history_len
@@ -613,7 +613,7 @@ def _extract_cohort_definition_with_provider_budget(
         step_id=budget_owner_step_id,
         consumed_categories=consumed_categories,
         logical_repair_entries=logical_repair_entries,
-        initial_generation_entry=initial_generation_entry,
+        initial_generation_entries=initial_generation_entries,
         receipt_path=receipt_path,
         reserved_final_category=reserved_final_category,
         required_reservation_token=required_reservation_token,
@@ -1233,6 +1233,7 @@ def _step_snapshot_requires_provider_receipt(
         3,
         4,
         5,
+        6,
         PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION,
     }:
         return False
@@ -5176,7 +5177,7 @@ def run_execute_phase(
         provider_receipt_relative_path = str(provider_receipt_path.relative_to(run_dir))
         prior_provider_categories: tuple[str, ...] = ()
         prior_logical_repair_entries: tuple[Dict[str, object], ...] = ()
-        prior_initial_generation_entry: Optional[Dict[str, object]] = None
+        prior_initial_generation_entries: tuple[Dict[str, object], ...] = ()
         prior_required_reservation_token: Optional[str] = None
         prior_reservation_bound_provider_history_len: Optional[int] = None
         prior_completed_reservation_token: Optional[str] = None
@@ -5239,7 +5240,7 @@ def run_execute_phase(
                 receipt_limit = receipt_state.limit
                 receipt_categories = receipt_state.categories
                 prior_logical_repair_entries = receipt_state.logical_repairs
-                prior_initial_generation_entry = receipt_state.initial_generation
+                prior_initial_generation_entries = receipt_state.initial_generations
                 prior_required_reservation_token = (
                     receipt_state.required_reservation_token
                 )
@@ -5285,7 +5286,10 @@ def run_execute_phase(
             step_id=step.step_id,
             consumed_categories=prior_provider_categories,
             logical_repair_entries=prior_logical_repair_entries,
-            initial_generation_entry=prior_initial_generation_entry,
+            initial_generation_entries=prior_initial_generation_entries,
+            allow_terminal_initial_generation_restart=(
+                resume_controller.explicitly_reruns_step(step.step_id)
+            ),
             receipt_path=provider_receipt_path,
             reserved_final_category=reserved_final_category,
             required_reservation_token=prior_required_reservation_token,
@@ -5311,7 +5315,10 @@ def run_execute_phase(
                         "Initial generation has paid provider calls but no durable "
                         "transport result."
                     )
-                if initial_resume_status == "failed":
+                if (
+                    initial_resume_status == "failed"
+                    and not provider_budget.terminal_initial_generation_restart_allowed
+                ):
                     raise ProviderCallBudgetReceiptError(
                         "Initial generation previously reached a terminal provider "
                         "failure."
