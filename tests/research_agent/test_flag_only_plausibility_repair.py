@@ -369,3 +369,42 @@ publish(frame)
         "_easyicu_flag_only_plausibility_range_retained_v1", ""
     )
     assert "out_of_range" not in repaired
+
+
+def test_the_repair_marker_alone_does_not_claim_the_flagging_half(tmp_path) -> None:
+    """Replayed against the real r25 Step 06 script.
+
+    The deterministic repair removes both terminal guards, so out-of-range
+    values are retained -- but the only thing it leaves behind is its own
+    marker comment. Searching the patched script for flag/count evidence finds
+    exactly that marker and nothing else, which is how a reader can mistake
+    "retention proven" for "retain_and_flag satisfied".
+    """
+
+    code = (
+        "def validate_allowed_numeric(values, column, manifest):\n"
+        "    contract = manifest['raw_input_contracts']['contracts'].get(column)\n"
+        "    bounds = contract.get('analysis_plausibility_range')\n"
+        "    if bounds is not None:\n"
+        "        lower = bounds.get('minimum')\n"
+        "        upper = bounds.get('maximum')\n"
+        "        numeric = values.dropna().astype(float)\n"
+        "        if lower is not None and (numeric < float(lower)).any():\n"
+        "            raise RuntimeError('below analysis plausibility minimum')\n"
+        "        if upper is not None and (numeric > float(upper)).any():\n"
+        "            raise RuntimeError('above analysis plausibility maximum')\n"
+    )
+
+    repaired, names = _repair(code, _finding(variable="numeric"))
+
+    assert names == ["flag_only_plausibility_range_retention_v1"]
+    # Retention: both terminal guards are gone, so no row is excluded.
+    assert "raise RuntimeError" not in repaired
+    # Flagging: the only match for a flag/count search is the marker itself.
+    residue = [
+        term
+        for term in ("_flag", "out_of_range", "flag_count", "flagged")
+        if term in repaired
+    ]
+    assert residue == ["_flag"]
+    assert repaired.count("_easyicu_flag_only_plausibility_range_retained_v1") == 2

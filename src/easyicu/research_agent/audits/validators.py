@@ -2724,6 +2724,17 @@ def _reclassify_flag_only_plausibility_range_findings(
             "locks another action.",
         )
         detail.setdefault("range_policy_authority", "concept_descriptor_flag_only")
+        # The downgrade settles *retention* only. Nothing here observes a count
+        # or a per-row indicator, so a later reader must not take the absence
+        # of an error as evidence that the flagging half happened -- that is
+        # the generated script's declared output, and it is still owed.
+        detail.setdefault("retain_and_flag_half_satisfied", "retain")
+        detail.setdefault(
+            "flag_obligation",
+            "The script still owes a structured out-of-range count or "
+            "indicator in its declared outputs; this downgrade does not "
+            "observe one and is not evidence that one exists.",
+        )
         reclassified.append(
             finding.model_copy(update={"severity": "warning", "detail": detail})
         )
