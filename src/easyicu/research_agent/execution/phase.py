@@ -289,7 +289,7 @@ from ..gates.semantics import (
     blocking_validator_findings as _blocking_validator_findings,
 )
 from ..providers.mocks import MockLLMClient
-from ..providers.prompt_budget import budgeted_role_client
+from ..providers.prompt_budget import budgeted_role_client, budgeted_vlm_client
 from ..planning.method_vocabulary import (
     MISSINGNESS_SOURCE_AVAILABILITY_AUDIT,
 )
@@ -11852,12 +11852,7 @@ def run_execute_phase(
         ]
         vlm_adapter = pipeline._visual_qa_adapter
         if vlm_adapter is None and pipeline._enable_vlm_visual_qa:
-            client = pipeline._vlm_client or budgeted_role_client(
-                role_resolver,
-                "analyzer",
-                "vlm_visual_qa",
-                limit_tokens=pipeline._max_prompt_tokens_per_call,
-            )
+            client = budgeted_vlm_client(pipeline, role_resolver, "vlm_visual_qa")
             if client is not None:
                 vlm_adapter = VLMVisualQAAdapter(
                     client,
