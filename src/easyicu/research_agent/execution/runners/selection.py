@@ -16,6 +16,11 @@ from .deterministic_missingness import (
     missingness_measurement_audit_code,
     source_availability_audit_executor_owns_step,
 )
+from .prevalence_outcome_figure_executor import (
+    PREVALENCE_OUTCOME_FIGURE_INPUT,
+    prevalence_outcome_figure_executor_code,
+    prevalence_outcome_figure_executor_owns_step,
+)
 from .table_one_executor import table_one_executor_code, table_one_executor_owns_step
 from .trajectory_stability_executor import (
     STABILITY_EXECUTOR_INPUTS,
@@ -57,6 +62,14 @@ def select_standard_executor(
             progress_message="Using planner-scoped cohort summary executor",
             code=cohort_summary_executor_code(step),
             consumed_input_keys=typed_cohort_inputs,
+        )
+    if prevalence_outcome_figure_executor_owns_step(step):
+        return StandardExecutorSelection(
+            analysis_kind="prevalence_outcome_figure",
+            selection_reason="prevalence_outcome_figure_contract_preflight",
+            progress_message="Using planner-scoped prevalence/outcome figure executor",
+            code=prevalence_outcome_figure_executor_code(step),
+            consumed_input_keys=(PREVALENCE_OUTCOME_FIGURE_INPUT,),
         )
     if table_one_executor_owns_step(step):
         typed_cohort_inputs = tuple(
