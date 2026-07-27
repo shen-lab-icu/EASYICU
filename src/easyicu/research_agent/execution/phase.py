@@ -3894,7 +3894,12 @@ def run_execute_phase(
     role_resolver = plan_result.role_resolver
     llm_signature = plan_result.llm_signature
     llm_concept_audit_client = pipeline._llm_concept_auditor_client or (
-        budgeted_role_client(role_resolver, "analyzer", "concept_audit")
+        budgeted_role_client(
+            role_resolver,
+            "analyzer",
+            "concept_audit",
+            limit_tokens=pipeline._max_prompt_tokens_per_call,
+        )
     )
     llm_concept_auditor_signature = (
         pipeline._llm_signature(llm_concept_audit_client)
@@ -4024,7 +4029,12 @@ def run_execute_phase(
         else fallback_coder_provider_identity_sha256
     )
     analyzer = AnalyzerAgent(
-        budgeted_role_client(role_resolver, "analyzer", "analyzer_interpretation")
+        budgeted_role_client(
+            role_resolver,
+            "analyzer",
+            "analyzer_interpretation",
+            limit_tokens=pipeline._max_prompt_tokens_per_call,
+        )
     )
     supervisor = RuntimeSupervisor(
         clinical_semantics=ClinicalSemanticsAgent(),
@@ -4286,7 +4296,10 @@ def run_execute_phase(
                     cohort_prose=_cohort_definition_prose(candidate_plan),
                     universe_columns=columns,
                     llm=budgeted_role_client(
-                        role_resolver, "planner", "cohort_extraction"
+                        role_resolver,
+                        "planner",
+                        "cohort_extraction",
+                        limit_tokens=pipeline._max_prompt_tokens_per_call,
                     ),
                     name=getattr(
                         getattr(candidate_plan, "cohort", None),
@@ -11840,7 +11853,10 @@ def run_execute_phase(
         vlm_adapter = pipeline._visual_qa_adapter
         if vlm_adapter is None and pipeline._enable_vlm_visual_qa:
             client = pipeline._vlm_client or budgeted_role_client(
-                role_resolver, "analyzer", "vlm_visual_qa"
+                role_resolver,
+                "analyzer",
+                "vlm_visual_qa",
+                limit_tokens=pipeline._max_prompt_tokens_per_call,
             )
             if client is not None:
                 vlm_adapter = VLMVisualQAAdapter(

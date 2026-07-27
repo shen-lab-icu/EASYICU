@@ -598,7 +598,10 @@ def run_write_phase(
                     egress_policy = None
                     if vlm_adapter is None and pipeline._enable_vlm_visual_qa:
                         client = pipeline._vlm_client or budgeted_role_client(
-                            role_resolver, "analyzer", "vlm_visual_qa"
+                            role_resolver,
+                            "analyzer",
+                            "vlm_visual_qa",
+                            limit_tokens=pipeline._max_prompt_tokens_per_call,
                         )
                         if client is not None:
                             egress_policy = pipeline._figure_egress_policy(

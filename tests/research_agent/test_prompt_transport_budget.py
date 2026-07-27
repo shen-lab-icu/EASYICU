@@ -17,6 +17,9 @@ import pytest
 
 from easyicu.research_agent.providers.prompt_budget import (
     BUDGETED_ROLES,
+    DEFAULT_MAX_PROMPT_TOKENS,
+    CONSERVATIVE_BYTES_PER_TOKEN,
+    OBSERVED_BYTES_PER_TOKEN,
     PROMPT_TRANSPORT_BUDGETS,
     PromptBudgetClient,
     PromptTransportBudgetError,
@@ -24,6 +27,7 @@ from easyicu.research_agent.providers.prompt_budget import (
     active_prompt_consumer,
     budgeted_role_client,
     declared_consumers_for_role,
+    estimate_prompt_tokens,
     prompt_payload_bytes,
 )
 
@@ -61,6 +65,25 @@ def _messages(total_bytes: int) -> list[_Message]:
     return [_Message("user", "x" * total_bytes)]
 
 
+def _bytes_for_tokens(tokens: int) -> int:
+    """Smallest byte payload whose estimate reaches ``tokens``."""
+
+    size = int(tokens * CONSERVATIVE_BYTES_PER_TOKEN)
+    while estimate_prompt_tokens(size) < tokens:
+        size += 1
+    while estimate_prompt_tokens(size - 1) >= tokens:
+        size -= 1
+    return size
+
+
+def _over_budget(budget) -> list[_Message]:
+    return _messages(_bytes_for_tokens(budget.limit_tokens + 1))
+
+
+def _at_budget(budget) -> list[_Message]:
+    return _messages(_bytes_for_tokens(budget.limit_tokens))
+
+
 def _resolver(client):
     return lambda role: client
 
@@ -77,11 +100,11 @@ def test_every_declared_consumer_is_enforced_on_complete(consumer: str) -> None:
     client = budgeted_role_client(_resolver(inner), budget.role, consumer)
 
     with pytest.raises(PromptTransportBudgetError) as excinfo:
-        client.complete(_messages(budget.limit_bytes + 1))
+        client.complete(_over_budget(budget))
 
     assert excinfo.value.consumer == consumer
-    assert excinfo.value.limit_bytes == budget.limit_bytes
-    assert excinfo.value.actual_bytes == budget.limit_bytes + 1
+    assert excinfo.value.limit_tokens == budget.limit_tokens
+    assert excinfo.value.actual_tokens == budget.limit_tokens + 1
     # Fail closed means the payload never reached the provider.
     assert inner.calls == []
 
@@ -95,7 +118,7 @@ def test_every_declared_consumer_is_enforced_on_complete_with_usage(
     client = budgeted_role_client(_resolver(inner), budget.role, consumer)
 
     with pytest.raises(PromptTransportBudgetError):
-        client.complete_with_usage(_messages(budget.limit_bytes + 1))
+        client.complete_with_usage(_over_budget(budget))
 
     assert inner.calls == []
 
@@ -105,7 +128,7 @@ def test_a_prompt_at_the_limit_is_delivered() -> None:
     inner = _RecordingClient()
     client = budgeted_role_client(_resolver(inner), budget.role, "concept_audit")
 
-    assert client.complete(_messages(budget.limit_bytes)) == "ok"
+    assert client.complete(_at_budget(budget)) == "ok"
     assert [name for name, _ in inner.calls] == ["complete"]
 
 
@@ -115,9 +138,7 @@ def test_the_error_names_the_consumer_not_only_the_role() -> None:
     inner = _RecordingClient()
     client = budgeted_role_client(_resolver(inner), "analyzer", "concept_audit")
     with pytest.raises(PromptTransportBudgetError) as excinfo:
-        client.complete(
-            _messages(PROMPT_TRANSPORT_BUDGETS["concept_audit"].limit_bytes + 1)
-        )
+        client.complete(_over_budget(PROMPT_TRANSPORT_BUDGETS["concept_audit"]))
 
     rendered = str(excinfo.value)
     assert "concept_audit" in rendered
@@ -125,30 +146,146 @@ def test_the_error_names_the_consumer_not_only_the_role() -> None:
 
 
 # ---------------------------------------------------------------------------
-# The real breach sizes, replayed against the consumers that now own them
+# Sized against real traffic, not against a hopeful number
+# ---------------------------------------------------------------------------
+#
+# The old ceilings sat *below* what this system normally produces, which is why
+# they kept tripping. The guard exists to catch a projection that has run away,
+# so real observed prompts must pass and only genuine runaway must fail.
+
+
+@pytest.mark.parametrize(
+    "payload_bytes,provider_tokens,role,consumer",
+    [
+        # Every one of these is a real completed transport receipt from the
+        # 2026-07-23 E1 replay, with the provider's own prompt_tokens count.
+        (101_878, 26_040, "planner", "legacy_model_roster_migration"),
+        (78_401, 20_804, "analyzer", "analyzer_interpretation"),
+        (66_119, 17_088, "planner", "cohort_extraction"),
+        (53_393, 13_988, "analyzer", "vlm_visual_qa"),
+    ],
+)
+def test_real_observed_prompts_are_not_refused(
+    payload_bytes: int, provider_tokens: int, role: str, consumer: str
+) -> None:
+    inner = _RecordingClient()
+    client = budgeted_role_client(_resolver(inner), role, consumer)
+
+    assert client.complete(_messages(payload_bytes)) == "ok"
+    # And the estimate must not have under-counted what the provider metered.
+    assert estimate_prompt_tokens(payload_bytes) >= provider_tokens
+
+
+def test_the_default_ceiling_clears_the_largest_prompt_ever_produced() -> None:
+    """26,040 provider-counted tokens is the high-water mark on record."""
+
+    assert DEFAULT_MAX_PROMPT_TOKENS > 26_040
+
+
+def test_a_genuinely_runaway_projection_is_still_refused() -> None:
+    inner = _RecordingClient()
+    client = budgeted_role_client(_resolver(inner), "planner", "cohort_extraction")
+
+    with pytest.raises(PromptTransportBudgetError):
+        client.complete(_messages(_bytes_for_tokens(DEFAULT_MAX_PROMPT_TOKENS + 1)))
+    assert inner.calls == []
+
+
+# ---------------------------------------------------------------------------
+# The ceiling is configuration, not a constant welded into the code
 # ---------------------------------------------------------------------------
 
 
-def test_the_measured_e1_analyzer_breach_is_now_refused() -> None:
-    """78,401 bytes went out on the analyzer role against a 48,000 ceiling."""
-
+def test_an_operator_supplied_ceiling_replaces_the_default() -> None:
     inner = _RecordingClient()
     client = budgeted_role_client(
-        _resolver(inner), "analyzer", "analyzer_interpretation"
+        _resolver(inner), "analyzer", "concept_audit", limit_tokens=1_000
+    )
+
+    assert client.limit_tokens == 1_000
+    with pytest.raises(PromptTransportBudgetError):
+        client.complete(_messages(_bytes_for_tokens(1_001)))
+
+
+def test_raising_the_ceiling_admits_a_previously_refused_payload() -> None:
+    payload = _messages(_bytes_for_tokens(DEFAULT_MAX_PROMPT_TOKENS + 5_000))
+
+    tight = budgeted_role_client(
+        _resolver(_RecordingClient()), "analyzer", "concept_audit"
     )
     with pytest.raises(PromptTransportBudgetError):
-        client.complete(_messages(78_401))
-    assert inner.calls == []
+        tight.complete(payload)
+
+    roomy = budgeted_role_client(
+        _resolver(_RecordingClient()),
+        "analyzer",
+        "concept_audit",
+        limit_tokens=DEFAULT_MAX_PROMPT_TOKENS + 10_000,
+    )
+    assert roomy.complete(payload) == "ok"
 
 
-def test_the_measured_e1_planner_breach_is_now_refused() -> None:
-    """101,878 bytes went out on the planner role against an 80,000 ceiling."""
+def test_the_pipeline_config_exposes_the_ceiling() -> None:
+    from easyicu.research_agent.orchestration.config import PipelineConfig
 
-    inner = _RecordingClient()
-    client = budgeted_role_client(_resolver(inner), "planner", "cohort_extraction")
-    with pytest.raises(PromptTransportBudgetError):
-        client.complete(_messages(101_878))
-    assert inner.calls == []
+    assert PipelineConfig.max_prompt_tokens_per_call == DEFAULT_MAX_PROMPT_TOKENS
+    raised = PipelineConfig(workdir=".").with_overrides(
+        max_prompt_tokens_per_call=120_000
+    )
+    assert raised.max_prompt_tokens_per_call == 120_000
+
+
+def test_the_error_says_the_ceiling_is_not_the_model_window() -> None:
+    """Blocking without saying whose limit it is is what wasted past effort."""
+
+    client = budgeted_role_client(
+        _resolver(_RecordingClient()), "analyzer", "concept_audit"
+    )
+    with pytest.raises(PromptTransportBudgetError) as excinfo:
+        client.complete(_messages(_bytes_for_tokens(DEFAULT_MAX_PROMPT_TOKENS + 1)))
+
+    rendered = str(excinfo.value)
+    assert "not the model's context window" in rendered.lower().replace("NOT", "not")
+    assert "max_prompt_tokens_per_call" in rendered
+
+
+# ---------------------------------------------------------------------------
+# The byte -> token estimate is calibrated, and never under-counts
+# ---------------------------------------------------------------------------
+
+
+def test_the_estimate_never_undercounts_any_observed_call() -> None:
+    """Estimating high can refuse a prompt that fits; low would let one slip."""
+
+    observed = [
+        (53_393, 13_988),
+        (101_878, 26_040),
+        (24_901, 6_290),
+        (78_401, 20_804),
+        (27_125, 6_191),
+        (26_064, 6_315),
+        (66_119, 17_088),
+        (33_762, 7_884),
+    ]
+    for payload_bytes, provider_tokens in observed:
+        assert estimate_prompt_tokens(payload_bytes) >= provider_tokens
+
+
+def test_the_calibration_constant_stays_under_every_observed_ratio() -> None:
+    observed_min = min(
+        53_393 / 13_988,
+        101_878 / 26_040,
+        24_901 / 6_290,
+        78_401 / 20_804,
+        27_125 / 6_191,
+        26_064 / 6_315,
+        66_119 / 17_088,
+        33_762 / 7_884,
+    )
+    assert OBSERVED_BYTES_PER_TOKEN <= observed_min
+    # And the estimator's own constant keeps margin below that, for content
+    # types (CJK) the English/JSON sample does not represent.
+    assert CONSERVATIVE_BYTES_PER_TOKEN < OBSERVED_BYTES_PER_TOKEN
 
 
 # ---------------------------------------------------------------------------
@@ -175,7 +312,7 @@ def test_an_oversized_vlm_text_prompt_is_still_refused() -> None:
 
     with pytest.raises(PromptTransportBudgetError):
         client.complete_with_images(
-            prompt="x" * (budget.limit_bytes + 1),
+            prompt="x" * _bytes_for_tokens(budget.limit_tokens + 1),
             image_paths=["a.png"],
         )
     assert inner.calls == []
@@ -440,4 +577,4 @@ def test_the_live_analyzer_consumers_are_all_declared() -> None:
 def test_every_budget_declares_a_rationale() -> None:
     for consumer, budget in PROMPT_TRANSPORT_BUDGETS.items():
         assert budget.rationale.strip(), f"{consumer} declares no rationale"
-        assert budget.limit_bytes > 0
+        assert budget.limit_tokens > 0
