@@ -9,6 +9,7 @@ as "the task succeeded".
 
 from __future__ import annotations
 
+import json
 from typing import Any, Dict, List
 
 from tools.run_research_agent_bench import (
@@ -251,3 +252,67 @@ def test_no_benchmark_entry_point_can_exit_zero_without_checking_execution():
         checked.add(node.name)
 
     assert checked == entry_points
+
+
+def test_an_import_whose_items_never_ran_is_not_a_pass(tmp_path) -> None:
+    """`scores=0, pending=1, exit=0` — the quietest false green of the set.
+
+    An item rejected at intake produces no score, so every check that reads
+    ``scores`` sees an empty list and agrees the run was clean. Nothing ran,
+    and the bench said it passed.
+    """
+
+    from tools.run_research_agent_bench import (
+        _PENDING_ITEMS_EXIT_CODE,
+        _run_ehrflowbench_jsonl,
+    )
+
+    jsonl = tmp_path / "items.jsonl"
+    jsonl.write_text(
+        '{"task_id": "probe", "question": "no cohort, no fields"}\n',
+        encoding="utf-8",
+    )
+
+    def _run(out_name: str, **kwargs):
+        return _run_ehrflowbench_jsonl(
+            jsonl_path=jsonl,
+            out_root=tmp_path / out_name,
+            seed=0,
+            arms=["aware"],
+            provider="mock",
+            model="mock",
+            allow_mock_aware=True,
+            **kwargs,
+        )
+
+    assert _run("blocked") == _PENDING_ITEMS_EXIT_CODE
+    # The opt-out has to be explicit, and has to actually work: an operator
+    # importing a JSONL with knowingly unrunnable rows still needs exit 0.
+    assert _run("allowed", allow_pending=True) == 0
+
+    payload = json.loads(
+        (tmp_path / "blocked" / "ehrflowbench_results.json").read_text(encoding="utf-8")
+    )
+    assert payload["scores"] == []
+    assert len(payload["pending"]) == 1
+
+
+def test_the_pending_gate_is_reachable_from_the_command_line() -> None:
+    """A gate with no flag to release it would just get deleted under pressure."""
+
+    from tools.run_research_agent_bench import main
+
+    import ast
+    import inspect
+
+    tree = ast.parse(inspect.getsource(main))
+    flags = {
+        node.args[0].value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "add_argument"
+        and node.args
+        and isinstance(node.args[0], ast.Constant)
+    }
+    assert "--allow-pending-import" in flags
