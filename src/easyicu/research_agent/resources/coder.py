@@ -22,6 +22,7 @@ from ..authority.coder_authority import HostCoderAuthority
 from ..authority.typed_binding import (
     _coder_authority_with_typed_parent_schema_receipts,
 )
+from ..gates.plausibility_receipt import RECEIPT_CONTRACT_CLAUSE
 from ..contracts.method_packages import (
     BASELINE_PACKAGES,
     CURATED_METHOD_PACKAGES,
@@ -574,6 +575,7 @@ def bind_execution_cohort_runtime(
         "`plausibility_policy.out_of_range_action` is binding, not a "
         "suggestion: `retain_and_flag` means keep every such row and record a "
         "flag column or count -- never drop, clip, impute, or raise on it. "
+        f"{RECEIPT_CONTRACT_CLAUSE} "
         "Treat a finite out-of-range value as a fatal input error only where "
         "the policy itself says so. Keep source "
         "missingness distinct from non-finite values: count non-finite only "
