@@ -21,6 +21,7 @@ from ..audits.validators import (
     _reclassify_llm_concept_findings,
     _verified_authoritative_exposure_flow,
 )
+from .plausibility_obligation import flag_only_plausibility_obligation_findings
 from .preflight import audit_mechanical_code_contracts
 from .typed_schema import host_schema_numeric_alias_findings
 from ..contracts.runtime import ValidationFinding
@@ -124,6 +125,14 @@ def deterministic_code_gate_findings(
             host_schema_numeric_alias_findings(
                 parsed_script,
                 resolved_input_bindings,
+            )
+        )
+        findings.extend(
+            flag_only_plausibility_obligation_findings(
+                parsed_script,
+                script_text=script_text,
+                context=context,
+                step=step,
             )
         )
     requires_primary_exposure_artifact = any(
