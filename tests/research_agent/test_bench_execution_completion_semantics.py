@@ -15,6 +15,7 @@ from tools.run_research_agent_bench import (
     _arm_execution_succeeded,
     _failed_step_ids,
     _finish_task_on_execution_outcome,
+    _incomplete_suite_items,
     _score_execution_failures,
 )
 
@@ -150,3 +151,103 @@ def test_failed_step_ids_reads_both_recorded_shapes() -> None:
     assert _failed_step_ids({"failed_steps": ["06_primary"]}) == ["06_primary"]
     assert _failed_step_ids({"failed_steps": []}) == []
     assert _failed_step_ids({}) == []
+
+
+def test_rule_and_analysis_suites_report_their_incomplete_items():
+    """The suite path scores runs too, so it can go false green the same way."""
+
+    incomplete_arm = _arm(
+        execution_complete=False,
+        step_scientific_requirements_complete=False,
+        completed_step_count=8,
+        failed_step_ids=["06_primary_adjusted_association"],
+        missing_step_ids=[
+            "06_primary_adjusted_association_figure",
+            "07_robustness_sensitivity",
+            "07_robustness_sensitivity_figure",
+        ],
+    )
+    runs = [
+        {
+            "model": "gpt-5.6-luna",
+            "scores": [
+                _score(
+                    item_key="e1_sepsis3_prevalence_mortality", aware=incomplete_arm
+                ),
+                _score(item_key="e2_other"),
+            ],
+        }
+    ]
+
+    incomplete = _incomplete_suite_items(runs)
+
+    assert incomplete == ["e1_sepsis3_prevalence_mortality (gpt-5.6-luna)"]
+
+
+def test_a_completed_development_diagnostic_is_not_reported_as_incomplete():
+    runs = [{"model": "gpt-5.6-luna", "scores": [_score()]}]
+
+    assert _incomplete_suite_items(runs) == []
+
+
+def test_every_model_in_a_matrix_run_is_checked():
+    runs = [
+        {"model": "model-a", "scores": [_score()]},
+        {
+            "model": "model-b",
+            "scores": [_score(aware=_arm(execution_complete=False))],
+        },
+    ]
+
+    assert _incomplete_suite_items(runs) == [
+        "e1_sepsis3_prevalence_mortality (model-b)"
+    ]
+
+
+def test_a_suite_run_with_no_scores_is_not_silently_passed_over():
+    """An empty score list is nothing to check; a broken score payload is not."""
+
+    assert _incomplete_suite_items([{"model": "m", "scores": []}]) == []
+    assert _incomplete_suite_items([{"model": "m", "scores": [None]}]) == ["? (m)"]
+
+
+def test_no_benchmark_entry_point_can_exit_zero_without_checking_execution():
+    """Fixing one entry point left the other reporting the same false green.
+
+    ``main`` and ``_run_ehrflowbench_jsonl`` are both process exit codes. A new
+    entry point that grows its own ``return 0`` must consult the execution axis
+    too, so assert the property on the source rather than on the two functions
+    that happen to exist today.
+    """
+
+    import ast
+    import pathlib
+
+    import tools.run_research_agent_bench as bench
+
+    tree = ast.parse(pathlib.Path(bench.__file__).read_text(encoding="utf-8"))
+    checkers = {"_incomplete_suite_items", "_score_execution_failures"}
+    entry_points = {"main", "_run_ehrflowbench_jsonl"}
+    checked: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef) or node.name not in entry_points:
+            continue
+        exits_zero = any(
+            isinstance(inner, ast.Return)
+            and isinstance(inner.value, ast.Constant)
+            and inner.value.value == 0
+            for inner in ast.walk(node)
+        )
+        if not exits_zero:
+            continue
+        called = {
+            inner.func.id
+            for inner in ast.walk(node)
+            if isinstance(inner, ast.Call) and isinstance(inner.func, ast.Name)
+        }
+        assert (
+            called & checkers
+        ), f"{node.name} can return 0 without consulting execution completion"
+        checked.add(node.name)
+
+    assert checked == entry_points

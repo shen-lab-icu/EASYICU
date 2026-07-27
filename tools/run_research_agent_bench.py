@@ -4009,7 +4009,36 @@ def main() -> int:
         )
         print(f"  -> {out_root / 'bench_model_matrix.json'}")
         print(f"  -> {out_root / 'bench_model_matrix.md'}")
+    # The rule/analysis suites reach the same false green as the JSONL path:
+    # scoring a run that stopped mid-plan still returns a payload, and an
+    # unconditional exit 0 here reports a partially executed item as a passing
+    # benchmark. Both entry points must answer the same question.
+    incomplete = _incomplete_suite_items(all_runs)
+    if incomplete:
+        print(
+            "[execution] items that did not complete execution: "
+            + ", ".join(incomplete)
+        )
+        return _EXECUTION_INCOMPLETE_EXIT_CODE
     return 0
+
+
+def _incomplete_suite_items(all_runs: Sequence[Mapping[str, Any]]) -> List[str]:
+    """Name every scored suite item whose run never finished executing."""
+
+    incomplete: List[str] = []
+    for payload in all_runs:
+        if not isinstance(payload, Mapping):
+            continue
+        model = str(payload.get("model") or "")
+        for score in payload.get("scores") or []:
+            if not _score_execution_failures(score):
+                continue
+            key = str(
+                (score.get("item_key") if isinstance(score, Mapping) else None) or "?"
+            )
+            incomplete.append(f"{key} ({model})" if model else key)
+    return incomplete
 
 
 def _ehrflow_item_done(item_root: Path) -> bool:
