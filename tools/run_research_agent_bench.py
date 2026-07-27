@@ -4578,7 +4578,10 @@ def _run_ehrflowbench_jsonl(
         _sync_pending_hard_stops()
         key = str(row.get("key") or row.get("id") or f"ehrflowbench_{idx:03d}")
         task_hard_stop = (
-            hard_stop_ledger.start_task(key)
+            hard_stop_ledger.start_task(
+                key,
+                reopen_terminal=bool(resume_run_id and batch_binding is None),
+            )
             if hard_stop_ledger is not None
             else None
         )

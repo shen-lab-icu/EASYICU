@@ -468,7 +468,21 @@ class ProviderHardStopLedger:
         )
         _atomic_write(self.path, self._payload)
 
-    def start_task(self, task_id: str) -> "TaskProviderHardStop":
+    def start_task(
+        self,
+        task_id: str,
+        *,
+        reopen_terminal: bool = False,
+    ) -> "TaskProviderHardStop":
+        """Start one task or explicitly reopen a resumable terminal attempt.
+
+        Normal batch reuse keeps ``completed`` tasks immutable.  An explicit
+        step-level run resume may reopen only ``completed`` or ``failed`` tasks;
+        their calls and elapsed wall clock remain cumulative so a resume cannot
+        reset any Provider stop-loss.  Budget exhaustion and canary blocking
+        are never resumable through this path.
+        """
+
         normalized = str(task_id).strip()
         with self._lock:
             task = self._task_locked(normalized)
@@ -478,11 +492,66 @@ class ProviderHardStopLedger:
                         "Running Provider hard-stop task lost its wall clock"
                     )
                 return TaskProviderHardStop(self, normalized)
-            if task.get("status") == "completed":
+            status = str(task.get("status") or "")
+            if status == "completed" and not reopen_terminal:
                 return TaskProviderHardStop(self, normalized)
-            if task.get("status") != "pending":
+            if reopen_terminal and status in {"completed", "failed"}:
+                calls = task.get("calls")
+                if not isinstance(calls, list) or any(
+                    isinstance(call, Mapping)
+                    and call.get("state") == "in_progress"
+                    for call in calls
+                ):
+                    raise ProviderHardStopLedgerError(
+                        "Terminal Provider hard-stop task has an unsafe call history"
+                    )
+                try:
+                    prior_elapsed = float(task.get("elapsed_seconds") or 0.0)
+                except (TypeError, ValueError) as exc:
+                    raise ProviderHardStopLedgerError(
+                        "Terminal Provider hard-stop task elapsed time is invalid"
+                    ) from exc
+                if not math.isfinite(prior_elapsed) or prior_elapsed < 0.0:
+                    raise ProviderHardStopLedgerError(
+                        "Terminal Provider hard-stop task elapsed time is invalid"
+                    )
+                attempts = task.get("terminal_attempts")
+                if attempts is None:
+                    attempts = []
+                    task["terminal_attempts"] = attempts
+                if not isinstance(attempts, list) or any(
+                    not isinstance(attempt, Mapping) for attempt in attempts
+                ):
+                    raise ProviderHardStopLedgerError(
+                        "Provider hard-stop terminal attempt history is invalid"
+                    )
+                attempts.append(
+                    {
+                        "status": status,
+                        "started_at": task.get("started_at"),
+                        "finished_at": task.get("finished_at"),
+                        "elapsed_seconds": prior_elapsed,
+                        "error": task.get("error"),
+                        "score_summary": task.get("score_summary"),
+                    }
+                )
+                task["resume_count"] = len(attempts)
+                task["status"] = "running"
+                task["finished_at"] = None
+                task["elapsed_seconds"] = None
+                task["error"] = None
+                task["blocked_by"] = None
+                task["score_summary"] = {}
+                if not task.get("started_at"):
+                    task["started_at"] = _utc_now()
+                self._task_started_monotonic[normalized] = (
+                    time.monotonic() - prior_elapsed
+                )
+                self._persist_locked()
+                return TaskProviderHardStop(self, normalized)
+            if status != "pending":
                 raise ProviderHardStopLedgerError(
-                    f"Provider hard-stop task cannot start from {task.get('status')!r}"
+                    f"Provider hard-stop task cannot start from {status!r}"
                 )
             task["status"] = "running"
             task["started_at"] = _utc_now()
@@ -783,7 +852,7 @@ class ProviderHardStopLedger:
         error: Optional[str] = None,
     ) -> None:
         with self._lock:
-            if self._task_locked(task_id).get("status") == "completed" and error is None:
+            if self._task_locked(task_id).get("status") == "completed":
                 return
         # Check the wall clock before granting a completed state.
         if error is None:
