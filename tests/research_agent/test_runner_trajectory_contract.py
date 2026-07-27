@@ -471,7 +471,9 @@ def test_ehrflowbench_rejects_path_only_trajectory_for_typed_cohort(
             provider="openai",
             model="model",
         )
-        == 0
+        # The item was rejected at intake and never ran, which is what the
+        # rest of this test proves. Exit 0 said that was a passing benchmark.
+        == bench._PENDING_ITEMS_EXIT_CODE
     )
     payload = json.loads(
         (tmp_path / "typed-path-only-out" / "ehrflowbench_results.json").read_text(
@@ -555,7 +557,9 @@ def test_ehrflowbench_rejects_missing_declared_trajectory(tmp_path, monkeypatch)
             provider="openai",
             model="model",
         )
-        == 0
+        # The item was rejected at intake and never ran, which is what the
+        # rest of this test proves. Exit 0 said that was a passing benchmark.
+        == bench._PENDING_ITEMS_EXIT_CODE
     )
     payload = json.loads(
         (tmp_path / "out" / "ehrflowbench_results.json").read_text(encoding="utf-8")
@@ -610,7 +614,9 @@ def test_ehrflowbench_rejects_trajectory_symlink_before_resolution(
             provider="openai",
             model="model",
         )
-        == 0
+        # The item was rejected at intake and never ran, which is what the
+        # rest of this test proves. Exit 0 said that was a passing benchmark.
+        == bench._PENDING_ITEMS_EXIT_CODE
     )
     payload = json.loads(
         (tmp_path / "out" / "ehrflowbench_results.json").read_text(encoding="utf-8")

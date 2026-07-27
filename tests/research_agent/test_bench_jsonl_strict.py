@@ -93,7 +93,9 @@ def test_external_jsonl_duplicate_key_is_reported_without_execution(
             provider="openai",
             model="model",
         )
-        == 0
+        # The item was rejected at intake and never ran, which is what the
+        # rest of this test proves. Exit 0 said that was a passing benchmark.
+        == bench._PENDING_ITEMS_EXIT_CODE
     )
 
     payload = json.loads(
