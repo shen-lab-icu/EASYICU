@@ -10,6 +10,7 @@ passes its own fixtures and abstains on the only script that matters.
 from __future__ import annotations
 
 import ast
+import pathlib
 
 import pytest
 
@@ -25,10 +26,18 @@ from easyicu.research_agent.schema import (
     ResearchContext,
 )
 
+# The host hands the step its output directory in the environment, and the
+# corpus reads it exactly this way. The directory is half the destination: a
+# check that compared only the filename accepted `/tmp/step_summary.json` for
+# the artifact the host opens.
 HEADER = """
 import json
+import os
+from pathlib import Path
 
 manifest = json.loads(open("resolved.json").read())
+STEP_OUT_DIR = Path(os.environ["STEP_OUT_DIR"])
+SUMMARY_PATH = STEP_OUT_DIR / "step_summary.json"
 
 
 def write_json(path, payload):
@@ -57,7 +66,7 @@ REJECTS = (
             raise RuntimeError(f"{column} is above the plausibility maximum")
 
 
-write_json("step_summary.json", {"rows": 1})
+write_json(SUMMARY_PATH, {"rows": 1})
 """
 )
 
@@ -76,7 +85,7 @@ RECORDS_NOTHING = (
     + """
 
 
-write_json("step_summary.json", {"rows": 1})
+write_json(SUMMARY_PATH, {"rows": 1})
 """
 )
 
@@ -87,7 +96,7 @@ LOCAL_ONLY = (
         above_n = int((numeric > float(upper)).sum()) if upper is not None else 0
 
 
-write_json("step_summary.json", {"rows": 1})
+write_json(SUMMARY_PATH, {"rows": 1})
 """
 )
 
@@ -103,7 +112,7 @@ plausibility_audit = {}
         }
 
 
-write_json("step_summary.json", {"plausibility": plausibility_audit})
+write_json(SUMMARY_PATH, {"plausibility_audit": plausibility_audit})
 """
 )
 
@@ -119,7 +128,7 @@ plausibility_audit = {}
             }
 
 
-write_json("step_summary.json", {"plausibility": plausibility_audit})
+write_json(SUMMARY_PATH, {"plausibility_audit": plausibility_audit})
 """
 )
 
@@ -130,7 +139,7 @@ FILTERS = (
         kept = numeric[~outside]
 
 
-write_json("step_summary.json", {"rows": 1})
+write_json(SUMMARY_PATH, {"rows": 1})
 """
 )
 
@@ -218,7 +227,7 @@ def validate(values, column, manifest):
         audit[column] = int(((numeric < 0.0) | (numeric > 120.0)).sum())
 
 
-write_json("step_summary.json", {"audit": audit})
+write_json(SUMMARY_PATH, {"audit": audit})
 """
     )
     assert _reasons(hard_coded) == {"plausibility_check_not_attributable"}
@@ -323,7 +332,7 @@ def test_every_way_the_corpus_reaches_the_canonical_summary_is_accepted(sink):
         + """
 from pathlib import Path
 
-OUT = Path("outputs")
+OUT = Path(os.environ["STEP_OUT_DIR"])
 plausibility_audit = {}
 """
         + HELPER_HEAD
@@ -341,19 +350,20 @@ summary = {"plausibility_audit": plausibility_audit}
     assert _reasons(code) == set()
 
 
-def test_a_path_the_step_registers_as_its_own_output_is_declared():
-    """`output_files` is the host's registration surface, so a path filed there
-    is declared by the step itself -- unlike the sibling scratch file beside it,
-    which is exactly the difference the gate has to see."""
+def test_a_registered_companion_file_does_not_substitute_for_the_receipt():
+    """Registering a companion declares an output; it does not deliver this one.
+
+    The post-execution half reads exactly one place, so a count that lands
+    anywhere else is a count the host never sees -- however properly the file
+    holding it was declared. An earlier draft accepted any registered path, and
+    the two halves could then disagree about the same step.
+    """
 
     code = (
         HEADER
         + """
-from pathlib import Path
-
 import pandas as pd
 
-OUT = Path("outputs")
 plausibility_audit = {}
 """
         + HELPER_HEAD
@@ -362,16 +372,146 @@ plausibility_audit = {}
         ) if lower is not None else 0
 
 
-pd.DataFrame([plausibility_audit]).to_csv(OUT / "range_audit.csv")
-write_json("step_summary.json", {"output_files": {"table:range": "range_audit.csv"}})
+pd.DataFrame([plausibility_audit]).to_csv(STEP_OUT_DIR / "range_audit.csv")
+write_json(SUMMARY_PATH, {"output_files": {"table:range": "range_audit.csv"}})
 """
     )
-    assert _reasons(code) == set()
+    assert _reasons(code) == {"out_of_range_record_not_in_declared_output"}
 
-    unregistered = code.replace(
-        '"table:range": "range_audit.csv"', '"table:other": "other.csv"'
+    # The same script, with the receipt also filed where the host reads it.
+    delivered = code.replace(
+        '{"output_files": {"table:range": "range_audit.csv"}}',
+        '{"output_files": {"table:range": "range_audit.csv"},'
+        ' "plausibility_audit": plausibility_audit}',
     )
-    assert _reasons(unregistered) == {"out_of_range_record_not_in_declared_output"}
+    assert _reasons(delivered) == set()
+
+
+@pytest.mark.parametrize(
+    "summary_key",
+    [
+        pytest.param("plausibility_audit", id="the_key_the_host_reads"),
+        pytest.param("range_audit", id="a_key_of_its_own_choosing"),
+    ],
+)
+def test_the_receipt_must_be_filed_under_the_key_the_host_reads(summary_key):
+    """Reaching the file is not the same as reaching the receipt.
+
+    The host opens one key. A summary that carries the counts under a name of
+    the script's own choosing has written them somewhere nothing looks, and the
+    post-execution half would then block a step the static one had passed.
+    """
+
+    code = (
+        HEADER
+        + """
+plausibility_audit = {}
+"""
+        + HELPER_HEAD
+        + """        plausibility_audit[column] = int(
+            (numeric < float(lower)).sum()
+        ) if lower is not None else 0
+
+
+write_json(SUMMARY_PATH, {"%s": plausibility_audit})
+"""
+        % summary_key
+    )
+    expected = (
+        set()
+        if summary_key == "plausibility_audit"
+        else {"out_of_range_record_not_in_declared_output"}
+    )
+    assert _reasons(code) == expected
+
+
+def test_nesting_the_receipt_below_the_top_level_is_not_delivery():
+    """`{"quality": receipt}` moves it one level down, out of the host's sight."""
+
+    code = (
+        HEADER
+        + """
+plausibility_audit = {}
+"""
+        + HELPER_HEAD
+        + """        plausibility_audit[column] = int(
+            (numeric < float(lower)).sum()
+        ) if lower is not None else 0
+
+
+receipt = {"plausibility_audit": plausibility_audit}
+write_json(SUMMARY_PATH, {"quality": receipt})
+"""
+    )
+    assert _reasons(code) == {"out_of_range_record_not_in_declared_output"}
+
+
+def test_the_real_counts_in_a_scratch_file_with_the_canonical_name_is_blocked():
+    """The reported false green, reproduced whole.
+
+    The script computes the counts honestly and writes them to
+    `/tmp/step_summary.json`, then writes the summary the host actually opens
+    with hard-coded zeros. Every serializer name matches, and so does the last
+    path component -- which is exactly why a destination has to be a directory
+    as well as a filename.
+    """
+
+    code = (
+        HEADER
+        + """
+plausibility_audit = {}
+"""
+        + HELPER_HEAD
+        + """        plausibility_audit[column] = {
+            "policy": "retain_and_flag",
+            "below_minimum_n": int((numeric < float(lower)).sum()),
+            "above_maximum_n": int((numeric > float(upper)).sum()),
+            "out_of_range_n": int(
+                ((numeric < float(lower)) | (numeric > float(upper))).sum()
+            ),
+        }
+
+
+write_json("/tmp/step_summary.json", {"plausibility_audit": plausibility_audit})
+write_json(
+    SUMMARY_PATH,
+    {
+        "plausibility_audit": {
+            "marker": {
+                "policy": "retain_and_flag",
+                "below_minimum_n": 0,
+                "above_maximum_n": 0,
+                "out_of_range_n": 0,
+            }
+        }
+    },
+)
+"""
+    )
+    assert _reasons(code) == {"out_of_range_record_not_in_declared_output"}
+
+
+def test_the_gate_reads_the_output_directory_the_host_actually_sets():
+    """The env aliases are the host's own, not a guess, so they must not drift.
+
+    The set is duplicated rather than imported so a read-only gate does not
+    depend on the execution layer; this is what keeps the copy honest.
+    """
+
+    from easyicu.research_agent.execution import runner
+    from easyicu.research_agent.gates.plausibility_receipt import (
+        HOST_OUTPUT_DIR_ENV_KEYS,
+    )
+
+    assert HOST_OUTPUT_DIR_ENV_KEYS <= runner.HOST_OWNED_RUNNER_ENV_KEYS
+    source = pathlib.Path(runner.__file__).read_text()
+    assigned = {
+        key
+        for key in runner.HOST_OWNED_RUNNER_ENV_KEYS
+        if f'"{key}": container_output_dir' in source
+    }
+    assert assigned, "the runner no longer assigns the output directory by name"
+    assert assigned <= HOST_OUTPUT_DIR_ENV_KEYS
 
 
 def test_no_declared_range_means_no_obligation():
@@ -388,7 +528,7 @@ def test_a_step_that_never_touches_a_range_is_out_of_scope():
         + """
 rows = [1, 2, 3]
 kept = [row for row in rows if row > 1]
-write_json("step_summary.json", {"kept": len(kept)})
+write_json(SUMMARY_PATH, {"kept": len(kept)})
 """
     )
     assert _reasons(unrelated) == set()
@@ -423,7 +563,7 @@ if len(receipt_rows) != 1:
 if bool((retained_mask & excluded_mask).any()):
     raise AssertionError("Retained and excluded masks overlap")
 
-write_json("step_summary.json", {"outside_range_n": outside_n})
+write_json(SUMMARY_PATH, {"plausibility_audit": {"marker": outside_n}})
 """
     )
     assert _reasons(eligibility) == set()
@@ -451,7 +591,7 @@ plausibility_range = contract.get("analysis_plausibility_range")
 {bound_source}
 numeric = frame["marker"].astype(float)
 audit = {{"outside_n": int(((numeric < minimum) | (numeric > maximum)).sum())}}
-write_json("step_summary.json", audit)
+write_json(SUMMARY_PATH, {{"plausibility_audit": {{"marker": audit}}}})
 """
     )
     assert _reasons(code) == set()

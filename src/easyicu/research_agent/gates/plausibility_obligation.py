@@ -15,13 +15,18 @@ three questions of the script itself:
 
 1. **Retention.**  No plausibility comparison may gate a terminal failure or
    filter rows out.
-2. **Flagging into a declared output.**  A structured count or per-row
-   indicator must reach a write whose *destination* this step declared -- the
-   canonical step summary, or a path it registers in ``output_files``.  An
-   earlier draft asked only whether some serializer had been called, which
-   proved that the script had touched something that writes and nothing more:
+2. **Flagging into the artifact the host reads.**  A structured count or
+   per-row indicator must reach the ``plausibility_audit`` key of the
+   ``step_summary.json`` written into the output directory the host handed the
+   step.  Two earlier drafts each stopped one step short of that.  The first
+   asked only whether some serializer had been called, which proved that the
+   script had touched something that writes and nothing more:
    ``json.dump(audit, sys.stdout)``, a scratch file under ``/tmp``, and
    ``DataFrame(...).to_json()`` with no destination at all each satisfied it.
+   The second did decide on the destination but compared only the last path
+   component, so ``/tmp/step_summary.json`` still passed for the canonical
+   artifact and the counts the host reads could be anything.  A destination is
+   a directory, a filename **and** a key.
 3. **An unconditional receipt.**  The count must be computed and delivered on
    every path, not only when it is positive.  "No out-of-range rows" and "we
    never looked" are different facts, and a receipt that only appears when the
@@ -45,16 +50,16 @@ knows which study, benchmark, column or bound is in play.
 from __future__ import annotations
 
 import ast
-from pathlib import PurePosixPath
 from typing import Iterator, Optional, Sequence, Set
 
 from ..audits.validators import _unwrapped_bound_name
 from ..schema import AnalysisStep, ResearchContext, ValidationFinding
 from .plausibility_receipt import (
     CANONICAL_STEP_SUMMARY_FILENAME,
-    OUTPUT_REGISTRATION_KEY,
+    HOST_OUTPUT_DIR_ENV_KEYS,
     POLICY_CONTRACT_KEY,
     RECEIPT_CONTRACT_SENTENCE,
+    RECEIPT_SUMMARY_KEY,
     REPAIR_RECEIPT_MARKER,
     ranged_variable_names,
     step_is_under_the_flag_only_obligation,
@@ -104,56 +109,72 @@ _WRITER_ATTRIBUTES = frozenset(
 #: Names whose call terminates the step.
 _TERMINATING_CALLS = frozenset({"exit", "_exit", "sys_exit"})
 
-#: Ways of naming a file on disk, for resolving a destination expression down
-#: to the filename it ends at.
+#: Wrappers that do not change which file a path expression names.
 _PATH_CONSTRUCTORS = frozenset({"Path", "PosixPath", "PurePath", "PurePosixPath"})
-_PATH_JOINS = frozenset({"join", "joinpath", "with_name", "with_suffix"})
 _PATH_IDENTITY = frozenset({"absolute", "expanduser", "resolve"})
 
 
-def _basename(value: str) -> str:
-    return PurePosixPath(str(value).replace("\\", "/")).name
+def _strip_path_wrappers(node: ast.AST) -> ast.AST:
+    """Drop ``Path(...)``, ``str(...)`` and the no-op path methods."""
+
+    while isinstance(node, ast.Call):
+        callee = node.func
+        if (
+            isinstance(callee, ast.Name)
+            and callee.id in (_PATH_CONSTRUCTORS | {"str"})
+            and len(node.args) == 1
+        ):
+            node = node.args[0]
+            continue
+        if (
+            isinstance(callee, ast.Attribute)
+            and callee.attr in _PATH_IDENTITY
+            and not node.args
+        ):
+            node = callee.value
+            continue
+        break
+    return node
 
 
-def _destination_names(node: ast.AST, resolved: dict[str, Set[str]]) -> Set[str]:
-    """The filenames a path expression can end at.
+def _is_os_environ(node: ast.AST) -> bool:
+    return (isinstance(node, ast.Attribute) and node.attr == "environ") or (
+        isinstance(node, ast.Name) and node.id == "environ"
+    )
 
-    Only the last component matters: the host owns the output directory, and a
-    step that writes ``<out_dir>/step_summary.json`` and one that writes
-    ``step_summary.json`` relative to it are writing the same artifact.  What
-    the caller does with this is compare it against the declared set, so an
-    expression this cannot read yields nothing and the write is refused.
+
+def _reads_the_host_output_directory(node: ast.AST) -> bool:
+    """Whether an expression is the output directory the host handed the step.
+
+    The host passes it in the environment, under every alias generated code has
+    been observed to invent.  That makes it the one directory a static check can
+    recognise without guessing -- and recognising the directory, not just the
+    filename, is the whole point: ``/tmp/step_summary.json`` ends in the
+    canonical name and is not the canonical artifact.
     """
 
-    if isinstance(node, ast.Constant) and isinstance(node.value, str):
-        return {_basename(node.value)}
-    if isinstance(node, ast.Name):
-        return set(resolved.get(node.id, ()))
-    if isinstance(node, ast.JoinedStr):
-        for part in reversed(node.values):
-            if isinstance(part, ast.Constant) and isinstance(part.value, str):
-                name = _basename(part.value)
-                if name:
-                    return {name}
-        return set()
-    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
-        return _destination_names(node.right, resolved)
-    if isinstance(node, ast.Call):
-        callee = node.func
-        if isinstance(callee, ast.Name) and callee.id in _PATH_CONSTRUCTORS:
-            return _destination_names(node.args[-1], resolved) if node.args else set()
-        if isinstance(callee, ast.Attribute):
-            if callee.attr in _PATH_JOINS:
-                if node.args:
-                    return _destination_names(node.args[-1], resolved)
-                return _destination_names(callee.value, resolved)
-            if callee.attr in _PATH_IDENTITY:
-                return _destination_names(callee.value, resolved)
-    return set()
+    node = _strip_path_wrappers(node)
+    if isinstance(node, ast.Subscript):
+        return (
+            _is_os_environ(node.value)
+            and isinstance(node.slice, ast.Constant)
+            and node.slice.value in HOST_OUTPUT_DIR_ENV_KEYS
+        )
+    if not isinstance(node, ast.Call) or not node.args:
+        return False
+    key = node.args[0]
+    if not isinstance(key, ast.Constant) or key.value not in HOST_OUTPUT_DIR_ENV_KEYS:
+        return False
+    callee = node.func
+    if isinstance(callee, ast.Attribute):
+        return callee.attr == "getenv" or (
+            callee.attr == "get" and _is_os_environ(callee.value)
+        )
+    return isinstance(callee, ast.Name) and callee.id == "getenv"
 
 
-def _resolved_path_names(tree: ast.AST) -> dict[str, Set[str]]:
-    """Local names that denote a path, and the filenames they end at."""
+def _host_output_directory_names(tree: ast.AST) -> Set[str]:
+    """Local names bound to the host's own step-output directory."""
 
     assignments = [
         node
@@ -162,79 +183,149 @@ def _resolved_path_names(tree: ast.AST) -> dict[str, Set[str]]:
         and len(node.targets) == 1
         and isinstance(node.targets[0], ast.Name)
     ]
-    resolved: dict[str, Set[str]] = {}
+    names: Set[str] = set()
     for _ in range(len(assignments) + 1):
         grew = False
         for node in assignments:
             target = node.targets[0]
             assert isinstance(target, ast.Name)
-            found = _destination_names(node.value, resolved)
-            if found - resolved.get(target.id, set()):
-                resolved.setdefault(target.id, set()).update(found)
+            if target.id in names:
+                continue
+            value = _strip_path_wrappers(node.value)
+            if _reads_the_host_output_directory(value) or (
+                isinstance(value, ast.Name) and value.id in names
+            ):
+                names.add(target.id)
                 grew = True
         if not grew:
             break
-    return resolved
+    return names
 
 
-def _subscript_key_chain(node: ast.AST) -> list[object]:
-    keys: list[object] = []
-    while isinstance(node, ast.Subscript):
-        if isinstance(node.slice, ast.Constant):
-            keys.append(node.slice.value)
-        node = node.value
-    return keys
+def _is_the_host_output_directory(node: ast.AST, directories: Set[str]) -> bool:
+    node = _strip_path_wrappers(node)
+    if isinstance(node, ast.Name):
+        return node.id in directories
+    return _reads_the_host_output_directory(node)
 
 
-def _registered_output_names(tree: ast.AST, resolved: dict[str, Set[str]]) -> Set[str]:
-    """Filenames the step registers as its own declared outputs.
+def _literal_string_names(tree: ast.AST) -> dict[str, Set[str]]:
+    """Local names bound to string literals, for a filename kept in a variable."""
 
-    ``output_files`` is the host's own registration surface -- the same mapping
-    the cross-step output validator reads -- so a path filed there is declared
-    by the step itself, and a path that is not is a scratch file.
+    assignments = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+    ]
+    literals: dict[str, Set[str]] = {}
+    for _ in range(len(assignments) + 1):
+        grew = False
+        for node in assignments:
+            target = node.targets[0]
+            assert isinstance(target, ast.Name)
+            value = node.value
+            if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                found = {value.value}
+            elif isinstance(value, ast.Name):
+                found = set(literals.get(value.id, ()))
+            else:
+                continue
+            if found - literals.get(target.id, set()):
+                literals.setdefault(target.id, set()).update(found)
+                grew = True
+        if not grew:
+            break
+    return literals
+
+
+def _names_the_canonical_summary(node: ast.AST, literals: dict[str, Set[str]]) -> bool:
+    """Whether an expression is exactly the canonical summary filename.
+
+    Exactly, not by last component: ``out_dir / "audit/step_summary.json"``
+    puts the file somewhere the host does not look, and a check that took the
+    basename could not tell the two apart.
     """
 
-    containers: list[ast.AST] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Dict):
-            for key, value in zip(node.keys, node.values):
-                if (
-                    isinstance(key, ast.Constant)
-                    and key.value == OUTPUT_REGISTRATION_KEY
-                ):
-                    containers.append(value)
-        elif isinstance(node, ast.Assign):
-            for target in node.targets:
-                if (
-                    isinstance(target, ast.Name)
-                    and target.id == OUTPUT_REGISTRATION_KEY
-                ):
-                    containers.append(node.value)
-                elif OUTPUT_REGISTRATION_KEY in _subscript_key_chain(target):
-                    containers.append(node.value)
-        elif (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and node.func.attr in {"update", "setdefault"}
-            and OUTPUT_REGISTRATION_KEY in _subscript_key_chain(node.func.value)
-        ):
-            containers.extend(node.args)
+    node = _strip_path_wrappers(node)
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value == CANONICAL_STEP_SUMMARY_FILENAME
+    if isinstance(node, ast.Name):
+        return CANONICAL_STEP_SUMMARY_FILENAME in literals.get(node.id, ())
+    return False
 
-    registered: Set[str] = set()
-    seen: Set[int] = set()
-    while containers:
-        item = containers.pop()
-        if id(item) in seen:
-            continue
-        seen.add(id(item))
-        if isinstance(item, ast.Dict):
-            containers.extend(value for value in item.values if value is not None)
-        elif isinstance(item, (ast.List, ast.Tuple, ast.Set)):
-            containers.extend(item.elts)
-        else:
-            registered |= _destination_names(item, resolved)
-    registered.discard("")
-    return registered
+
+def _denotes_the_canonical_summary(
+    node: ast.AST,
+    *,
+    directories: Set[str],
+    literals: dict[str, Set[str]],
+    summaries: Set[str],
+) -> bool:
+    """Whether an expression names the summary artifact the host itself opens.
+
+    That is ``<host output directory>/step_summary.json`` and nothing else:
+    the directory must be the one the host handed the step, and the filename
+    must be its direct child.  Anything the check cannot read this way is
+    refused, so a spelling it does not know costs a repair rather than buying
+    a pass -- which is why every spelling in the real corpus is locked by test.
+    """
+
+    node = _strip_path_wrappers(node)
+    if isinstance(node, ast.Name):
+        return node.id in summaries
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+        return _is_the_host_output_directory(
+            node.left, directories
+        ) and _names_the_canonical_summary(node.right, literals)
+    if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+        return False
+    callee = node.func
+    if callee.attr == "joinpath" and len(node.args) == 1:
+        return _is_the_host_output_directory(
+            callee.value, directories
+        ) and _names_the_canonical_summary(node.args[0], literals)
+    if callee.attr == "join" and len(node.args) == 2:
+        return _is_the_host_output_directory(
+            node.args[0], directories
+        ) and _names_the_canonical_summary(node.args[1], literals)
+    return False
+
+
+def _canonical_summary_names(
+    tree: ast.AST,
+    directories: Set[str],
+    literals: dict[str, Set[str]],
+) -> Set[str]:
+    """Local names bound to the canonical summary path."""
+
+    assignments = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+    ]
+    summaries: Set[str] = set()
+    for _ in range(len(assignments) + 1):
+        grew = False
+        for node in assignments:
+            target = node.targets[0]
+            assert isinstance(target, ast.Name)
+            if target.id in summaries:
+                continue
+            if _denotes_the_canonical_summary(
+                node.value,
+                directories=directories,
+                literals=literals,
+                summaries=summaries,
+            ):
+                summaries.add(target.id)
+                grew = True
+        if not grew:
+            break
+    return summaries
 
 
 def _accessed_key(node: ast.AST) -> Optional[tuple[ast.AST, object]]:
@@ -399,12 +490,8 @@ def _call_arguments(node: ast.Call) -> list[ast.AST]:
     return [*node.args, *(keyword.value for keyword in node.keywords)]
 
 
-def _opens_a_declared_output(
-    node: ast.AST,
-    resolved: dict[str, Set[str]],
-    declared: Set[str],
-) -> bool:
-    """Whether an expression opens one of this step's declared outputs."""
+def _opens_the_canonical_summary(node: ast.AST, denotes) -> bool:
+    """Whether an expression opens the summary artifact the host reads."""
 
     if not isinstance(node, ast.Call):
         return False
@@ -416,15 +503,11 @@ def _opens_a_declared_output(
         candidates.append(callee.value)
     else:
         return False
-    return any(_destination_names(arg, resolved) & declared for arg in candidates)
+    return any(denotes(candidate) for candidate in candidates)
 
 
-def _declared_output_handles(
-    tree: ast.AST,
-    resolved: dict[str, Set[str]],
-    declared: Set[str],
-) -> Set[str]:
-    """Names bound to an open handle on one of this step's declared outputs."""
+def _canonical_summary_handles(tree: ast.AST, denotes) -> Set[str]:
+    """Names bound to an open handle on the canonical summary."""
 
     handles: Set[str] = set()
     for node in ast.walk(tree):
@@ -432,13 +515,13 @@ def _declared_output_handles(
             for item in node.items:
                 if isinstance(
                     item.optional_vars, ast.Name
-                ) and _opens_a_declared_output(item.context_expr, resolved, declared):
+                ) and _opens_the_canonical_summary(item.context_expr, denotes):
                     handles.add(item.optional_vars.id)
         elif (
             isinstance(node, ast.Assign)
             and len(node.targets) == 1
             and isinstance(node.targets[0], ast.Name)
-            and _opens_a_declared_output(node.value, resolved, declared)
+            and _opens_the_canonical_summary(node.value, denotes)
         ):
             handles.add(node.targets[0].id)
     return handles
@@ -536,17 +619,21 @@ class _FlagFlow:
         }
         self.carriers: Set[str] = set()
         self.returning_functions: Set[str] = set()
-        #: Which files this step may write to, and how it reaches them.  A
-        #: sink is a write *to one of these*; see `sink_expressions`.
-        self.path_names = _resolved_path_names(tree)
-        self.registered_outputs = _registered_output_names(tree, self.path_names)
-        self.handles = _declared_output_handles(
-            tree,
-            self.path_names,
-            {CANONICAL_STEP_SUMMARY_FILENAME} | self.registered_outputs,
+        #: How this script reaches the one artifact the host opens afterwards.
+        #: A delivery is a write *to that file*; see `receipt_deliveries`.
+        self.output_directories = _host_output_directory_names(tree)
+        self.literals = _literal_string_names(tree)
+        self.summary_paths = _canonical_summary_names(
+            tree, self.output_directories, self.literals
         )
+        self.handles = _canonical_summary_handles(tree, self.denotes_the_summary)
         self.writer_functions = _writer_functions(tree)
         self._resolve()
+        #: Names holding a mapping that carries the record under the receipt
+        #: key.  Reaching the file is not enough on its own: the host reads one
+        #: key of it, so a count filed anywhere else in the same summary is a
+        #: count the host never sees.
+        self.receipt_carriers: Set[str] = self._resolve_receipt_carriers()
         #: The mask and count themselves, without the containers they are
         #: later filed into. A guard on `mask.any()` or on `n_out > 0` is a
         #: rejection; a guard on the summary dict that happens to hold the
@@ -711,50 +798,204 @@ class _FlagFlow:
                 return outer
         return None
 
-    def sink_expressions(self) -> list[ast.AST]:
-        """Expressions handed to a write whose destination this step declared.
+    def denotes_the_summary(self, node: ast.AST) -> bool:
+        """Whether an expression names the summary artifact the host opens."""
 
-        Both halves are load-bearing.  Without the destination, the check
-        proved only that the script had touched something that serializes --
-        a scratch file, ``sys.stdout``, or a ``to_json()`` with nowhere to go
-        each satisfied it.  Without the write, any call that merely *mentions*
-        the summary filename, a log line included, would qualify.
+        return _denotes_the_canonical_summary(
+            node,
+            directories=self.output_directories,
+            literals=self.literals,
+            summaries=self.summary_paths,
+        )
+
+    def _addresses_the_summary(self, node: ast.AST) -> bool:
+        return self.denotes_the_summary(node) or (
+            isinstance(node, ast.Name) and node.id in self.handles
+        )
+
+    def _resolve_receipt_carriers(self) -> Set[str]:
+        """Names holding a mapping whose receipt key is the out-of-range record.
+
+        Seeded by the two ways a script files something under a literal key --
+        ``summary[key] = record`` and a dict literal -- then propagated the same
+        way the carrier set is: through plain assignment and through helpers
+        *proven* to return such a mapping.  It deliberately does not propagate
+        through nesting: ``{"quality": summary}`` moves the receipt one level
+        down, where the host does not look for it.
         """
 
-        declared = {CANONICAL_STEP_SUMMARY_FILENAME} | self.registered_outputs
-        sinks: list[ast.AST] = []
+        names: Set[str] = set()
+        for node in ast.walk(self.tree):
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if (
+                        isinstance(target, ast.Subscript)
+                        and isinstance(target.slice, ast.Constant)
+                        and target.slice.value == RECEIPT_SUMMARY_KEY
+                        and self._carries(node.value)
+                    ):
+                        root = _subscript_root(target)
+                        if root is not None:
+                            names.add(root)
+            elif (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "setdefault"
+                and len(node.args) == 2
+                and isinstance(node.args[0], ast.Constant)
+                and node.args[0].value == RECEIPT_SUMMARY_KEY
+                and self._carries(node.args[1])
+            ):
+                root = _subscript_root(node.func.value)
+                if root is not None:
+                    names.add(root)
+            elif (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "update"
+                and any(
+                    self._is_receipt_mapping(argument, names) for argument in node.args
+                )
+            ):
+                root = _subscript_root(node.func.value)
+                if root is not None:
+                    names.add(root)
+
+        assignments = [
+            node
+            for node in ast.walk(self.tree)
+            if isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+        ]
+        functions = [
+            node
+            for node in ast.walk(self.tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        ]
+        returning: Set[str] = set()
+        for _ in range(len(assignments) + len(functions) + 1):
+            grew = False
+            for node in assignments:
+                target = node.targets[0]
+                assert isinstance(target, ast.Name)
+                if target.id in names:
+                    continue
+                value = node.value
+                if self._is_receipt_mapping(value, names) or (
+                    isinstance(value, ast.Call)
+                    and isinstance(value.func, ast.Name)
+                    and value.func.id in returning
+                ):
+                    names.add(target.id)
+                    grew = True
+            for function in functions:
+                if function.name in returning:
+                    continue
+                if any(
+                    isinstance(inner, ast.Return)
+                    and inner.value is not None
+                    and self._is_receipt_mapping(inner.value, names)
+                    for inner in ast.walk(function)
+                ):
+                    returning.add(function.name)
+                    grew = True
+            if not grew:
+                break
+        return names
+
+    def _is_receipt_mapping(self, node: ast.AST, names: Set[str]) -> bool:
+        """Whether an expression *is* a mapping carrying the record at its key."""
+
+        for value in _branch_values(node):
+            if isinstance(value, ast.Name) and value.id in names:
+                return True
+            if isinstance(value, ast.Dict):
+                for key, item in zip(value.keys, value.values):
+                    if key is None:  # `{**summary}`
+                        if isinstance(item, ast.Name) and item.id in names:
+                            return True
+                    elif (
+                        isinstance(key, ast.Constant)
+                        and key.value == RECEIPT_SUMMARY_KEY
+                        and self._carries(item)
+                    ):
+                        return True
+            if (
+                isinstance(value, ast.Call)
+                and isinstance(value.func, ast.Name)
+                and value.func.id == "dict"
+            ):
+                for keyword in value.keywords:
+                    if keyword.arg is None:
+                        if (
+                            isinstance(keyword.value, ast.Name)
+                            and keyword.value.id in names
+                        ):
+                            return True
+                    elif keyword.arg == RECEIPT_SUMMARY_KEY and self._carries(
+                        keyword.value
+                    ):
+                        return True
+        return False
+
+    def delivers_the_receipt(self, node: ast.AST) -> bool:
+        """Whether an expression handed to a write carries the receipt.
+
+        One step looser than :meth:`_is_receipt_mapping`, and only here: the
+        serialization a script wraps the mapping in on the way to the file
+        (``json.dumps(summary)``) preserves it, so the argument of a call is
+        followed.  A mapping nested under another key is still refused, because
+        the containers themselves are read strictly.
+        """
+
+        if self._is_receipt_mapping(node, self.receipt_carriers):
+            return True
+        return isinstance(node, ast.Call) and any(
+            self.delivers_the_receipt(argument) for argument in _call_arguments(node)
+        )
+
+    def receipt_deliveries(self) -> list[ast.AST]:
+        """Expressions that put the receipt into the artifact the host reads.
+
+        Three things have to line up, and dropping any one of them has already
+        been shown to open a bypass: the call must *write* (or a log line that
+        merely names the file would count), it must write to the canonical
+        summary *in the host's own output directory* (or a scratch file with
+        the right basename would count), and what it writes must carry the
+        record *under the receipt key* (or a summary that mentions it anywhere
+        would count).
+        """
+
+        deliveries: list[ast.AST] = []
         for node in ast.walk(self.tree):
             if not isinstance(node, ast.Call):
                 continue
             callee = node.func
             arguments = _call_arguments(node)
             receiver = callee.value if isinstance(callee, ast.Attribute) else None
-            addressed = any(
-                _destination_names(argument, self.path_names) & declared
-                or (isinstance(argument, ast.Name) and argument.id in self.handles)
-                for argument in arguments
-            ) or (
-                receiver is not None
-                and (
-                    bool(_destination_names(receiver, self.path_names) & declared)
-                    or (isinstance(receiver, ast.Name) and receiver.id in self.handles)
-                )
-            )
-            if not addressed:
+            if not (
+                any(self._addresses_the_summary(argument) for argument in arguments)
+                or (receiver is not None and self._addresses_the_summary(receiver))
+            ):
                 continue
             if isinstance(callee, ast.Attribute):
                 if callee.attr not in _WRITER_ATTRIBUTES:
                     continue
-                sinks.append(callee.value)
+                candidates = [callee.value, *arguments]
             elif isinstance(callee, ast.Name) and callee.id in self.writer_functions:
-                pass
+                candidates = list(arguments)
             else:
                 continue
-            sinks.extend(arguments)
-        return sinks
+            deliveries.extend(
+                candidate
+                for candidate in candidates
+                if self.delivers_the_receipt(candidate)
+            )
+        return deliveries
 
-    def reaches_a_declared_output(self) -> bool:
-        return any(self._carries(expression) for expression in self.sink_expressions())
+    def reaches_the_step_summary(self) -> bool:
+        return bool(self.receipt_deliveries())
 
     def guarded_by_its_own_count(self, node: ast.AST) -> bool:
         """Whether a node only runs when the out-of-range count is positive."""
@@ -780,9 +1021,7 @@ class _FlagFlow:
         return False
 
     def has_unconditional_delivery(self) -> bool:
-        for expression in self.sink_expressions():
-            if not self._carries(expression):
-                continue
+        for expression in self.receipt_deliveries():
             statement = self.statement_of(expression)
             if statement is None or not self.guarded_by_its_own_count(statement):
                 return True
@@ -891,8 +1130,7 @@ def flag_only_plausibility_obligation_findings(
                     "so nothing proves the out-of-range rows were counted. "
                     "Compare each ranged value against the minimum/maximum "
                     "taken from the contract -- not against a bound written "
-                    "into the source as a literal -- and record the count in "
-                    "this step's written outputs."
+                    f"into the source as a literal. {RECEIPT_CONTRACT_SENTENCE}"
                 ),
                 detail={
                     **detail_base,
@@ -911,7 +1149,7 @@ def flag_only_plausibility_obligation_findings(
     )
 
     records = flow.records_a_structured_value()
-    delivered = records and flow.reaches_a_declared_output()
+    delivered = records and flow.reaches_the_step_summary()
     if not records:
         findings.append(
             ValidationFinding(
@@ -937,9 +1175,12 @@ def flag_only_plausibility_obligation_findings(
                 severity="error",
                 message=(
                     f"Step {step_id} counts the out-of-range rows but never "
-                    "writes them to a declared output of this step. A value "
-                    "left in a local, printed to the console, or written to a "
-                    "scratch path is not a record a reader can open. "
+                    f"files them under {RECEIPT_SUMMARY_KEY!r} in the "
+                    f"{CANONICAL_STEP_SUMMARY_FILENAME} it writes into the "
+                    "host's step output directory. A value left in a local, "
+                    "printed to the console, written to a scratch path that "
+                    "merely ends in the same filename, or filed under some "
+                    "other key is not a record the host reads. "
                     f"{RECEIPT_CONTRACT_SENTENCE}"
                 ),
                 detail={
