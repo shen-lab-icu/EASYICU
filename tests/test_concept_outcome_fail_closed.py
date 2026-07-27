@@ -172,13 +172,18 @@ def test_a_dict_cohort_selector_narrows_the_same_way(tmp_path):
     assert result.empty
 
 
-def test_deaths_dropped_for_want_of_a_timestamp_are_reported(tmp_path):
-    """Partial loss is legitimate, but it must not be silent.
+def test_deaths_dropped_for_want_of_a_timestamp_fail_closed(tmp_path):
+    """Partial loss is the same defect as total loss, only smaller.
 
-    A death the extraction cannot time simply does not appear in the result,
-    which lowers the mortality it reports with nothing to show for it. That is
-    not fatal — a patient can genuinely lack the observation — so it warns with
-    the count rather than failing the whole extraction.
+    A death the extraction cannot time does not appear in the result, so the
+    mortality computed from it is lower than the source says and nothing
+    downstream can see that a number went missing. An earlier version warned
+    instead, on the assumption that a patient could legitimately lack the
+    observation that times the death. Measured against the real HiRID export
+    that assumption is false — all 2,062 recorded deaths are timeable from
+    variables 110/200 — so a shortfall is a fault, and raising costs a correct
+    run nothing. A RuntimeWarning also cannot be read by any gate: it reaches
+    stderr and no caller.
     """
 
     general = pd.DataFrame({"patientid": [1, 2], "discharge_status": ["dead", "dead"]})
@@ -187,12 +192,62 @@ def test_deaths_dropped_for_want_of_a_timestamp_are_reported(tmp_path):
         {"patientid": [1, 1], "datetime": [10, 20], "variableid": [110, 200]}
     )
 
-    with pytest.warns(RuntimeWarning, match="1 of 2 recorded deaths"):
-        result = _apply(
-            _GeneralSource(general=general, base_path=tmp_path), frame=frame
-        )
+    with pytest.raises(ConceptExtractionUnavailable) as excinfo:
+        _apply(_GeneralSource(general=general, base_path=tmp_path), frame=frame)
 
-    assert list(result["patientid"]) == [1]
+    assert excinfo.value.stage == "last_observation"
+    message = str(excinfo.value)
+    assert "1 of 2 recorded deaths" in message
+    # The undercount it refused to report, stated as a number.
+    assert "mortality of 1/2" in message
+
+
+def test_an_explicitly_empty_cohort_is_empty_not_everybody(tmp_path):
+    """Only absence means "all patients"; `[]` means nobody.
+
+    Collapsing an empty selector into "no filter" makes every guard below
+    answer for the whole database when the caller asked about nobody — the
+    same mistake as guarding on every death in the source. The package's own
+    normalizers already keep `None` and `[]` apart, so this one must too.
+    """
+
+    from easyicu.concept.callback_apply import (
+        cohort_patient_ids,
+        deaths_within_cohort,
+    )
+
+    assert cohort_patient_ids(None) is None
+    assert cohort_patient_ids([]) == set()
+    assert cohort_patient_ids({}) == set()
+    assert cohort_patient_ids({"patientid": []}) == set()
+    assert cohort_patient_ids({"patientid": [1]}) == {1}
+
+    # The consequence that matters: a death in the database is not a death in
+    # an empty cohort.
+    assert deaths_within_cohort({2}, []) == set()
+    assert deaths_within_cohort({2}, None) == {2}
+
+
+def test_an_empty_cohort_returns_empty_rather_than_failing_on_someone_elses_death(
+    tmp_path,
+):
+    """The end-to-end consequence of the selector fix."""
+
+    general = pd.DataFrame({"patientid": [1, 2], "discharge_status": ["alive", "dead"]})
+    # Patient 2 died and cannot be timed — which would raise for a cohort that
+    # contained them, and must not for a cohort that contains nobody.
+    frame = pd.DataFrame(
+        {"patientid": [1, 1], "datetime": [10, 20], "variableid": [110, 200]}
+    )
+
+    result = _apply(
+        _GeneralSource(general=general, base_path=tmp_path),
+        frame=frame,
+        patient_ids=[],
+    )
+
+    assert isinstance(result, pd.DataFrame)
+    assert result.empty
 
 
 def test_deaths_that_cannot_be_timed_are_not_reported_as_no_deaths(tmp_path):
@@ -246,6 +301,11 @@ def test_both_copies_of_the_logic_fail_closed():
         "the fast path must narrow to the cohort through the same shared helper, "
         "or the two copies drift on which population their guards are about"
     )
-    assert (
-        "_warn_untimed_deaths" in fast_path
-    ), "a death the query cannot time silently lowers the mortality reported"
+    assert "_refuse_untimed_deaths" in fast_path, (
+        "a death the query cannot time silently lowers the mortality reported, "
+        "and both copies must refuse it through the same helper"
+    )
+    assert "_warn_untimed_deaths" not in fast_path, (
+        "warning was the old behaviour: it reaches stderr, not the caller, so "
+        "nothing downstream can act on the shortfall"
+    )
