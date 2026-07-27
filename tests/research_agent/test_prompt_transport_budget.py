@@ -684,6 +684,54 @@ def test_rewrapping_for_the_same_consumer_is_still_idempotent() -> None:
     assert budgeted_client(once, "analyzer", "concept_audit") is once
 
 
+def test_the_same_consumer_under_a_new_ceiling_is_rewrapped_not_reused() -> None:
+    """Matching on the consumer's name alone discarded the ceiling asked for.
+
+    Idempotence is about the whole envelope, not about the name on it. While
+    the check read only `base.consumer`, the first caller to wrap a client set
+    the limit for every caller after it: asking for 1,000 tokens returned a
+    wrapper still measuring against 9,000, with nothing to say the request had
+    been dropped.
+    """
+
+    inner = _RecordingClient()
+    first = budgeted_client(inner, "analyzer", "vlm_visual_qa", limit_tokens=9_000)
+    second = budgeted_client(first, "analyzer", "vlm_visual_qa", limit_tokens=1_000)
+
+    assert second is not first
+    assert second.limit_tokens == 1_000
+    assert second.consumer == "vlm_visual_qa"
+    # Re-wrapped around the original client, never stacked two envelopes deep.
+    assert second.inner is inner
+    assert first.limit_tokens == 9_000
+
+
+def test_rewrapping_lands_exactly_where_a_first_wrap_would() -> None:
+    """The property that keeps this from needing a special case.
+
+    A re-wrap is not a merge and carries no memory of the previous ceiling: it
+    produces the envelope a fresh wrap with the same arguments produces. That
+    also fixes what the ceiling means when a caller does not name one -- the
+    declared default, exactly as on a first wrap, rather than whatever the
+    previous caller happened to ask for.
+    """
+
+    declared = PROMPT_TRANSPORT_BUDGETS["vlm_visual_qa"].limit_tokens
+    inner = _RecordingClient()
+    tightened = budgeted_client(inner, "analyzer", "vlm_visual_qa", limit_tokens=1_000)
+
+    for limit in (2_000, None):
+        rewrapped = budgeted_client(
+            tightened, "analyzer", "vlm_visual_qa", limit_tokens=limit
+        )
+        fresh = budgeted_client(inner, "analyzer", "vlm_visual_qa", limit_tokens=limit)
+        assert rewrapped.budget == fresh.budget
+        assert rewrapped.inner is fresh.inner is inner
+
+    unspecified = budgeted_client(tightened, "analyzer", "vlm_visual_qa")
+    assert unspecified.limit_tokens == declared
+
+
 def test_an_injected_client_from_an_undeclared_consumer_is_refused() -> None:
     with pytest.raises(UndeclaredPromptConsumerError):
         budgeted_client(_RecordingClient(), "analyzer", "not_declared_anywhere")
