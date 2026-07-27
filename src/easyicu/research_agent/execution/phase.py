@@ -289,6 +289,7 @@ from ..gates.semantics import (
     blocking_validator_findings as _blocking_validator_findings,
 )
 from ..providers.mocks import MockLLMClient
+from ..providers.prompt_budget import budgeted_role_client
 from ..planning.method_vocabulary import (
     MISSINGNESS_SOURCE_AVAILABILITY_AUDIT,
 )
@@ -3892,8 +3893,8 @@ def run_execute_phase(
     }
     role_resolver = plan_result.role_resolver
     llm_signature = plan_result.llm_signature
-    llm_concept_audit_client = pipeline._llm_concept_auditor_client or role_resolver(
-        "analyzer"
+    llm_concept_audit_client = pipeline._llm_concept_auditor_client or (
+        budgeted_role_client(role_resolver, "analyzer", "concept_audit")
     )
     llm_concept_auditor_signature = (
         pipeline._llm_signature(llm_concept_audit_client)
@@ -4022,7 +4023,9 @@ def run_execute_phase(
         if isinstance(coder, AgenticCoderAgent)
         else fallback_coder_provider_identity_sha256
     )
-    analyzer = AnalyzerAgent(role_resolver("analyzer"))
+    analyzer = AnalyzerAgent(
+        budgeted_role_client(role_resolver, "analyzer", "analyzer_interpretation")
+    )
     supervisor = RuntimeSupervisor(
         clinical_semantics=ClinicalSemanticsAgent(),
         data_extraction=DataExtractionAgent(),
@@ -4282,7 +4285,9 @@ def run_execute_phase(
                     configured_limit=pipeline._max_step_provider_calls,
                     cohort_prose=_cohort_definition_prose(candidate_plan),
                     universe_columns=columns,
-                    llm=role_resolver("planner"),
+                    llm=budgeted_role_client(
+                        role_resolver, "planner", "cohort_extraction"
+                    ),
                     name=getattr(
                         getattr(candidate_plan, "cohort", None),
                         "name",
@@ -11834,7 +11839,9 @@ def run_execute_phase(
         ]
         vlm_adapter = pipeline._visual_qa_adapter
         if vlm_adapter is None and pipeline._enable_vlm_visual_qa:
-            client = pipeline._vlm_client or role_resolver("analyzer")
+            client = pipeline._vlm_client or budgeted_role_client(
+                role_resolver, "analyzer", "vlm_visual_qa"
+            )
             if client is not None:
                 vlm_adapter = VLMVisualQAAdapter(
                     client,
