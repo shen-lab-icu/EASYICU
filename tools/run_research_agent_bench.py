@@ -90,6 +90,10 @@ class _JSONLObjectDecodeError(ValueError):
 
 
 _FIGURE2_PAPER_ACCEPTANCE_EXIT_CODE = 3
+# A run that did not finish its plan. Distinct from paper-acceptance (3) so a
+# development diagnostic, which is never paper-accepted, still reports the
+# difference between "ran and was not authorized" and "did not finish running".
+_EXECUTION_INCOMPLETE_EXIT_CODE = 4
 
 
 def _is_figure2_task_id(value: object) -> bool:
@@ -952,6 +956,89 @@ def _figure2_evaluation_attempt(*, run_dir: Path, item) -> Dict[str, Any]:
         ).model_dump(mode="json")
 
 
+def _failed_step_ids(readiness: Mapping[str, Any]) -> List[str]:
+    """Return the step ids the run itself recorded as failed."""
+
+    failed: List[str] = []
+    for entry in readiness.get("failed_steps") or []:
+        step_id = entry.get("step_id") if isinstance(entry, Mapping) else entry
+        if step_id:
+            failed.append(str(step_id))
+    return failed
+
+
+def _arm_execution_succeeded(arm: Any) -> bool:
+    """Return whether one arm actually executed its plan to completion.
+
+    This is deliberately NOT a paper-authority check. A development diagnostic
+    ends ``status='diagnostic_only'`` and ``paper_authorized=false`` by design,
+    and that is a legitimate completed execution. What is never a completed
+    execution is a run whose own ``run_status.json`` reports unfinished or
+    failed steps -- exactly the state that previously reported
+    ``completed_tasks=1, failed_or_blocked_tasks=0`` and exit 0.
+    """
+
+    if not isinstance(arm, Mapping):
+        return False
+    return bool(
+        arm.get("execution_complete")
+        and arm.get("step_scientific_requirements_complete")
+        and not arm.get("failed_step_ids")
+        and not arm.get("missing_step_ids")
+    )
+
+
+def _score_execution_failures(score: Any) -> List[str]:
+    """Return a reason per arm that did not finish executing."""
+
+    if not isinstance(score, Mapping):
+        return ["benchmark item produced no score payload"]
+    arms = [
+        (label, score.get(label))
+        for label in ("aware", "naive")
+        if isinstance(score.get(label), Mapping)
+    ]
+    if not arms:
+        return ["benchmark item produced no scored arm"]
+    reasons: List[str] = []
+    for label, arm in arms:
+        if _arm_execution_succeeded(arm):
+            continue
+        assert isinstance(arm, Mapping)
+        failed = list(arm.get("failed_step_ids") or [])
+        missing = list(arm.get("missing_step_ids") or [])
+        detail = []
+        if failed:
+            detail.append(f"failed steps {failed}")
+        if missing:
+            detail.append(f"missing steps {missing}")
+        if not arm.get("step_scientific_requirements_complete") and not detail:
+            detail.append("step scientific requirements incomplete")
+        if not detail:
+            detail.append("execution_complete is false")
+        completed = arm.get("completed_step_count")
+        required = arm.get("required_step_count")
+        position = (
+            f" ({completed}/{required} steps)"
+            if isinstance(completed, int) and isinstance(required, int) and required
+            else ""
+        )
+        reasons.append(
+            f"{label} arm did not complete execution{position}: " + "; ".join(detail)
+        )
+    return reasons
+
+
+def _finish_task_on_execution_outcome(task_hard_stop: Any, score: Any) -> None:
+    """Close the ledger task on what the run did, not on the call returning."""
+
+    failures = _score_execution_failures(score)
+    if failures:
+        task_hard_stop.finish(score=score, error="; ".join(failures)[:1800])
+        return
+    task_hard_stop.finish(score=score)
+
+
 def _score_arm(*, run_dir: Path, item, label: str) -> Dict[str, Any]:
     manifest = _load_manifest(run_dir)
     historical_error_count = sum(
@@ -996,6 +1083,21 @@ def _score_arm(*, run_dir: Path, item, label: str) -> Dict[str, Any]:
         # the gate story should be quantitative in the bench report, not
         # only visible inside each run's run_status.json).
         "gate_status": _gate_ladder(run_dir, readiness),
+        # The execution axis, surfaced explicitly at the benchmark boundary.
+        # A development-diagnostic run is expected to end paper_authorized=false,
+        # but it must still have RUN: without these fields the only signal the
+        # outer driver had was "the call returned", which reports a run that
+        # failed two steps as a completed task.
+        "execution_complete": bool(readiness.get("execution_complete")),
+        "step_scientific_requirements_complete": bool(
+            readiness.get("step_scientific_requirements_complete")
+        ),
+        "required_step_count": int(readiness.get("required_step_count") or 0),
+        "completed_step_count": int(readiness.get("completed_step_count") or 0),
+        "failed_step_ids": _failed_step_ids(readiness),
+        "missing_step_ids": [
+            str(step_id) for step_id in (readiness.get("missing_steps") or [])
+        ],
         "manuscript_ready": bool(readiness.get("manuscript_ready")),
         "publication_ready": bool(readiness.get("publication_ready")),
         # Keep the three independent completion axes visible at the benchmark
@@ -2642,7 +2744,7 @@ def _run_suite(
             raise
         scores.append(score)
         if task_hard_stop is not None:
-            task_hard_stop.finish(score=score)
+            _finish_task_on_execution_outcome(task_hard_stop, score)
 
     totals = _aggregate(scores)
     payload = {
@@ -4889,8 +4991,17 @@ def _run_ehrflowbench_jsonl(
                 provider_hard_stop=task_hard_stop,
             )
             scores.append(score)
+            execution_failures = _score_execution_failures(score)
             if task_hard_stop is not None:
-                task_hard_stop.finish(score=score)
+                _finish_task_on_execution_outcome(task_hard_stop, score)
+            if execution_failures:
+                pending.append(
+                    {
+                        "key": key,
+                        "status": "execution_incomplete",
+                        "error": "; ".join(execution_failures)[:300],
+                    }
+                )
             if formal_canary_task_id is not None and key == formal_canary_task_id:
                 canary_passed = _figure2_canary_passed(score)
                 _write_figure2_canary_gate(
@@ -5096,6 +5207,20 @@ def _run_ehrflowbench_jsonl(
             return 2
     if require_figure2_paper_acceptance and acceptance_status != "accepted":
         return _FIGURE2_PAPER_ACCEPTANCE_EXIT_CODE
+    # A scored item whose run never finished executing is not a success, even in
+    # a development diagnostic where paper authority is expected to be withheld.
+    # Reporting exit 0 here is what let a 7/12-step run read as a completed task.
+    incomplete = [
+        str(score.get("item_key") or "")
+        for score in scores
+        if _score_execution_failures(score)
+    ]
+    if incomplete:
+        print(
+            "[execution] items that did not complete execution: "
+            + ", ".join(incomplete)
+        )
+        return _EXECUTION_INCOMPLETE_EXIT_CODE
     return 0
 
 
