@@ -25,7 +25,9 @@ from easyicu.research_agent.providers.prompt_budget import (
     PromptTransportBudgetError,
     UndeclaredPromptConsumerError,
     active_prompt_consumer,
+    budgeted_client,
     budgeted_role_client,
+    budgeted_vlm_client,
     declared_consumers_for_role,
     estimate_prompt_tokens,
     prompt_payload_bytes,
@@ -578,3 +580,110 @@ def test_every_budget_declares_a_rationale() -> None:
     for consumer, budget in PROMPT_TRANSPORT_BUDGETS.items():
         assert budget.rationale.strip(), f"{consumer} declares no rationale"
         assert budget.limit_tokens > 0
+
+
+# ---------------------------------------------------------------------------
+# The envelope has to cover every way a client can arrive
+# ---------------------------------------------------------------------------
+
+
+class _Pipeline:
+    """The two attributes the visual-QA call sites read off the pipeline."""
+
+    def __init__(self, vlm_client=None, limit_tokens=None) -> None:
+        self._vlm_client = vlm_client
+        self._max_prompt_tokens_per_call = limit_tokens
+
+
+def test_an_injected_vlm_client_is_still_held_to_the_envelope() -> None:
+    """`pipeline._vlm_client or budgeted_role_client(...)` short-circuits.
+
+    An explicitly supplied client therefore reached the provider with no
+    ceiling and no consumer attribution at all -- the envelope covered only
+    the clients the resolver happened to produce.
+    """
+
+    injected = _RecordingClient()
+    client = budgeted_vlm_client(
+        _Pipeline(vlm_client=injected), _resolver(_RecordingClient()), "vlm_visual_qa"
+    )
+
+    assert isinstance(client, PromptBudgetClient)
+    assert client.consumer == "vlm_visual_qa"
+
+
+def test_an_injected_client_takes_the_operator_ceiling_too() -> None:
+    client = budgeted_vlm_client(
+        _Pipeline(vlm_client=_RecordingClient(), limit_tokens=4_321),
+        _resolver(_RecordingClient()),
+        "vlm_visual_qa",
+    )
+
+    assert client.limit_tokens == 4_321
+
+
+def test_the_resolver_still_supplies_the_client_when_none_is_injected() -> None:
+    """The negative control: the wrapping must not change the normal path."""
+
+    inner = _RecordingClient()
+    client = budgeted_vlm_client(_Pipeline(), _resolver(inner), "vlm_visual_qa")
+
+    assert isinstance(client, PromptBudgetClient)
+    assert client.consumer == "vlm_visual_qa"
+    assert client.inner is inner
+
+
+def test_no_call_site_reintroduces_the_short_circuit() -> None:
+    """The same two-word bug was written independently in two files."""
+
+    import easyicu.research_agent as pkg
+
+    root = pathlib.Path(pkg.__file__).parent
+    offenders = [
+        str(path.relative_to(root))
+        for path in root.rglob("*.py")
+        # The owner module quotes the pattern in prose to explain what it
+        # replaced; everywhere else it is the bug itself.
+        if path.name != "prompt_budget.py"
+        and "_vlm_client or " in path.read_text(encoding="utf-8")
+    ]
+    assert not offenders, (
+        "an injected client must go through budgeted_vlm_client, not past the "
+        f"envelope via `or`: {offenders}"
+    )
+
+
+def test_a_client_wrapped_for_another_consumer_is_rewrapped() -> None:
+    """Reuse used to keep the first consumer's name and ceiling.
+
+    Two consumers share the `analyzer` role. Handing the second one the first
+    one's wrapper attributes its calls to a consumer that did not make them,
+    and measures them against a limit that was never sized for them.
+    """
+
+    inner = _RecordingClient()
+    first = budgeted_role_client(
+        _resolver(inner), "analyzer", "concept_audit", limit_tokens=1_000
+    )
+    second = budgeted_client(first, "analyzer", "vlm_visual_qa", limit_tokens=9_000)
+
+    assert second is not first
+    assert second.consumer == "vlm_visual_qa"
+    assert second.limit_tokens == 9_000
+    # Re-wrapped around the original client, not stacked on the old envelope.
+    assert second.inner is inner
+    # The first wrapper is untouched, so its own consumer keeps its ceiling.
+    assert first.consumer == "concept_audit"
+    assert first.limit_tokens == 1_000
+
+
+def test_rewrapping_for_the_same_consumer_is_still_idempotent() -> None:
+    inner = _RecordingClient()
+    once = budgeted_role_client(_resolver(inner), "analyzer", "concept_audit")
+
+    assert budgeted_client(once, "analyzer", "concept_audit") is once
+
+
+def test_an_injected_client_from_an_undeclared_consumer_is_refused() -> None:
+    with pytest.raises(UndeclaredPromptConsumerError):
+        budgeted_client(_RecordingClient(), "analyzer", "not_declared_anywhere")

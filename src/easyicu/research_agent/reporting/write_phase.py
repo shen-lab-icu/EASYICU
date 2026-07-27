@@ -38,7 +38,7 @@ from ..figures.skill import PublicationFigureSkill
 from .latex import scaffold_to_latex
 from ..literature import LiteratureAgent, LiteratureBundle
 from ..providers.mocks import MockLLMClient
-from ..providers.prompt_budget import budgeted_role_client
+from ..providers.prompt_budget import budgeted_vlm_client
 from .manuscript_post import (
     _apply_writer_evidence_repair_decisions,
     bind_numeric_values,
@@ -597,11 +597,11 @@ def run_write_phase(
                     vlm_adapter = pipeline._visual_qa_adapter
                     egress_policy = None
                     if vlm_adapter is None and pipeline._enable_vlm_visual_qa:
-                        client = pipeline._vlm_client or budgeted_role_client(
-                            role_resolver,
-                            "analyzer",
-                            "vlm_visual_qa",
-                            limit_tokens=pipeline._max_prompt_tokens_per_call,
+                        # An injected client is still a consumer of the
+                        # role, so it gets the same envelope; `or` used to let
+                        # it past unwrapped and unattributed.
+                        client = budgeted_vlm_client(
+                            pipeline, role_resolver, "vlm_visual_qa"
                         )
                         if client is not None:
                             egress_policy = pipeline._figure_egress_policy(

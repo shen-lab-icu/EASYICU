@@ -45,7 +45,9 @@ __all__ = [
     "PromptTransportBudgetError",
     "UndeclaredPromptConsumerError",
     "active_prompt_consumer",
+    "budgeted_client",
     "budgeted_role_client",
+    "budgeted_vlm_client",
     "estimate_prompt_tokens",
     "prompt_payload_bytes",
 ]
@@ -283,6 +285,12 @@ class PromptBudgetClient:
     def limit_tokens(self) -> int:
         return self._budget.limit_tokens
 
+    @property
+    def inner(self) -> Any:
+        """The client this wrapper bounds, for re-wrapping under a new budget."""
+
+        return self._inner
+
     def _enforce(self, messages: Sequence[Any]) -> None:
         actual_bytes = prompt_payload_bytes(messages)
         if estimate_prompt_tokens(actual_bytes) > self._budget.limit_tokens:
@@ -359,17 +367,75 @@ def budgeted_role_client(
     uses the declared default.
     """
 
-    budget = PROMPT_TRANSPORT_BUDGETS.get(str(consumer))
-    if budget is None:
-        raise UndeclaredPromptConsumerError(consumer=str(consumer), role=str(role))
-    if budget.role != str(role):
-        raise UndeclaredPromptConsumerError(consumer=str(consumer), role=str(role))
-    base = role_resolver(str(role))
+    # Resolve nothing until the consumer is known: an undeclared consumer must
+    # not even reach the provider.
+    _declared_budget(consumer=consumer, role=role)
+    return budgeted_client(
+        role_resolver(str(role)), role, consumer, limit_tokens=limit_tokens
+    )
+
+
+def budgeted_client(
+    base: Any,
+    role: str,
+    consumer: str,
+    *,
+    limit_tokens: Optional[int] = None,
+) -> Any:
+    """Hold an already-resolved client to ``consumer``'s declared envelope.
+
+    The resolver-based form above cannot cover a client that was injected
+    rather than resolved -- ``pipeline._vlm_client or budgeted_role_client(...)``
+    short-circuits, so an explicitly supplied client reached the provider
+    unwrapped and unattributed, with no ceiling at all.
+    """
+
+    budget = _declared_budget(consumer=consumer, role=role)
     if base is None:
         return None
     if isinstance(base, PromptBudgetClient):
-        return base
+        if base.consumer == str(consumer):
+            return base
+        # Wrapped, but for somebody else. Returning it as-is hands this
+        # consumer the other one's name and ceiling -- so its calls are
+        # attributed to a consumer that did not make them, and it is measured
+        # against a limit that was never sized for it. Re-wrap the client
+        # underneath instead of stacking a second envelope on top.
+        base = base.inner
     return PromptBudgetClient(base, budget=budget.with_limit_tokens(limit_tokens))
+
+
+def budgeted_vlm_client(
+    pipeline: Any,
+    role_resolver: Callable[[str], Any],
+    consumer: str,
+) -> Any:
+    """The one way visual QA obtains its client, injected or resolved.
+
+    Both call sites wrote ``pipeline._vlm_client or budgeted_role_client(...)``,
+    which means an injected client took neither the ceiling nor the consumer
+    attribution. Having one function own the choice keeps the two sites from
+    drifting apart again.
+    """
+
+    injected = getattr(pipeline, "_vlm_client", None)
+    limit_tokens = getattr(pipeline, "_max_prompt_tokens_per_call", None)
+    if injected is not None:
+        return budgeted_client(
+            injected, "analyzer", consumer, limit_tokens=limit_tokens
+        )
+    return budgeted_role_client(
+        role_resolver, "analyzer", consumer, limit_tokens=limit_tokens
+    )
+
+
+def _declared_budget(*, consumer: str, role: str) -> PromptConsumerBudget:
+    """Fail closed unless ``consumer`` is a declared user of ``role``."""
+
+    budget = PROMPT_TRANSPORT_BUDGETS.get(str(consumer))
+    if budget is None or budget.role != str(role):
+        raise UndeclaredPromptConsumerError(consumer=str(consumer), role=str(role))
+    return budget
 
 
 def declared_consumers_for_role(role: str) -> Dict[str, PromptConsumerBudget]:
