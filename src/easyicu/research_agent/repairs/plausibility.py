@@ -111,8 +111,10 @@ def patch_flag_only_plausibility_range_rejection(
     shape.  Supported shapes are a direct adjacent
     ``range-mask = lower | upper`` / ``if range-mask.any(): raise`` pair, or a
     mask/count/terminal-failure chain where the mask and count remain available
-    for audit reporting and only the failure guard is removed.  Any ambiguity,
-    scientific filtering use, side effect, or non-literal boundary leaves the
+    for audit reporting and only the failure guard is removed.  A unique pair
+    of lower/upper terminal guards may also be retained when both bounds are
+    read from the sealed ``analysis_plausibility_range`` minimum/maximum
+    schema.  Any ambiguity, scientific filtering use, or side effect leaves the
     code unchanged for provider repair.
     """
 
@@ -279,6 +281,192 @@ def patch_flag_only_plausibility_range_rejection(
             and isinstance(statement.value.func, ast.Name)
             and statement.value.func.id in terminating_helpers
         )
+
+    plausibility_names = {
+        node.targets[0].id
+        for node in assignments
+        if len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Attribute)
+        and node.value.func.attr == "get"
+        and node.value.args
+        and isinstance(node.value.args[0], ast.Constant)
+        and node.value.args[0].value == "analysis_plausibility_range"
+    }
+    sealed_bound_names: dict[str, tuple[str, str]] = {}
+    for node in assignments:
+        if not (
+            len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Attribute)
+            and isinstance(node.value.func.value, ast.Name)
+            and node.value.func.value.id in plausibility_names
+            and node.value.func.attr == "get"
+            and node.value.args
+            and isinstance(node.value.args[0], ast.Constant)
+            and node.value.args[0].value in {"minimum", "maximum"}
+        ):
+            continue
+        sealed_bound_names[node.targets[0].id] = (
+            node.value.func.value.id,
+            str(node.value.args[0].value),
+        )
+
+    def _non_null_bound_name(node: ast.AST) -> Optional[str]:
+        if not (
+            isinstance(node, ast.Compare)
+            and len(node.ops) == 1
+            and isinstance(node.ops[0], ast.IsNot)
+            and len(node.comparators) == 1
+        ):
+            return None
+        left, right = node.left, node.comparators[0]
+        if (
+            isinstance(left, ast.Name)
+            and isinstance(right, ast.Constant)
+            and right.value is None
+        ):
+            return left.id
+        if (
+            isinstance(right, ast.Name)
+            and isinstance(left, ast.Constant)
+            and left.value is None
+        ):
+            return right.id
+        return None
+
+    def _sealed_comparison(
+        node: ast.AST,
+        *,
+        bound_name: str,
+        bound_kind: str,
+    ) -> Optional[str]:
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "bool"
+            and len(node.args) == 1
+            and not node.keywords
+        ):
+            node = node.args[0]
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "any"
+            and not node.args
+            and not node.keywords
+            and isinstance(node.func.value, ast.Compare)
+            and len(node.func.value.ops) == 1
+            and len(node.func.value.comparators) == 1
+        ):
+            return None
+        comparison = node.func.value
+        left, right = comparison.left, comparison.comparators[0]
+        operator = comparison.ops[0]
+        if isinstance(left, ast.Name) and isinstance(right, ast.Name):
+            if right.id == bound_name and (
+                (bound_kind == "minimum" and isinstance(operator, (ast.Lt, ast.LtE)))
+                or (
+                    bound_kind == "maximum"
+                    and isinstance(operator, (ast.Gt, ast.GtE))
+                )
+            ):
+                return left.id
+            if left.id == bound_name and (
+                (bound_kind == "minimum" and isinstance(operator, (ast.Gt, ast.GtE)))
+                or (
+                    bound_kind == "maximum"
+                    and isinstance(operator, (ast.Lt, ast.LtE))
+                )
+            ):
+                return right.id
+        return None
+
+    def _sealed_guard(
+        node: ast.stmt,
+    ) -> Optional[tuple[str, str, str]]:
+        if not (
+            isinstance(node, ast.If)
+            and not node.orelse
+            and is_terminal_failure_body(node.body)
+            and isinstance(node.test, ast.BoolOp)
+            and isinstance(node.test.op, ast.And)
+            and len(node.test.values) == 2
+        ):
+            return None
+        for null_check, range_check in (
+            (node.test.values[0], node.test.values[1]),
+            (node.test.values[1], node.test.values[0]),
+        ):
+            bound_name = _non_null_bound_name(null_check)
+            if bound_name is None or bound_name not in sealed_bound_names:
+                continue
+            plausibility_name, bound_kind = sealed_bound_names[bound_name]
+            series_name = _sealed_comparison(
+                range_check,
+                bound_name=bound_name,
+                bound_kind=bound_kind,
+            )
+            if series_name is not None:
+                return plausibility_name, bound_kind, series_name
+        return None
+
+    sealed_pairs: list[tuple[ast.If, ast.If]] = []
+    for parent in ast.walk(tree):
+        for field in ("body", "orelse", "finalbody"):
+            statements = getattr(parent, field, None)
+            if not isinstance(statements, list):
+                continue
+            guards = [
+                (statement, _sealed_guard(statement))
+                for statement in statements
+                if isinstance(statement, ast.If)
+            ]
+            guards = [
+                (statement, detail)
+                for statement, detail in guards
+                if detail is not None
+            ]
+            for index, (lower_guard, lower_detail) in enumerate(guards):
+                assert lower_detail is not None
+                if lower_detail[1] != "minimum":
+                    continue
+                for upper_guard, upper_detail in guards[index + 1 :]:
+                    assert upper_detail is not None
+                    if (
+                        upper_detail[1] == "maximum"
+                        and upper_detail[0] == lower_detail[0]
+                        and upper_detail[2] == lower_detail[2]
+                    ):
+                        sealed_pairs.append((lower_guard, upper_guard))
+    if len(sealed_pairs) == 1:
+        lines = code.splitlines(keepends=True)
+        replacements: list[tuple[int, int, str]] = []
+        for guard in sealed_pairs[0]:
+            if not guard.body or guard.body[-1].end_lineno is None:
+                return code
+            start = guard.body[0].lineno
+            end = guard.body[-1].end_lineno
+            source_line = lines[start - 1]
+            indent = source_line[: len(source_line) - len(source_line.lstrip(" \t"))]
+            replacements.append(
+                (
+                    start,
+                    end,
+                    f"{indent}pass  # "
+                    "_easyicu_flag_only_plausibility_range_retained_v1\n",
+                )
+            )
+        for start, end, replacement in sorted(replacements, reverse=True):
+            lines[start - 1 : end] = [replacement]
+        repaired = "".join(lines)
+        try:
+            ast.parse(repaired)
+        except SyntaxError:
+            return code
+        return repaired
 
     def is_raise_guard(node: ast.stmt, mask_name: str) -> bool:
         if not (

@@ -124,7 +124,9 @@ def test_cohort_summary_executor_owns_only_closed_auxiliary_contract():
     step = _step()
     assert cohort_summary_executor_owns_step(step)
 
-    assert not cohort_summary_executor_owns_step(
+    # Canonical9 planners may use the generic method head, but the remaining
+    # closed contract still uniquely identifies this mechanical summary.
+    assert cohort_summary_executor_owns_step(
         step.model_copy(update={"method": "descriptive"})
     )
     assert not cohort_summary_executor_owns_step(

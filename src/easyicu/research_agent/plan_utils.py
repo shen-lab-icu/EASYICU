@@ -4079,6 +4079,8 @@ def _primary_exposure_overadjustment_findings(
     (``context.primary_exposure``); it is never inferred, so the check stays
     silent rather than guessing.
     """
+    if not effect_output_authorized(step):
+        return []
     exposure = (getattr(context, "primary_exposure", None) or "").strip()
     if not exposure:
         return []
@@ -4156,6 +4158,8 @@ def _primary_model_leakage_findings(
     ``context.primary_exposure``); they are never inferred, so each check stays
     silent rather than guessing.
     """
+    if not effect_output_authorized(step):
+        return []
     covariates = read_adjustment_covariates(out_dir)
     if not covariates:
         return []
