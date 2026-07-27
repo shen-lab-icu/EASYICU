@@ -114,8 +114,15 @@ def patch_flag_only_plausibility_range_rejection(
     for audit reporting and only the failure guard is removed.  A unique pair
     of lower/upper terminal guards may also be retained when both bounds are
     read from the sealed ``analysis_plausibility_range`` minimum/maximum
-    schema.  Any ambiguity, scientific filtering use, or side effect leaves the
-    code unchanged for provider repair.
+    schema, whether the bound is compared directly or narrowed once through
+    ``float(...)``.  Any ambiguity, scientific filtering use, or side effect
+    leaves the code unchanged for provider repair.
+
+    This repair proves only the retention half of ``retain_and_flag``: it
+    deletes a terminal guard, so no row is excluded.  It cannot supply the
+    structured flag or count, which belongs to the generated script's declared
+    outputs.  A step whose only evidence of policy compliance is this marker
+    has satisfied retention, not flagging.
     """
 
     matching: list[set[str] | None] = []
@@ -337,6 +344,27 @@ def patch_flag_only_plausibility_range_rejection(
             return right.id
         return None
 
+    def _compared_bound_name(node: ast.AST) -> Optional[str]:
+        """Read the bound a comparison operand denotes, through one float().
+
+        A host bound arrives as JSON, so a generated script commonly narrows it
+        at the comparison itself (``numeric < float(lower)``). That is the same
+        bound, not a computed threshold, so matching only a bare ``Name`` left
+        this repair unable to fire on the exact shape the auditor blocks.
+        Nothing else is unwrapped: a call with keywords, extra arguments, or any
+        other callee is not a bound and returns None.
+        """
+
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "float"
+            and len(node.args) == 1
+            and not node.keywords
+        ):
+            node = node.args[0]
+        return node.id if isinstance(node, ast.Name) else None
+
     def _sealed_comparison(
         node: ast.AST,
         *,
@@ -363,25 +391,23 @@ def patch_flag_only_plausibility_range_rejection(
         ):
             return None
         comparison = node.func.value
-        left, right = comparison.left, comparison.comparators[0]
         operator = comparison.ops[0]
-        if isinstance(left, ast.Name) and isinstance(right, ast.Name):
-            if right.id == bound_name and (
-                (bound_kind == "minimum" and isinstance(operator, (ast.Lt, ast.LtE)))
-                or (
-                    bound_kind == "maximum"
-                    and isinstance(operator, (ast.Gt, ast.GtE))
-                )
-            ):
-                return left.id
-            if left.id == bound_name and (
-                (bound_kind == "minimum" and isinstance(operator, (ast.Gt, ast.GtE)))
-                or (
-                    bound_kind == "maximum"
-                    and isinstance(operator, (ast.Lt, ast.LtE))
-                )
-            ):
-                return right.id
+        left_name = _compared_bound_name(comparison.left)
+        right_name = _compared_bound_name(comparison.comparators[0])
+        if left_name is None or right_name is None:
+            return None
+        # The series side must stay a plain name: only the bound may be
+        # narrowed, so a comparison against float(series) is not this shape.
+        if right_name == bound_name and isinstance(comparison.left, ast.Name):
+            if (
+                bound_kind == "minimum" and isinstance(operator, (ast.Lt, ast.LtE))
+            ) or (bound_kind == "maximum" and isinstance(operator, (ast.Gt, ast.GtE))):
+                return left_name
+        if left_name == bound_name and isinstance(comparison.comparators[0], ast.Name):
+            if (
+                bound_kind == "minimum" and isinstance(operator, (ast.Gt, ast.GtE))
+            ) or (bound_kind == "maximum" and isinstance(operator, (ast.Lt, ast.LtE))):
+                return right_name
         return None
 
     def _sealed_guard(

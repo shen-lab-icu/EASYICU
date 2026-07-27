@@ -257,3 +257,115 @@ def test_repair_is_registered_as_structural():
 
     assert metadata.repair_class is RepairClass.STRUCTURAL
     assert metadata.classification_source == "exact"
+
+
+def test_host_bound_narrowed_with_float_is_still_the_same_bound():
+    """The exact shape E1 r25 step 06 was blocked on.
+
+    The generated validator narrows the JSON bound at the comparison itself
+    (``numeric < float(lower)``). Matching only a bare name left this repair
+    unable to fire on the one script the auditor actually rejects: it returned
+    no repair names and an unchanged script while the run burned its provider
+    budget on the same blocked draft.
+    """
+
+    code = """
+def validate_allowed_numeric(values, column, manifest):
+    contract = manifest["raw_input_contracts"]["contracts"].get(column)
+    observed = values.dropna()
+    bounds = contract.get("analysis_plausibility_range")
+    if bounds is not None:
+        lower = bounds.get("minimum")
+        upper = bounds.get("maximum")
+        numeric = observed.astype(float)
+        if lower is not None and (numeric < float(lower)).any():
+            raise RuntimeError(f"{column} below analysis plausibility minimum")
+        if upper is not None and (numeric > float(upper)).any():
+            raise RuntimeError(f"{column} above analysis plausibility maximum")
+"""
+
+    repaired, names = _repair(code, _finding(variable="age"))
+
+    assert names == ["flag_only_plausibility_range_retention_v1"]
+    assert repaired.count("_easyicu_flag_only_plausibility_range_retained_v1") == 2
+    assert "below analysis plausibility minimum" not in repaired
+    assert "above analysis plausibility maximum" not in repaired
+    # The comparison, the bound reads and the coercion are untouched: only the
+    # terminal exclusion is removed.
+    assert "(numeric < float(lower)).any()" in repaired
+    assert "(numeric > float(upper)).any()" in repaired
+    assert 'lower = bounds.get("minimum")' in repaired
+    assert "numeric = observed.astype(float)" in repaired
+
+
+def test_only_the_bound_may_be_narrowed_not_the_series():
+    """``float(series)`` is a computed operand, not the sealed host bound."""
+
+    code = """
+bounds = contract.get("analysis_plausibility_range")
+lower = bounds.get("minimum")
+upper = bounds.get("maximum")
+if lower is not None and (float(numeric) < lower).any():
+    raise RuntimeError("below")
+if upper is not None and (float(numeric) > upper).any():
+    raise RuntimeError("above")
+"""
+
+    repaired, names = _repair(code, _finding(variable="age"))
+
+    assert names == []
+    assert repaired == code
+
+
+def test_a_call_that_is_not_a_plain_float_of_the_bound_is_not_a_bound():
+    """Anything else around the bound is a computed threshold, not the bound."""
+
+    for expression in (
+        "float(lower, 2)",
+        "float(lower * 2)",
+        "round(lower)",
+        "float(x=lower)",
+    ):
+        code = f"""
+bounds = contract.get("analysis_plausibility_range")
+lower = bounds.get("minimum")
+upper = bounds.get("maximum")
+if lower is not None and (numeric < {expression}).any():
+    raise RuntimeError("below")
+if upper is not None and (numeric > float(upper)).any():
+    raise RuntimeError("above")
+"""
+        repaired, names = _repair(code, _finding(variable="age"))
+        assert names == [], expression
+        assert repaired == code, expression
+
+
+def test_retention_repair_removes_the_exclusion_but_does_not_itself_flag():
+    """State the half this repair does not do, so nobody reads it as compliance.
+
+    ``retain_and_flag`` is two obligations. A deterministic patch can prove the
+    first -- no row is excluded -- because it only deletes a terminal guard. It
+    cannot invent the structured flag or count, which belongs to the generated
+    script's declared outputs. A run whose only evidence of policy compliance
+    is this marker has satisfied retention, not flagging.
+    """
+
+    code = """
+bounds = contract.get("analysis_plausibility_range")
+lower = bounds.get("minimum")
+upper = bounds.get("maximum")
+if lower is not None and (numeric < float(lower)).any():
+    raise RuntimeError("below")
+if upper is not None and (numeric > float(upper)).any():
+    raise RuntimeError("above")
+publish(frame)
+"""
+
+    repaired, names = _repair(code, _finding(variable="age"))
+
+    assert names == ["flag_only_plausibility_range_retention_v1"]
+    assert "raise RuntimeError" not in repaired
+    assert "flag" not in repaired.replace(
+        "_easyicu_flag_only_plausibility_range_retained_v1", ""
+    )
+    assert "out_of_range" not in repaired
