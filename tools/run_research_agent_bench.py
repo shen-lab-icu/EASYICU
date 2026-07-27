@@ -94,6 +94,12 @@ _FIGURE2_PAPER_ACCEPTANCE_EXIT_CODE = 3
 # development diagnostic, which is never paper-accepted, still reports the
 # difference between "ran and was not authorized" and "did not finish running".
 _EXECUTION_INCOMPLETE_EXIT_CODE = 4
+# An item the bench never started. Distinct from 4 on purpose: 4 says a run
+# began and stopped short, 5 says the item never entered the pipeline at all
+# (missing fields, missing cohort, an authority marker that would not load).
+# Both used to exit 0, so a JSONL whose every row was rejected at intake read
+# as a clean pass -- `scores=0, pending=1, exit=0`.
+_PENDING_ITEMS_EXIT_CODE = 5
 
 
 def _is_figure2_task_id(value: object) -> bool:
@@ -3269,6 +3275,16 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--allow-pending-import",
+        action="store_true",
+        help=(
+            "Exit 0 even when JSONL items were rejected at intake and never "
+            "ran. Without this the bench exits 5, because an import whose rows "
+            "all failed to load otherwise reports the same success as one that "
+            "ran and passed."
+        ),
+    )
+    parser.add_argument(
         "--model",
         default=os.environ.get(
             "EASYICU_HOSTED_DEFAULT_MODEL", "openai/gpt-oss-120b:free"
@@ -3874,6 +3890,7 @@ def main() -> int:
                 stop_after_step_id=stop_after_step_id,
                 force_writer_probe=bool(args.force_writer_probe),
                 allow_mock_aware=bool(args.allow_mock_aware),
+                allow_pending=bool(args.allow_pending_import),
                 require_figure2_paper_acceptance=bool(
                     args.require_figure2_paper_acceptance
                 ),
@@ -4556,6 +4573,7 @@ def _run_ehrflowbench_jsonl(
     stop_after_step_id: Optional[str] = None,
     force_writer_probe: bool = False,
     allow_mock_aware: bool = False,
+    allow_pending: bool = False,
     require_figure2_paper_acceptance: bool = False,
     expected_execution_identity_path: Path | None = None,
     batch_binding: Optional[Any] = None,
@@ -5244,11 +5262,29 @@ def _run_ehrflowbench_jsonl(
         for score in scores
         if _score_execution_failures(score)
     ]
+    # An item that never started is the same failure one stage earlier, and it
+    # was the quieter of the two: it produces no score to inspect, so nothing
+    # downstream could notice it. Report both lists before returning, so a run
+    # with both problems does not hide one behind the other's exit code.
+    if pending:
+        print(
+            "[pending] items that never entered the pipeline: "
+            + ", ".join(
+                f"{entry.get('key')} ({entry.get('status')})" for entry in pending
+            )
+        )
     if incomplete:
         print(
             "[execution] items that did not complete execution: "
             + ", ".join(incomplete)
         )
+    if pending and not allow_pending:
+        print(
+            "[pending] pass --allow-pending-import to accept an import whose "
+            "items are knowingly not runnable."
+        )
+        return _PENDING_ITEMS_EXIT_CODE
+    if incomplete:
         return _EXECUTION_INCOMPLETE_EXIT_CODE
     return 0
 
