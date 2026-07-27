@@ -60,7 +60,8 @@ def cohort_summary_executor_owns_step(step: AnalysisStep) -> bool:
 
     columns = _declared_columns(step)
     return bool(
-        str(step.method or "").strip().casefold() == "descriptive_cohort_summary"
+        str(step.method or "").strip().casefold()
+        in {"descriptive_cohort_summary", "descriptive"}
         and str(step.planned_analysis_role or "").strip().casefold() == "auxiliary"
         and list(step.expected_outputs or []) == ["table:cohort_summary"]
         and columns

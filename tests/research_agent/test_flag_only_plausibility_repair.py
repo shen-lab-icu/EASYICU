@@ -172,6 +172,58 @@ step_summary = {"out_of_domain_n": age_out_of_domain_n}
     assert "_easyicu_flag_only_plausibility_range_retained_v1" in repaired
 
 
+def test_sealed_minimum_maximum_terminal_guards_retain_values():
+    """Regression for E1 r25's exact host-bound plausibility shape."""
+
+    code = """
+for column_name in REQUIRED_COLUMNS:
+    contract = raw_contracts[column_name]
+    observed = df[column_name].dropna()
+    plausibility = contract.get("analysis_plausibility_range")
+    if plausibility is not None and column_name != "sex":
+        numeric_observed = validate_numeric_source(observed, column_name)
+        minimum = plausibility.get("minimum")
+        maximum = plausibility.get("maximum")
+        if minimum is not None and (numeric_observed < minimum).any():
+            raise ValueError("below plausibility range")
+        if maximum is not None and (numeric_observed > maximum).any():
+            raise ValueError("above plausibility range")
+publish(df)
+"""
+
+    repaired, names = _repair(code, _finding(variable="age"))
+
+    assert names == ["flag_only_plausibility_range_retention_v1"]
+    assert repaired.count("_easyicu_flag_only_plausibility_range_retained_v1") == 2
+    assert "raise ValueError(\"below plausibility range\")" not in repaired
+    assert "raise ValueError(\"above plausibility range\")" not in repaired
+    assert "(numeric_observed < minimum).any()" in repaired
+    assert "(numeric_observed > maximum).any()" in repaired
+    assert "publish(df)" in repaired
+    assert _repair(repaired, _finding(variable="age")) == (repaired, [])
+
+
+def test_two_sealed_plausibility_guard_pairs_are_ambiguous():
+    code = """
+first_range = first_contract.get("analysis_plausibility_range")
+first_min = first_range.get("minimum")
+first_max = first_range.get("maximum")
+if first_min is not None and (first < first_min).any():
+    raise ValueError("first low")
+if first_max is not None and (first > first_max).any():
+    raise ValueError("first high")
+second_range = second_contract.get("analysis_plausibility_range")
+second_min = second_range.get("minimum")
+second_max = second_range.get("maximum")
+if second_min is not None and (second < second_min).any():
+    raise ValueError("second low")
+if second_max is not None and (second > second_max).any():
+    raise ValueError("second high")
+"""
+
+    assert _repair(code, _finding(variable="age")) == (code, [])
+
+
 def test_counted_range_guard_does_not_rewrite_a_filtering_mask():
     code = """
 def fail(message):
