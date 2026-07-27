@@ -2697,15 +2697,19 @@ class ConceptResolver:
                             ) from _hd_general_exc
                         
                         # 确定要查询的死亡患者列表
-                        _query_pids = dead_pids
-                        if patient_ids and dead_pids:
-                            if isinstance(patient_ids, dict):
-                                pid_list = list(next(iter(patient_ids.values())))
-                            else:
-                                pid_list = list(patient_ids)
-                            _query_pids = set(p for p in pid_list if p in dead_pids)
-                        
-                        if dead_pids and not bucket_dir.exists():
+                        #
+                        # Shared with the `callback_apply` copy so the two
+                        # cannot drift on the question they answer: every guard
+                        # below is about the deaths *in this cohort*, not every
+                        # death in the database.
+                        from .callback_apply import (
+                            _warn_untimed_deaths,
+                            deaths_within_cohort,
+                        )
+
+                        _query_pids = deaths_within_cohort(dead_pids, patient_ids)
+
+                        if _query_pids and not bucket_dir.exists():
                             # Patients are recorded as deceased but the table
                             # that times their last observation is not there.
                             # The empty frame the old ``else`` produced is a
@@ -2716,9 +2720,10 @@ class ConceptResolver:
                                 database='hirid',
                                 stage='observations_bucket',
                                 detail=(
-                                    f'{len(dead_pids)} patient(s) are recorded '
-                                    'as deceased but the observations bucket '
-                                    f'is missing at {bucket_dir}'
+                                    f'{len(_query_pids)} patient(s) in this '
+                                    'cohort are recorded as deceased but the '
+                                    'observations bucket is missing at '
+                                    f'{bucket_dir}'
                                 ),
                             )
                         if _query_pids and bucket_dir.exists():
@@ -2772,6 +2777,36 @@ class ConceptResolver:
                             finally:
                                 _hd_conn.unregister("_hirid_death_pids")
                                 _hd_conn.unregister("_hirid_death_ids")
+                            # The query returns one row per death it could
+                            # time. A death it could not time simply does not
+                            # come back, so a shortfall here lowers the
+                            # reported mortality with nothing to show for it.
+                            _hd_timed = (
+                                set(frame['patientid']) if len(frame) else set()
+                            )
+                            _hd_untimed = set(_query_pids) - _hd_timed
+                            if _hd_untimed and not _hd_timed:
+                                # None of them could be timed: that is the
+                                # silent zero this whole path exists to refuse.
+                                _hd_conn.close()
+                                raise ConceptExtractionUnavailable(
+                                    concept_id=concept_name,
+                                    database='hirid',
+                                    stage='last_observation',
+                                    detail=(
+                                        f'{len(_hd_untimed)} patient(s) in this '
+                                        'cohort are recorded as deceased but '
+                                        'none of them has an observation of '
+                                        f'variable(s) {sorted(src_ids)} to time '
+                                        'the death'
+                                    ),
+                                )
+                            _warn_untimed_deaths(
+                                database='hirid',
+                                concept_id=concept_name,
+                                timed=len(_hd_timed),
+                                untimed=_hd_untimed,
+                            )
                             frame[concept_name] = True
                         else:
                             frame = pd.DataFrame(columns=['patientid', 'datetime', concept_name])

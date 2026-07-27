@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import operator
 import re
+import warnings
 from dataclasses import replace
 from typing import TYPE_CHECKING, List, Optional, Union
 
@@ -73,6 +74,69 @@ if TYPE_CHECKING:
     from . import ConceptResolver
 
 DEBUG_MODE = False
+
+
+def cohort_patient_ids(patient_ids) -> Optional[set]:
+    """Normalize a caller's cohort selector to a set, or ``None`` for "all".
+
+    ``patient_ids`` reaches the concept layer as a list, as a ``{id_col: ids}``
+    mapping, or absent. An empty selector means the caller did not narrow, and
+    is treated the same as absent.
+    """
+
+    if patient_ids is None:
+        return None
+    if isinstance(patient_ids, dict):
+        values = next(iter(patient_ids.values()), None)
+        if values is None:
+            return None
+        return set(values) or None
+    if isinstance(patient_ids, (str, bytes, int)):
+        return {patient_ids}
+    try:
+        return set(patient_ids) or None
+    except TypeError:
+        return {patient_ids}
+
+
+def deaths_within_cohort(dead_pids, patient_ids) -> set:
+    """The recorded deaths that fall inside the cohort actually being asked about.
+
+    An outcome concept must fail closed when it cannot see deaths that exist —
+    but "exist" has to mean *in this cohort*. A guard written against every
+    death in the source answers a different question than the caller asked:
+    for a cohort of survivors it reports a failure while the correct answer,
+    zero, was available. Narrowing first keeps both halves honest — a real
+    zero stays a zero, and an unreadable death still raises.
+    """
+
+    cohort = cohort_patient_ids(patient_ids)
+    if cohort is None:
+        return set(dead_pids)
+    return {pid for pid in dead_pids if pid in cohort}
+
+
+def _warn_untimed_deaths(*, database: str, concept_id: str, timed: int, untimed) -> None:
+    """Report deaths that were found but could not be placed on the timeline.
+
+    Dropping them silently lowers the reported mortality with no trace, which
+    is the same class of defect as reporting zero: the number changes and
+    nothing says so. Partial loss is not fatal (a patient can legitimately
+    lack the observation that times their death), so this states the shortfall
+    rather than failing the extraction.
+    """
+
+    if not untimed:
+        return
+    warnings.warn(
+        f"{database} {concept_id}: {len(untimed)} of {timed + len(untimed)} "
+        "recorded deaths in this cohort have no observation to time them and "
+        "are absent from the result, which lowers the mortality it reports. "
+        f"Untimed patient ids: {sorted(untimed)[:10]}"
+        + ("..." if len(untimed) > 10 else ""),
+        RuntimeWarning,
+        stacklevel=3,
+    )
 
 
 def _apply_callback(
@@ -231,9 +295,16 @@ def _apply_callback(
                 cause=exc,
             ) from exc
 
+        # Narrow to the cohort before deciding anything. `dead_pids` is every
+        # death in the source; the caller asked about `patient_ids`. Guarding
+        # on the wider set made a cohort of survivors raise, because the
+        # database recorded a death somewhere else.
+        cohort_dead = deaths_within_cohort(dead_pids, patient_ids)
+
         # Reached only after a successful read: the source was legible and
-        # nobody in it died. That is a real answer, so return the real empty.
-        if not dead_pids:
+        # nobody in this cohort died. That is a real answer, so return the
+        # real empty.
+        if not cohort_dead:
             return frame.head(0) if hasattr(frame, 'head') else pd.DataFrame()
         
         # Step 2: 🚀 使用 DuckDB 直接聚合获取最后观测时间（避免加载 115M 行）
@@ -264,7 +335,7 @@ def _apply_callback(
                         _ldd_read_expr_safe = f"read_parquet('{_ldd_glob}', union_by_name=true)"
                     conn.register(
                         "_ldd_dead_pids",
-                        pd.DataFrame({"patientid": list(dead_pids)}),
+                        pd.DataFrame({"patientid": list(cohort_dead)}),
                     )
                     _ldd_q_tpl = """
                         SELECT obs.patientid, MAX(obs.datetime) AS datetime
@@ -301,10 +372,10 @@ def _apply_callback(
                 time_col = 'datetime' if 'datetime' in df.columns else ('charttime' if 'charttime' in df.columns else None)
                 if time_col:
                     last_obs = df.groupby(id_col, as_index=False).agg({time_col: 'max'})
-                    last_obs = last_obs[last_obs[id_col].isin(dead_pids)]
+                    last_obs = last_obs[last_obs[id_col].isin(cohort_dead)]
 
         if last_obs is None or last_obs.empty:
-            # ``dead_pids`` is non-empty here — the general table says these
+            # ``cohort_dead`` is non-empty here — the general table says these
             # patients died. Returning an empty frame would report zero deaths
             # while the source we just read says otherwise, so the emptiness is
             # a failure to time the deaths, not an absence of them.
@@ -313,9 +384,9 @@ def _apply_callback(
                 database='hirid',
                 stage='last_observation',
                 detail=(
-                    f'{len(dead_pids)} patient(s) are recorded as deceased in '
-                    'the general table, but no last observation time could be '
-                    'obtained for any of them'
+                    f'{len(cohort_dead)} patient(s) in this cohort are recorded '
+                    'as deceased in the general table, but no last observation '
+                    'time could be obtained for any of them'
                     + (
                         f' (aggregation failed: {aggregation_error})'
                         if aggregation_error is not None
@@ -324,7 +395,16 @@ def _apply_callback(
                 ),
                 cause=aggregation_error,
             )
-        
+
+        # Some deaths timed, some not: the result silently under-reports unless
+        # the shortfall is stated.
+        _warn_untimed_deaths(
+            database='hirid',
+            concept_id=concept_name,
+            timed=len(last_obs),
+            untimed=cohort_dead - set(last_obs[id_col]),
+        )
+
         # Step 3: Set death = TRUE
         result = last_obs.copy()
         result[concept_name] = True
