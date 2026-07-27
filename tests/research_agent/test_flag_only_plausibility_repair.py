@@ -572,3 +572,53 @@ def test_an_unobservable_flag_abstains_rather_than_blocking():
 
     assert _records('df = df.dropna(subset=["lactate"])') is None
     assert _records("x = 1") is None
+
+
+def test_the_generic_per_column_helper_shape_is_still_attributable():
+    """The shape real generated code uses, where the column is a parameter.
+
+    Taken from the r25 Step 06 quarantine draft: plausibility is checked in a
+    helper that receives the series, so the audited variable's name appears
+    nowhere near the comparison and matching on the series alone abstained on
+    exactly the script that matters. Falling back to the sealed
+    `analysis_plausibility_range` bound identifies the check whatever the
+    column is called.
+    """
+
+    rejects = """
+bounds = contract.get("analysis_plausibility_range")
+if bounds is not None:
+    lower = bounds.get("minimum")
+    upper = bounds.get("maximum")
+    numeric = observed.astype(float)
+    if lower is not None and (numeric < float(lower)).any():
+        raise RuntimeError(f"{column} below analysis plausibility minimum")
+    if upper is not None and (numeric > float(upper)).any():
+        raise RuntimeError(f"{column} above analysis plausibility maximum")
+"""
+    assert _records(rejects, "age") is False
+
+    records = """
+bounds = contract.get("analysis_plausibility_range")
+if bounds is not None:
+    lower = bounds.get("minimum")
+    numeric = observed.astype(float)
+    if lower is not None:
+        audit[f"{column}_below_minimum_n"] = int((numeric < float(lower)).sum())
+"""
+    assert _records(records, "age") is True
+
+
+def test_a_threshold_that_is_not_a_sealed_bound_is_not_a_plausibility_check():
+    """The fallback keys on the sealed range, not on any comparison at all.
+
+    Without this, a cohort rule against an unrelated local would be read as a
+    plausibility check and its absence of flagging would block the step.
+    """
+
+    cohort_rule = """
+threshold = settings.get("minimum")
+numeric = observed.astype(float)
+adults = numeric >= float(threshold)
+"""
+    assert _records(cohort_rule, "age") is None
