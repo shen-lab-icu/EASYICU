@@ -2101,6 +2101,10 @@ class DockerRunner:
                     "-c",
                     distribution_script,
                 ]
+                ghost_monitor = self._start_ghost_container_monitor(
+                    cidfile=cidfile,
+                    fallback_name=container_name,
+                )
                 try:
                     capture_proc = subprocess.run(  # noqa: S603 - argv list, no shell
                         capture_cmd,
@@ -2130,6 +2134,11 @@ class DockerRunner:
                         "Docker execution-runtime dependency capture timed out "
                         f"after {attempt_index + 1} attempt(s). " + cleanup_note.strip()
                     ) from exc
+                finally:
+                    if ghost_monitor is not None:
+                        monitor_stop, monitor_thread = ghost_monitor
+                        monitor_stop.set()
+                        monitor_thread.join(timeout=1.0)
                 container_ref = self._required_container_reference(
                     cidfile,
                     fallback_name=container_name,
