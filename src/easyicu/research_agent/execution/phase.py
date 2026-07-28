@@ -375,6 +375,7 @@ from ..trajectory.plan_contract import (
     trajectory_plan_dag_findings,
 )
 from .runners.selection import select_standard_executor
+from .runners.selection_report import standard_executor_candidate_report
 from .standard_executor_diagnostics import standard_executor_failure_finding
 from ..repair_registry import (
     InvariantStatus,
@@ -6769,6 +6770,22 @@ def run_execute_phase(
                 fallback_reason=standard_executor.selection_reason,
             )
             preflight_standard_code = standard_executor.code
+        # A step no deterministic owner claims falls to the stochastic Coder
+        # silently.  Record which owners were consulted and how they answered,
+        # so the next reader can tell an unsupported analysis apart from a
+        # supported one wearing a name or a product count nobody recognises.
+        step_record["standard_executor_candidates"] = (
+            standard_executor_candidate_report(
+                step,
+                plan=plan,
+                resolved_bindings=resolved_input_bindings,
+                claimed_by=(
+                    standard_executor.analysis_kind
+                    if standard_executor is not None
+                    else None
+                ),
+            )
+        )
         preflight_figure_code = (
             None
             if preflight_standard_code is not None
