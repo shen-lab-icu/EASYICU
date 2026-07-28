@@ -89,6 +89,10 @@ class _JSONLObjectDecodeError(ValueError):
     """Raised when one benchmark JSONL row is not a strict JSON object."""
 
 
+class _CohortMetadataError(ValueError):
+    """Raised when bounded cohort metadata inspection cannot prove its shape."""
+
+
 _FIGURE2_PAPER_ACCEPTANCE_EXIT_CODE = 3
 # A run that did not finish its plan. Distinct from paper-acceptance (3) so a
 # development diagnostic, which is never paper-accepted, still reports the
@@ -960,6 +964,80 @@ def _figure2_evaluation_attempt(*, run_dir: Path, item) -> Dict[str, Any]:
             invalid_reason_codes=("SCORER_ERROR",),
             invalid_details=(f"posthoc Figure 2 scorer failed: {exc}",),
         ).model_dump(mode="json")
+
+
+def _ensure_formal_figure2_safety_and_rescore(
+    *,
+    score: Dict[str, Any],
+    item: Any,
+    provider_environment: Optional[Mapping[str, str]],
+    request_timeout: float,
+) -> None:
+    """Close the evaluator-only safety chain for one formal aware-arm run.
+
+    Development runs intentionally keep the missing-receipt diagnostic.  The
+    authorized batch path calls this function after Agent execution and before
+    the E1 canary decision, so the Agent never sees the rubric and the paper
+    scorer never runs against an implicitly trusted model response.
+    """
+
+    aware = score.get("aware")
+    if not isinstance(aware, dict):
+        return
+    attempt = aware.get("figure2_evaluation_attempt")
+    if not isinstance(attempt, dict):
+        return
+    if attempt.get("status") == "valid":
+        return
+    reason_codes = set(attempt.get("invalid_reason_codes") or ())
+    if "SAFETY_ADJUDICATION_MISSING" not in reason_codes:
+        return
+    workdir = aware.get("workdir")
+    task_id = str(getattr(item, "key", "") or "")
+    if not isinstance(workdir, str) or not workdir or not task_id:
+        return
+
+    from benchmarks.figure2_canonical9.evaluator.safety_runner import (
+        Figure2SafetyAdjudicationError,
+        LocalOpenAICompatibleSafetyTransport,
+        ensure_figure2_safety_receipt,
+    )
+
+    environment = dict(provider_environment or {})
+    api_key = str(environment.get("OPENAI_API_KEY") or "")
+    diagnostic: Dict[str, str] | None = None
+    try:
+        transport = LocalOpenAICompatibleSafetyTransport(
+            api_key=api_key,
+            timeout_seconds=float(request_timeout),
+        )
+        ensure_figure2_safety_receipt(
+            Path(workdir),
+            task_id=task_id,
+            transport=transport,
+        )
+    except Figure2SafetyAdjudicationError as exc:
+        diagnostic = {
+            "code": exc.code,
+            "stage": exc.stage,
+            "detail": str(exc)[:1800],
+        }
+    except Exception as exc:
+        diagnostic = {
+            "code": "SAFETY_TRANSPORT_CONFIG_INVALID",
+            "stage": "transport_config",
+            "detail": f"{type(exc).__name__}: {exc}"[:1800],
+        }
+    if diagnostic is not None:
+        aware["figure2_safety_adjudication_error"] = diagnostic
+        print(
+            "[figure2-safety] "
+            f"{task_id} blocked at {diagnostic['stage']}: {diagnostic['code']}"
+        )
+    aware["figure2_evaluation_attempt"] = _figure2_evaluation_attempt(
+        run_dir=Path(workdir),
+        item=item,
+    )
 
 
 def _failed_step_ids(readiness: Mapping[str, Any]) -> List[str]:
@@ -4557,6 +4635,58 @@ def _external_item_from_row(
     )
 
 
+def _cohort_shape_without_materialization(path: Path) -> tuple[int, List[str]]:
+    """Read cohort row/column metadata without loading the full table.
+
+    Parquet exposes exact shape in its footer.  Delimited files need one
+    bounded pass for the row count, but only the first column is ever held in
+    memory.  The pipeline remains the sole owner of full cohort loading.
+    """
+
+    suffix = path.suffix.lower()
+    if suffix in {".parquet", ".pq"}:
+        try:
+            import pyarrow.parquet as pq
+
+            parquet = pq.ParquetFile(path)
+            metadata = parquet.metadata
+            return int(metadata.num_rows), [
+                str(name) for name in parquet.schema_arrow.names
+            ]
+        except Exception as exc:  # noqa: BLE001 - normalize the I/O boundary
+            raise _CohortMetadataError(
+                f"Parquet footer inspection failed for {path}: "
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
+
+    if suffix in {".csv", ".tsv"}:
+        import pandas as pd
+
+        separator = "\t" if suffix == ".tsv" else ","
+        try:
+            header = pd.read_csv(path, sep=separator, nrows=0)
+            columns = [str(column) for column in header.columns]
+            if not columns:
+                raise ValueError("cohort has no declared columns")
+            row_count = sum(
+                len(chunk)
+                for chunk in pd.read_csv(
+                    path,
+                    sep=separator,
+                    usecols=[0],
+                    chunksize=100_000,
+                )
+            )
+            return int(row_count), columns
+        except Exception as exc:  # noqa: BLE001 - normalize the I/O boundary
+            raise _CohortMetadataError(
+                f"Delimited cohort inspection failed for {path}: "
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
+
+    raise _CohortMetadataError(f"Unsupported cohort format: {path.suffix or '<none>'}")
+
+
 def _run_ehrflowbench_jsonl(
     *,
     jsonl_path: Path,
@@ -4584,8 +4714,6 @@ def _run_ehrflowbench_jsonl(
     provider_base_url: Optional[str] = None,
 ) -> int:
     """Run an external EHRFlowBench-style JSONL export when available."""
-    import pandas as pd
-
     pipeline_options = _bind_benchmark_cost_price_table(
         pipeline_options,
         provider=provider,
@@ -4844,18 +4972,24 @@ def _run_ehrflowbench_jsonl(
                     }
                 )
                 continue
-        if path.suffix.lower() in {".parquet", ".pq"}:
-            cohort = pd.read_parquet(path)
-        elif path.suffix.lower() in {".csv", ".tsv"}:
-            cohort = pd.read_csv(
-                path, sep=("\t" if path.suffix.lower() == ".tsv" else ",")
-            )
-        else:
+        if path.suffix.lower() not in {".parquet", ".pq", ".csv", ".tsv"}:
             pending.append(
                 {
                     "key": key,
                     "status": "unsupported_cohort_format",
                     "cohort_path": str(path),
+                }
+            )
+            continue
+        try:
+            cohort_size, cohort_columns = _cohort_shape_without_materialization(path)
+        except _CohortMetadataError as exc:
+            pending.append(
+                {
+                    "key": key,
+                    "status": "cohort_metadata_unreadable",
+                    "cohort_path": str(path),
+                    "error": f"{type(exc).__name__}: {exc}",
                 }
             )
             continue
@@ -4982,8 +5116,8 @@ def _run_ehrflowbench_jsonl(
             key=key,
             question=str(question),
             target=(str(target) if target else None),
-            cohort_size=int(len(cohort)),
-            cohort_columns=list(cohort.columns),
+            cohort_size=cohort_size,
+            cohort_columns=cohort_columns,
             cohort_authority_path=cohort_authority_path,
             cohort_authority_ref=(
                 cohort_authority_ref.to_dict()
@@ -5037,6 +5171,13 @@ def _run_ehrflowbench_jsonl(
                 provider_environment=provider_environment,
                 provider_hard_stop=task_hard_stop,
             )
+            if batch_binding is not None:
+                _ensure_formal_figure2_safety_and_rescore(
+                    score=score,
+                    item=item,
+                    provider_environment=provider_environment,
+                    request_timeout=request_timeout,
+                )
             scores.append(score)
             execution_failures = _score_execution_failures(score)
             if task_hard_stop is not None:
@@ -5174,6 +5315,59 @@ def _run_ehrflowbench_jsonl(
         for p in pending:
             md.append(f"- `{p['key']}` — {p['status']}")
     (out_root / "ehrflowbench_results.md").write_text("\n".join(md), encoding="utf-8")
+    batch_authority_issues: list[tuple[str, str, str | None]] = []
+    if batch_binding is not None:
+        # Verify the batch-to-child authority before publishing the
+        # paper-facing acceptance artifact.  The previous order could write
+        # `accepted` and only then discover that the batch ledger was
+        # incomplete, leaving a contradictory terminal file on disk.
+        from benchmarks.figure2_canonical9.realrun_authority import (
+            build_batch_ledger,
+            verify_results_frozen_input_authority,
+            write_batch_ledger,
+        )
+
+        try:
+            ledger = build_batch_ledger(payload, out_root, batch_binding)
+            ledger_path = write_batch_ledger(ledger, out_root)
+            print(f"  -> {ledger_path}")
+            input_authority_mismatches = verify_results_frozen_input_authority(
+                payload, batch_binding.frozen_input_by_task
+            )
+            for task_id, reason in input_authority_mismatches:
+                print(
+                    "[realrun-authority] POST-RUN input authority mismatch for "
+                    f"{task_id}: {reason}"
+                )
+                batch_authority_issues.append(
+                    (
+                        "BATCH_INPUT_AUTHORITY_INVALID",
+                        str(reason)[:2048],
+                        str(task_id),
+                    )
+                )
+            if not ledger.get("complete"):
+                detail = (
+                    "not every Canonical9 child run mapped back to the "
+                    "authorized batch declaration"
+                )
+                print(
+                    "[realrun-authority] POST-RUN batch ledger incomplete: "
+                    f"{detail}."
+                )
+                batch_authority_issues.append(
+                    ("BATCH_LEDGER_INVALID", detail, None)
+                )
+        except Exception as exc:  # fail closed into the terminal receipt
+            detail = f"{type(exc).__name__}: {exc}"[:2048]
+            print(
+                "[realrun-authority] POST-RUN batch ledger verification "
+                f"failed: {detail}"
+            )
+            batch_authority_issues.append(
+                ("BATCH_LEDGER_INVALID", detail, None)
+            )
+
     acceptance_status: str | None = None
     if require_figure2_paper_acceptance or any(
         _is_figure2_task_id(task_id) for task_id in input_task_ids
@@ -5207,6 +5401,28 @@ def _run_ehrflowbench_jsonl(
                     ),
                 ),
             )
+        if batch_authority_issues:
+            acceptance = acceptance.model_copy(
+                update={
+                    "status": "invalid",
+                    "issues": acceptance.issues
+                    + tuple(
+                        Figure2AcceptanceIssue(
+                            code=code,
+                            detail=detail,
+                            task_id=task_id,
+                        )
+                        for code, detail, task_id in batch_authority_issues
+                    ),
+                }
+            )
+            # `model_copy` is intentionally cheap and does not revalidate.
+            # Round-trip once so the terminal artifact obeys the same strict
+            # contract as an ordinary acceptance evaluation.
+            acceptance = Figure2PaperAcceptance.model_validate_json(
+                acceptance.model_dump_json(),
+                strict=True,
+            )
         acceptance_path = out_root / "figure2_paper_acceptance.json"
         acceptance_path.write_text(
             json.dumps(
@@ -5223,35 +5439,8 @@ def _run_ehrflowbench_jsonl(
         print(f"  -> {acceptance_path}")
     print(f"  -> {results_path}")
     print(f"  -> {out_root / 'ehrflowbench_results.md'}")
-    if batch_binding is not None:
-        # Post-run: each written aware manifest must carry ITS task's frozen input
-        # authority (the evaluator, being scorer-tree-locked, only checks presence),
-        # and every Canonical9 child run must map back to the batch in a final
-        # ledger (child run_id + manifest sha + identity + input digest).
-        from benchmarks.figure2_canonical9.realrun_authority import (
-            build_batch_ledger,
-            verify_results_frozen_input_authority,
-            write_batch_ledger,
-        )
-
-        ledger = build_batch_ledger(payload, out_root, batch_binding)
-        ledger_path = write_batch_ledger(ledger, out_root)
-        print(f"  -> {ledger_path}")
-        input_authority_mismatches = verify_results_frozen_input_authority(
-            payload, batch_binding.frozen_input_by_task
-        )
-        if input_authority_mismatches or not ledger.get("complete"):
-            for task_id, reason in input_authority_mismatches:
-                print(
-                    "[realrun-authority] POST-RUN input authority mismatch for "
-                    f"{task_id}: {reason}"
-                )
-            if not ledger.get("complete"):
-                print(
-                    "[realrun-authority] POST-RUN batch ledger incomplete: not every "
-                    "Canonical9 child run mapped back to the declaration."
-                )
-            return 2
+    if batch_authority_issues:
+        return 2
     if require_figure2_paper_acceptance and acceptance_status != "accepted":
         return _FIGURE2_PAPER_ACCEPTANCE_EXIT_CODE
     # A scored item whose run never finished executing is not a success, even in

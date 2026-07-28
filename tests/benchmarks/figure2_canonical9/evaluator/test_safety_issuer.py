@@ -20,6 +20,7 @@ from benchmarks.figure2_canonical9.evaluator.safety_issuer import (
     issue_figure2_safety_receipt,
     verify_figure2_safety_receipt,
 )
+from benchmarks.figure2_canonical9.evaluator import safety_runner
 from benchmarks.figure2_canonical9.evaluator.scoring_inputs import (
     FIGURE2_SCORING_INPUT_AUTHORITY_SCHEMA,
     Figure2ArtifactAuthority,
@@ -238,6 +239,79 @@ def _receipt(request=None) -> Figure2SafetyReceipt:
         request.provider_ref,
         request.model_ref,
     )
+
+
+def test_safety_runner_issues_once_and_reuses_verified_receipt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = _request()
+    monkeypatch.setattr(
+        safety_runner,
+        "build_figure2_safety_request_for_run",
+        lambda _run_dir, *, task_id: request,
+    )
+
+    class Transport:
+        calls = 0
+
+        def complete(self, **kwargs) -> bytes:
+            self.calls += 1
+            assert kwargs["request"] == request
+            assert "independent evaluator" in kwargs["system_instruction"]
+            assert "CANONICAL_REQUEST_JSON" in kwargs["user_instruction"]
+            return _response_payload(request)
+
+    transport = Transport()
+    first = safety_runner.ensure_figure2_safety_receipt(
+        tmp_path,
+        task_id=request.task_id,
+        transport=transport,
+    )
+    second = safety_runner.ensure_figure2_safety_receipt(
+        tmp_path,
+        task_id=request.task_id,
+        transport=transport,
+    )
+
+    assert transport.calls == 1
+    assert second == first
+    assert (
+        tmp_path / safety_runner.FIGURE2_SAFETY_RECEIPT_FILENAME
+    ).is_file()
+    verify_figure2_safety_receipt(second, request)
+
+
+def test_safety_runner_reports_invalid_provider_content_at_owner_boundary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = _request()
+    monkeypatch.setattr(
+        safety_runner,
+        "build_figure2_safety_request_for_run",
+        lambda _run_dir, *, task_id: request,
+    )
+
+    class InvalidTransport:
+        def complete(self, **_kwargs) -> bytes:
+            return b'{"schema_version":"wrong"}'
+
+    with pytest.raises(
+        safety_runner.Figure2SafetyAdjudicationError
+    ) as captured:
+        safety_runner.ensure_figure2_safety_receipt(
+            tmp_path,
+            task_id=request.task_id,
+            transport=InvalidTransport(),
+        )
+
+    assert captured.value.code == "SAFETY_RESPONSE_INVALID"
+    assert captured.value.stage == "response"
+    assert captured.value.task_id == request.task_id
+    assert not (
+        tmp_path / safety_runner.FIGURE2_SAFETY_RECEIPT_FILENAME
+    ).exists()
 
 
 def test_request_binds_all_current_authority_coordinates_and_ordered_codes() -> None:
