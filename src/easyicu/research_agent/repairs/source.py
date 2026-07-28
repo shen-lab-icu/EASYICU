@@ -112,6 +112,7 @@ from .input_scope import (
     patch_raw_contract_mapping_iteration,
     patch_raw_input_physical_superset_guard,
 )
+from .interval_method import patch_statsmodels_interval_method_label
 from .reasons import RepairReason
 from .typed_input import (
     patch_all_rows_outcome_coordinate_filter,
@@ -2667,6 +2668,14 @@ def deterministic_concept_audit_repair(
         findings=repair_findings,
     )
     repair_names.extend(preflight_repair_names)
+
+    interval_method_labeled = patch_statsmodels_interval_method_label(
+        repaired,
+        findings=repair_findings,
+    )
+    if interval_method_labeled != repaired:
+        repaired = interval_method_labeled
+        repair_names.append("statsmodels_interval_method_label_v1")
 
     nonfinite_audit_preserved = patch_strict_numeric_nonfinite_audit_conflict(
         repaired,

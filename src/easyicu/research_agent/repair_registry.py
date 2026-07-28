@@ -293,6 +293,7 @@ _SYNTACTIC_REPAIRS = {
     "resolved_input_run_root_v1",
     "resolved_typed_input_precedence_v1",
     "scalar_cast_before_reduction_v1",
+    "statsmodels_interval_method_label_v1",
     "superseded_manual_provenance_receipt_v1",
     "table_one_planner_spec_binding_v1",
     "unresolved_input_binding_receipts_v1",

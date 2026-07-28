@@ -564,6 +564,9 @@ _DETAIL_REASON_CODES = {
     "count_companion_closed_domain_invalid": (
         RepairReason.SCIENTIFIC_SEMANTICS_VIOLATION
     ),
+    "confidence_interval_method_mislabeled": (
+        RepairReason.SCIENTIFIC_SEMANTICS_VIOLATION
+    ),
     "string_suffix_trim_length_mismatch": (RepairReason.STRING_SUFFIX_TRIM_MISMATCH),
     "resolved_context_payload_not_loaded": (RepairReason.TYPED_CONTEXT_BINDING_INVALID),
     "resolved_input_key_not_materialized": (RepairReason.TYPED_PRODUCT_BINDING_INVALID),

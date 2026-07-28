@@ -30,6 +30,7 @@ from .host_helper_result import (
     host_helper_result_findings,
     table_one_spec_binding_findings,
 )
+from .interval_method import confidence_interval_method_findings
 from .numeric_reduction import is_array_boolean_predicate as _is_array_boolean_predicate
 from .numeric_reduction import is_proven_array_boolean_predicate
 from .numeric_reduction import misnested_boolean_mask_reduction_expression
@@ -8595,6 +8596,7 @@ def audit_mechanical_code_contracts(
     findings.extend(_conditional_nonfinite_guard_findings(tree))
     findings.extend(_strict_numeric_nonfinite_findings(tree))
     findings.extend(_categorical_level_reconciliation_findings(tree))
+    findings.extend(confidence_interval_method_findings(tree))
     findings.extend(
         binary_feasibility_guard_findings(tree)
         + _cohort_count_findings(tree)
