@@ -1181,6 +1181,43 @@ class StepProviderCallBudget:
             transport={"state": "failed", "error_type": normalized},
         )
 
+    def authorize_failed_initial_generation_retry(
+        self,
+        *,
+        error_type: str,
+        max_generation_epochs: int,
+    ) -> bool:
+        """Authorize one bounded retry of a locally rejected provider result.
+
+        The failed epoch must already be durable, must name the exact local
+        validation error the caller is handling, and must leave provider-call
+        capacity for the retry. Provider exceptions, interruptions, and
+        paid-pending transports therefore cannot enter this path.
+        """
+
+        normalized = str(error_type).strip()
+        if not normalized:
+            raise ValueError("initial-generation retry error type must be non-empty")
+        if (
+            isinstance(max_generation_epochs, bool)
+            or not isinstance(max_generation_epochs, int)
+            or max_generation_epochs < 1
+        ):
+            raise ValueError("maximum initial-generation epochs must be positive")
+        with self._lock:
+            entry = self._initial_generations[-1] if self._initial_generations else None
+            transport = dict(entry.get("transport") or {}) if entry else {}
+            if (
+                entry is None
+                or len(self._initial_generations) >= max_generation_epochs
+                or transport.get("state") != "failed"
+                or transport.get("error_type") != normalized
+                or not self._can_consume_locked("initial_generation")
+            ):
+                return False
+            self._terminal_initial_generation_restart_available = True
+            return True
+
     def initial_generation_resume_status(self) -> str:
         """Return the verified crash-resume state of initial generation."""
 

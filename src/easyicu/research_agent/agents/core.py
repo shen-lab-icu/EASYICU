@@ -149,6 +149,7 @@ from ..research_context.temporal_semantics import (
     TemporalAlignmentEngine,
 )
 from ..review.step_semantics import decide_step_scientific_review
+from .coder_generation import generate_initial_coder_candidate
 
 # Compatibility alias for callers/tests that imported the former local helper.
 _format_observed_domain = format_observed_domain
@@ -2547,74 +2548,21 @@ class CoderAgent:
                 ),
                 LLMMessage(role="user", content=user_content),
             ]
-        initial_transport_id: Optional[str] = None
-        if provider_budget is not None and initial_generation_binding is not None:
-            initial_transport_id = provider_budget.reserve_initial_generation(
-                initial_generation_binding
-            )
-            binding_sha256 = hashlib.sha256(
-                json.dumps(
-                    dict(initial_generation_binding),
-                    ensure_ascii=False,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                ).encode("utf-8")
-            ).hexdigest()
-            if on_initial_reserved is not None:
-                on_initial_reserved(initial_transport_id, binding_sha256)
-        try:
-            raw = complete_with_provider_budget(
-                budget=provider_budget,
-                category="initial_generation",
-                call=lambda: authorized_complete(
-                    self.llm,
-                    messages,
-                    max_tokens=_CODER_MAX_TOKENS,
-                    temperature=0.1,
-                ),
-            )
-            code = _strip_code_fence(raw.strip())
-            if not looks_like_executable_python(code):
-                raise ValueError(
-                    "Initial coder response is not a complete executable Python "
-                    "script; refusing to persist or seal it as candidate authority."
-                )
-            initial_ref = (
-                persist_candidate(code) if persist_candidate is not None else None
-            )
-            if initial_transport_id is not None:
-                if initial_ref is None:
-                    raise RuntimeError(
-                        "initial-generation transport requires persisted code bytes"
-                    )
-                assert provider_budget is not None
-                provider_budget.complete_initial_generation_transport(
-                    provider_transport_id=initial_transport_id,
-                    after_code_sha256=initial_ref.sha256,
-                    after_code_size_bytes=initial_ref.size_bytes,
-                )
-            if (
-                initial_ref is not None
-                and initial_transport_id is not None
-                and on_initial_candidate is not None
-            ):
-                on_initial_candidate(initial_ref, initial_transport_id)
-        except BaseException as exc:
-            if initial_transport_id is not None and provider_budget is not None:
-                if provider_budget.initial_generation_resume_status() == "pending":
-                    provider_budget.fail_initial_generation_transport(
-                        provider_transport_id=initial_transport_id,
-                        error_type=type(exc).__name__,
-                    )
-                elif provider_budget.initial_generation_resume_status() in {
-                    "unpaid_pending",
-                    "paid_pending",
-                }:
-                    provider_budget.fail_initial_generation_transport(
-                        provider_transport_id=initial_transport_id,
-                        error_type=type(exc).__name__,
-                    )
-            raise
+        code = generate_initial_coder_candidate(
+            messages=messages,
+            provider_call=lambda candidate_messages: authorized_complete(
+                self.llm,
+                candidate_messages,
+                max_tokens=_CODER_MAX_TOKENS,
+                temperature=0.1,
+            ),
+            response_parser=lambda raw: _strip_code_fence(raw.strip()),
+            provider_budget=provider_budget,
+            initial_generation_binding=initial_generation_binding,
+            persist_candidate=persist_candidate,
+            on_initial_reserved=on_initial_reserved,
+            on_initial_candidate=on_initial_candidate,
+        )
 
         # Patch C: post-codegen pre-execution compatibility enforcement.
         # Loops up to _MAX_PRE_EXEC_COMPATIBILITY_REPAIRS times; each
