@@ -13,7 +13,11 @@ from typing import Literal, Sequence
 
 import pandas as pd
 
-__all__ = ["CohortGranularity", "resolve_cohort_granularity"]
+__all__ = [
+    "CohortGranularity",
+    "format_patient_count",
+    "resolve_cohort_granularity",
+]
 
 
 _PATIENT_ID_NAMES = frozenset(
@@ -63,6 +67,16 @@ class CohortGranularity:
                 else "unavailable"
             ),
         }
+
+
+def format_patient_count(n_patients: int | None) -> str:
+    """Render unavailable patient identity without relabeling ICU stays."""
+
+    return (
+        f"{n_patients:,}"
+        if n_patients is not None
+        else "unavailable (no patient identifier)"
+    )
 
 
 def resolve_cohort_granularity(

@@ -25,6 +25,7 @@ __all__ = [
     "RegisteredPlanInputClosure",
     "RegisteredPlanAuthority",
     "close_measurement_companion_inputs",
+    "plan_manifest_fields",
     "register_measurement_companion_input_closure",
     "resolve_registered_plan_authority",
 ]
@@ -66,6 +67,26 @@ class RegisteredPlanAuthority:
             "sha256": self.sha256,
             "revision": self.revision,
         }
+
+
+def plan_manifest_fields(
+    run_dir: Path,
+    evidence: EvidenceStore,
+    plan: AnalysisPlan,
+    plan_path: Path,
+) -> Dict[str, object]:
+    """Project the current immutable plan into a run-manifest payload."""
+
+    authority = resolve_registered_plan_authority(
+        run_dir=run_dir,
+        evidence=evidence,
+        plan=plan,
+        plan_path=plan_path,
+    )
+    return {
+        "plan_path": authority.relative_path,
+        "current_plan_authority": authority.to_dict(),
+    }
 
 
 def close_measurement_companion_inputs(

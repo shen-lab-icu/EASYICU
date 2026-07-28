@@ -30,6 +30,12 @@ class StepExecutor:
     def __init__(self, *, clear_output_dir: Callable[[Path], None]) -> None:
         self._clear_output_dir = clear_output_dir
 
+    @staticmethod
+    def runner_timeout(runner: Any, fallback_seconds: float) -> float:
+        """Return the timeout actually enforced by the selected runner."""
+
+        return float(getattr(runner, "timeout_seconds", fallback_seconds))
+
     def execute(
         self,
         *,

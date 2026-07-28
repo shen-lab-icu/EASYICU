@@ -60,6 +60,7 @@ from ..authority.evidence_store import EvidenceStore, sha256_of_file
 from ..authority.step_recovery import StepRecoverySignature
 from ..planning.figure_strategy import summarize_article_figure_strategy_coverage
 from ..planning.study_design import study_design_family_for_analysis_type
+from ..research_context.cohort_granularity import format_patient_count
 from ..figures.publication import PUBLICATION_FIGURE_SKILL_POLICY_VERSION
 from ..plan_utils import _output_declares_figure, _parent_step_id_for_figure_step
 from .review_artifacts import build_review_artifact_payloads
@@ -3018,11 +3019,7 @@ def render_report(
     parts.append("")
     parts.append(f"- Research question: {context.research_question}")
     parts.append(f"- Cohort: {context.cohort.cohort_name} ({context.cohort.database})")
-    patient_count = (
-        f"{context.cohort.n_patients:,}"
-        if context.cohort.n_patients is not None
-        else "unavailable (no patient identifier)"
-    )
+    patient_count = format_patient_count(context.cohort.n_patients)
     parts.append(f"- Stays: {context.cohort.n_stays:,} / Patients: {patient_count}")
     if context.target_outcome:
         parts.append(f"- Target outcome: {context.target_outcome}")
