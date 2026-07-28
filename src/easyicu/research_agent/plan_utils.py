@@ -61,10 +61,7 @@ from .contracts.ordered_stratified import (
     is_ordered_stratified_analysis_step,
     ordered_stratified_structure_findings,
 )
-from .contracts.table_one import (
-    bind_table_one_execution_spec,
-    table_one_output_findings,
-)
+from .contracts.table_one import table_one_output_findings
 from .scalar_utils import (
     _first_numeric_scalar_with_key_fragment,
     _first_present_scalar,
@@ -85,17 +82,6 @@ from .trajectory.contract import (
     trajectory_phenotyping_contract_applies,
 )
 from .trajectory.plan_contract import trajectory_plan_contract_applies
-
-_WIDE_MEASUREMENT_VALUE_SUFFIXES = (
-    "_median",
-    "_first",
-    "_last",
-    "_mean",
-    "_max",
-    "_min",
-    "_sum",
-)
-
 
 def _migrate_render_step_contract(
     child: AnalysisStep,
@@ -126,70 +112,6 @@ def _migrate_render_step_contract(
     if method is not None:
         update["method"] = method
     return child.model_copy(update=update)
-
-
-def _augment_measurement_companion_inputs(
-    *,
-    plan: AnalysisPlan,
-    context: ResearchContext,
-) -> tuple[AnalysisPlan, List[ValidationFinding]]:
-    """Close structural provenance inputs for selected wide summaries.
-
-    The planner remains the owner of which clinical values a step analyzes.
-    Exact count/measured companions are provenance inputs, not new scientific
-    choices; add only registered companions and never fuzzy-match concepts.
-    """
-
-    available = {str(variable.name) for variable in context.variables}
-    revised_steps: List[AnalysisStep] = []
-    additions_by_step: Dict[str, List[str]] = {}
-    for step in plan.steps or []:
-        inputs = [str(value) for value in (step.inputs or [])]
-        seen = set(inputs)
-        additions: List[str] = []
-        for input_name in list(inputs):
-            if ":" in input_name:
-                continue
-            if input_name.endswith("_measured"):
-                companions = (f"{input_name[:-9]}_n",)
-            elif input_name.endswith("_n"):
-                companions = (f"{input_name[:-2]}_measured",)
-            else:
-                suffix = next(
-                    filter(input_name.endswith, _WIDE_MEASUREMENT_VALUE_SUFFIXES), None
-                )
-                if suffix is None:
-                    continue
-                base = input_name[: -len(suffix)]
-                companions = (f"{base}_measured", f"{base}_n")
-            for companion in companions:
-                if companion in available and companion not in seen:
-                    inputs.append(companion)
-                    additions.append(companion)
-                    seen.add(companion)
-        if additions:
-            additions_by_step[str(step.step_id)] = additions
-            revised_steps.append(step.model_copy(update={"inputs": inputs}))
-        else:
-            revised_steps.append(step)
-        bind_table_one_execution_spec(revised_steps[-1], context)
-
-    if not additions_by_step:
-        return plan, []
-    revised = plan.model_copy(update={"steps": revised_steps})
-    finding = ValidationFinding(
-        validator="planner_input_closure",
-        severity="info",
-        message=(
-            "Added registered count/measured provenance companions for "
-            "planner-selected per-stay measurement summaries."
-        ),
-        detail={
-            "reason": "measurement_companion_input_closure",
-            "added_inputs_by_step": additions_by_step,
-        },
-    )
-    return revised, [finding]
 
 
 _REPORT_INPUT_PRODUCT_KINDS = frozenset({"manifest", "statistic", "table"})
