@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any, Mapping
 
 from ...authority.plausibility import FlagOnlyPlausibilityScope
 from ...schema import AnalysisPlan, AnalysisStep
@@ -16,6 +17,11 @@ from .deterministic_missingness import (
     missingness_audit_executor_owns_step,
     missingness_measurement_audit_code,
     source_availability_audit_executor_owns_step,
+)
+from .exposure_outcome_distribution_figure_executor import (
+    EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_INPUTS,
+    exposure_outcome_distribution_figure_executor_code,
+    exposure_outcome_distribution_figure_executor_owns_step,
 )
 from .missingness_measurement_figure_executor import (
     MISSINGNESS_MEASUREMENT_FIGURE_INPUTS,
@@ -58,8 +64,16 @@ def select_standard_executor(
     *,
     plan: AnalysisPlan,
     plausibility_scope: FlagOnlyPlausibilityScope | None = None,
+    resolved_bindings: Mapping[str, Any] | None = None,
 ) -> StandardExecutorSelection | None:
-    """Select by exact typed contract, never by prose or benchmark identity."""
+    """Select by exact typed contract, never by prose or benchmark identity.
+
+    ``resolved_bindings`` is the host's own typed-input binding map for this
+    step.  An executor whose readable schema is fixed by the *producing* step
+    rather than by the Planner's product name uses it to confirm the bound
+    product contract before claiming the step; without it such an executor
+    declines and the ordinary coder path runs.
+    """
 
     if plausibility_scope is not None:
         plausibility_scope.require_step(step.step_id)
@@ -108,6 +122,28 @@ def select_standard_executor(
                 display_labels=plan.display_labels,
             ),
             consumed_input_keys=PREVALENCE_MORTALITY_FIGURE_INPUTS,
+        )
+    if exposure_outcome_distribution_figure_executor_owns_step(
+        step,
+        resolved_bindings=resolved_bindings,
+        display_labels=plan.display_labels,
+    ):
+        if receipt_required:
+            return None
+        return StandardExecutorSelection(
+            analysis_kind="exposure_outcome_distribution_figure",
+            selection_reason=(
+                "exposure_outcome_distribution_figure_contract_preflight"
+            ),
+            progress_message=(
+                "Using planner-scoped exposure/outcome distribution figure executor"
+            ),
+            code=exposure_outcome_distribution_figure_executor_code(
+                step,
+                resolved_bindings=resolved_bindings,
+                display_labels=plan.display_labels,
+            ),
+            consumed_input_keys=EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_INPUTS,
         )
     if missingness_measurement_figure_executor_owns_step(step):
         if receipt_required:
