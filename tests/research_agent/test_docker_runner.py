@@ -701,6 +701,41 @@ def test_docker_coder_capabilities_use_image_snapshot_before_first_step(
     assert "* shap" not in block
 
 
+def test_runtime_provenance_probe_uses_ghost_monitor(
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    cohort = _make_cohort(tmp_path)
+    _force_docker_present(monkeypatch)
+    _install_fake_subprocess(monkeypatch)
+    runner = ra.DockerRunner(workdir=tmp_path / "run", cohort_parquet=cohort)
+    lifecycle: Dict[str, Any] = {}
+
+    class _Stop:
+        def set(self) -> None:
+            lifecycle["stopped"] = True
+
+    class _Thread:
+        def join(self, *, timeout: float) -> None:
+            lifecycle["joined_timeout"] = timeout
+
+    def fake_monitor(*, cidfile: Path, fallback_name: str):
+        lifecycle["cidfile"] = cidfile
+        lifecycle["fallback_name"] = fallback_name
+        return _Stop(), _Thread()
+
+    monkeypatch.setattr(runner, "_start_ghost_container_monitor", fake_monitor)
+
+    provenance, _requirements = runner._capture_runtime_provenance()
+
+    assert provenance["runtime"] == "docker"
+    assert lifecycle["cidfile"].parent == Path(tempfile.gettempdir())
+    assert lifecycle["fallback_name"].startswith("easyicu-ra-")
+    assert lifecycle["stopped"] is True
+    assert lifecycle["joined_timeout"] == 1.0
+
+
 def test_runtime_provenance_timeout_tears_down_named_probe(
     ra,
     tmp_path: Path,
@@ -729,6 +764,11 @@ def test_runtime_provenance_timeout_tears_down_named_probe(
     import easyicu.research_agent.execution.runner as runner_module
 
     monkeypatch.setattr(runner_module.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        runner_module.DockerRunner,
+        "_start_ghost_container_monitor",
+        lambda self, **kwargs: None,
+    )
     run_dir = tmp_path / "run"
     runner = ra.DockerRunner(workdir=run_dir, cohort_parquet=cohort)
 
@@ -804,6 +844,11 @@ def test_runtime_provenance_retries_once_after_transient_timeout(
     import easyicu.research_agent.execution.runner as runner_module
 
     monkeypatch.setattr(runner_module.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        runner_module.DockerRunner,
+        "_start_ghost_container_monitor",
+        lambda self, **kwargs: None,
+    )
     run_dir = tmp_path / "run"
     runner = ra.DockerRunner(workdir=run_dir, cohort_parquet=cohort)
 
