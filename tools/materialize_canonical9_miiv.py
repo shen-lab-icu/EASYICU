@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Materialize the exact Canonical9 MIMIC-IV inputs to an external volume.
+"""Materialize Canonical9 MIMIC-IV inputs to an external volume.
 
 The tool opens the verified native-v2 export once, reuses its immutable file
-snapshots across all nine sequential cases, and writes every case directly to
-its final external directory.  It makes no Provider, Docker, or network calls.
+snapshots across the selected sequential cases, and writes every case directly
+to its final external directory. By default all nine cases are selected; a
+development canary may select one or more exact task ids. It makes no Provider,
+Docker, or network calls.
 """
 
 from __future__ import annotations
@@ -13,37 +15,46 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import sys
 import tempfile
 from typing import Any, Mapping
 import uuid
 
-from benchmarks.figure2_canonical9.evaluator.suite import (
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+for _entry in (_REPO_ROOT, _REPO_ROOT / "src"):
+    if str(_entry) not in sys.path:
+        sys.path.insert(0, str(_entry))
+
+from benchmarks.figure2_canonical9.evaluator.suite import (  # noqa: E402
     easyicu_evaluation_protocol_suite,
 )
-from benchmarks.figure2_canonical9.identity_bridge_contract import (
+from benchmarks.figure2_canonical9.identity_bridge_contract import (  # noqa: E402
     assess_identity_bridge_contract,
     load_identity_bridge_contract,
 )
-from benchmarks.figure2_canonical9.materialization_plan import (
+from benchmarks.figure2_canonical9.materialization_plan import (  # noqa: E402
     CANONICAL9_MIMIC_IV_PLAN,
+    Canonical9MaterializationSpec,
     validate_canonical9_mimic_iv_plan,
 )
-from easyicu.research_agent.cohort.materializer import materialize_to_parquet
-from easyicu.research_agent.intake.export_package import (
+from easyicu.research_agent.cohort.materializer import (  # noqa: E402
+    materialize_to_parquet,
+)
+from easyicu.research_agent.intake.export_package import (  # noqa: E402
     open_export_package,
     require_column_metadata,
     resolve_exported_concept,
     verify_export_package,
 )
-from easyicu.research_agent.intake.materialized_metadata import (
+from easyicu.research_agent.intake.materialized_metadata import (  # noqa: E402
     load_verified_materialized_cohort_authority,
     prepare_real_directory,
 )
-from easyicu.research_agent.intake.materialized_trajectory import (
+from easyicu.research_agent.intake.materialized_trajectory import (  # noqa: E402
     load_verified_materialized_trajectory_authority,
 )
 
-_RECEIPT_SCHEMA = "easyicu.canonical9_miiv_materialization/1"
+_RECEIPT_SCHEMA = "easyicu.canonical9_miiv_materialization/2"
 _JSONL_SCHEMA = "easyicu.canonical9_ehrflowbench_jsonl/1"
 
 
@@ -185,6 +196,29 @@ def _load_bridge(
     }, contract_sha256
 
 
+def _select_materialization_specs(
+    task_ids: object,
+) -> tuple[Canonical9MaterializationSpec, ...]:
+    requested = [
+        str(value or "").strip()
+        for value in (task_ids if isinstance(task_ids, (list, tuple)) else [])
+    ]
+    if not requested:
+        return tuple(CANONICAL9_MIMIC_IV_PLAN)
+    if any(not value for value in requested):
+        raise ValueError("--task-id values must be non-empty")
+    if len(requested) != len(set(requested)):
+        raise ValueError("--task-id values must be unique")
+    known = {spec.task_id for spec in CANONICAL9_MIMIC_IV_PLAN}
+    unknown = sorted(set(requested) - known)
+    if unknown:
+        raise ValueError(f"unknown Canonical9 task id(s): {unknown}")
+    selected = set(requested)
+    return tuple(
+        spec for spec in CANONICAL9_MIMIC_IV_PLAN if spec.task_id in selected
+    )
+
+
 def _build_jsonl_row(
     *,
     task: object,
@@ -266,6 +300,7 @@ def _build_jsonl_row(
 def materialize(args: argparse.Namespace) -> Path:
     validate_canonical9_mimic_iv_plan()
     _require_external_temp()
+    selected_specs = _select_materialization_specs(getattr(args, "task_id", None))
     export_root = args.export_root.expanduser().resolve(strict=True)
     output_root = _require_external_output(
         args.output_root,
@@ -290,7 +325,7 @@ def materialize(args: argparse.Namespace) -> Path:
             raise ValueError("development-sealed exports cannot become paper inputs")
         requested = {
             concept
-            for spec in CANONICAL9_MIMIC_IV_PLAN
+            for spec in selected_specs
             for concept in (
                 *spec.feature_concepts,
                 *spec.static_concepts,
@@ -306,7 +341,7 @@ def materialize(args: argparse.Namespace) -> Path:
         if missing:
             raise ValueError(f"typed export is missing concepts: {missing}")
 
-        for index, spec in enumerate(CANONICAL9_MIMIC_IV_PLAN, start=1):
+        for index, spec in enumerate(selected_specs, start=1):
             task = task_by_id[spec.task_id]
             case_dir = prepare_real_directory(
                 output_root / spec.task_id,
@@ -314,14 +349,21 @@ def materialize(args: argparse.Namespace) -> Path:
             )
             cohort_candidate = case_dir / "cohort.parquet"
             if args.resume_existing and cohort_candidate.is_file():
-                print(f"[{index}/9] verifying existing {spec.task_id}", flush=True)
+                print(
+                    f"[{index}/{len(selected_specs)}] verifying existing "
+                    f"{spec.task_id}",
+                    flush=True,
+                )
                 cohort_path = cohort_candidate.resolve(strict=True)
             else:
                 if any(case_dir.iterdir()):
                     raise RuntimeError(
                         f"{spec.task_id}: incomplete case directory is not empty"
                     )
-                print(f"[{index}/9] materializing {spec.task_id}", flush=True)
+                print(
+                    f"[{index}/{len(selected_specs)}] materializing {spec.task_id}",
+                    flush=True,
+                )
                 identity_options: dict[str, object] = {}
                 if spec.identity_mode == "patient_grouped_stay":
                     identity_options = {
@@ -412,7 +454,17 @@ def materialize(args: argparse.Namespace) -> Path:
     receipt = {
         "schema_version": _RECEIPT_SCHEMA,
         "paper_authority": False,
-        "status": "materialized_awaiting_scientific_identity_and_operator_freeze",
+        "scope": (
+            "full_canonical9"
+            if len(selected_specs) == len(CANONICAL9_MIMIC_IV_PLAN)
+            else "development_subset"
+        ),
+        "selected_task_ids": [spec.task_id for spec in selected_specs],
+        "status": (
+            "materialized_awaiting_scientific_identity_and_operator_freeze"
+            if len(selected_specs) == len(CANONICAL9_MIMIC_IV_PLAN)
+            else "development_subset_not_paper_authority"
+        ),
         "export_root": str(export_root),
         "export_manifest_sha256": export_manifest_sha256,
         "export_authority_sha256": export_authority_sha256,
@@ -435,6 +487,15 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument("--identity-bridge-contract", type=Path, required=True)
     parser.add_argument("--identity-mapping", type=Path, required=True)
+    parser.add_argument(
+        "--task-id",
+        action="append",
+        default=[],
+        help=(
+            "Exact Canonical9 task id to materialize; repeat for multiple tasks. "
+            "Omit to materialize all nine."
+        ),
+    )
     parser.add_argument(
         "--resume-existing",
         action="store_true",
