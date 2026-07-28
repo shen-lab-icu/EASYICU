@@ -555,3 +555,79 @@ own the step.
 Of the 6 steps that fall to the Coder, **none is open-ended science**;
 `allowed_coder` is the right verdict for zero of the 12. They reach the Coder
 because nobody typed their contract.
+
+## L0 — a figure claimed by its contract, not by its label (`b9b1427`)
+
+Removed the semantic-free product-name allow-list from the
+missingness/measurement renderer, selector **and** runtime.
+
+Correction to K11: the allow-list was **not** what stopped a path traversal on
+the selector side -- `_figure_product` already parsed through
+`[a-z][a-z0-9_]*`, so `figure:../../etc/passwd`, `figure:a/b` and
+`figure:.hidden` were already rejected. The claim holds only for the public
+`run_...` entry point, whose sole guard the allow-list was, and which
+interpolates the id into `out_dir / figure_product`. So the change is a
+deletion plus a validator **in one place**, not two.
+
+Mutation-verified: restoring the allow-list fails 5, dropping the runtime check
+fails 6, widening the id rule fails 14; restored, 49 pass. The new
+case-token guard caught a case name I had written into a comment of this very
+change.
+
+Replay moved to `3 owned / 1 conditional_receipt / 2 unknown / 6 coder`, as
+predicted in K11.
+
+## L1 — declare the distribution, then own it (`f3358bc`)
+
+`ExposureOutcomeDistributionSpec`: exposure, closed `exposure_levels`, outcome,
+the exact `outcome_positive_value`, `denominator_policy`, `interval_method`.
+Refuses eight malformed shapes. Planner is taught to emit it and **refused** if
+it declares the output without it.
+
+Against the real plan: the distribution step is **not** owned as the Planner
+wrote it, and **is** owned once the design is declared. Exposure/outcome for
+that check were taken from the plan's own `model_requirements`, not guessed.
+
+The product is self-contained -- per-row denominator, missing count, events,
+rate, interval, plus an overall row -- which is what lets a figure's input
+contract close before its parent runs.
+
+Level matching is by the declared level's own type. A declared *number* matches
+the same number whatever dtype the export produced; a declared *string*
+compares as a string, so `0`/`1` never absorb a `yes`/`no` column. **An earlier
+version of that test asserted the opposite; the test was wrong, not the code**
+-- refusing a string-typed column would fail-close a correct study.
+
+`typed_cohort_binding.py` extracted as the owner of "which bytes may this step
+read" (contained path, no symlink segment, digest, and columns/row-count equal
+to the `product_contract` -- joined, because a digest proves the file is
+unchanged, not that it is the table promised). It was already copy-pasted into
+`deterministic_robustness.py`; the summary executor now imports it and its 14
+tests pass unchanged. **The third copy is still there** -- migrating it is its
+own change.
+
+Regression: 33 failed / 7791 passed, pytest's own exit 1, identical 33-item set
+to the cached baseline. Zero new, zero fixed.
+
+## L2 — a renderer that needs one table
+
+`exposure_outcome_distribution_render.py` consumes exactly the L1 product and
+nothing else: no covert second dependency on a cohort summary. It re-checks the
+arithmetic before drawing it (levels partition the cohort, events sum, observed
+plus missing equals the row count, the rate lies inside its own interval) --
+mutation-verified by deleting the partition check.
+
+The end-to-end test builds the table with the **real producer** and hands only
+that to the renderer, rather than hand-writing a fixture that might not match
+what the producer emits.
+
+## Method notes from this session
+
+* **`nohup … &` reports the shell's exit code, not pytest's.** The harness
+  said "exit code 0" for a run that had not written its summary line yet, and a
+  failure diff read from that file meant nothing. Same family as
+  `pytest | tail`; third disguise this session. Every leg now writes its own
+  `$?` and its complete `FAILED` set, diffed against
+  `~/.cache/easyicu-regress/baseline-0df6d26.failed`.
+* **A case-token guard test belongs in every new owner**, and it earns its
+  place immediately -- it caught the author, not a hypothetical future one.
