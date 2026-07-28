@@ -119,8 +119,6 @@ def select_standard_executor(
             consumed_input_keys=typed_cohort_inputs,
         )
     if missingness_audit_executor_owns_step(step):
-        if receipt_required:
-            return None
         source_availability = source_availability_audit_executor_owns_step(step)
         compact_measurement = is_compact_missingness_measurement_contract(
             step.method,
@@ -147,7 +145,10 @@ def select_standard_executor(
                 )
             ),
             progress_message="Using planner-specified missingness audit executor",
-            code=missingness_measurement_audit_code(step),
+            code=missingness_measurement_audit_code(
+                step,
+                plausibility_scope=plausibility_scope,
+            ),
             consumed_input_keys=(
                 (typed_cohort_input,) if typed_cohort_input is not None else ()
             ),
