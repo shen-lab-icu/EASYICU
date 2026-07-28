@@ -68,6 +68,7 @@ from .nonfinite_audit import (
 from .nullable_validation import patch_unused_nullable_numeric_validation
 from .rendering_role import patch_structured_analysis_role_selection
 from .rendering_summary import patch_render_only_effect_echo
+from .strict_numeric_result import patch_strict_numeric_input_result_projection
 from .plausibility import (
     patch_flag_only_plausibility_range_rejection,
     patch_plausibility_range_schema_keys,
@@ -6146,6 +6147,12 @@ def _deterministic_runner_repair(
             return structured_role_repair, repaired
     if repair := _finding_json_repair(code, run_log, previous_repair):
         return repair
+
+    strict_numeric_result_repair = "strict_numeric_input_result_projection_v1"
+    if previous_repair != strict_numeric_result_repair:
+        repaired = patch_strict_numeric_input_result_projection(code, run_log)
+        if repaired != code:
+            return strict_numeric_result_repair, repaired
 
     host_helper_import_repair = "relocate_known_host_helper_import_v1"
     if previous_repair != host_helper_import_repair:
