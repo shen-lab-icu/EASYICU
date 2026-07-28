@@ -307,6 +307,14 @@ def finalise_success(
 
     cost_records_for_manifest = []
     if plan_result.cost_meter is not None:
+        hard_stop_accounting = None
+        provider_hard_stop = getattr(pipeline, "_provider_hard_stop", None)
+        accounting_summary = getattr(provider_hard_stop, "accounting_summary", None)
+        if callable(accounting_summary):
+            hard_stop_accounting = accounting_summary()
+        cost_summary = plan_result.cost_meter.summary(
+            hard_stop_accounting=hard_stop_accounting,
+        )
         cost_records_for_manifest = list(plan_result.cost_meter.records)
         cost_json_path = run_dir / "cost_records.json"
         cost_json_path.write_text(
@@ -320,7 +328,11 @@ def finalise_success(
         )
         cost_md_path = run_dir / "cost_summary.md"
         cost_md_path.write_text(
-            _render_cost_summary(plan_result.cost_meter), encoding="utf-8"
+            _render_cost_summary(
+                plan_result.cost_meter,
+                hard_stop_accounting=hard_stop_accounting,
+            ),
+            encoding="utf-8",
         )
         # Machine-readable aggregate (token totals + estimated USD, by model)
         # so the bench scorer and Fig.3 source-data builder can read cost
@@ -328,7 +340,7 @@ def finalise_success(
         cost_summary_json_path = run_dir / "cost_summary.json"
         cost_summary_json_path.write_text(
             json.dumps(
-                plan_result.cost_meter.summary(),
+                cost_summary,
                 indent=2,
                 ensure_ascii=False,
                 default=str,
@@ -1085,7 +1097,11 @@ def finalise_aborted(
 # ---------------------------------------------------------------------------
 
 
-def _render_cost_summary(meter: "CostMeter") -> str:
+def _render_cost_summary(
+    meter: "CostMeter",
+    *,
+    hard_stop_accounting: Optional[Dict[str, Any]] = None,
+) -> str:
     """Render a markdown view of a :class:`CostMeter` for the run report.
 
     The output has three sections:
@@ -1100,7 +1116,7 @@ def _render_cost_summary(meter: "CostMeter") -> str:
     here is purely presentational — the row-level
     ``cost_records.json`` is the source of truth.
     """
-    summary = meter.summary()
+    summary = meter.summary(hard_stop_accounting=hard_stop_accounting)
     lines: List[str] = ["# LLM cost summary (T3.2)", ""]
     if summary["n_calls"] == 0:
         lines.append("_No LLM calls were recorded for this run._")
@@ -1120,6 +1136,31 @@ def _render_cost_summary(meter: "CostMeter") -> str:
             "(client did not expose `last_usage`). Treat counts as "
             "approximate."
         )
+    accounting = summary.get("usage_accounting") or {}
+    reported = accounting.get("provider_reported") or {}
+    unknown = accounting.get("usage_unknown") or {}
+    upper = accounting.get("conservative_upper_bound") or {}
+    lines.extend(
+        [
+            (
+                "- Provider-reported actual usage: "
+                f"{int(reported.get('n_calls') or 0)} calls, "
+                f"{int(reported.get('total_tokens') or 0):,} tokens, "
+                f"${float(reported.get('estimated_cost_usd') or 0.0):.4f} USD"
+            ),
+            (
+                "- Usage unknown: "
+                f"{int(unknown.get('n_calls') or 0)} calls "
+                f"({json.dumps(unknown.get('states') or {}, sort_keys=True)})"
+            ),
+            (
+                "- Conservative upper bound: "
+                f"{int(upper.get('total_tokens') or 0):,} tokens, "
+                f"${float(upper.get('estimated_cost_usd') or 0.0):.4f} USD "
+                f"(`{upper.get('source') or 'unavailable'}`)"
+            ),
+        ]
+    )
     lines.append("")
     if summary["by_role"]:
         lines.append("## By role")
