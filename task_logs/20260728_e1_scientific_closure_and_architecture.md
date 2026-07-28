@@ -3,10 +3,13 @@
 ## Status
 
 - Branch: `fix/external-review-20260724-p0-p1`
-- Code endpoint: `d7fe639`
+- Code endpoint: `0bf6842`
 - Old E1 with 13 resumes remains `diagnostic_only`; it must not be resumed or promoted.
 - Figure 2 paper-facing score remains 0/9. The frozen scorer digest is intentionally not refreshed during development.
-- No Provider call was made while implementing or verifying this repair series.
+- The code repairs themselves were verified without Provider calls. One fresh
+  development E1 canary at `b94ffab` used the local Provider and terminated
+  fail closed; no Provider call was made after its three failures were
+  localized.
 
 ## Closed findings
 
@@ -44,6 +47,39 @@ No architecture baseline was refreshed. The existing architecture guard stayed g
 - 4 exact resume regressions passed.
 - A broader resume/provider batch reached 89 passed before being stopped because it had expanded into repetitive coverage; no failure occurred before the stop.
 - Earlier focused validation included 201 Step 06 tests, 148 formal safety/acceptance/plausibility tests, 263 Table 1 tests and 35 E1 acceptance/figure tests.
+
+## Fresh5 diagnostic and local closure
+
+The exact-SHA image `easyicu-research-agent:dev-b94ffab-20260728`
+(`sha256:3ed84abb0a2c...`) ran a fresh aware-only `adaptive_v1` E1 at:
+
+`/Volumes/外置硬盘/easyicu_data/canonical9_runs/batch_20260728_luna_miiv_dev_b94ffab_e1_fresh5/e1_sepsis3_prevalence_mortality/aware/run_20260728T102246_0f1738`
+
+It ended `diagnostic_only` with 3 of 11 required steps complete. The run made
+23 completed Provider calls and correctly refused to promote incomplete
+evidence. It also proved that the former 65 KB local repair-envelope limit was
+removed: an approximately 82 KB full-rewrite request reached the transport.
+
+Three owner-attributable failures remained:
+
+1. The plausibility gate did not follow a named literal column list into a
+   generic validation helper. `0f90509` now resolves that one assignment edge;
+   60 focused tests pass, an omitted column remains blocked, and the exact
+   quarantined Step 04 script now returns no finding.
+2. Generated Step 05 code sent the `StrictNumericInput` envelope into pandas
+   instead of projecting `.values`. `0bf6842` adds a narrow traceback- and
+   AST-bound repair owner. The exact archived script then ran over 94,458 stays
+   without a Provider call and wrote primary, landmark, non-readmission and
+   flexible-form estimates. The repair neighborhood is 126 passed; 13
+   architecture tests also pass.
+3. Step 02 figure code selected rows only by non-null exposure/outcome labels,
+   so two zero-count `missingness` rows were treated as joint cells. This item
+   is intentionally left open for the next handoff; no speculative patch was
+   committed.
+
+No fresh6 image or run was started. The next agent must close item 3, replay
+all three exact artifacts without Provider calls, then create a new SHA/image
+and a brand-new development batch.
 
 ## Fresh E1 policy
 
