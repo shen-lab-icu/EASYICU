@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Any, Literal, Mapping
 
 ScientificIssueSeverity = Literal["warning", "error"]
+CriticDecisionStatus = Literal["pass", "needs_revision", "blocked"]
 
 
 @dataclass(frozen=True)
@@ -46,6 +47,15 @@ class StepScientificReviewSummary:
 
     metrics: tuple[ScientificReviewMetric, ...]
     issues: tuple[ScientificReviewIssue, ...]
+
+
+@dataclass(frozen=True)
+class StepCriticDecision:
+    """Deterministic review decision returned to the agent adapter."""
+
+    status: CriticDecisionStatus
+    concerns: tuple[str, ...]
+    semantic_repairs: tuple[str, ...]
 
 
 def _integer(value: Any) -> int | None:
@@ -294,9 +304,49 @@ def summarize_step_scientific_semantics(
     )
 
 
+def decide_step_scientific_review(
+    *,
+    step_summary: Mapping[str, Any],
+    deterministic_findings: tuple[str, ...],
+    evidence_present: bool,
+) -> StepCriticDecision:
+    """Combine typed semantic receipts with deterministic gate findings."""
+
+    summary = summarize_step_scientific_semantics(step_summary)
+    concerns = [message for message in deterministic_findings if message]
+    concerns.extend(issue.message for issue in summary.issues)
+    concerns.extend(
+        (
+            "[scientific_semantics:event_time_before_origin_reported] "
+            f"{metric.variable} reports {metric.before_origin_n} event times "
+            "before the declared origin; timing analyses must exclude or "
+            "resolve them under the reviewed protocol."
+        )
+        for metric in summary.metrics
+        if metric.before_origin_n
+    )
+    if not evidence_present:
+        concerns.append("No evidence refs were registered for this step.")
+        status: CriticDecisionStatus = "blocked"
+    elif any(issue.severity == "error" for issue in summary.issues):
+        status = "blocked"
+    elif deterministic_findings or summary.issues:
+        status = "needs_revision"
+    else:
+        status = "pass"
+    repairs = tuple(dict.fromkeys(issue.repair for issue in summary.issues))
+    return StepCriticDecision(
+        status=status,
+        concerns=tuple(concerns),
+        semantic_repairs=repairs,
+    )
+
+
 __all__ = [
     "ScientificReviewIssue",
     "ScientificReviewMetric",
+    "StepCriticDecision",
     "StepScientificReviewSummary",
+    "decide_step_scientific_review",
     "summarize_step_scientific_semantics",
 ]

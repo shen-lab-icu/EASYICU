@@ -47,9 +47,7 @@ _TRY_STAR_NODE_TYPES = (
 )
 _TRY_NODE_TYPES = (ast.Try, *_TRY_STAR_NODE_TYPES)
 _TYPE_PARAMETER_NODE_TYPES = tuple(
-    node_type
-    for name in ("TypeVar", "ParamSpec", "TypeVarTuple")
-    if (node_type := getattr(ast, name, None)) is not None
+    filter(None, (getattr(ast, name, None) for name in ("TypeVar", "ParamSpec", "TypeVarTuple")))
 )
 _STRUCTURAL_ACCOUNTING_PRODUCTS = frozenset(
     {
@@ -8596,9 +8594,9 @@ def audit_mechanical_code_contracts(
     findings.extend(_conditional_nonfinite_guard_findings(tree))
     findings.extend(_strict_numeric_nonfinite_findings(tree))
     findings.extend(_categorical_level_reconciliation_findings(tree))
-    findings.extend(confidence_interval_method_findings(tree))
     findings.extend(
-        binary_feasibility_guard_findings(tree)
+        confidence_interval_method_findings(tree)
+        + binary_feasibility_guard_findings(tree)
         + _cohort_count_findings(tree)
         + _runtime_context_level_findings(tree)
     )

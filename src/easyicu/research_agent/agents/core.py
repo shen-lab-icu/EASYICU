@@ -148,7 +148,7 @@ from ..research_context.temporal_semantics import (
     ICUEpisodeResolver,
     TemporalAlignmentEngine,
 )
-from ..review.step_semantics import summarize_step_scientific_semantics
+from ..review.step_semantics import decide_step_scientific_review
 
 # Compatibility alias for callers/tests that imported the former local helper.
 _format_observed_domain = format_observed_domain
@@ -1762,43 +1762,26 @@ class CriticAgent:
         evidence_refs: Sequence[EvidenceRef],
         findings: Sequence[str],
     ) -> CritiqueReport:
-        scientific_summary = summarize_step_scientific_semantics(step_summary)
-        deterministic_concerns = [msg for msg in findings if msg]
-        concerns = list(deterministic_concerns)
-        concerns.extend(issue.message for issue in scientific_summary.issues)
-        concerns.extend(
-            (
-                "[scientific_semantics:event_time_before_origin_reported] "
-                f"{metric.variable} reports {metric.before_origin_n} event times "
-                "before the declared origin; timing analyses must exclude or "
-                "resolve them under the reviewed protocol."
+        decision = decide_step_scientific_review(
+            step_summary=step_summary,
+            deterministic_findings=tuple(findings),
+            evidence_present=bool(evidence_refs),
+        )
+        suggested_repairs = list(decision.semantic_repairs)
+        if decision.status != "pass":
+            suggested_repairs.extend(
+                _suggest_repairs_for(step_summary, decision.concerns)
             )
-            for metric in scientific_summary.metrics
-            if metric.before_origin_n
-        )
-        status: str = "pass"
-        if not evidence_refs:
-            status = "blocked"
-            concerns.append("No evidence refs were registered for this step.")
-        elif any(
-            issue.severity == "error" for issue in scientific_summary.issues
-        ):
-            status = "blocked"
-        elif deterministic_concerns or scientific_summary.issues:
-            status = "needs_revision"
-        suggested_repairs = list(
-            dict.fromkeys(issue.repair for issue in scientific_summary.issues)
-        )
-        if status != "pass":
-            suggested_repairs.extend(_suggest_repairs_for(step_summary, concerns))
         return CritiqueReport(
-            status=status,  # type: ignore[arg-type]
+            status=decision.status,
             reviewer="CriticAgent",
-            concerns=concerns,
+            concerns=list(decision.concerns),
             unsupported_claims=[],
             missing_evidence_refs=[] if evidence_refs else [step.step_id],
             suggested_repairs=(
-                [] if status == "pass" else list(dict.fromkeys(suggested_repairs))
+                []
+                if decision.status == "pass"
+                else list(dict.fromkeys(suggested_repairs))
             ),
             related_evidence_refs=list(evidence_refs),
         )

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from easyicu.research_agent.authority.plan_input_closure import (
     close_measurement_companion_inputs,
+    plan_manifest_fields,
     register_measurement_companion_input_closure,
     resolve_registered_plan_authority,
 )
@@ -279,3 +280,9 @@ def test_current_plan_authority_selects_immutable_closure_evidence(tmp_path):
     assert authority.revision == 3
     assert authority.relative_path.startswith("evidence/")
     assert authority.sha256 == evidence.get(registered.evidence_id).sha256
+    assert plan_manifest_fields(
+        tmp_path, evidence, closed, registered.evidence_path
+    ) == {
+        "plan_path": authority.relative_path,
+        "current_plan_authority": authority.to_dict(),
+    }

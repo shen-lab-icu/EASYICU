@@ -48,7 +48,6 @@ from ..scalar_utils import (
 )
 from .attrition import patch_attrition_rule_id_canonicalization
 from .categorical import patch_categorical_declared_order_check
-from .concept_preflight import patch_concept_preflight_repairs
 from .figure_distribution import (
     patch_categorical_distribution_clinical_bin_role,
     patch_text_distribution_denominator_from_counts,
@@ -112,7 +111,7 @@ from .input_scope import (
     patch_raw_contract_mapping_iteration,
     patch_raw_input_physical_superset_guard,
 )
-from .interval_method import patch_statsmodels_interval_method_label
+from .preflight import patch_preflight_repairs
 from .reasons import RepairReason
 from .typed_input import (
     patch_all_rows_outcome_coordinate_filter,
@@ -2663,19 +2662,11 @@ def deterministic_concept_audit_repair(
     repaired = code
     repair_names: List[str] = []
 
-    repaired, preflight_repair_names = patch_concept_preflight_repairs(
+    repaired, preflight_repair_names = patch_preflight_repairs(
         repaired,
         findings=repair_findings,
     )
     repair_names.extend(preflight_repair_names)
-
-    interval_method_labeled = patch_statsmodels_interval_method_label(
-        repaired,
-        findings=repair_findings,
-    )
-    if interval_method_labeled != repaired:
-        repaired = interval_method_labeled
-        repair_names.append("statsmodels_interval_method_label_v1")
 
     nonfinite_audit_preserved = patch_strict_numeric_nonfinite_audit_conflict(
         repaired,

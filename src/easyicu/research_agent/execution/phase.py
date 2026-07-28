@@ -213,8 +213,8 @@ from ..authority.plan_authority import (
 )
 from ..authority.plan_input_closure import (
     close_measurement_companion_inputs,
+    plan_manifest_fields,
     register_measurement_companion_input_closure,
-    resolve_registered_plan_authority,
 )
 from ..authority.plan_scope import (
     _normalise_scientific_text,
@@ -4110,20 +4110,13 @@ def run_execute_phase(
             snapshot = dict(record)
             if snapshot not in step_attempt_history:
                 step_attempt_history.append(snapshot)
-        current_plan_authority = resolve_registered_plan_authority(
-            run_dir=run_dir,
-            evidence=evidence,
-            plan=plan,
-            plan_path=plan_path,
-        )
         payload: Dict[str, Any] = {
             "schema_version": "easyicu.research_manifest_partial/1",
             "run_id": run_id,
             "research_question": context.research_question,
             "started_at": plan_result.started_at.isoformat(),
             "context_path": str(plan_result.context_path.relative_to(run_dir)),
-            "plan_path": current_plan_authority.relative_path,
-            "current_plan_authority": current_plan_authority.to_dict(),
+            **plan_manifest_fields(run_dir, evidence, plan, plan_path),
             "evidence": [r.model_dump(mode="json") for r in evidence.records()],
             "findings": [f.model_dump(mode="json") for f in findings],
             "per_step_records": per_step_records,
@@ -6626,6 +6619,7 @@ def run_execute_phase(
             reason: str,
             *,
             preflight: bool = False,
+            plausibility_scope: FlagOnlyPlausibilityScope = plausibility_authority.scope,
         ) -> Optional[str]:
             if (
                 worker_progress.deterministic_fallback_used
@@ -6649,7 +6643,7 @@ def run_execute_phase(
             )
             return robustness_sensitivity_preflight_code(
                 step,
-                plausibility_scope=plausibility_authority.scope,
+                plausibility_scope=plausibility_scope,
             )
 
         def _missingness_audit_preflight_supported() -> bool:
@@ -8423,9 +8417,8 @@ def run_execute_phase(
             execution_runner = runner
             execution_timeout_seconds = pipeline._timeout_seconds
             if worker_progress.deterministic_standard_executor_used:
-                # A registered standard executes the exact typed workload the
-                # planner froze. Give it the dedicated bounded timeout even
-                # when the step also consumes a staged primary-cohort universe.
+                # Give a registered standard's exact typed workload its dedicated
+                # timeout even with a staged primary-cohort universe.
                 execution_timeout_seconds = pipeline._standard_executor_timeout_seconds
             if step_execution_cohort_path != cohort_path or (
                 worker_progress.deterministic_standard_executor_used
@@ -8438,13 +8431,7 @@ def run_execute_phase(
                     **run_input_authority_state.runner_bindings(),
                     timeout_seconds=execution_timeout_seconds,
                 )
-            execution_timeout_seconds = float(
-                getattr(
-                    execution_runner,
-                    "timeout_seconds",
-                    execution_timeout_seconds,
-                )
-            )
+            execution_timeout_seconds = step_executor.runner_timeout(execution_runner, execution_timeout_seconds)
             emit_progress(
                 "runner",
                 f"Running {run_label} for {step.step_id}.",
