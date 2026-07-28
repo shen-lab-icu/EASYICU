@@ -374,7 +374,7 @@ from ..trajectory.plan_contract import (
     trajectory_plan_contract_applies,
     trajectory_plan_dag_findings,
 )
-from .runners.selection import select_standard_executor
+from .runners.selection import StandardExecutorCandidate, select_standard_executor
 from .runners.selection_report import standard_executor_candidate_report
 from .standard_executor_diagnostics import standard_executor_failure_finding
 from ..repair_registry import (
@@ -6745,11 +6745,13 @@ def run_execute_phase(
         # to reuse; a prior deterministic ``contract_failed`` attempt may reuse
         # only its exact evidence-bound code and scientific signature. Reused
         # code still runs through every current execution audit and repair gate.
+        standard_executor_trace: list[StandardExecutorCandidate] = []
         standard_executor = select_standard_executor(
             step,
             plan=plan,
             plausibility_scope=plausibility_authority.scope,
             resolved_bindings=resolved_input_bindings,
+            trace=standard_executor_trace,
         )
         preflight_standard_code = None
         if standard_executor is not None:
@@ -6774,10 +6776,14 @@ def run_execute_phase(
         # silently.  Record which owners were consulted and how they answered,
         # so the next reader can tell an unsupported analysis apart from a
         # supported one wearing a name or a product count nobody recognises.
+        # The verdicts come from the selector's own trace, never from re-running
+        # its predicates here -- a second evaluation cannot see the gates the
+        # selector applies after a contract matches.
         step_record["standard_executor_candidates"] = (
             standard_executor_candidate_report(
                 step,
                 plan=plan,
+                trace=standard_executor_trace,
                 resolved_bindings=resolved_input_bindings,
                 claimed_by=(
                     standard_executor.analysis_kind

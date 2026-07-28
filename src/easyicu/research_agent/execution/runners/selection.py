@@ -46,7 +46,11 @@ from .trajectory_stability_executor import (
     trajectory_stability_executor_owns_step,
 )
 
-__all__ = ["StandardExecutorSelection", "select_standard_executor"]
+__all__ = [
+    "StandardExecutorCandidate",
+    "StandardExecutorSelection",
+    "select_standard_executor",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,12 +64,28 @@ class StandardExecutorSelection:
     consumed_input_keys: tuple[str, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class StandardExecutorCandidate:
+    """What one deterministic owner answered, recorded by the decider itself.
+
+    A diagnostic that re-derives ownership from the same predicates is a second
+    registry: it cannot see the extra gates this function applies after a
+    contract matches, so it eventually reports an owner the selector declined.
+    The trace is therefore emitted here, by the code that actually decides.
+    """
+
+    analysis_kind: str
+    contract_matches: bool
+    outcome: str  # "selected" | "declined_receipt_required" | "contract_declined"
+
+
 def select_standard_executor(
     step: AnalysisStep,
     *,
     plan: AnalysisPlan,
     plausibility_scope: FlagOnlyPlausibilityScope | None = None,
     resolved_bindings: Mapping[str, Any] | None = None,
+    trace: list[StandardExecutorCandidate] | None = None,
 ) -> StandardExecutorSelection | None:
     """Select by exact typed contract, never by prose or benchmark identity.
 
@@ -74,6 +94,11 @@ def select_standard_executor(
     rather than by the Planner's product name uses it to confirm the bound
     product contract before claiming the step; without it such an executor
     declines and the ordinary coder path runs.
+
+    ``trace``, when supplied, receives one :class:`StandardExecutorCandidate`
+    per owner consulted, in consultation order, recording what this function
+    actually concluded.  Reporting reads that; it must not re-run the
+    predicates itself.
     """
 
     if plausibility_scope is not None:
@@ -83,8 +108,36 @@ def select_standard_executor(
         and plausibility_scope.expected_columns
     )
 
+    def _note(analysis_kind: str, contract_matches: bool, outcome: str) -> None:
+        if trace is not None:
+            trace.append(
+                StandardExecutorCandidate(
+                    analysis_kind=analysis_kind,
+                    contract_matches=contract_matches,
+                    outcome=outcome,
+                )
+            )
+
+    def _missed(analysis_kind: str) -> None:
+        _note(analysis_kind, False, "contract_declined")
+
+    def _receipt_declined(analysis_kind: str) -> None:
+        _note(analysis_kind, True, "declined_receipt_required")
+
+    def _selected(
+        selection: StandardExecutorSelection,
+        owner_key: str | None = None,
+    ) -> StandardExecutorSelection:
+        # ``owner_key`` keeps one stable name per owner in the trace.  The
+        # missingness owner resolves to one of four ``analysis_kind`` variants
+        # once it claims, and a trace that named it differently depending on
+        # whether it claimed could not be read as a list of consulted owners.
+        _note(owner_key or selection.analysis_kind, True, "selected")
+        return selection
+
     if cohort_summary_executor_owns_step(step):
         if receipt_required:
+            _receipt_declined("descriptive_cohort_summary")
             return None
         typed_cohort_inputs = tuple(
             str(value or "").strip()
@@ -92,72 +145,96 @@ def select_standard_executor(
             if str(value or "").strip().startswith("cohort:")
             or str(value or "").strip() == "artifact:analysis_cohort"
         )
-        return StandardExecutorSelection(
-            analysis_kind="descriptive_cohort_summary",
-            selection_reason="cohort_summary_contract_preflight",
-            progress_message="Using planner-scoped cohort summary executor",
-            code=cohort_summary_executor_code(step),
-            consumed_input_keys=typed_cohort_inputs,
+        return _selected(
+            StandardExecutorSelection(
+                analysis_kind="descriptive_cohort_summary",
+                selection_reason="cohort_summary_contract_preflight",
+                progress_message="Using planner-scoped cohort summary executor",
+                code=cohort_summary_executor_code(step),
+                consumed_input_keys=typed_cohort_inputs,
+            )
         )
+    _missed("descriptive_cohort_summary")
     if prevalence_outcome_figure_executor_owns_step(step):
         if receipt_required:
+            _receipt_declined("prevalence_outcome_figure")
             return None
-        return StandardExecutorSelection(
-            analysis_kind="prevalence_outcome_figure",
-            selection_reason="prevalence_outcome_figure_contract_preflight",
-            progress_message="Using planner-scoped prevalence/outcome figure executor",
-            code=prevalence_outcome_figure_executor_code(step),
-            consumed_input_keys=(PREVALENCE_OUTCOME_FIGURE_INPUT,),
+        return _selected(
+            StandardExecutorSelection(
+                analysis_kind="prevalence_outcome_figure",
+                selection_reason="prevalence_outcome_figure_contract_preflight",
+                progress_message=(
+                    "Using planner-scoped prevalence/outcome figure executor"
+                ),
+                code=prevalence_outcome_figure_executor_code(step),
+                consumed_input_keys=(PREVALENCE_OUTCOME_FIGURE_INPUT,),
+            )
         )
+    _missed("prevalence_outcome_figure")
     if prevalence_mortality_figure_executor_owns_step(step):
         if receipt_required:
+            _receipt_declined("prevalence_mortality_figure")
             return None
-        return StandardExecutorSelection(
-            analysis_kind="prevalence_mortality_figure",
-            selection_reason="prevalence_mortality_figure_contract_preflight",
-            progress_message=(
-                "Using planner-scoped prevalence/mortality figure executor"
-            ),
-            code=prevalence_mortality_figure_executor_code(
-                step,
-                display_labels=plan.display_labels,
-            ),
-            consumed_input_keys=PREVALENCE_MORTALITY_FIGURE_INPUTS,
+        return _selected(
+            StandardExecutorSelection(
+                analysis_kind="prevalence_mortality_figure",
+                selection_reason="prevalence_mortality_figure_contract_preflight",
+                progress_message=(
+                    "Using planner-scoped prevalence/mortality figure executor"
+                ),
+                code=prevalence_mortality_figure_executor_code(
+                    step,
+                    display_labels=plan.display_labels,
+                ),
+                consumed_input_keys=PREVALENCE_MORTALITY_FIGURE_INPUTS,
+            )
         )
+    _missed("prevalence_mortality_figure")
     if exposure_outcome_distribution_figure_executor_owns_step(
         step,
         resolved_bindings=resolved_bindings,
         display_labels=plan.display_labels,
     ):
         if receipt_required:
+            _receipt_declined("exposure_outcome_distribution_figure")
             return None
-        return StandardExecutorSelection(
-            analysis_kind="exposure_outcome_distribution_figure",
-            selection_reason=(
-                "exposure_outcome_distribution_figure_contract_preflight"
-            ),
-            progress_message=(
-                "Using planner-scoped exposure/outcome distribution figure executor"
-            ),
-            code=exposure_outcome_distribution_figure_executor_code(
-                step,
-                resolved_bindings=resolved_bindings,
-                display_labels=plan.display_labels,
-            ),
-            consumed_input_keys=EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_INPUTS,
+        return _selected(
+            StandardExecutorSelection(
+                analysis_kind="exposure_outcome_distribution_figure",
+                selection_reason=(
+                    "exposure_outcome_distribution_figure_contract_preflight"
+                ),
+                progress_message=(
+                    "Using planner-scoped exposure/outcome distribution figure "
+                    "executor"
+                ),
+                code=exposure_outcome_distribution_figure_executor_code(
+                    step,
+                    resolved_bindings=resolved_bindings,
+                    display_labels=plan.display_labels,
+                ),
+                consumed_input_keys=EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_INPUTS,
+            )
         )
+    _missed("exposure_outcome_distribution_figure")
     if missingness_measurement_figure_executor_owns_step(step):
         if receipt_required:
+            _receipt_declined("missingness_measurement_figure")
             return None
-        return StandardExecutorSelection(
-            analysis_kind="missingness_measurement_figure",
-            selection_reason="missingness_measurement_figure_contract_preflight",
-            progress_message=(
-                "Using planner-scoped missingness/measurement figure executor"
-            ),
-            code=missingness_measurement_figure_executor_code(step),
-            consumed_input_keys=MISSINGNESS_MEASUREMENT_FIGURE_INPUTS,
+        return _selected(
+            StandardExecutorSelection(
+                analysis_kind="missingness_measurement_figure",
+                selection_reason=(
+                    "missingness_measurement_figure_contract_preflight"
+                ),
+                progress_message=(
+                    "Using planner-scoped missingness/measurement figure executor"
+                ),
+                code=missingness_measurement_figure_executor_code(step),
+                consumed_input_keys=MISSINGNESS_MEASUREMENT_FIGURE_INPUTS,
+            )
         )
+    _missed("missingness_measurement_figure")
     if table_one_executor_owns_step(step):
         typed_cohort_inputs = tuple(
             str(value or "").strip()
@@ -165,16 +242,19 @@ def select_standard_executor(
             if str(value or "").strip().startswith("cohort:")
             or str(value or "").strip() == "artifact:analysis_cohort"
         )
-        return StandardExecutorSelection(
-            analysis_kind="grouped_table_one",
-            selection_reason="table_one_spec_preflight",
-            progress_message="Using planner-specified grouped Table 1 executor",
-            code=table_one_executor_code(
-                step,
-                plausibility_scope=plausibility_scope,
-            ),
-            consumed_input_keys=typed_cohort_inputs,
+        return _selected(
+            StandardExecutorSelection(
+                analysis_kind="grouped_table_one",
+                selection_reason="table_one_spec_preflight",
+                progress_message="Using planner-specified grouped Table 1 executor",
+                code=table_one_executor_code(
+                    step,
+                    plausibility_scope=plausibility_scope,
+                ),
+                consumed_input_keys=typed_cohort_inputs,
+            )
         )
+    _missed("grouped_table_one")
     if missingness_audit_executor_owns_step(step):
         source_availability = source_availability_audit_executor_owns_step(step)
         compact_measurement = is_compact_missingness_measurement_contract(
@@ -186,7 +266,7 @@ def select_standard_executor(
             step.expected_outputs,
         )
         typed_cohort_input = missingness_audit_cohort_input_key(step)
-        return StandardExecutorSelection(
+        selection = StandardExecutorSelection(
             analysis_kind=(
                 "missingness_source_availability_audit"
                 if source_availability
@@ -222,14 +302,22 @@ def select_standard_executor(
                 (typed_cohort_input,) if typed_cohort_input is not None else ()
             ),
         )
+        return _selected(selection, "missingness_audit")
+    _missed("missingness_audit")
     if trajectory_stability_executor_owns_step(step, plan=plan):
         if receipt_required:
+            _receipt_declined("trajectory_cluster_stability")
             return None
-        return StandardExecutorSelection(
-            analysis_kind="trajectory_cluster_stability",
-            selection_reason="trajectory_stability_spec_preflight",
-            progress_message="Using planner-specified trajectory stability executor",
-            code=trajectory_stability_executor_code(step, plan=plan),
-            consumed_input_keys=tuple(sorted(STABILITY_EXECUTOR_INPUTS)),
+        return _selected(
+            StandardExecutorSelection(
+                analysis_kind="trajectory_cluster_stability",
+                selection_reason="trajectory_stability_spec_preflight",
+                progress_message=(
+                    "Using planner-specified trajectory stability executor"
+                ),
+                code=trajectory_stability_executor_code(step, plan=plan),
+                consumed_input_keys=tuple(sorted(STABILITY_EXECUTOR_INPUTS)),
+            )
         )
+    _missed("trajectory_cluster_stability")
     return None
