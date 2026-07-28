@@ -103,7 +103,10 @@ def select_standard_executor(
             progress_message=(
                 "Using planner-scoped prevalence/mortality figure executor"
             ),
-            code=prevalence_mortality_figure_executor_code(step),
+            code=prevalence_mortality_figure_executor_code(
+                step,
+                display_labels=plan.display_labels,
+            ),
             consumed_input_keys=PREVALENCE_MORTALITY_FIGURE_INPUTS,
         )
     if missingness_measurement_figure_executor_owns_step(step):
