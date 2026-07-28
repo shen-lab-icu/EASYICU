@@ -482,7 +482,14 @@ class CohortDescriptor(BaseModel):
 
     cohort_name: str
     database: str = Field(..., description="Source database tag, e.g. 'miiv', 'eicu'.")
-    n_patients: int = Field(ge=0)
+    n_patients: Optional[int] = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Distinct patients when a verified patient identifier is present; "
+            "None when the cohort only exposes stay/row identity."
+        ),
+    )
     n_stays: int = Field(ge=0)
     inclusion_criteria: List[str] = Field(default_factory=list)
     exclusion_criteria: List[str] = Field(default_factory=list)
