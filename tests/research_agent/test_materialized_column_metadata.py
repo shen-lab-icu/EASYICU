@@ -77,6 +77,8 @@ from easyicu.research_agent.research_context.typed import (
     CanonicalColumnBinding,
     ResearchContextV2,
     binding_preserves_analysis_range,
+    canonical_column_binding,
+    descriptor_physical_updates,
     effective_analysis_plausibility_range,
     materialized_input_prompt_attachment,
     resolved_raw_input_contracts,
@@ -1094,6 +1096,40 @@ def test_typed_allowed_values_do_not_promote_event_status_to_ordinal(
     assert context.materialized_inputs.cohort.column_bindings["death"].binding[
         "metadata"
     ]["allowed_values"] == [0, 1]
+
+
+@pytest.mark.parametrize(
+    "role",
+    [
+        ConceptColumnRole.FIRST_OBSERVATION_TIME,
+        ConceptColumnRole.LAST_OBSERVATION_TIME,
+        ConceptColumnRole.EVENT_TIME,
+    ],
+)
+def test_typed_time_representations_use_their_sealed_time_unit(role) -> None:
+    definition = load_dictionary(include_sofa2=True).get("lact")
+    assert definition is not None
+    binding = ColumnMetadataBinding(
+        metadata=project_concept_column_metadata(
+            definition,
+            spec=ColumnProjectionSpec(
+                column_name=f"lact_{role.value}",
+                source_concept="lact",
+                role=role,
+                time_origin="icu_admission",
+                time_unit="h",
+            ),
+            source_database="miiv",
+        )
+    )
+    canonical = canonical_column_binding(binding.metadata.column_name, binding)
+
+    updates = descriptor_physical_updates(canonical)
+
+    assert binding.metadata.canonical_unit is None
+    assert binding.metadata.time_unit == "h"
+    assert updates["unit"] == "h"
+    assert updates["temporal_resolution"] == "relative to icu_admission in h"
 
 
 def test_one_sided_analysis_plausibility_range_is_preserved(

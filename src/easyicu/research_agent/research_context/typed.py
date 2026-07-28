@@ -154,6 +154,11 @@ def descriptor_physical_updates(
     parsed = ColumnMetadataBinding.from_dict(binding.binding)
     metadata = parsed.metadata
     value_like = metadata.role.value in {"value", "numeric_aggregate"}
+    time_like = metadata.role.value in {
+        "first_observation_time",
+        "last_observation_time",
+        "event_time",
+    }
     plausible = binding.analysis_plausibility_range
     valid_range = None
     if (
@@ -164,7 +169,11 @@ def descriptor_physical_updates(
         valid_range = [plausible["minimum"], plausible["maximum"]]
     lineage = metadata.source_lineage
     updates: Dict[str, Any] = {
-        "unit": metadata.canonical_unit if value_like else None,
+        "unit": (
+            metadata.time_unit
+            if time_like
+            else metadata.canonical_unit if value_like else None
+        ),
         "valid_range": valid_range,
         "source_concept": metadata.source_concept,
         "derived_from_concepts": list(metadata.derived_from_concepts),
