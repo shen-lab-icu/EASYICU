@@ -7,6 +7,11 @@ from typing import Any, Mapping
 
 from ...authority.plausibility import FlagOnlyPlausibilityScope
 from ...schema import AnalysisPlan, AnalysisStep
+from .exposure_outcome_distribution_render import (
+    EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_INPUT,
+    exposure_outcome_distribution_figure_code,
+    exposure_outcome_distribution_figure_owns_step,
+)
 from .exposure_outcome_distribution_executor import (
     exposure_outcome_distribution_executor_code,
     exposure_outcome_distribution_executor_owns_step,
@@ -186,6 +191,27 @@ def select_standard_executor(
             )
         )
     _missed("exposure_outcome_distribution")
+    if exposure_outcome_distribution_figure_owns_step(step):
+        if receipt_required:
+            _receipt_declined("exposure_outcome_distribution_figure")
+            return None
+        return _selected(
+            StandardExecutorSelection(
+                analysis_kind="exposure_outcome_distribution_figure",
+                selection_reason=(
+                    "exposure_outcome_distribution_figure_contract_preflight"
+                ),
+                progress_message=(
+                    "Using planner-scoped exposure/outcome distribution renderer"
+                ),
+                code=exposure_outcome_distribution_figure_code(
+                    step,
+                    display_labels=plan.display_labels,
+                ),
+                consumed_input_keys=(EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_INPUT,),
+            )
+        )
+    _missed("exposure_outcome_distribution_figure")
     if prevalence_outcome_figure_executor_owns_step(step):
         if receipt_required:
             _receipt_declined("prevalence_outcome_figure")
