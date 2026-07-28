@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 import ast
 import importlib
 import inspect
@@ -124,6 +126,38 @@ def test_cohort_contract_owns_one_process_registry() -> None:
         cohort_contract.clear_cohort_concept_ids()
 
 
+def test_cohort_concept_id_scope_restores_the_exact_prior_registry() -> None:
+    """A caller asking a hypothetical must not answer it for everyone else.
+
+    ``clear_cohort_concept_ids`` empties the registry wholesale, so a scoped
+    question ("would this plan validate if these columns existed?") could only
+    be asked by destroying a registration its owner still needs.  The scope
+    must restore what was there, including ids registered before it ran.
+    """
+
+    cohort_contract.clear_cohort_concept_ids()
+    try:
+        cohort_contract.register_cohort_concept_ids(["already_owned"])
+        with cohort_schema.cohort_concept_id_scope(["hypothetical"]):
+            assert cohort_contract.concept_id_exists("hypothetical")
+            assert cohort_contract.concept_id_exists("already_owned")
+        assert not cohort_contract.concept_id_exists("hypothetical")
+        assert cohort_contract.concept_id_exists("already_owned")
+    finally:
+        cohort_contract.clear_cohort_concept_ids()
+
+
+def test_cohort_concept_id_scope_restores_even_when_the_block_raises() -> None:
+    cohort_contract.clear_cohort_concept_ids()
+    try:
+        with pytest.raises(ValueError):
+            with cohort_schema.cohort_concept_id_scope(["hypothetical"]):
+                raise ValueError("validation failed inside the scope")
+        assert not cohort_contract.concept_id_exists("hypothetical")
+    finally:
+        cohort_contract.clear_cohort_concept_ids()
+
+
 def test_cohort_contract_resolves_packaged_concept_dictionary() -> None:
     assert cohort_contract._CONCEPT_DICT_PATH.is_file()
     assert cohort_contract.known_concept_ids()
@@ -147,3 +181,130 @@ def test_cohort_contract_round_trip_and_digest_match_legacy_path() -> None:
     assert cohort_schema.cohort_definition_sha(definition) == (
         cohort_contract.cohort_definition_sha(definition)
     )
+
+
+def test_cohort_concept_id_scope_survives_interleaved_threads() -> None:
+    """Two overlapping scopes must not restore each other's snapshots.
+
+    Unsynchronised, the interleaving A-enter / B-enter / A-exit / B-exit has B
+    snapshot a set that already contains A's ids and then reinstate them on
+    exit -- so A's hypothetical leaks into the process permanently, and every
+    later validation silently accepts a column no run registered.  The scope is
+    therefore mutually exclusive; this asserts the outcome, not the mechanism.
+    """
+
+    import threading
+
+    cohort_contract.clear_cohort_concept_ids()
+    barrier = threading.Barrier(2)
+    seen: dict[str, set[str]] = {}
+    errors: list[BaseException] = []
+
+    def worker(name: str, own: str, foreign: str) -> None:
+        try:
+            barrier.wait(timeout=10)
+            for _ in range(60):
+                with cohort_schema.cohort_concept_id_scope([own]):
+                    assert cohort_contract.concept_id_exists(own)
+                    # Mutual exclusion is what makes this assertion safe: the
+                    # other thread's id must never be visible inside our scope.
+                    if cohort_contract.concept_id_exists(foreign):
+                        seen.setdefault(name, set()).add(foreign)
+        except BaseException as exc:  # pragma: no cover - reported below
+            errors.append(exc)
+
+    threads = [
+        threading.Thread(target=worker, args=("a", "col_a", "col_b")),
+        threading.Thread(target=worker, args=("b", "col_b", "col_a")),
+    ]
+    try:
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=30)
+            assert not thread.is_alive(), "scope deadlocked"
+        assert not errors, errors
+        assert seen == {}, f"a scope observed another thread's ids: {seen}"
+        # The decisive assertion: nothing survives the last scope's exit.
+        assert not cohort_contract.concept_id_exists("col_a")
+        assert not cohort_contract.concept_id_exists("col_b")
+    finally:
+        cohort_contract.clear_cohort_concept_ids()
+
+
+def test_cohort_concept_id_scope_nests_within_one_thread() -> None:
+    """The lock must be re-entrant, or a nested scope would deadlock."""
+
+    cohort_contract.clear_cohort_concept_ids()
+    try:
+        with cohort_schema.cohort_concept_id_scope(["outer"]):
+            with cohort_schema.cohort_concept_id_scope(["inner"]):
+                assert cohort_contract.concept_id_exists("outer")
+                assert cohort_contract.concept_id_exists("inner")
+            assert cohort_contract.concept_id_exists("outer")
+            assert not cohort_contract.concept_id_exists("inner")
+        assert not cohort_contract.concept_id_exists("outer")
+    finally:
+        cohort_contract.clear_cohort_concept_ids()
+
+
+def test_a_bare_reader_never_observes_a_scoped_concept_id() -> None:
+    """Guarding the writers left the readers outside.
+
+    A thread that never enters a scope still calls ``concept_id_exists``.  With
+    the read unguarded it could observe another thread's *hypothetical* id --
+    so "would this plan validate if these columns existed?" asked in one place
+    silently became "yes, it exists" somewhere else.
+
+    The window has to be held open deliberately.  A first version of this test
+    let two threads race and passed with the read lock removed: the scope
+    enters and exits in microseconds, so the reader simply never sampled inside
+    it, and the test asserted nothing.  Here the scope stays open for a fixed
+    interval, which the reader is released into -- so an unguarded read sees the
+    id every time, and a guarded one blocks until the scope has restored the
+    registry and then correctly sees nothing.
+    """
+
+    import threading
+    import time
+
+    cohort_contract.clear_cohort_concept_ids()
+    inside = threading.Event()
+    observed: list[str] = []
+    errors: list[BaseException] = []
+
+    def scoped() -> None:
+        try:
+            with cohort_schema.cohort_concept_id_scope(["scoped_only"]):
+                assert cohort_contract.concept_id_exists("scoped_only")
+                inside.set()
+                # Held open on purpose. Never waits on the reader: with the
+                # lock working the reader is blocked on us, so waiting for it
+                # would deadlock rather than fail.
+                time.sleep(0.5)
+        except BaseException as exc:  # pragma: no cover - reported below
+            errors.append(exc)
+            inside.set()
+
+    def bare_reader() -> None:
+        try:
+            assert inside.wait(timeout=10)
+            if cohort_contract.concept_id_exists("scoped_only"):
+                observed.append("scoped_only")
+        except BaseException as exc:  # pragma: no cover - reported below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=scoped), threading.Thread(target=bare_reader)]
+    try:
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=30)
+            assert not thread.is_alive(), "reader or scope deadlocked"
+        assert not errors, errors
+        assert observed == [], (
+            "a thread outside the scope observed a temporary concept id: " f"{observed}"
+        )
+        assert not cohort_contract.concept_id_exists("scoped_only")
+    finally:
+        cohort_contract.clear_cohort_concept_ids()
