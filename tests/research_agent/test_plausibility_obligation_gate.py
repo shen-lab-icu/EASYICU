@@ -532,6 +532,145 @@ write_summary({"plausibility_audit": plausibility_audit}, STEP_OUT_DIR)
     assert _reasons(ambiguous) == {"out_of_range_record_not_in_declared_output"}
 
 
+RECORD_THE_COUNTS = """        plausibility_audit[column] = {
+            "policy": "retain_and_flag",
+            "below_minimum_n": int((numeric < float(lower)).sum()),
+            "above_maximum_n": int((numeric > float(upper)).sum()),
+            "out_of_range_n": int(
+                ((numeric < float(lower)) | (numeric > float(upper))).sum()
+            ),
+        }
+"""
+
+# A receipt the artifact can carry that no post-hoc reader can falsify: it is
+# internally consistent, and every count in it is a typed zero.
+ZEROS = """
+ZEROS = {
+    "marker": {
+        "policy": "retain_and_flag",
+        "below_minimum_n": 0,
+        "above_maximum_n": 0,
+        "out_of_range_n": 0,
+    }
+}
+"""
+
+
+def test_rebinding_the_output_directory_after_reading_it_is_blocked():
+    """A name is trusted where it is written, not once and for all.
+
+    The script reads the host's directory into `out_dir`, then rebinds it to a
+    scratch path and sends the real counts there, leaving the artifact the host
+    opens with hard-coded zeros. Every name matches the compliant spelling; the
+    first binding is the only honest thing about it. A flat name set had no way
+    to notice the second one.
+    """
+
+    code = (
+        HEADER
+        + ZEROS
+        + """
+plausibility_audit = {}
+out_dir = STEP_OUT_DIR
+out_dir = Path("/tmp")
+"""
+        + HELPER_HEAD
+        + RECORD_THE_COUNTS
+        + """
+
+write_json(out_dir / "step_summary.json", {"plausibility_audit": plausibility_audit})
+write_json(SUMMARY_PATH, {"plausibility_audit": ZEROS})
+"""
+    )
+    assert _reasons(code) == {"out_of_range_record_not_in_declared_output"}
+
+
+def test_a_name_trusted_in_one_function_does_not_lend_itself_to_another():
+    """Two functions, one name, two different files.
+
+    `out_dir` is a parameter of the official writer -- every call site hands it
+    the host's directory, so it is genuinely trusted there -- and an ordinary
+    local in the scratch writer. `payload` is likewise a real receipt in one
+    and a literal in the other. Neither name means the same thing in both
+    places, and one flat set per script cannot say so.
+    """
+
+    code = (
+        HEADER
+        + ZEROS
+        + """
+plausibility_audit = {}
+
+
+def stage_the_official(out_dir, payload):
+    write_json(out_dir / "step_summary.json", payload)
+
+
+def stage_to_scratch(payload):
+    out_dir = Path("/tmp")
+    write_json(out_dir / "step_summary.json", payload)
+"""
+        + HELPER_HEAD
+        + RECORD_THE_COUNTS
+        + """
+
+stage_to_scratch({"plausibility_audit": plausibility_audit})
+stage_the_official(STEP_OUT_DIR, {"plausibility_audit": ZEROS})
+"""
+    )
+    assert _reasons(code) == {"out_of_range_record_not_in_declared_output"}
+
+
+def test_replacing_the_record_with_a_literal_before_writing_it_is_blocked():
+    """The same defect one step over, on the payload instead of the path.
+
+    The counts are computed into `plausibility_audit`, then the name is rebound
+    to a hard-coded mapping and *that* is what reaches the artifact. Following
+    where a value *can* come from is the right question for finding the
+    computation and the wrong one for certifying a delivery.
+    """
+
+    code = (
+        HEADER
+        + ZEROS
+        + """
+plausibility_audit = {}
+"""
+        + HELPER_HEAD
+        + RECORD_THE_COUNTS
+        + """
+
+plausibility_audit = ZEROS
+write_json(SUMMARY_PATH, {"plausibility_audit": plausibility_audit})
+"""
+    )
+    assert _reasons(code) == {"out_of_range_record_not_in_declared_output"}
+
+
+def test_seeding_an_empty_accumulator_is_not_replacing_it():
+    """The shape almost every compliant script writes must survive the rule.
+
+    `plausibility_audit = {}` before `plausibility_audit[column] = ...` is a
+    second whole-name binding that carries nothing, and a rule that only asked
+    "does every binding carry" would refuse the one spelling the corpus
+    actually uses.
+    """
+
+    code = (
+        HEADER
+        + """
+plausibility_audit = {}
+"""
+        + HELPER_HEAD
+        + RECORD_THE_COUNTS
+        + """
+
+write_json(SUMMARY_PATH, {"plausibility_audit": plausibility_audit})
+"""
+    )
+    assert _reasons(code) == set()
+
+
 def test_the_gate_reads_the_output_directory_the_host_actually_sets():
     """The env aliases are the host's own, not a guess, so they must not drift.
 
