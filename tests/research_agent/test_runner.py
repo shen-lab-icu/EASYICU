@@ -21,6 +21,23 @@ def test_run_result_has_one_dependency_neutral_contract_owner():
     assert RunnerRunResult is ContractRunResult
 
 
+@pytest.fixture
+def unauthorized_host_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Withdraw the suite-wide host-fallback grant for one test.
+
+    ``tests/conftest.py`` sets ``EASYICU_ALLOW_UNSAFE_HOST_FALLBACK=1`` for
+    every research-agent test so test-owned scripts still run when an outer
+    CI/Codex sandbox prevents ``sandbox-exec`` from nesting.  That grant is
+    right for tests that merely need generated code to execute, and wrong for
+    the tests below, which *own* the fail-closed isolation boundary: inheriting
+    it makes them assert a guard while the harness has already authorized
+    exactly what the guard exists to refuse, so they fail whether or not the
+    production default is intact.
+    """
+
+    monkeypatch.delenv("EASYICU_ALLOW_UNSAFE_HOST_FALLBACK", raising=False)
+
+
 def _is_python_executable(command: str) -> bool:
     return Path(command).name.startswith("python")
 
@@ -474,7 +491,7 @@ def test_code_runner_preserves_bare_python_command(ra, tmp_path: Path):
 
 
 def test_code_runner_scrubs_secrets_and_reports_filesystem_degradation(
-    ra, tmp_path: Path, monkeypatch
+    ra, tmp_path: Path, monkeypatch, unauthorized_host_fallback
 ):
     cohort_path = tmp_path / "cohort.parquet"
     pd.DataFrame({"stay_id": [1], "death": [0]}).to_parquet(cohort_path, index=False)
@@ -519,7 +536,7 @@ def test_code_runner_scrubs_secrets_and_reports_filesystem_degradation(
 
 
 def test_code_runner_default_does_not_retry_failed_sandbox_on_host(
-    ra, tmp_path: Path, monkeypatch
+    ra, tmp_path: Path, monkeypatch, unauthorized_host_fallback
 ):
     import easyicu.research_agent.execution.runner as runner_mod
 
@@ -556,7 +573,7 @@ def test_code_runner_default_does_not_retry_failed_sandbox_on_host(
 
 
 def test_code_runner_default_blocks_direct_host_execution(
-    ra, tmp_path: Path, monkeypatch
+    ra, tmp_path: Path, monkeypatch, unauthorized_host_fallback
 ):
     import easyicu.research_agent.execution.runner as runner_mod
 
@@ -585,7 +602,9 @@ def test_code_runner_default_blocks_direct_host_execution(
     sys.platform != "darwin" or shutil.which("sandbox-exec") is None,
     reason="requires the macOS sandbox-exec backend",
 )
-def test_macos_sandbox_executes_resolved_python_symlink(ra, tmp_path: Path):
+def test_macos_sandbox_executes_resolved_python_symlink(
+    ra, tmp_path: Path, unauthorized_host_fallback
+):
     cohort_path = tmp_path / "cohort.parquet"
     pd.DataFrame({"stay_id": [1], "death": [0]}).to_parquet(cohort_path, index=False)
     runtime_dir = Path(sys.executable).parent.resolve(strict=True)
@@ -618,7 +637,7 @@ def test_macos_sandbox_executes_resolved_python_symlink(ra, tmp_path: Path):
     reason="requires the macOS sandbox-exec backend",
 )
 def test_macos_sandbox_imports_pandas_and_easyicu_but_confines_files(
-    ra, tmp_path: Path
+    ra, tmp_path: Path, unauthorized_host_fallback
 ):
     cohort_path = tmp_path / "cohort.parquet"
     pd.DataFrame({"stay_id": [1], "death": [0]}).to_parquet(cohort_path, index=False)
