@@ -59,6 +59,7 @@ from .plausibility_receipt import (
     HOST_OUTPUT_DIR_ENV_KEYS,
     POLICY_CONTRACT_KEY,
     RECEIPT_CONTRACT_SENTENCE,
+    RECEIPT_POLICY_VALUE,
     RECEIPT_SUMMARY_KEY,
     REPAIR_RECEIPT_MARKER,
     ranged_variable_names,
@@ -1516,6 +1517,65 @@ class _FlagFlow:
         return False
 
 
+def _tests_the_declared_action(node: ast.AST) -> Optional[bool]:
+    """Whether a test decides on the policy being the declared flag-only action.
+
+    Returns ``True`` for a test that is taken *when the policy is* that action,
+    ``False`` for one taken when it is not, and ``None`` when the test says
+    nothing about the policy.  ``and``/``or`` are searched, because the corpus
+    writes the defensive check inline as
+    ``if n_out > 0 and policy != "retain_and_flag": raise``.
+    """
+
+    if isinstance(node, ast.BoolOp):
+        for value in node.values:
+            decided = _tests_the_declared_action(value)
+            if decided is not None:
+                return decided
+        return None
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+        inner = _tests_the_declared_action(node.operand)
+        return None if inner is None else not inner
+    if not isinstance(node, ast.Compare) or len(node.ops) != 1:
+        return None
+    if not isinstance(node.ops[0], (ast.Eq, ast.NotEq)):
+        return None
+    operands = [node.left, node.comparators[0]]
+    names = any(
+        isinstance(side, ast.Constant) and side.value == RECEIPT_POLICY_VALUE
+        for side in operands
+    )
+    return isinstance(node.ops[0], ast.Eq) if names else None
+
+
+def _guarded_by_a_different_policy(flow: _FlagFlow, node: ast.AST) -> bool:
+    """Whether a terminal branch is only reachable under a *different* policy.
+
+    Generated scripts guard their own fatal fallback on the policy they were
+    handed -- ``if policy == "retain_and_flag": pass`` / ``elif n_out: raise``,
+    or the same thing inline with ``and policy != ...``.  Under the declared
+    flag-only policy that ``raise`` cannot run, so reporting it as a rejection
+    is a wrong block, and in a fail-closed gate a wrong block is the expensive
+    kind: it cost a real canary its whole run at step 01.
+
+    Being defensive about a policy the host did not declare is good practice,
+    not a violation of the one it did.
+    """
+
+    child = node
+    for outer in flow.ancestors(node):
+        if isinstance(outer, ast.If):
+            decided = _tests_the_declared_action(outer.test)
+            if decided is not None:
+                in_body = any(child is statement for statement in outer.body)
+                # Reached when the policy IS the declared action only if the
+                # test says so and we are on the branch it guards.
+                if decided is not in_body:
+                    return True
+        child = outer
+    return False
+
+
 def _rejection_findings(
     tree: ast.Module,
     flow: _FlagFlow,
@@ -1529,6 +1589,8 @@ def _rejection_findings(
             isinstance(node, ast.If)
             and flow.rejects_on(node.test)
             and _is_terminal_failure(node.body)
+            and not _guarded_by_a_different_policy(flow, node)
+            and _tests_the_declared_action(node.test) is not False
         ):
             findings.append(
                 ValidationFinding(
