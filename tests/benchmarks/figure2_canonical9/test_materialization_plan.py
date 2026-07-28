@@ -114,7 +114,18 @@ def test_e1_materialized_item_receives_only_its_case_protocol_overlay(tmp_path):
     )
 
     assert "e1_scientific_closure" in e1_row["protocol_version"]
+    assert e1_row["scientific_acceptance_contract"]["task_id"] == (
+        "e1_sepsis3_prevalence_mortality"
+    )
+    assert e1_row["scientific_acceptance_contract"]["sensitivity_product"] == (
+        "table:e1_scientific_sensitivity"
+    )
     assert any("24-hour landmark" in item for item in e1_row["semantic_guardrails"])
+    assert any(
+        "table:e1_scientific_sensitivity" in item
+        for item in e1_row["expected_outputs"]
+    )
+    assert any("display_labels" in item for item in e1_row["semantic_guardrails"])
     assert any(
         "functional-form sensitivity" in item for item in e1_row["expected_outputs"]
     )

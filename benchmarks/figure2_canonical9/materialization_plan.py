@@ -16,6 +16,10 @@ from .evaluator.paper_rubric_v3 import (
     default_figure2_paper_rubric_path,
 )
 from .evaluator.suite import easyicu_evaluation_protocol_suite
+from .e1_scientific_acceptance import (
+    display_label_instruction,
+    sensitivity_output_instruction,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +85,7 @@ CANONICAL9_MIMIC_IV_PLAN: tuple[Canonical9MaterializationSpec, ...] = (
                 "adjusted association with timing, repeated-stay, and "
                 "functional-form sensitivity table and figure"
             ),
+            sensitivity_output_instruction(),
         ),
         additional_semantic_guardrails=(
             (
@@ -117,6 +122,7 @@ CANONICAL9_MIMIC_IV_PLAN: tuple[Canonical9MaterializationSpec, ...] = (
                 "Use clinical display labels such as Sepsis-3 absent/present, "
                 "never Category 0/1."
             ),
+            display_label_instruction(),
         ),
         task_protocol_version=(
             "easyicu_evaluation_protocol_suite/v2+"

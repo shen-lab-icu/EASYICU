@@ -80,6 +80,25 @@ def test_diagnostic_only_status_alone_never_fails_the_task() -> None:
     assert _score_execution_failures(_score(aware=arm)) == []
 
 
+def test_case_scoped_scientific_rejection_is_an_execution_failure() -> None:
+    rejected = _arm(
+        scientific_acceptance={
+            "status": "rejected",
+            "issues": [{"reason_code": "e1_landmark_protocol_invalid"}],
+        }
+    )
+    accepted = _arm(
+        scientific_acceptance={"status": "accepted", "issues": []}
+    )
+
+    assert not _arm_execution_succeeded(rejected)
+    assert _arm_execution_succeeded(accepted)
+    failures = _score_execution_failures(_score(aware=rejected))
+    assert len(failures) == 1
+    assert "scientific acceptance rejected" in failures[0]
+    assert "e1_landmark_protocol_invalid" in failures[0]
+
+
 def test_an_incomplete_execution_is_not_a_completed_task() -> None:
     """The exact real-run shape: 7/12 steps with two failed steps."""
 

@@ -2233,6 +2233,42 @@ def test_formal_canary_rejects_valid_but_analysis_only_paper_score() -> None:
     assert bench._figure2_canary_passed(score) is False
 
 
+def test_formal_canary_requires_e1_scientific_receipt_for_closure_protocol() -> None:
+    import tools.run_research_agent_bench as bench
+
+    score = {
+        "protocol_version": (
+            "easyicu_evaluation_protocol_suite/v2+"
+            "e1_scientific_closure/20260728-v1"
+        ),
+        "aware": {
+            "publication_ready": True,
+            "manuscript_ready": True,
+            "publication_artifacts_ready": True,
+            "execution_paper_eligible": True,
+            "paper_authorized": True,
+            "n_errors": 0,
+            "figure2_evaluation_attempt": {
+                "status": "valid",
+                "envelope": {
+                    "scorecard": {
+                        "scorecard_canonical_json": json.dumps(
+                            {"tristate": "gate_reportable"}
+                        )
+                    }
+                },
+            },
+        },
+    }
+
+    assert bench._figure2_canary_passed(score) is False
+    score["aware"]["scientific_acceptance"] = {
+        "status": "accepted",
+        "issues": [],
+    }
+    assert bench._figure2_canary_passed(score) is True
+
+
 def test_formal_canary_rejects_artifact_ready_but_unauthorized_run() -> None:
     import tools.run_research_agent_bench as bench
 
