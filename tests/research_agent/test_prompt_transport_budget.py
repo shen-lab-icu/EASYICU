@@ -26,6 +26,7 @@ from easyicu.research_agent.providers.prompt_budget import (
     UndeclaredPromptConsumerError,
     active_prompt_consumer,
     budgeted_client,
+    budgeted_coder_clients,
     budgeted_role_client,
     budgeted_vlm_client,
     declared_consumers_for_role,
@@ -168,6 +169,9 @@ def test_the_error_names_the_consumer_not_only_the_role() -> None:
         # Fresh E1 2026-07-28: the retired 42 KB Coder-local ceiling rejected
         # this ordinary step before transport despite the unified token budget.
         (52_302, 14_000, "coder", "coder_initial_generation"),
+        # The same run produced a normal complete-script repair above the
+        # retired 65 KB Coder-local rewrite ceiling.
+        (82_530, 22_000, "repair", "coder_repair"),
     ],
 )
 def test_real_observed_prompts_are_not_refused(
@@ -581,6 +585,18 @@ def test_the_live_analyzer_consumers_are_all_declared() -> None:
 
 def test_the_live_coder_consumer_is_declared() -> None:
     assert set(declared_consumers_for_role("coder")) == {"coder_initial_generation"}
+    assert set(declared_consumers_for_role("repair")) == {"coder_repair"}
+
+
+def test_coder_generation_and_repair_share_the_operator_ceiling() -> None:
+    generation, repair = budgeted_coder_clients(
+        _resolver(_RecordingClient()),
+        limit_tokens=321,
+    )
+
+    assert generation.consumer == "coder_initial_generation"
+    assert repair.consumer == "coder_repair"
+    assert generation.limit_tokens == repair.limit_tokens == 321
 
 
 def test_every_budget_declares_a_rationale() -> None:

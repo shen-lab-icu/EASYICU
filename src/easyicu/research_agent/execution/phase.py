@@ -302,7 +302,9 @@ from ..gates.semantics import (
     blocking_validator_findings as _blocking_validator_findings,
 )
 from ..providers.mocks import MockLLMClient
-from ..providers.prompt_budget import budgeted_role_client, budgeted_vlm_client
+from ..providers.prompt_budget import (
+    budgeted_coder_clients, budgeted_role_client, budgeted_vlm_client
+)
 from ..planning.method_vocabulary import (
     MISSINGNESS_SOURCE_AVAILABILITY_AUDIT,
 )
@@ -3996,16 +3998,14 @@ def run_execute_phase(
         plan_result.resume_state = resume_revalidation.resume_state
         resume_controller.resume_state = resume_revalidation.resume_state
 
-    coder_llm_client = budgeted_role_client(
+    coder_transports = budgeted_coder_clients(
         role_resolver,
-        "coder",
-        "coder_initial_generation",
         limit_tokens=pipeline._max_prompt_tokens_per_call,
     )
     fallback_coder_provider_identity_sha256 = canonical_sha256(
-        pipeline._llm_signature(coder_llm_client)
+        pipeline._llm_signature(coder_transports[0])
     )
-    coder = CoderAgent(coder_llm_client, repair_llm=role_resolver("repair"))
+    coder = CoderAgent(*coder_transports)
     # Opt-in altitude-2a: delegate script authoring + self-repair to a local
     # coding-agent CLI when EASYICU_AGENTIC_CODER_BACKEND is set. Off by default;
     # degrades back to ``coder`` when the CLI is unavailable. The script it

@@ -2006,7 +2006,6 @@ _MAX_PRE_EXEC_COMPATIBILITY_REPAIRS = 2
 _CODER_MAX_TOKENS = 8192
 _CODER_INITIAL_PROMPT_TARGET_BYTES = 38_000
 _CODER_PATCH_PROMPT_BYTE_LIMIT = 30_000
-_CODER_REWRITE_PROMPT_BYTE_LIMIT = 65_000
 _CODER_TYPED_PATCH_DIAGNOSTIC_BYTE_LIMIT = 768
 _CODER_PATCH_MAX_EXCERPT_CHARS = 5_500
 
@@ -2931,11 +2930,6 @@ class CoderAgent:
                 patch_messages,
                 max_tokens=min(2048, _CODER_MAX_TOKENS),
                 temperature=0.0,
-            ),
-            full_rewrite_preflight=lambda reason: _enforce_coder_prompt_budget(
-                _full_rewrite_messages(reason),
-                mode="full_rewrite",
-                limit_bytes=_CODER_REWRITE_PROMPT_BYTE_LIMIT,
             ),
             full_rewrite_call=_full_rewrite,
             logical_repair_attempt_id=logical_repair_attempt_id,

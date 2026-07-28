@@ -26,6 +26,10 @@ from easyicu.research_agent.research_context.prompt_scope import (
     coder_rewrite_guide_for_step,
 )
 from easyicu.research_agent.providers.prompts import load_prompt_pack
+from easyicu.research_agent.providers.prompt_budget import (
+    PromptTransportBudgetError,
+    budgeted_client,
+)
 from easyicu.research_agent.authority.provider_budget import (
     ProviderCallBudgetReceiptError,
     StepProviderCallBudget,
@@ -2155,19 +2159,20 @@ def test_assignment_model_roster_is_host_bound_outside_research_notes():
 def test_oversized_full_rewrite_fails_before_fallback_provider_call(ra):
     context = _wide_context(ra, n_families=1)
     step = _quality_step(ra, n_families=1)
-    code = "import os\n" + "# retained complete-script authority\n" * 2_000
+    code = "import os\n" + "# retained complete-script authority\n" * 4_000
     llm = _CaptureLLM(["not a patch"])
+    bounded_repair = budgeted_client(llm, "repair", "coder_repair")
 
-    with pytest.raises(CoderPromptBudgetError) as exc_info:
-        CoderAgent(llm).repair(
+    with pytest.raises(PromptTransportBudgetError) as exc_info:
+        CoderAgent(llm, repair_llm=bounded_repair).repair(
             context=context,
             step=step,
             code=code,
             run_log="one bounded mechanical failure",
         )
 
-    assert exc_info.value.mode == "full_rewrite"
-    assert exc_info.value.actual_bytes > exc_info.value.limit_bytes
+    assert exc_info.value.consumer == "coder_repair"
+    assert exc_info.value.actual_tokens > exc_info.value.limit_tokens
     assert len(llm.calls) == 1, "the oversized rewrite must never reach the provider"
 
 

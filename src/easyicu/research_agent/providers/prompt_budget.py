@@ -46,6 +46,7 @@ __all__ = [
     "UndeclaredPromptConsumerError",
     "active_prompt_consumer",
     "budgeted_client",
+    "budgeted_coder_clients",
     "budgeted_role_client",
     "budgeted_vlm_client",
     "estimate_prompt_tokens",
@@ -172,6 +173,14 @@ PROMPT_TRANSPORT_BUDGETS: Mapping[str, PromptConsumerBudget] = {
             rationale=(
                 "Initial analysis-script generation after step-scoped context "
                 "and host authority are assembled."
+            ),
+        ),
+        PromptConsumerBudget(
+            consumer="coder_repair",
+            role="repair",
+            rationale=(
+                "Minimal-patch or complete-script Coder repair after typed "
+                "diagnosis and host authority are assembled."
             ),
         ),
         PromptConsumerBudget(
@@ -386,6 +395,29 @@ def budgeted_role_client(
     _declared_budget(consumer=consumer, role=role)
     return budgeted_client(
         role_resolver(str(role)), role, consumer, limit_tokens=limit_tokens
+    )
+
+
+def budgeted_coder_clients(
+    role_resolver: Callable[[str], Any],
+    *,
+    limit_tokens: Optional[int] = None,
+) -> tuple[Any, Any]:
+    """Resolve the Coder's generation and repair transports under one ceiling."""
+
+    return (
+        budgeted_role_client(
+            role_resolver,
+            "coder",
+            "coder_initial_generation",
+            limit_tokens=limit_tokens,
+        ),
+        budgeted_role_client(
+            role_resolver,
+            "repair",
+            "coder_repair",
+            limit_tokens=limit_tokens,
+        ),
     )
 
 
