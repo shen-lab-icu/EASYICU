@@ -926,6 +926,62 @@ def test_replay_ignores_mutable_checkpoint_summary_and_binding_receipts(
     assert "resolved_input_bindings" not in latest
 
 
+def test_successful_revalidation_remains_revalidatable_after_another_gate_change(
+    replay_environment,
+    monkeypatch,
+):
+    pipeline_execute, run_dir, evidence = replay_environment
+    step = AnalysisStep(step_id="01_model", intent="Fit the planned model.")
+    record, _, _ = _register_success(
+        run_dir=run_dir,
+        evidence=evidence,
+        step=step,
+    )
+    sealed_inputs_sha256 = record["resolved_inputs_sha256"]
+    gate_calls: list[str] = []
+    monkeypatch.setattr(
+        pipeline_execute,
+        "_evaluate_final_deterministic_gates",
+        lambda **kwargs: gate_calls.append(kwargs["step"].step_id)
+        or _empty_gates(pipeline_execute),
+    )
+
+    first = _revalidate(
+        pipeline_execute,
+        run_dir=run_dir,
+        evidence=evidence,
+        records=[record],
+        plan=AnalysisPlan(research_question="Question", steps=[step]),
+    )
+    first_record = first.resume_state["per_step_records"][-1]
+    assert first_record["resolved_inputs_sha256"] == sealed_inputs_sha256
+
+    next_stamp = {
+        **pipeline_execute._deterministic_gate_stamp(),
+        "deterministic_gate_engine_code_sha256": "1" * 64,
+        "deterministic_gate_fingerprint": "2" * 64,
+    }
+    monkeypatch.setattr(
+        pipeline_execute,
+        "_deterministic_gate_stamp",
+        lambda: next_stamp,
+    )
+    second = _revalidate(
+        pipeline_execute,
+        run_dir=run_dir,
+        evidence=evidence,
+        records=first.resume_state["per_step_records"],
+        plan=AnalysisPlan(research_question="Question", steps=[step]),
+    )
+    second_record = second.resume_state["per_step_records"][-1]
+
+    assert gate_calls == [step.step_id, step.step_id]
+    assert second.revalidated_step_ids == (step.step_id,)
+    assert second.invalidated_step_ids == ()
+    assert second_record["resolved_inputs_sha256"] == sealed_inputs_sha256
+    assert second_record["attempt_id"].endswith(":resume_revalidation:2")
+
+
 def test_prior_blocking_critic_cannot_be_upgraded_by_replay(
     replay_environment,
     monkeypatch,

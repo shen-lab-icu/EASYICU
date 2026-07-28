@@ -3597,6 +3597,7 @@ def _selectively_revalidate_resume_successes(
             **stamp,
         }
         _discard_stale_resolved_input_receipts(replayed)
+        replayed["resolved_inputs_sha256"] = prior_record["resolved_inputs_sha256"]
         replayed["flag_only_plausibility_scope"] = plausibility_scope.to_dict()
         replayed["revalidated_input_bindings_fingerprint"] = (
             _resume_typed_input_bindings_fingerprint(resolved_bindings)
