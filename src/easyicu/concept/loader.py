@@ -24,29 +24,46 @@ from __future__ import annotations
 
 import functools
 import json
+import math
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from .schema import ConceptDictionary
 
 
 @functools.lru_cache(maxsize=1)
-def _load_concept_dict_cached():
+def _load_concept_dict_cached() -> dict[str, Any]:
     """Load concept-dict.json once and cache in memory."""
-    dict_path = Path(__file__).parent / 'data' / 'concept-dict.json'
-    with open(dict_path) as f:
-        return json.load(f)
+    dict_path = Path(__file__).resolve().parents[1] / "data" / "concept-dict.json"
+    with dict_path.open(encoding="utf-8") as handle:
+        payload = json.load(handle)
+    if not isinstance(payload, dict):
+        raise ValueError("concept-dict.json root must be a JSON object")
+    return payload
 
 
 def _get_concept_bounds(concept_name: str, bound: str) -> Optional[float]:
     """Get min/max bounds from concept-dict.json for filter_bounds."""
-    try:
-        d = _load_concept_dict_cached()
-        c = d.get(concept_name, {})
-        val = c.get(bound)
-        return float(val) if val is not None else None
-    except Exception:
+    dictionary = _load_concept_dict_cached()
+    if concept_name not in dictionary:
         return None
+    concept = dictionary[concept_name]
+    if not isinstance(concept, dict):
+        raise ValueError(f"concept {concept_name!r} must be a JSON object")
+    value = concept.get(bound)
+    if value is None:
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"concept {concept_name!r} has a non-numeric {bound!r} bound"
+        ) from exc
+    if not math.isfinite(numeric):
+        raise ValueError(
+            f"concept {concept_name!r} has a non-finite {bound!r} bound"
+        )
+    return numeric
 
 
 def load_dictionary(src_name: Optional[str] = None, include_sofa2: bool = False) -> ConceptDictionary:
