@@ -118,6 +118,13 @@ def _explicit_test_runner_backend(
         yield
         return
 
+    if research_agent_runner_backend == "subprocess":
+        # Test-owned scripts may fall back to the direct host interpreter when
+        # an outer CI/Codex sandbox prevents macOS sandbox-exec (or Linux
+        # unshare) from nesting.  This authorization is scoped to pytest and
+        # does not change the production Pipeline default.
+        monkeypatch.setenv("EASYICU_ALLOW_UNSAFE_HOST_FALLBACK", "1")
+
     pipeline = importlib.import_module("easyicu.research_agent.pipeline")
     monkeypatch.setattr(
         pipeline,

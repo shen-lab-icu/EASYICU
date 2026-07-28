@@ -2931,16 +2931,14 @@ def test_llm_concept_auditor_reclassifies_typed_flag_only_range_demand(ra):
     )
 
     assert len(findings) == 1
-    # The exclusion demand is still overturned -- the range is flag-only, so
-    # the auditor does not get to shrink the analysis set. What it does not buy
-    # is a pass: this script never compares `marker` against a bound, so the
-    # flagging half was never observed and the finding stays blocking.
+    assert findings[0].severity == "warning"
     assert findings[0].detail["range_policy_authority"] == (
         "concept_descriptor_flag_only"
     )
-    assert "do NOT exclude" in findings[0].detail["flag_obligation"]
-    assert findings[0].severity == "error"
-    assert findings[0].detail["flag_evidence"] == "not_attributable"
+    assert "deterministic gate" in findings[0].detail[
+        "flag_obligation"
+    ]
+    assert findings[0].detail["retain_and_flag_half_satisfied"] == "retain"
 
 
 def test_llm_concept_auditor_reclassifies_scoped_flag_only_range_demand(ra):
@@ -2975,13 +2973,7 @@ def test_llm_concept_auditor_reclassifies_scoped_flag_only_range_demand(ra):
     assert findings[0].detail["range_policy_authority"] == (
         "concept_descriptor_flag_only"
     )
-    # This script never compares `marker` against a bound, so the flagging
-    # check has nothing to attribute. It used to abstain and downgrade anyway,
-    # which let the weakest possible evidence -- none -- buy the same pass as
-    # an observed count. Silence now blocks and says which kind of silence it
-    # was.
-    assert findings[0].severity == "error"
-    assert findings[0].detail["flag_evidence"] == "not_attributable"
+    assert findings[0].severity == "warning"
     assert findings[0].detail["retain_and_flag_half_satisfied"] == "retain"
 
 
@@ -3015,74 +3007,42 @@ def test_flag_only_range_reclassifier_preserves_strict_or_unbound_errors(
     findings = _reclassify_flag_only_plausibility_range_findings(
         findings=[finding],
         context=_plausibility_range_context(ra, binary=binary),
-        # A script that does flag, so each case proves the error survives for
-        # the reason it names -- a strict domain, a non-finite class, an
-        # unbound variable -- and not because the flagging gate fired.
-        script_text=(
-            'numeric = pd.to_numeric(frame["marker"])\n'
-            'frame["marker_out_of_range"] = numeric > 10.0\n'
-        ),
     )
 
     assert findings[0].severity == "error"
 
 
-def test_a_flag_only_downgrade_requires_the_script_to_flag(ra):
-    """The downgrade settles retention; it must not also grant flagging.
-
-    `retain_and_flag` is two obligations, and this reclassifier only ever
-    discharged the first: it overrode the auditor's demand to exclude, wrote a
-    note saying the other half was still owed, and let the step pass. A note
-    nothing reads is not a gate. A script that compares the value against its
-    bound and then discards the result has retained without flagging, so the
-    finding stays an error -- retyped, because telling the Coder to exclude
-    would ask for exactly what the policy forbids.
-    """
+def test_flag_only_llm_reclassifier_does_not_duplicate_deterministic_gate(ra):
+    """The LLM adapter owns retention; the deterministic gate owns flagging."""
 
     from easyicu.research_agent.audits.validators import (
         _reclassify_flag_only_plausibility_range_findings,
     )
 
-    def _reclassify(script_text):
-        finding = ValidationFinding(
-            validator="llm_concept_auditor",
-            severity="error",
-            message="The candidate value should be excluded.",
-            detail={
-                "issue_code": "plausibility_range_exclusion_required",
-                "variable": "marker",
-                "requested_action": "exclude",
-                "value_class": "finite_outside_plausibility_range",
-            },
-        )
-        return _reclassify_flag_only_plausibility_range_findings(
-            findings=[finding],
-            context=_plausibility_range_context(ra),
-            script_text=script_text,
-        )[0]
-
-    rejects = _reclassify(
-        'numeric = pd.to_numeric(frame["marker"])\n'
-        "if (numeric > 10.0).any():\n"
-        '    raise ValueError("out of range")\n'
+    finding = ValidationFinding(
+        validator="llm_concept_auditor",
+        severity="error",
+        message="The candidate value should be excluded.",
+        detail={
+            "issue_code": "plausibility_range_exclusion_required",
+            "variable": "marker",
+            "requested_action": "exclude",
+            "value_class": "finite_outside_plausibility_range",
+        },
     )
-    assert rejects.severity == "error"
-    assert rejects.detail["flag_evidence"] == "absent"
-    assert rejects.detail["retain_and_flag_half_satisfied"] == "retain"
-    # Retyped, not merely re-emitted: the Coder is told to keep the rows.
-    assert "do NOT exclude" in rejects.detail["flag_obligation"]
-    assert "structured count or per-row indicator" in rejects.detail["flag_obligation"]
-    # The message is untouched, so the quarantine-replay comparison in
-    # gates/concept.py still recognises this as the same finding.
-    assert rejects.message == "The candidate value should be excluded."
+    result = _reclassify_flag_only_plausibility_range_findings(
+        findings=[finding],
+        context=_plausibility_range_context(ra),
+    )[0]
 
-    flags = _reclassify(
-        'numeric = pd.to_numeric(frame["marker"])\n'
-        'frame["marker_out_of_range"] = numeric > 10.0\n'
-    )
-    assert flags.severity == "warning"
-    assert flags.detail["flag_evidence"] == "observed_count_or_indicator"
-    assert flags.detail["retain_and_flag_half_satisfied"] == "retain_and_flag"
+    assert result.severity == "warning"
+    assert result.detail["retain_and_flag_half_satisfied"] == "retain"
+    assert "deterministic gate" in result.detail[
+        "flag_obligation"
+    ]
+    assert "flag_evidence" not in result.detail
+    # The message remains stable for quarantine replay identity.
+    assert result.message == "The candidate value should be excluded."
 
 
 def test_llm_concept_auditor_checks_summary_source_status_bypasses(ra):

@@ -39,8 +39,8 @@ import pytest
 
 
 def test_primary_cohort_predicates_extend_only_raw_contract_authority() -> None:
-    from easyicu.research_agent.execution.phase import (
-        _raw_contract_inputs_for_step,
+    from easyicu.research_agent.research_context.typed import (
+        raw_contract_inputs_for_step,
     )
 
     receipt = {
@@ -53,19 +53,19 @@ def test_primary_cohort_predicates_extend_only_raw_contract_authority() -> None:
         ]
     }
 
-    assert _raw_contract_inputs_for_step(
+    assert raw_contract_inputs_for_step(
         planner_declared_inputs=["table:parent", "age"],
         primary_cohort_execution_receipt=receipt,
     ) == ("table:parent", "age", "eligibility_max")
-    assert _raw_contract_inputs_for_step(
+    assert raw_contract_inputs_for_step(
         planner_declared_inputs=["age"],
         primary_cohort_execution_receipt=None,
     ) == ("age",)
 
 
 def test_primary_cohort_predicate_contract_rejects_typed_or_invalid_coordinate() -> None:
-    from easyicu.research_agent.execution.phase import (
-        _raw_contract_inputs_for_step,
+    from easyicu.research_agent.research_context.typed import (
+        raw_contract_inputs_for_step,
     )
     from easyicu.research_agent.intake.materialized_metadata import (
         MaterializedMetadataError,
@@ -75,7 +75,7 @@ def test_primary_cohort_predicate_contract_rejects_typed_or_invalid_coordinate()
         MaterializedMetadataError,
         match="invalid resolved column",
     ):
-        _raw_contract_inputs_for_step(
+        raw_contract_inputs_for_step(
             planner_declared_inputs=[],
             primary_cohort_execution_receipt={
                 "ordered_predicate_flow": [
@@ -88,7 +88,7 @@ def test_primary_cohort_predicate_contract_rejects_typed_or_invalid_coordinate()
 def test_primary_cohort_contract_uses_full_authority_without_widening_prompt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from easyicu.research_agent.execution import phase
+    from easyicu.research_agent.research_context import typed
 
     base_context = object()
     scoped_context = object()
@@ -101,7 +101,7 @@ def test_primary_cohort_contract_uses_full_authority_without_widening_prompt(
         calls.append((context, names))
         return {"contracts": {name: {} for name in names if ":" not in name}}
 
-    monkeypatch.setattr(phase, "resolved_raw_input_contracts", fake_resolver)
+    monkeypatch.setattr(typed, "resolved_raw_input_contracts", fake_resolver)
     receipt = {
         "ordered_predicate_flow": [
             {"resolved_column": None},
@@ -109,7 +109,7 @@ def test_primary_cohort_contract_uses_full_authority_without_widening_prompt(
         ]
     }
 
-    result = phase._resolved_raw_input_contracts_for_step(
+    result = typed.resolved_raw_input_contracts_for_step(
         coder_base_context=base_context,
         coder_context=scoped_context,
         planner_declared_inputs=["table:parent"],
@@ -119,7 +119,7 @@ def test_primary_cohort_contract_uses_full_authority_without_widening_prompt(
     assert result == {"contracts": {"eligibility_max": {}}}
     assert calls == [(base_context, ("table:parent", "eligibility_max"))]
 
-    phase._resolved_raw_input_contracts_for_step(
+    typed.resolved_raw_input_contracts_for_step(
         coder_base_context=base_context,
         coder_context=scoped_context,
         planner_declared_inputs=["age"],
@@ -1361,6 +1361,9 @@ def test_final_gate_evaluator_preserves_group_order_and_attempt_binding(
     monkeypatch,
     tmp_path,
 ):
+    from easyicu.research_agent.authority.plausibility import (
+        FlagOnlyPlausibilityScope,
+    )
     from easyicu.research_agent.execution import phase as pipeline_execute
     from easyicu.research_agent.gates import contract as contract_gate
     from easyicu.research_agent.contracts.runtime import ValidationFinding
@@ -1494,6 +1497,12 @@ def test_final_gate_evaluator_preserves_group_order_and_attempt_binding(
         step_record={},
         completed_step_records=({"step_id": "06_parent", "status": "ok"},),
         resolved_input_bindings={},
+        plausibility_scope=FlagOnlyPlausibilityScope(
+            step_id="07_review",
+            expected_columns=(),
+            source_contracts_sha256="0" * 64,
+            authority_kind="test",
+        ),
         script_text="",
         attempt_id="attempt-2",
         checkpoint_id="checkpoint-9",
@@ -1564,6 +1573,9 @@ def test_final_fraction_consumer_fails_closed_when_sealed_compile_fails(
     monkeypatch,
     tmp_path,
 ):
+    from easyicu.research_agent.authority.plausibility import (
+        FlagOnlyPlausibilityScope,
+    )
     from easyicu.research_agent.execution import phase as pipeline_execute
     from easyicu.research_agent.execution.envelope_sealing import (
         SealedStepResultEnvelopeSnapshot,
@@ -1631,6 +1643,12 @@ def test_final_fraction_consumer_fails_closed_when_sealed_compile_fails(
         step_record={"status": "running"},
         completed_step_records=(),
         resolved_input_bindings={},
+        plausibility_scope=FlagOnlyPlausibilityScope(
+            step_id=step.step_id,
+            expected_columns=(),
+            source_contracts_sha256="0" * 64,
+            authority_kind="test",
+        ),
         script_text="",
         attempt_id="attempt-1",
         checkpoint_id="checkpoint-1",

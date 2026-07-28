@@ -754,6 +754,97 @@ def _pick_primary_predictor(
     return None
 
 
+def _with_mock_plausibility_receipt(code: str) -> str:
+    """Make deterministic analysis fixtures honor the mounted range contract.
+
+    The offline mock is part of the executable development path, so it must
+    obey the same host-owned contract as a real Coder response.  Appending one
+    case-neutral block also keeps every analysis template from reimplementing
+    the receipt policy independently.
+    """
+
+    receipt_block = r"""
+    # ---- Host-owned flag-only plausibility receipt ----
+    _easyicu_manifest_path = Path(os.environ["EASYICU_RESOLVED_INPUTS_JSON"])
+    _easyicu_document = json.loads(
+        _easyicu_manifest_path.read_text(encoding="utf-8")
+    )
+    _easyicu_manifest = _easyicu_document.get("manifest", _easyicu_document)
+    _easyicu_raw_contracts = _easyicu_manifest["raw_input_contracts"]["contracts"]
+    if not isinstance(_easyicu_raw_contracts, dict):
+        raise RuntimeError("raw_input_contracts.contracts must be an object")
+
+    _easyicu_plausibility_audit = {}
+    for _easyicu_column, _easyicu_contract in _easyicu_raw_contracts.items():
+        if not isinstance(_easyicu_contract, dict):
+            raise RuntimeError(
+                f"raw-input contract for {_easyicu_column!r} must be an object"
+            )
+        _easyicu_bounds = _easyicu_contract.get("analysis_plausibility_range")
+        _easyicu_policy = _easyicu_contract.get("plausibility_policy")
+        if not (
+            isinstance(_easyicu_bounds, dict)
+            and isinstance(_easyicu_policy, dict)
+            and _easyicu_policy.get("out_of_range_action") == "retain_and_flag"
+        ):
+            continue
+        if _easyicu_column not in df.columns:
+            raise RuntimeError(
+                f"ranged raw-input column {_easyicu_column!r} is absent"
+            )
+        _easyicu_source = df[_easyicu_column]
+        _easyicu_numeric = pd.to_numeric(_easyicu_source, errors="coerce")
+        _easyicu_observed = _easyicu_source.notna() & _easyicu_numeric.notna()
+        _easyicu_minimum = _easyicu_bounds.get("minimum")
+        _easyicu_maximum = _easyicu_bounds.get("maximum")
+        _easyicu_below = (
+            int(
+                (
+                    _easyicu_observed
+                    & (_easyicu_numeric < _easyicu_minimum)
+                ).sum()
+            )
+            if _easyicu_minimum is not None
+            else 0
+        )
+        _easyicu_above = (
+            int(
+                (
+                    _easyicu_observed
+                    & (_easyicu_numeric > _easyicu_maximum)
+                ).sum()
+            )
+            if _easyicu_maximum is not None
+            else 0
+        )
+        _easyicu_plausibility_audit[_easyicu_column] = {
+            "policy": "retain_and_flag",
+            "below_minimum_n": _easyicu_below,
+            "above_maximum_n": _easyicu_above,
+            "out_of_range_n": _easyicu_below + _easyicu_above,
+        }
+
+    _easyicu_summary_path = out_dir / "step_summary.json"
+    _easyicu_summary = json.loads(
+        _easyicu_summary_path.read_text(encoding="utf-8")
+    )
+    if _easyicu_plausibility_audit:
+        _easyicu_summary["plausibility_audit"] = _easyicu_plausibility_audit
+    else:
+        _easyicu_summary.pop("plausibility_audit", None)
+    _easyicu_summary_path.write_text(
+        json.dumps(
+            _easyicu_summary,
+            indent=2,
+            ensure_ascii=False,
+            default=str,
+        ),
+        encoding="utf-8",
+    )
+    """
+    return code.rstrip() + "\n\n" + textwrap.dedent(receipt_block).strip() + "\n"
+
+
 def _mock_code_for_step(ctx: ResearchContext, prompt: str) -> str:
     """Return a minimal, ICU-aware analysis script for the requested step.
 
@@ -795,23 +886,29 @@ def _mock_code_for_step(ctx: ResearchContext, prompt: str) -> str:
         primary_pred = (
             _pick_primary_predictor(ctx, outcome=outcome) or score_var or "age"
         )
-        return _mock_code_primary_association(
-            ctx=ctx,
-            step_id=step_id,
-            outcome=outcome,
-            predictor=primary_pred,
+        return _with_mock_plausibility_receipt(
+            _mock_code_primary_association(
+                ctx=ctx,
+                step_id=step_id,
+                outcome=outcome,
+                predictor=primary_pred,
+            )
         )
     if "prediction_model_analysis" in step_id:
-        return _mock_code_prediction_model(
-            ctx=ctx,
-            step_id=step_id,
-            outcome=outcome,
+        return _with_mock_plausibility_receipt(
+            _mock_code_prediction_model(
+                ctx=ctx,
+                step_id=step_id,
+                outcome=outcome,
+            )
         )
     if "trajectory_clustering_analysis" in step_id:
-        return _mock_code_trajectory_clustering(
-            ctx=ctx,
-            step_id=step_id,
-            outcome=outcome,
+        return _with_mock_plausibility_receipt(
+            _mock_code_trajectory_clustering(
+                ctx=ctx,
+                step_id=step_id,
+                outcome=outcome,
+            )
         )
     # Inline script as a triple-quoted heredoc — note: keep this tight; the
     # runner persists it byte-for-byte and hashes it as evidence.
@@ -943,7 +1040,7 @@ def _mock_code_for_step(ctx: ResearchContext, prompt: str) -> str:
         ).strip()
         + "\n"
     )
-    return code
+    return _with_mock_plausibility_receipt(code)
 
 
 def _mock_code_declared_figure(*, step_id: str, prompt: str) -> str:

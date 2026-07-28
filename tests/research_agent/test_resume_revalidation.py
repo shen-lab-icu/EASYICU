@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -16,6 +17,146 @@ from easyicu.research_agent.schema import (
     CohortDescriptor,
     ResearchContext,
 )
+
+
+def _canonical_sha256(payload: dict) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _attach_executed_capsule(
+    *,
+    run_dir: Path,
+    step: AnalysisStep,
+    record: dict,
+) -> None:
+    """Give a synthetic success the same sealed coordinates production requires."""
+
+    from easyicu.research_agent.authority.step_capsule import (
+        CandidateOrigin,
+        ExecutionSeal,
+        StepAuthorityCapsule,
+        execution_seal_identity_sha256,
+        put_content_blob,
+        seal_step_authority_capsule,
+    )
+
+    raw_contracts = {
+        "schema_version": "easyicu.resolved_raw_input_contracts/1",
+        "authority_scope": (
+            "host_verified_physical_representation_and_domain_constraints"
+        ),
+        "scientific_ownership": "Planner retains scientific decisions",
+        "contracts": {},
+    }
+    raw_contracts["contracts_sha256"] = _canonical_sha256(raw_contracts)
+    resolved_inputs = {
+        "schema_version": "2.1",
+        "step_id": step.step_id,
+        "planner_declared_inputs": list(step.inputs or ()),
+        "inputs": {},
+        "raw_input_contracts": raw_contracts,
+    }
+    planner_scope = put_content_blob(
+        run_dir,
+        payload=json.dumps(step.model_dump(mode="json"), sort_keys=True).encode(),
+        media_type="application/json",
+    )
+    scoped_context = put_content_blob(
+        run_dir,
+        payload=b'{"variables":[]}',
+        media_type="application/json",
+    )
+    resolved_ref = put_content_blob(
+        run_dir,
+        payload=json.dumps(resolved_inputs, sort_keys=True).encode(),
+        media_type="application/json",
+    )
+    code_ref = put_content_blob(
+        run_dir,
+        payload=b"value = 1\n",
+        media_type="text/x-python",
+    )
+    candidate = StepAuthorityCapsule(
+        step_id=step.step_id,
+        stage="candidate",
+        run_input_capsule_sha256="a" * 64,
+        planner_scope=planner_scope,
+        scoped_coder_context=scoped_context,
+        resolved_inputs=resolved_ref,
+        typed_bindings_sha256="b" * 64,
+        upstream_authority_sha256="c" * 64,
+        candidate_code=code_ref,
+        candidate_origin=CandidateOrigin(
+            kind="initial_generation",
+            authority_binding_sha256="b" * 64,
+            provider_category="initial_generation",
+            provider_transport_id="initial_generation:fixture",
+        ),
+        deterministic_gate_fingerprint="d" * 64,
+        engine_code_sha256="e" * 64,
+        validator_code_sha256="f" * 64,
+        prompt_pack_version="test",
+        prompt_pack_sha256="a" * 64,
+    )
+    candidate_ref = seal_step_authority_capsule(run_dir, candidate)
+    execution_payload = {
+        "execution_context_sha256": "d" * 64,
+        "code_sha256": code_ref.sha256,
+        "resolved_inputs_sha256": resolved_ref.sha256,
+        "returncode": 0,
+        "duration_seconds": 0.01,
+        "timed_out": False,
+        "outputs_safe_to_collect": True,
+        "requested_network_policy": "none",
+        "effective_isolation": "test_fixture",
+        "isolation_degraded": False,
+        "isolation_degradation_reason": None,
+        "runtime_provenance": put_content_blob(
+            run_dir,
+            payload=b'{"runtime":"test"}',
+            media_type="application/json",
+        ),
+        "stdout": put_content_blob(
+            run_dir,
+            payload=b"",
+            media_type="text/plain",
+        ),
+        "stderr": put_content_blob(
+            run_dir,
+            payload=b"",
+            media_type="text/plain",
+        ),
+        "runner_log": None,
+        "outputs": (),
+    }
+    execution_payload["execution_identity_sha256"] = (
+        execution_seal_identity_sha256(execution_payload)
+    )
+    executed = candidate.model_copy(
+        update={
+            "stage": "executed",
+            "parent_capsule_sha256": candidate_ref.capsule_sha256,
+            "execution": ExecutionSeal.model_validate(execution_payload),
+        }
+    )
+    executed_ref = seal_step_authority_capsule(run_dir, executed)
+    record.update(
+        {
+            "executed_code_sha256": code_ref.sha256,
+            "concept_approved_code_sha256": code_ref.sha256,
+            "resolved_inputs_sha256": resolved_ref.sha256,
+            "step_authority_capsule_ref": executed_ref.model_dump(mode="json"),
+            "step_authority_capsule_stage": "executed",
+        }
+    )
 
 
 def _context() -> ResearchContext:
@@ -74,6 +215,7 @@ def _register_success(
         "step_summary": {"status": "forged", "outputs": ["mutable.csv"]},
         "analysis_request": {"step": step.model_dump(mode="json")},
     }
+    _attach_executed_capsule(run_dir=run_dir, step=step, record=record)
     return record, script, summary
 
 
@@ -161,7 +303,7 @@ def test_current_fingerprint_is_a_true_zero_work_fast_path(monkeypatch, tmp_path
     assert result.invalidated_step_ids == ()
 
 
-def test_legacy_success_revalidates_once_and_retires_stale_input_receipt(
+def test_legacy_success_without_capsule_is_invalidated_not_revalidated(
     replay_environment,
     monkeypatch,
 ):
@@ -173,12 +315,13 @@ def test_legacy_success_revalidates_once_and_retires_stale_input_receipt(
         evidence=evidence,
         step=step,
     )
+    record.pop("step_authority_capsule_ref")
+    record.pop("step_authority_capsule_stage")
     record.update(
         {
             "resolved_inputs": {"stale": True},
             "resolved_input_bindings": {"stale": True},
             "resolved_inputs_path": "steps/01_model/resolved_inputs.json",
-            "resolved_inputs_sha256": "0" * 64,
             "revalidated_input_bindings_fingerprint": "1" * 64,
         }
     )
@@ -199,19 +342,15 @@ def test_legacy_success_revalidates_once_and_retires_stale_input_receipt(
     )
     latest = first.resume_state["per_step_records"][-1]
 
-    assert calls == [step.step_id]
-    assert latest["status"] == "ok"
-    assert latest["revalidated_without_execution"] is True
-    assert latest["step_summary"] == {"status": "ok", "outputs": []}
-    assert latest["deterministic_gate_fingerprint"]
+    assert calls == []
+    assert latest["status"] == "resume_validator_invalid"
+    assert "lacks sealed step authority" in latest["resume_invalidation_reason"]
     assert latest["attempt_id"].startswith(f"{step.step_id}:resume_revalidation:")
     assert "resolved_inputs" not in latest
     assert "resolved_input_bindings" not in latest
     assert "resolved_inputs_path" not in latest
     assert "resolved_inputs_sha256" not in latest
-    assert latest["revalidated_input_bindings_fingerprint"] == (
-        pipeline_execute._resume_typed_input_bindings_fingerprint({})
-    )
+    assert "revalidated_input_bindings_fingerprint" not in latest
 
     second = _revalidate(
         pipeline_execute,
@@ -224,7 +363,7 @@ def test_legacy_success_revalidates_once_and_retires_stale_input_receipt(
         second.resume_state["per_step_records"]
         == first.resume_state["per_step_records"]
     )
-    assert calls == [step.step_id]
+    assert calls == []
 
 
 def test_replay_projects_only_digest_bound_absolute_output_paths(

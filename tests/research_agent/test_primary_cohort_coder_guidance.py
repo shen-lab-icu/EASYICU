@@ -23,6 +23,9 @@ from easyicu.research_agent.resources.coder import (
     bind_primary_cohort_role,
 )
 from easyicu.research_agent.authority.coder_authority import HostCoderAuthority
+from easyicu.research_agent.authority.plausibility import (
+    FlagOnlyPlausibilityScope,
+)
 
 
 def _CaptureLLM(responses: list[str]):  # noqa: N802
@@ -149,6 +152,42 @@ def test_execution_cohort_runtime_uses_only_step_raw_domain_contract() -> None:
     assert "never by filling missing values with NaN" in text
     assert "do not recover one from prompt prose, the broader ResearchContext" in text
     assert "ResearchContext JSON uses observed_domain.levels" not in text
+
+
+def test_execution_runtime_renders_the_exact_empty_plausibility_scope() -> None:
+    scope = FlagOnlyPlausibilityScope(
+        step_id="01_cohort",
+        expected_columns=(),
+        source_contracts_sha256="0" * 64,
+        authority_kind="resolved_raw_input_contracts",
+    )
+
+    text = bind_execution_cohort_runtime(
+        authority=HostCoderAuthority(),
+        plausibility_scope=scope,
+    ).render()
+
+    assert "FLAG-ONLY PLAUSIBILITY RECEIPT SCOPE (host-owned): []" in text
+    assert "Do not write a non-empty `plausibility_audit`" in text
+    assert scope.scope_sha256 in text
+
+
+def test_execution_runtime_renders_only_exact_ranged_step_columns() -> None:
+    scope = FlagOnlyPlausibilityScope(
+        step_id="03_model",
+        expected_columns=("step_marker",),
+        source_contracts_sha256="1" * 64,
+        authority_kind="resolved_raw_input_contracts",
+    )
+
+    text = bind_execution_cohort_runtime(
+        authority=HostCoderAuthority(),
+        plausibility_scope=scope,
+    ).render()
+
+    assert 'exact resolved columns ["step_marker"]' in text
+    assert "unrelated ResearchContext variable" in text
+    assert scope.scope_sha256 in text
 
 
 def test_repair_prompt_and_contract_guidance_share_primary_cohort_schema() -> None:

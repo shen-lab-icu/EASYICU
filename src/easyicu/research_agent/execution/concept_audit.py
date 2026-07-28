@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, List, Mapping, MutableMapping, Optional, Sequence
 
+from ..authority.plausibility import FlagOnlyPlausibilityScope
 from ..audits.patterns import AnalysisPatternAuditor
 from ..audits.validators import (
     ConceptUsageAuditor,
@@ -275,10 +276,14 @@ class ConceptAuditAuthority:
     context: ResearchContext
     step: AnalysisStep
     resolved_input_bindings: Mapping[str, Any]
+    plausibility_scope: FlagOnlyPlausibilityScope
     environment_sha256: str
     auditor_implementation_sha256: str
     auditor_identity: Callable[[], str]
     enable_llm_audit: bool
+
+    def __post_init__(self) -> None:
+        self.plausibility_scope.require_step(self.step.step_id)
 
 
 @dataclass(slots=True)
@@ -342,6 +347,7 @@ class ConceptAuditCoordinator:
             usage_auditor=runtime.usage_auditor,
             pattern_auditor=runtime.pattern_auditor,
             resolved_input_bindings=authority.resolved_input_bindings,
+            plausibility_scope=authority.plausibility_scope,
         )
         deterministic_errors = [
             finding
@@ -533,7 +539,14 @@ class ConceptAuditCoordinator:
                         audit_prompt=audit_prompt,
                         environment_sha256=authority.environment_sha256,
                         auditor_identity=authority.auditor_identity(),
-                        authority_bindings=authority.resolved_input_bindings,
+                        authority_bindings={
+                            "resolved_input_bindings": (
+                                authority.resolved_input_bindings
+                            ),
+                            "flag_only_plausibility_scope": (
+                                authority.plausibility_scope.to_dict()
+                            ),
+                        },
                         validator_implementation_sha256=(
                             authority.auditor_implementation_sha256
                         ),
