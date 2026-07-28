@@ -4319,6 +4319,15 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
     assert manifest["per_step_records"], "final manifest dropped per-step records"
     assert manifest["per_step_records"] == partial["per_step_records"]
     assert manifest["per_step_records"][0]["status"] == "ok"
-    assert manifest["step_attempt_history"]
-    assert manifest["step_attempt_history"] == partial["step_attempt_history"]
+    assert manifest["step_attempt_history"] == []
+    assert manifest["step_attempt_history_ref"]["record_count"] == len(
+        partial["step_attempt_history"]
+    )
+    from easyicu.research_agent.authority.runtime_artifacts import (
+        load_run_artifact_authority,
+    )
+
+    hydrated = load_run_artifact_authority(run_dir)
+    assert hydrated is not None
+    assert hydrated["step_attempt_history"] == partial["step_attempt_history"]
     assert manifest["cost_records"], "hosted-stub path should be metered"

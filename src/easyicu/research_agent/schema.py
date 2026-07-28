@@ -1644,8 +1644,16 @@ class AnalysisManifest(BaseModel):
         default_factory=list,
         description=(
             "Append-only execution and deterministic-revalidation history. "
-            "Unlike per_step_records, this retains superseded attempts needed "
-            "to audit or safely resume a finalized run."
+            "Live checkpoints retain the records inline. Final manifests may "
+            "externalize them through step_attempt_history_ref; the authority "
+            "loader restores the exact digest-bound records before resume."
+        ),
+    )
+    step_attempt_history_ref: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Digest-bound JSONL reference used by finalized manifests to avoid "
+            "embedding every full superseded attempt snapshot."
         ),
     )
     cost_records: List[CostRecord] = Field(default_factory=list)
