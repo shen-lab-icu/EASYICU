@@ -127,8 +127,30 @@ def _validated_source_frame(
     if set(missing["concept"].astype(str)) != set(source["concept"].astype(str)):
         return None
 
-    number_columns = ("n_total", "n_nonmissing", "missing_n")
-    source_number_columns = ("n_total", "measured_one_n", "value_missing_n")
+    for frame in (missing, source):
+        frame["eligible_n"] = frame.get("eligible_n", frame["n_total"])
+        frame["not_applicable_n"] = frame.get("not_applicable_n", 0)
+    source["event_present_n"] = source.get("event_present_n", 0)
+    source["event_absent_n"] = source.get("event_absent_n", 0)
+    source["before_origin_n"] = source.get("before_origin_n", 0)
+
+    number_columns = (
+        "n_total",
+        "n_nonmissing",
+        "missing_n",
+        "eligible_n",
+        "not_applicable_n",
+    )
+    source_number_columns = (
+        "n_total",
+        "measured_one_n",
+        "value_missing_n",
+        "eligible_n",
+        "not_applicable_n",
+        "event_present_n",
+        "event_absent_n",
+        "before_origin_n",
+    )
     for column in number_columns:
         missing[column] = pd.to_numeric(missing[column], errors="coerce")
     for column in source_number_columns:
@@ -141,11 +163,11 @@ def _validated_source_frame(
         return None
     if (source[list(source_number_columns)] < 0).any().any():
         return None
-    if not (missing["n_nonmissing"] + missing["missing_n"]).equals(missing["n_total"]):
-        return None
-    if not (source["measured_one_n"] + source["value_missing_n"]).equals(
-        source["n_total"]
-    ):
+    if not (
+        missing["n_nonmissing"]
+        + missing["missing_n"]
+        + missing["not_applicable_n"]
+    ).equals(missing["n_total"]):
         return None
 
     merged = missing.merge(
@@ -160,17 +182,78 @@ def _validated_source_frame(
         return None
     if not merged["missing_n"].equals(merged["value_missing_n"]):
         return None
-    if not (
-        merged["indicator_semantics"].astype(str) == "measurement_availability"
+    if not merged["eligible_n_missing"].equals(merged["eligible_n_source"]):
+        return None
+    if not merged["not_applicable_n_missing"].equals(
+        merged["not_applicable_n_source"]
+    ):
+        return None
+
+    semantics_column = (
+        "indicator_semantics_source"
+        if "indicator_semantics_source" in merged
+        else "indicator_semantics"
+    )
+    kind_column = (
+        "missingness_kind_source"
+        if "missingness_kind_source" in merged
+        else "missingness_kind"
+    )
+    merged["indicator_semantics"] = merged[semantics_column].astype(str)
+    merged["missingness_kind"] = merged[kind_column].astype(str)
+    if "indicator_semantics_missing" in merged and not merged[
+        "indicator_semantics_missing"
+    ].astype(str).equals(merged["indicator_semantics"]):
+        return None
+    if "missingness_kind_missing" in merged and not merged[
+        "missingness_kind_missing"
+    ].astype(str).equals(merged["missingness_kind"]):
+        return None
+
+    measurement = merged["indicator_semantics"].eq("measurement_availability")
+    binary_event = merged["indicator_semantics"].eq("binary_event_presence")
+    conditional_time = merged["indicator_semantics"].eq("conditional_event_time")
+    if not (measurement | binary_event | conditional_time).all():
+        return None
+    kinds = merged["missingness_kind"]
+    if not kinds[measurement].isin(
+        ["measurement_missing", "structural_no_source"]
     ).all():
         return None
-    kinds = merged["missingness_kind"].astype(str)
-    # Structural no-source rows are still pure sealed counts (measured == 0 by
-    # definition) and are exactly what a cross-database audit surfaces; render
-    # them instead of abandoning the whole sealed figure. Flag-conflict and
-    # binary-event rows keep refusing: their counts carry different semantics.
-    if not kinds.isin(["measurement_missing", "structural_no_source"]).all():
+    if not kinds[binary_event].eq("binary_event_status_complete").all():
         return None
+    if not kinds[conditional_time].eq("conditional_event_time").all():
+        return None
+
+    source_closed = (
+        merged["measured_one_n"]
+        + merged["value_missing_n"]
+        + merged["not_applicable_n_source"]
+    ).eq(merged["n_total_source"])
+    if not source_closed[measurement | conditional_time].all():
+        return None
+    if not (
+        merged.loc[binary_event, "event_present_n"]
+        + merged.loc[binary_event, "event_absent_n"]
+    ).eq(merged.loc[binary_event, "n_total_source"]).all():
+        return None
+    if not merged.loc[binary_event, "measured_one_n"].eq(
+        merged.loc[binary_event, "n_total_source"]
+    ).all():
+        return None
+    if not merged.loc[binary_event, "value_missing_n"].eq(0).all():
+        return None
+    if not merged.loc[conditional_time, "eligible_n_source"].eq(
+        merged.loc[conditional_time, "event_present_n"]
+    ).all():
+        return None
+    if not merged.loc[conditional_time, "not_applicable_n_source"].eq(
+        merged.loc[conditional_time, "event_absent_n"]
+    ).all():
+        return None
+    if not merged.loc[conditional_time, "before_origin_n"].eq(0).all():
+        return None
+
     structural = kinds == "structural_no_source"
     if bool((merged.loc[structural, "measured_one_n"] != 0).any()):
         return None
@@ -178,8 +261,21 @@ def _validated_source_frame(
     denominator = merged["n_total_missing"].astype(float)
     if (denominator <= 0).any():
         return None
+    merged["observed_or_present_n"] = merged["n_nonmissing"]
+    merged.loc[binary_event, "observed_or_present_n"] = merged.loc[
+        binary_event, "event_present_n"
+    ]
+    merged["absent_or_not_applicable_n"] = merged["not_applicable_n_missing"]
+    merged.loc[binary_event, "absent_or_not_applicable_n"] = merged.loc[
+        binary_event, "event_absent_n"
+    ]
     merged["missing_pct"] = merged["missing_n"].astype(float) * 100.0 / denominator
-    merged["available_pct"] = merged["n_nonmissing"].astype(float) * 100.0 / denominator
+    merged["available_pct"] = (
+        merged["observed_or_present_n"].astype(float) * 100.0 / denominator
+    )
+    merged["not_applicable_pct"] = (
+        merged["absent_or_not_applicable_n"].astype(float) * 100.0 / denominator
+    )
     return merged.sort_values(
         ["missing_pct", "concept"], ascending=[False, True]
     ).reset_index(drop=True)
@@ -226,8 +322,14 @@ def render_missingness_source_bundle(
             "n_total_missing",
             "n_nonmissing",
             "missing_n",
+            "eligible_n_missing",
+            "not_applicable_n_missing",
+            "event_present_n",
+            "event_absent_n",
+            "before_origin_n",
             "available_pct",
             "missing_pct",
+            "not_applicable_pct",
             "indicator_semantics",
             "missingness_kind",
         ],
@@ -236,6 +338,8 @@ def render_missingness_source_bundle(
             "variable_missing": "variable",
             "value_column_missing": "value_column",
             "n_total_missing": "n_total",
+            "eligible_n_missing": "eligible_n",
+            "not_applicable_n_missing": "not_applicable_n",
         }
     ).to_csv(
         source_path, index=False
@@ -249,6 +353,7 @@ def render_missingness_source_bundle(
     positions = list(range(len(source)))
     available = source["available_pct"].astype(float)
     missing = source["missing_pct"].astype(float)
+    not_applicable = source["not_applicable_pct"].astype(float)
     structural_no_source = (
         source["missingness_kind"].astype(str).eq("structural_no_source")
     )
@@ -260,7 +365,7 @@ def render_missingness_source_bundle(
         plotted_available,
         color=palette["blue_soft"],
         height=0.62,
-        label="Available",
+        label="Observed / event present",
     )
     ax.barh(
         positions,
@@ -268,7 +373,16 @@ def render_missingness_source_bundle(
         left=plotted_available,
         color=palette["neutral_light"],
         height=0.62,
-        label="Measurement missing",
+        label="Missing among eligible",
+    )
+    ax.barh(
+        positions,
+        not_applicable,
+        left=plotted_available + plotted_missing,
+        color=palette["neutral"],
+        alpha=0.45,
+        height=0.62,
+        label="Event absent / not applicable",
     )
     ax.barh(
         positions,
@@ -288,16 +402,39 @@ def render_missingness_source_bundle(
     ax.set_title("Availability of declared audit inputs", loc="left")
     ax.grid(axis="x", color=palette["neutral_light"], linewidth=0.5)
     ax.legend(loc="lower right", bbox_to_anchor=(1.0, 1.01), ncol=2)
-    for y, (missing_pct, missing_n, total_n, kind) in enumerate(
+    for y, (
+        missing_pct,
+        missing_n,
+        total_n,
+        kind,
+        semantics,
+        event_present_n,
+        event_absent_n,
+        eligible_n,
+    ) in enumerate(
         zip(
             missing,
             source["missing_n"],
             source["n_total_missing"],
             source["missingness_kind"].astype(str),
+            source["indicator_semantics"].astype(str),
+            source["event_present_n"],
+            source["event_absent_n"],
+            source["eligible_n_missing"],
         )
     ):
         if kind == "structural_no_source":
             label = f"No source in cohort (0/{int(total_n):,})"
+        elif semantics == "binary_event_presence":
+            label = (
+                f"Event present {int(event_present_n):,}; "
+                f"absent {int(event_absent_n):,}"
+            )
+        elif semantics == "conditional_event_time":
+            label = (
+                f"Time missing {int(missing_n):,}/{int(eligible_n):,} "
+                "event-positive"
+            )
         else:
             label = f"Missing {missing_pct:.1f}% ({int(missing_n):,}/{int(total_n):,})"
         ax.text(101.0, y, label, va="center", ha="left", fontsize=6.2, clip_on=False)
@@ -308,8 +445,8 @@ def render_missingness_source_bundle(
     contract = make_figure_contract(
         figure_id="figure:missingness_measurement",
         core_claim=(
-            "Availability and missingness are reported for every Planner-declared "
-            "audit input using the locked analysis cohort as denominator."
+            "Availability, event absence, conditional non-applicability, and true "
+            "missingness are reported for every Planner-declared audit input."
         ),
         archetype="quantitative_grid",
         width_mm=183.0,
@@ -320,9 +457,9 @@ def render_missingness_source_bundle(
                 "title": "Measurement availability",
                 "role": "data_quality",
                 "claim": (
-                    "Available and measurement-missing counts partition inputs "
-                    "with a source; structural no-source inputs are displayed as "
-                    "a separate status."
+                    "Observed or event-present, truly missing, event-absent or "
+                    "not-applicable, and structural no-source counts form a "
+                    "typed closed partition."
                 ),
                 "evidence_ids": [source_path.name],
                 # Anchor the sealed renderer's authorized figure product slot to
@@ -342,7 +479,8 @@ def render_missingness_source_bundle(
             "Percentages are recomputed from digest-bound integer counts; this "
             "renderer performs no cohort selection, imputation, or modelling. "
             "Concepts with no source in this cohort (structural no-source) are "
-            "labelled distinctly from measurement missingness."
+            "labelled distinctly from measurement missingness. Positive-only "
+            "events and conditional event times use their typed semantics."
         ),
     )
     outputs = save_publication_figure(

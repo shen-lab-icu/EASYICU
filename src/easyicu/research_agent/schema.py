@@ -200,6 +200,49 @@ class TemporalConstraint(BaseModel):
     )
 
 
+class ObservationSemantics(BaseModel):
+    """Typed interpretation of values absent by design rather than by loss.
+
+    This contract is deliberately narrow.  It does not infer exposure,
+    outcome, or analysis roles.  It only records a mechanically verified
+    representation: a positive-only event triad, or an event time that is
+    applicable only when a separate complete event-status column is positive.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: Literal["positive_only_event", "conditional_event_time"]
+    event_status_column: Optional[str] = None
+    event_count_column: Optional[str] = None
+    measured_column: Optional[str] = None
+    representative_column: Optional[str] = None
+    time_origin: Optional[str] = None
+    time_unit: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _validate_closed_shape(self) -> "ObservationSemantics":
+        if self.kind == "positive_only_event":
+            required = {
+                "event_count_column": self.event_count_column,
+                "measured_column": self.measured_column,
+                "representative_column": self.representative_column,
+            }
+            missing = sorted(name for name, value in required.items() if not value)
+            if missing:
+                raise ValueError(
+                    "positive-only event semantics require " + ", ".join(missing)
+                )
+            if self.event_status_column is not None:
+                raise ValueError(
+                    "positive-only event semantics derive status from their triad"
+                )
+        elif not self.event_status_column:
+            raise ValueError(
+                "conditional event-time semantics require event_status_column"
+            )
+        return self
+
+
 class MissingnessProfile(BaseModel):
     """Per-variable missingness summary computed at context build time."""
 
@@ -208,6 +251,24 @@ class MissingnessProfile(BaseModel):
     fraction_missing: float = Field(ge=0.0, le=1.0)
     n_missing: int = Field(ge=0)
     n_total: int = Field(ge=0)
+    raw_n_missing: Optional[int] = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Raw null count before typed observation semantics distinguish "
+            "event absence or non-applicability from true missingness."
+        ),
+    )
+    eligible_n: Optional[int] = Field(
+        default=None,
+        ge=0,
+        description="Rows for which this value is semantically applicable.",
+    )
+    not_applicable_n: int = Field(
+        default=0,
+        ge=0,
+        description="Rows where absence is expected under the typed semantics.",
+    )
     missingness_severity: Literal["low", "medium", "high", "unknown"] = "unknown"
     missingness_kind: Optional[str] = Field(
         default=None,
@@ -390,6 +451,13 @@ class ConceptDescriptor(BaseModel):
     missingness_semantics: Optional[str] = Field(
         default=None,
         description="Domain-specific interpretation of missingness for this variable.",
+    )
+    observation_semantics: Optional[ObservationSemantics] = Field(
+        default=None,
+        description=(
+            "Mechanically verified representation contract for event absence or "
+            "conditional event-time applicability."
+        ),
     )
     forbidden_transformations: List[str] = Field(
         default_factory=list,

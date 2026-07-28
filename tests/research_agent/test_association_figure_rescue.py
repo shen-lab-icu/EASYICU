@@ -453,8 +453,102 @@ def test_sealed_missingness_renderer_accepts_structural_no_source(
     assert structural["missing_pct"] == pytest.approx(100.0)
     assert (out / "missingness_measurement_panel.png").stat().st_size > 0
     svg = (out / "missingness_measurement_panel.svg").read_text(encoding="utf-8")
-    assert "Measurement missing" in svg
+    assert "Missing among eligible" in svg
     assert "No source" in svg
+
+
+def test_sealed_missingness_renderer_uses_typed_event_semantics(
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.figures.missingness_source import (
+        REPAIR_ID,
+        render_missingness_source_bundle,
+    )
+
+    def _csv(frame: pd.DataFrame) -> bytes:
+        return frame.to_csv(index=False).encode("utf-8")
+
+    missing = pd.DataFrame(
+        {
+            "concept": ["susp_inf", "death_time"],
+            "variable": ["susp_inf", "death_time"],
+            "value_column": ["susp_inf_first", "death_time"],
+            "n_total": [100, 100],
+            "n_nonmissing": [100, 8],
+            "missing_n": [0, 2],
+            "eligible_n": [100, 10],
+            "not_applicable_n": [0, 90],
+            "missing_pct": [0.0, 20.0],
+            "indicator_semantics": [
+                "binary_event_presence",
+                "conditional_event_time",
+            ],
+            "missingness_kind": [
+                "binary_event_status_complete",
+                "conditional_event_time",
+            ],
+        }
+    )
+    source = pd.DataFrame(
+        {
+            "concept": ["susp_inf", "death_time"],
+            "variable": ["susp_inf", "death_time"],
+            "value_column": ["susp_inf_first", "death_time"],
+            "n_total": [100, 100],
+            "measured_one_n": [100, 8],
+            "value_missing_n": [0, 2],
+            "eligible_n": [100, 10],
+            "not_applicable_n": [0, 90],
+            "event_present_n": [40, 10],
+            "event_absent_n": [60, 90],
+            "before_origin_n": [0, 0],
+            "indicator_semantics": [
+                "binary_event_presence",
+                "conditional_event_time",
+            ],
+            "missingness_kind": [
+                "binary_event_status_complete",
+                "conditional_event_time",
+            ],
+        }
+    )
+    snapshot = {
+        "step_summary.json": json.dumps(
+            {
+                "analysis_family": "data_quality",
+                "method": "missingness_and_source_availability_audit",
+                "output_files": {
+                    "table:missingness_audit": "missingness_audit.csv",
+                    "table:measurement_source_audit": "measurement_source_audit.csv",
+                },
+            }
+        ).encode("utf-8"),
+        "missingness_audit.csv": _csv(missing),
+        "measurement_source_audit.csv": _csv(source),
+    }
+    out = tmp_path / "steps" / "04_audit_figure" / "outputs"
+
+    assert (
+        render_missingness_source_bundle(
+            run_dir=tmp_path,
+            current_step_id="04_audit_figure",
+            out_dir=out,
+            preverified_parent_artifacts=snapshot,
+        )
+        == REPAIR_ID
+    )
+    rendered = pd.read_csv(out / "missingness_measurement_panel_source_data.csv")
+    susp_inf = rendered.loc[rendered["concept"] == "susp_inf"].iloc[0]
+    death_time = rendered.loc[rendered["concept"] == "death_time"].iloc[0]
+    assert susp_inf["available_pct"] == pytest.approx(40.0)
+    assert susp_inf["not_applicable_pct"] == pytest.approx(60.0)
+    assert susp_inf["missing_pct"] == pytest.approx(0.0)
+    assert death_time["available_pct"] == pytest.approx(8.0)
+    assert death_time["not_applicable_pct"] == pytest.approx(90.0)
+    assert death_time["missing_pct"] == pytest.approx(2.0)
+    svg = (out / "missingness_measurement_panel.svg").read_text(encoding="utf-8")
+    assert "Event present 40; absent 60" in svg
+    assert "Time missing 2/10 event-positive" in svg
 
 
 def test_sealed_missingness_panel_anchors_authorized_product_slot(

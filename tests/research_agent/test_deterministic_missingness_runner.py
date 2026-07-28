@@ -864,6 +864,152 @@ def test_complete_binary_event_flag_is_not_misread_as_measurement_missingness(
     assert rrt["value_present_but_measured_zero_n"] == 0
 
 
+def test_typed_positive_only_event_absence_is_not_missingness(
+    tmp_path: Path,
+) -> None:
+    cohort = pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3, 4, 5],
+            "death": [0, 1, 0, 0, 1],
+            "susp_inf_n": [0, 1, 2, 0, 1],
+            "susp_inf_measured": [0, 1, 1, 0, 1],
+            "susp_inf_first": [np.nan, 1.0, 1.0, np.nan, 1.0],
+        }
+    )
+    context = {
+        "variables": [
+            {
+                "name": "susp_inf_first",
+                "observation_semantics": {
+                    "kind": "positive_only_event",
+                    "event_count_column": "susp_inf_n",
+                    "measured_column": "susp_inf_measured",
+                    "representative_column": "susp_inf_first",
+                },
+            }
+        ]
+    }
+
+    summary, out_dir = _exec_runner(
+        tmp_path,
+        cohort,
+        context,
+        requested_inputs=[
+            "susp_inf_first",
+            "susp_inf_measured",
+            "susp_inf_n",
+        ],
+    )
+
+    audit = pd.read_csv(out_dir / "missingness_measurement_audit.csv")
+    row = audit.loc[audit["concept"] == "susp_inf"].iloc[0]
+    assert summary["status"] == "ok"
+    assert row["indicator_semantics"] == "binary_event_presence"
+    assert row["missingness_kind"] == "binary_event_status_complete"
+    assert row["raw_value_missing_n"] == 2
+    assert row["event_present_n"] == 3
+    assert row["event_absent_n"] == 2
+    assert row["measured_one_n"] == len(cohort)
+    assert row["value_missing_n"] == 0
+    assert summary["observation_semantics_audit"]["susp_inf_first"][
+        "event_absent_n"
+    ] == 2
+
+
+def test_typed_conditional_event_time_uses_event_positive_denominator(
+    tmp_path: Path,
+) -> None:
+    cohort = pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3, 4, 5],
+            "death": [0, 1, 1, 0, 1],
+            "death_time": [np.nan, 12.0, np.nan, np.nan, 48.0],
+        }
+    )
+    context = {
+        "variables": [
+            {
+                "name": "death_time",
+                "observation_semantics": {
+                    "kind": "conditional_event_time",
+                    "event_status_column": "death",
+                    "representative_column": "death_time",
+                    "time_origin": "icu_admission",
+                    "time_unit": "h",
+                },
+            }
+        ]
+    }
+
+    summary, out_dir = _exec_runner(
+        tmp_path,
+        cohort,
+        context,
+        requested_inputs=["death_time"],
+    )
+
+    audit = pd.read_csv(out_dir / "missingness_measurement_audit.csv")
+    row = audit.loc[audit["concept"] == "death_time"].iloc[0]
+    missingness = pd.read_csv(out_dir / "missingness_audit.csv").iloc[0]
+    denominator = pd.read_csv(out_dir / "analytic_denominators.csv")
+    observed = denominator.loc[
+        denominator["analysis_set"] == "observed:death_time"
+    ].iloc[0]
+    assert summary["status"] == "ok"
+    assert row["indicator_semantics"] == "conditional_event_time"
+    assert row["eligible_n"] == 3
+    assert row["not_applicable_n"] == 2
+    assert row["raw_value_missing_n"] == 3
+    assert row["value_missing_n"] == 1
+    assert missingness["missing_pct"] == pytest.approx(100.0 / 3.0)
+    assert observed["n_complete"] == 4
+
+
+def test_typed_conditional_event_time_before_origin_blocks(
+    tmp_path: Path,
+) -> None:
+    cohort = pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3],
+            "death": [0, 1, 1],
+            "death_time": [np.nan, -2.0, 48.0],
+        }
+    )
+    context = {
+        "variables": [
+            {
+                "name": "death_time",
+                "observation_semantics": {
+                    "kind": "conditional_event_time",
+                    "event_status_column": "death",
+                    "representative_column": "death_time",
+                    "time_origin": "icu_admission",
+                    "time_unit": "h",
+                },
+            }
+        ]
+    }
+
+    summary, out_dir = _exec_runner(
+        tmp_path,
+        cohort,
+        context,
+        requested_inputs=["death_time"],
+    )
+
+    audit = pd.read_csv(out_dir / "missingness_measurement_audit.csv")
+    row = audit.loc[audit["concept"] == "death_time"].iloc[0]
+    assert summary["status"] == "blocked"
+    assert summary["temporal_validity_audit"] == {
+        "status": "blocked",
+        "reason_codes": ["event_time_before_declared_origin:death_time:1"],
+    }
+    assert "event_time_before_declared_origin:death_time:1" in str(
+        summary["blocking_reason"]
+    )
+    assert row["before_origin_n"] == 1
+
+
 def test_binary_value_flag_without_event_count_remains_a_conflict(tmp_path: Path):
     cohort = pd.DataFrame(
         {

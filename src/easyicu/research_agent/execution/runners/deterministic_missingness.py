@@ -357,6 +357,10 @@ def missingness_measurement_audit_code(
         from easyicu.research_agent.methods.descriptive_inputs import (
             measurement_provenance_receipt,
         )
+        from easyicu.research_agent.methods.source_status import (
+            reconcile_binary_event_presence,
+            reconcile_conditional_event_time,
+        )
 
         out_dir = Path(os.environ["STEP_OUT_DIR"])
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -456,9 +460,17 @@ def missingness_measurement_audit_code(
         req_concepts = []
         requested_inputs = []
         requested_outputs = []
+        observation_semantics_by_column = {}
         context_path = run_dir / "research_context.json"
         if context_path.is_file():
             ctx = json.loads(context_path.read_text("utf-8"))
+            for variable in ctx.get("variables") or []:
+                if not isinstance(variable, dict):
+                    continue
+                variable_name = str(variable.get("name") or "").strip()
+                semantics = variable.get("observation_semantics")
+                if variable_name and isinstance(semantics, dict):
+                    observation_semantics_by_column[variable_name] = dict(semantics)
             prefs = ctx.get("user_preferences") or {}
             if isinstance(prefs, dict):
                 for key in ("audit_concepts", "feature_concepts", "concepts", "features"):
@@ -676,6 +688,9 @@ def missingness_measurement_audit_code(
 
         # --- per-concept measurement audit -------------------------------------
         rows = []
+        semantic_complete_masks = {}
+        observation_semantics_audit = {}
+        temporal_semantics_blocking_reasons = []
         for base in concepts:
             flag_col = base + "_measured"
             value_col = _representative_value_column(base)
@@ -703,25 +718,99 @@ def missingness_measurement_audit_code(
                 value_present = pd.Series(False, index=df.index)
             value_present_n = int(value_present.sum())
 
-            # Some wide exports use ``X_measured`` for an event-presence flag,
-            # not measurement availability: a fully observed binary X is 0/1
-            # and the paired flag is exactly 1 where X == 1. Treating negative
-            # states as unmeasured would turn a complete binary status into
-            # near-total missingness (for example, a rare procedure). Keep this
-            # inference narrow and case-neutral: both binary states must occur,
-            # every value and flag must be present, and an independently emitted
-            # ``X_n > 0`` event-count signal must exactly agree with the value and
-            # flag. Partial continuous labs/vitals and an unknown bad binary flag
-            # cannot enter this branch.
             indicator_semantics = "measurement_availability"
             raw_indicator_one_n = int(measured_mask.sum())
+            eligible_n = n_total
+            not_applicable_n = 0
+            event_present_n = 0
+            event_absent_n = 0
+            before_origin_n = 0
             count_candidate = base + "_n"
             count_col = (
                 count_candidate
                 if count_candidate in df.columns
                 else low.get(count_candidate.lower())
             )
-            if (
+            typed_semantics = observation_semantics_by_column.get(
+                value_col or base,
+                {},
+            )
+            typed_kind = str(typed_semantics.get("kind") or "")
+            if typed_kind == "positive_only_event":
+                declared_count = str(
+                    typed_semantics.get("event_count_column") or ""
+                )
+                declared_measured = str(
+                    typed_semantics.get("measured_column") or ""
+                )
+                declared_representative = str(
+                    typed_semantics.get("representative_column") or ""
+                )
+                if (
+                    declared_count != count_col
+                    or declared_measured != flag_col
+                    or declared_representative != value_col
+                ):
+                    raise RuntimeError(
+                        "Positive-only event semantics do not match the audited columns"
+                    )
+                event_result = reconcile_binary_event_presence(
+                    df,
+                    count_column=declared_count,
+                    measured_column=declared_measured,
+                    representative_column=declared_representative,
+                )
+                indicator_semantics = "binary_event_presence"
+                measured_mask = pd.Series(True, index=df.index)
+                event_present_n = int(event_result.audit["event_present_n"])
+                event_absent_n = int(event_result.audit["event_absent_n"])
+                semantic_complete_masks[value_col] = pd.Series(
+                    True,
+                    index=df.index,
+                )
+                observation_semantics_audit[value_col] = dict(event_result.audit)
+            elif typed_kind == "conditional_event_time":
+                event_status_column = str(
+                    typed_semantics.get("event_status_column") or ""
+                )
+                if value_col is None or not event_status_column:
+                    raise RuntimeError(
+                        "Conditional event-time semantics are incomplete"
+                    )
+                event_time_result = reconcile_conditional_event_time(
+                    df,
+                    event_status_column=event_status_column,
+                    event_time_column=value_col,
+                )
+                event_audit = event_time_result.audit
+                indicator_semantics = "conditional_event_time"
+                measured_mask = df[value_col].notna()
+                eligible_n = int(event_audit["eligible_event_n"])
+                not_applicable_n = int(
+                    event_audit["not_applicable_event_absent_n"]
+                )
+                event_present_n = eligible_n
+                event_absent_n = not_applicable_n
+                before_origin_n = int(event_audit["before_origin_n"])
+                semantic_complete_masks[value_col] = (
+                    df[value_col].notna()
+                    | pd.to_numeric(
+                        df[event_status_column],
+                        errors="raise",
+                    ).eq(0)
+                )
+                observation_semantics_audit[value_col] = dict(event_audit)
+                if before_origin_n:
+                    temporal_semantics_blocking_reasons.append(
+                        "event_time_before_declared_origin:"
+                        + value_col
+                        + ":"
+                        + str(before_origin_n)
+                    )
+            # Legacy complete 0/1 event-status exports remain accepted when no
+            # typed context is available. Positive-only shapes require the
+            # typed contract above and the shared reconciliation helper.
+            elif (
                 has_flag
                 and value_col is not None
                 and count_col is not None
@@ -744,15 +833,30 @@ def missingness_measurement_audit_code(
                 if is_complete_binary_status:
                     indicator_semantics = "binary_event_presence"
                     measured_mask = value_present
+                    event_present_n = int(numeric_value.eq(1).sum())
+                    event_absent_n = int(numeric_value.eq(0).sum())
 
             measured_one_n = int(measured_mask.sum())
-            value_missing_n = int(n_total - measured_one_n)
+            value_missing_n = (
+                int(
+                    observation_semantics_audit[value_col][
+                        "missing_event_time_n"
+                    ]
+                )
+                if indicator_semantics == "conditional_event_time"
+                else int(n_total - measured_one_n)
+            )
+            if value_col is not None and value_col not in semantic_complete_masks:
+                semantic_complete_masks[value_col] = measured_mask
             structural_no_source = bool(
                 measured_one_n == 0 and value_present_n == 0
             )
             # Rows with a value present but the measurement indicator says zero
             # (a genuine present-but-unmeasured, e.g. a derived source flag).
-            if has_flag:
+            if indicator_semantics == "binary_event_presence":
+                present_but_zero = 0
+                measured_but_missing = 0
+            elif has_flag:
                 present_but_zero = int((value_present & ~measured_mask).sum())
                 measured_but_missing = int((measured_mask & ~value_present).sum())
             else:
@@ -761,6 +865,8 @@ def missingness_measurement_audit_code(
 
             if structural_no_source:
                 kind = "structural_no_source"
+            elif indicator_semantics == "conditional_event_time":
+                kind = "conditional_event_time"
             elif indicator_semantics == "binary_event_presence":
                 kind = "binary_event_status_complete"
             elif present_but_zero or measured_but_missing:
@@ -785,6 +891,11 @@ def missingness_measurement_audit_code(
                     "missing_n": value_missing_n,
                     "missing_pct": round(100.0 * value_missing_n / n_total, 6),
                     "measured_pct": round(100.0 * measured_one_n / n_total, 6),
+                    "eligible_n": eligible_n,
+                    "not_applicable_n": not_applicable_n,
+                    "event_present_n": event_present_n,
+                    "event_absent_n": event_absent_n,
+                    "before_origin_n": before_origin_n,
                     "value_present_but_measured_zero_n": present_but_zero,
                     "measured_but_value_missing_n": measured_but_missing,
                     "raw_value_missing_n": int(n_total - value_present_n),
@@ -805,20 +916,28 @@ def missingness_measurement_audit_code(
         audit.to_csv(out_dir / "missingness_measurement_audit.csv", index=False)
 
         missingness_audit = audit[
-            ["concept", "variable", "value_column", "n_total", "raw_value_missing_n"]
+            [
+                "concept",
+                "variable",
+                "value_column",
+                "n_total",
+                "measured_one_n",
+                "value_missing_n",
+                "eligible_n",
+                "not_applicable_n",
+                "raw_value_missing_n",
+                "indicator_semantics",
+                "missingness_kind",
+            ]
         ].copy()
-        missingness_audit["n_nonmissing"] = (
-            missingness_audit["n_total"] - missingness_audit["raw_value_missing_n"]
-        )
-        missingness_audit["missing_n"] = missingness_audit["raw_value_missing_n"]
+        missingness_audit["n_nonmissing"] = missingness_audit["measured_one_n"]
+        missingness_audit["missing_n"] = missingness_audit["value_missing_n"]
         missingness_audit["missing_pct"] = (
             100.0
             * missingness_audit["missing_n"]
-            / missingness_audit["n_total"]
+            / missingness_audit["eligible_n"].replace(0, np.nan)
         )
-        missingness_audit.drop(columns=["raw_value_missing_n"]).to_csv(
-            out_dir / "missingness_audit.csv", index=False
-        )
+        missingness_audit.to_csv(out_dir / "missingness_audit.csv", index=False)
 
         source_audit = audit[
             [
@@ -828,6 +947,11 @@ def missingness_measurement_audit_code(
                 "n_total",
                 "measured_one_n",
                 "value_missing_n",
+                "eligible_n",
+                "not_applicable_n",
+                "event_present_n",
+                "event_absent_n",
+                "before_origin_n",
                 "value_present_but_measured_zero_n",
                 "measured_but_value_missing_n",
                 "indicator_semantics",
@@ -864,7 +988,11 @@ def missingness_measurement_audit_code(
 
         denominator_rows = []
         for column in resolved_inputs:
-            observed_n = int(df[column].notna().sum())
+            complete_mask = semantic_complete_masks.get(
+                column,
+                df[column].notna(),
+            )
+            observed_n = int(complete_mask.sum())
             denominator_rows.append(
                 {
                     "analysis_set": "observed:" + column,
@@ -891,10 +1019,25 @@ def missingness_measurement_audit_code(
             )
 
         if resolved_inputs and denominator_error is None:
-            complete_mask = df[resolved_inputs].notna().all(axis=1)
-            complete_n = int(complete_mask.sum())
+            joint_complete_mask = pd.Series(True, index=df.index)
+            for column in resolved_inputs:
+                joint_complete_mask &= semantic_complete_masks.get(
+                    column,
+                    df[column].notna(),
+                )
+            complete_n = int(joint_complete_mask.sum())
         else:
             complete_n = None
+        if temporal_semantics_blocking_reasons:
+            temporal_error = (
+                "Typed temporal validity audit failed: "
+                + "; ".join(temporal_semantics_blocking_reasons)
+            )
+            denominator_error = (
+                temporal_error
+                if denominator_error is None
+                else denominator_error + "; " + temporal_error
+            )
         denominator_rows.insert(
             0,
             {
@@ -979,6 +1122,15 @@ def missingness_measurement_audit_code(
             "measurement_provenance_audit": {
                 "source": "COHORT_PARQUET",
                 "checks": measurement_checks,
+            },
+            "observation_semantics_audit": observation_semantics_audit,
+            "temporal_validity_audit": {
+                "status": (
+                    "blocked"
+                    if temporal_semantics_blocking_reasons
+                    else "ok"
+                ),
+                "reason_codes": temporal_semantics_blocking_reasons,
             },
             "notes": [
                 "Deterministic missingness audit (no LLM coder).",

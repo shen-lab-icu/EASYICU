@@ -190,10 +190,22 @@ def outbound_safe_context_payload(
                         else None
                     ),
                     "missingness_semantics": variable.missingness_semantics,
+                    "observation_semantics": (
+                        variable.observation_semantics.model_dump(mode="json")
+                        if variable.observation_semantics is not None
+                        else None
+                    ),
                     "forbidden_transformations": variable.forbidden_transformations,
                     "missingness": (
                         {
                             "fraction_missing": variable.missingness.fraction_missing,
+                            "n_missing": variable.missingness.n_missing,
+                            "n_total": variable.missingness.n_total,
+                            "raw_n_missing": variable.missingness.raw_n_missing,
+                            "eligible_n": variable.missingness.eligible_n,
+                            "not_applicable_n": (
+                                variable.missingness.not_applicable_n
+                            ),
                             "severity": variable.missingness.missingness_severity,
                         }
                         if variable.missingness is not None
