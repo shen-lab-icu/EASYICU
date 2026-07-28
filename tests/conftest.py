@@ -11,6 +11,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = REPO_ROOT / "src"
+RESEARCH_AGENT_TEST_ROOT = REPO_ROOT / "tests" / "research_agent"
 
 for path in (REPO_ROOT, SRC_ROOT):
     if str(path) not in sys.path:
@@ -53,33 +54,75 @@ def ra():
     return _load_research_agent()
 
 
-@pytest.fixture(autouse=True)
-def _explicit_test_runner_backend(monkeypatch):
-    """Select a host backend only when the test command explicitly requests it.
+@pytest.fixture
+def research_agent_runner_backend(request: pytest.FixtureRequest) -> str:
+    """Return the runner backend selected explicitly for one test.
 
-    Production ``runner_kind="auto"`` must stay fail-closed on Linux hosts
-    without the pinned Docker image.  The CI integration lane exercises only
-    repository-owned deterministic scripts, so it may opt into the host runner
-    with both ``EASYICU_TEST_RUNNER_KIND=subprocess`` and the CodeRunner's
-    separate unsafe-host authorization flag.  Keeping this switch in test
-    plumbing prevents CI configuration from weakening the product default.
+    Ordinary research-agent tests default to ``subprocess`` so a developer
+    starting or stopping Docker cannot change their execution path.  A test
+    that owns Docker/auto behaviour may override the default explicitly:
+
+    .. code-block:: python
+
+       @pytest.mark.parametrize(
+           "research_agent_runner_backend", ["auto"], indirect=True
+       )
+       def test_auto_selection(research_agent_runner_backend): ...
+
+    The command-level ``EASYICU_TEST_RUNNER_KIND`` switch remains available for
+    CI lanes.  Neither mechanism changes the production default.
     """
 
-    requested = os.environ.get("EASYICU_TEST_RUNNER_KIND", "").strip().lower()
-    if not requested:
+    parametrized = getattr(request, "param", None)
+    requested = (
+        str(parametrized)
+        if parametrized is not None
+        else os.environ.get("EASYICU_TEST_RUNNER_KIND", "")
+    )
+    requested = requested.strip().lower() or "subprocess"
+    if requested not in {"auto", "docker", "subprocess"}:
+        pytest.fail(
+            "research-agent test runner backend must be one of "
+            "'auto', 'docker', or 'subprocess'"
+        )
+    return requested
+
+
+@pytest.fixture(autouse=True)
+def _explicit_test_runner_backend(
+    request: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
+    research_agent_runner_backend: str,
+):
+    """Make ordinary research-agent tests independent of Docker availability.
+
+    Only the selector imported by ``ResearchAgentPipeline`` is replaced.
+    Direct tests of the production selector remain real, and an explicitly
+    supplied ``runner_kind="docker"`` still bypasses this selector.  Tests that
+    exercise the pipeline's ``auto``/Docker wiring opt in through
+    ``research_agent_runner_backend`` and therefore cannot be silently
+    overridden by this fixture.
+    """
+
+    test_path = Path(str(request.node.path)).resolve()
+    command_override = os.environ.get("EASYICU_TEST_RUNNER_KIND", "").strip()
+    is_research_agent_test = (
+        test_path == RESEARCH_AGENT_TEST_ROOT
+        or RESEARCH_AGENT_TEST_ROOT in test_path.parents
+    )
+    if not is_research_agent_test and not command_override:
         yield
         return
-    if requested != "subprocess":
-        pytest.fail(
-            "EASYICU_TEST_RUNNER_KIND only supports the explicit "
-            "'subprocess' test backend"
-        )
+
+    if research_agent_runner_backend == "auto":
+        yield
+        return
 
     pipeline = importlib.import_module("easyicu.research_agent.pipeline")
     monkeypatch.setattr(
         pipeline,
         "select_safe_runner_kind",
-        lambda **_kwargs: "subprocess",
+        lambda **_kwargs: research_agent_runner_backend,
     )
     yield
 
