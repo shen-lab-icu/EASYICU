@@ -9,6 +9,15 @@ count observations outside each bound, and expose the canonical
 The comparisons are deliberately rendered into the sandbox source instead of
 hidden behind an imported runtime helper.  That lets the pre-execution static
 gate verify the exact code that will run.
+
+Each record also carries ``compared_n``: how many observations were actually
+compared against the bound.  Without it a column that is entirely missing
+emits ``out_of_range_n = 0`` -- byte-identical to a fully observed, entirely
+in-range column.  The obligation gate already refuses a receipt that appears
+only when the count is nonzero, on the grounds that "no out-of-range rows" and
+"we never looked" are different facts; a receipt with no denominator loses that
+same distinction one level down, and death and other partly recorded outcomes
+are exactly where it bites.
 """
 
 from __future__ import annotations
@@ -114,6 +123,8 @@ def render_standard_plausibility_receipt_code(
                 "below_minimum_n": below_minimum_n,
                 "above_maximum_n": above_maximum_n,
                 "out_of_range_n": below_minimum_n + above_maximum_n,
+                "compared_n": int(numeric.notna().sum()),
+                "observed_n": int({frame_name}[column].notna().sum()),
             }}
         if set(plausibility_audit) != set(plausibility_expected_columns):
             raise RuntimeError(

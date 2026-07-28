@@ -137,9 +137,9 @@ def select_standard_executor(
         return selection
 
     if cohort_summary_executor_owns_step(step):
-        if receipt_required:
-            _receipt_declined("descriptive_cohort_summary")
-            return None
+        # This executor emits the flag-only receipt itself, so a receipt
+        # obligation no longer sends a step the host can compute exactly to
+        # the stochastic Coder.
         typed_cohort_inputs = tuple(
             str(value or "").strip()
             for value in step.inputs
@@ -151,7 +151,10 @@ def select_standard_executor(
                 analysis_kind="descriptive_cohort_summary",
                 selection_reason="cohort_summary_contract_preflight",
                 progress_message="Using planner-scoped cohort summary executor",
-                code=cohort_summary_executor_code(step),
+                code=cohort_summary_executor_code(
+                    step,
+                    plausibility_scope=plausibility_scope,
+                ),
                 consumed_input_keys=typed_cohort_inputs,
             )
         )

@@ -273,13 +273,13 @@ def test_owner_rejects_widened_or_mistyped_plan_contracts(tmp_path: Path) -> Non
             ],
         )
     )
-    reordered = list(reversed(EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_INPUTS))
+    narrowed = [EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_INPUTS[0]]
     assert not owns(
         _step(
-            inputs=reordered,
+            inputs=narrowed,
             input_consumption_contracts=[
                 ArtifactConsumptionContract(input_key=value, mode="all_rows")
-                for value in reordered
+                for value in narrowed
             ],
         )
     )
@@ -304,6 +304,25 @@ def test_owner_rejects_widened_or_mistyped_plan_contracts(tmp_path: Path) -> Non
                 ),
             ]
         )
+    )
+
+
+def test_owner_reads_the_same_pair_in_either_declared_order(tmp_path: Path) -> None:
+    """The bound schema decides, not the order the Planner listed the tables."""
+
+    _, manifest = _manifest(tmp_path)
+    reordered = list(reversed(EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_INPUTS))
+
+    assert exposure_outcome_distribution_figure_executor_owns_step(
+        _step(
+            inputs=reordered,
+            input_consumption_contracts=[
+                ArtifactConsumptionContract(input_key=value, mode="all_rows")
+                for value in reordered
+            ],
+        ),
+        resolved_bindings=manifest["inputs"],
+        display_labels=LABELS,
     )
 
 
@@ -363,8 +382,9 @@ def test_a_missing_outcome_label_renders_a_reader_title_not_a_machine_name() -> 
     assert mod._outcome_title(None, "in_hospital_death") == "In hospital death"
     assert mod._outcome_title({}, "in_hospital_death") == "In hospital death"
     assert (
-        mod._outcome_title({"in_hospital_death": "In-hospital mortality"},
-                           "in_hospital_death")
+        mod._outcome_title(
+            {"in_hospital_death": "In-hospital mortality"}, "in_hospital_death"
+        )
         == "In-hospital mortality"
     )
 

@@ -486,14 +486,16 @@ def test_compact_missingness_executor_emits_exact_plausibility_receipt(
 
     summary = json.loads((out_dir / "step_summary.json").read_text("utf-8"))
     assert summary["n_total"] == len(frame)
-    assert summary["plausibility_audit"] == {
-        "age": {
-            "policy": "retain_and_flag",
-            "below_minimum_n": 1,
-            "above_maximum_n": 1,
-            "out_of_range_n": 2,
-        }
-    }
+    receipt = summary["plausibility_audit"]["age"]
+    assert set(summary["plausibility_audit"]) == {"age"}
+    assert receipt["policy"] == "retain_and_flag"
+    assert receipt["below_minimum_n"] == 1
+    assert receipt["above_maximum_n"] == 1
+    assert receipt["out_of_range_n"] == 2
+    # The denominator is what separates "2 of many were out of range" from a
+    # column that was never observed and reports 0 for both.
+    assert receipt["compared_n"] >= receipt["out_of_range_n"]
+    assert receipt["compared_n"] > 0
     assert (
         plausibility_audit_receipt_findings(
             step_summary=summary,

@@ -14,10 +14,11 @@ Three concrete over-statements are locked here, each one observed:
 * It reported ``coder`` for steps whose owner needs the host's
   ``resolved_bindings``.  Offline those decline by construction, which is not
   evidence about what the run will do.
-* The E1 Step 02 shape: its contract matches ``descriptive_cohort_summary``,
-  but the selector declines it when the step owes a host-verified plausibility
-  receipt.  An earlier scan had no scope object, could not see that gate, and
-  called the step owned; the real run recorded ``declined_receipt_required``.
+* A receipt-gated owner counted as owned.  An earlier scan had no scope
+  object, could not see that gate, and called the E1 Step 02 shape owned; the
+  real run recorded ``declined_receipt_required``.  That particular owner now
+  renders its own receipt and really is selected, so the conditional case here
+  is carried by a renderer that still genuinely cannot emit one.
 """
 
 from __future__ import annotations
@@ -52,7 +53,31 @@ def _plan_payload(*steps: dict[str, Any], **overrides: Any) -> dict[str, Any]:
 
 
 def _receipt_gated_step() -> dict[str, Any]:
-    """A cohort summary that a plausibility receipt would take away."""
+    """A renderer that a plausibility receipt would take away.
+
+    It reads two parent tables rather than the ranged raw columns, so it has
+    nothing to compare against the sealed bounds and the selector declines it
+    when the step owes a receipt.  ``descriptive_cohort_summary`` was the
+    original instance; it now renders the receipt itself and is selected, so
+    the conditional shape moved here.
+    """
+
+    return {
+        "step_id": "04_prevalence_mortality_figure",
+        "intent": "Render the sealed prevalence and mortality tables.",
+        "method": "visualization",
+        "planned_analysis_role": "auxiliary",
+        "inputs": ["table:cohort_summary", "table:outcome_incidence"],
+        "expected_outputs": ["figure:prevalence_mortality"],
+        "input_consumption_contracts": [
+            {"input_key": "table:cohort_summary", "mode": "all_rows"},
+            {"input_key": "table:outcome_incidence", "mode": "all_rows"},
+        ],
+    }
+
+
+def _receipt_free_cohort_summary_step() -> dict[str, Any]:
+    """The E1 Step 02 shape, which a receipt obligation no longer disowns."""
 
     return {
         "step_id": "02_cohort_definition_summary",
@@ -258,7 +283,7 @@ def test_a_receipt_gated_owner_is_reported_conditional_not_owned(
     (row,) = replay_owner_coverage(plan_path)
 
     assert row.verdict == CONDITIONAL_RECEIPT
-    assert row.analysis_kind == "descriptive_cohort_summary"
+    assert row.analysis_kind == "prevalence_mortality_figure"
     assert "receipt" in row.note
 
 
@@ -291,8 +316,8 @@ def test_a_real_obligation_replaces_the_probe_with_a_definite_answer(
     snapshot = SelectionContextSnapshot(
         plan=plan,
         plausibility_scopes={
-            "02_cohort_definition_summary": FlagOnlyPlausibilityScope(
-                step_id="02_cohort_definition_summary",
+            "04_prevalence_mortality_figure": FlagOnlyPlausibilityScope(
+                step_id="04_prevalence_mortality_figure",
                 expected_columns=(),
                 source_contracts_sha256="0" * 64,
                 authority_kind="resolved_raw_input_contracts",
@@ -303,7 +328,7 @@ def test_a_real_obligation_replaces_the_probe_with_a_definite_answer(
     (row,) = replay_owner_coverage(snapshot=snapshot)
 
     assert row.verdict == OWNED
-    assert row.analysis_kind == "descriptive_cohort_summary"
+    assert row.analysis_kind == "prevalence_mortality_figure"
 
 
 def test_a_real_nonempty_obligation_settles_the_step_against_the_owner(
@@ -318,8 +343,8 @@ def test_a_real_nonempty_obligation_settles_the_step_against_the_owner(
     snapshot = SelectionContextSnapshot(
         plan=plan,
         plausibility_scopes={
-            "02_cohort_definition_summary": FlagOnlyPlausibilityScope(
-                step_id="02_cohort_definition_summary",
+            "04_prevalence_mortality_figure": FlagOnlyPlausibilityScope(
+                step_id="04_prevalence_mortality_figure",
                 expected_columns=("sofa2_liver_max",),
                 source_contracts_sha256="0" * 64,
                 authority_kind="resolved_raw_input_contracts",
@@ -388,7 +413,7 @@ def test_a_conditional_step_cannot_satisfy_the_gate(
     plan_path = _write(tmp_path, _plan_payload(_receipt_gated_step()))
 
     exit_code = main(
-        [str(plan_path), "--require-deterministic", "02_cohort_definition_summary"]
+        [str(plan_path), "--require-deterministic", "04_prevalence_mortality_figure"]
     )
 
     assert exit_code == 1
@@ -411,6 +436,24 @@ def test_requiring_a_step_the_plan_does_not_contain_is_refused(
 # --------------------------------------------------------------------------
 # Ordinary reporting.
 # --------------------------------------------------------------------------
+
+
+def test_the_e1_step_02_shape_is_owned_even_when_it_owes_a_receipt(
+    tmp_path: Path,
+) -> None:
+    """The step whose decline this whole tool was built after.
+
+    Reported as ``declined_receipt_required`` by the real run, then reported as
+    owned by a scan that could not see the gate.  It is now genuinely owned:
+    the executor renders the receipt itself.
+    """
+
+    plan_path = _write(tmp_path, _plan_payload(_receipt_free_cohort_summary_step()))
+
+    (row,) = replay_owner_coverage(plan_path)
+
+    assert row.verdict == OWNED
+    assert row.analysis_kind == "descriptive_cohort_summary"
 
 
 def test_an_unconditionally_owned_step_is_reported_owned(tmp_path: Path) -> None:

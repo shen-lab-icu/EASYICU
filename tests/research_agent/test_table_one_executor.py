@@ -350,14 +350,16 @@ def test_table_one_executor_retains_rows_and_emits_exact_plausibility_receipt(
     assert summary["source_row_count_reconciliation"][
         "table_one_filtering_performed"
     ] is False
-    assert summary["plausibility_audit"] == {
-        "age": {
-            "policy": "retain_and_flag",
-            "below_minimum_n": 1,
-            "above_maximum_n": 1,
-            "out_of_range_n": 2,
-        }
-    }
+    receipt = summary["plausibility_audit"]["age"]
+    assert set(summary["plausibility_audit"]) == {"age"}
+    assert receipt["policy"] == "retain_and_flag"
+    assert receipt["below_minimum_n"] == 1
+    assert receipt["above_maximum_n"] == 1
+    assert receipt["out_of_range_n"] == 2
+    # The denominator is what separates "2 of many were out of range" from a
+    # column that was never observed and reports 0 for both.
+    assert receipt["compared_n"] >= receipt["out_of_range_n"]
+    assert receipt["compared_n"] > 0
     assert (
         plausibility_audit_receipt_findings(
             step_summary=summary,
@@ -370,13 +372,21 @@ def test_table_one_executor_retains_rows_and_emits_exact_plausibility_receipt(
 
 
 def test_standard_executor_abstains_when_it_cannot_emit_required_receipt():
+    """An owner that cannot emit the receipt must decline, not emit a false one.
+
+    The cohort-summary executor used to be the example here.  It now renders
+    the receipt itself, so the case is carried by an owner that genuinely
+    cannot: a figure step reads a parent product, not the raw ranged columns,
+    so it has nothing to compare against the sealed bounds.
+    """
+
     step = AnalysisStep(
-        step_id="01_summary",
+        step_id="04_distribution_figure",
         planned_analysis_role="auxiliary",
-        intent="Describe the locked cohort.",
-        inputs=["artifact:analysis_cohort", "age"],
-        expected_outputs=["table:cohort_summary"],
-        method="descriptive",
+        intent="Render the declared distribution figure.",
+        inputs=["table:cohort_summary", "table:outcome_incidence"],
+        expected_outputs=["figure:prevalence_mortality"],
+        method="visualization",
     )
     scope = FlagOnlyPlausibilityScope(
         step_id=step.step_id,
@@ -393,6 +403,38 @@ def test_standard_executor_abstains_when_it_cannot_emit_required_receipt():
         )
         is None
     )
+
+
+def test_a_receipt_obligation_no_longer_disowns_the_cohort_summary():
+    """The step the real E1 run recorded as ``declined_receipt_required``.
+
+    It is exactly computable by the host, and handing it to the stochastic
+    Coder for want of a receipt the host can also compute was the defect.
+    """
+
+    step = AnalysisStep(
+        step_id="01_summary",
+        planned_analysis_role="auxiliary",
+        intent="Describe the locked cohort.",
+        inputs=["artifact:analysis_cohort", "age"],
+        expected_outputs=["table:cohort_summary"],
+        method="descriptive",
+    )
+    scope = FlagOnlyPlausibilityScope(
+        step_id=step.step_id,
+        expected_columns=("age",),
+        source_contracts_sha256="0" * 64,
+        authority_kind="resolved_raw_input_contracts",
+    )
+
+    selection = select_standard_executor(
+        step,
+        plan=AnalysisPlan(research_question="Test", steps=[step]),
+        plausibility_scope=scope,
+    )
+
+    assert selection is not None
+    assert selection.analysis_kind == "descriptive_cohort_summary"
 
 
 def test_table_one_plausibility_receipt_rejects_contract_byte_drift(

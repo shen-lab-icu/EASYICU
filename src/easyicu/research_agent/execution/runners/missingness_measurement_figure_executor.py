@@ -34,6 +34,7 @@ from ...figures.publication import (
     save_publication_figure,
 )
 from ...schema import AnalysisStep
+from .figure_input_capability import TypedInputCapability
 
 __all__ = [
     "MEASUREMENT_PROCESS_AUDIT_INPUT",
@@ -117,31 +118,27 @@ def _figure_product(value: Any) -> str | None:
     return product
 
 
+#: ``run_missingness_measurement_figure`` indexes both bindings and builds a
+#: panel from each, so neither may be declared optional.  A plan that names
+#: only the missingness audit is refused here and stays refused: the E1
+#: protocol layer is what requires the process audit be produced, and this
+#: renderer is not the place to paper over a plan that did not promise it.
+MISSINGNESS_MEASUREMENT_FIGURE_CAPABILITY = TypedInputCapability(
+    required=frozenset(MISSINGNESS_MEASUREMENT_FIGURE_INPUTS),
+)
+
+
 def missingness_measurement_figure_executor_owns_step(step: AnalysisStep) -> bool:
     """Return whether every scientific choice is fixed by the typed contract."""
 
     products = [_figure_product(value) for value in step.expected_outputs]
-    contracts = list(step.input_consumption_contracts)
-    declared_inputs = [str(value or "").strip() for value in step.inputs]
-    if (
-        len(declared_inputs) != len(MISSINGNESS_MEASUREMENT_FIGURE_INPUTS)
-        or set(declared_inputs) != set(MISSINGNESS_MEASUREMENT_FIGURE_INPUTS)
-        or len(contracts) != len(MISSINGNESS_MEASUREMENT_FIGURE_INPUTS)
-        or {contract.input_key for contract in contracts}
-        != set(MISSINGNESS_MEASUREMENT_FIGURE_INPUTS)
-    ):
+    if not MISSINGNESS_MEASUREMENT_FIGURE_CAPABILITY.admits_step(step):
         return False
     return bool(
         step.planned_analysis_role == "auxiliary"
         and _method_head(step.method) == "visualization"
         and len(products) == 1
         and products[0] in _SUPPORTED_FIGURE_PRODUCTS
-        and all(
-            contract.mode == "all_rows"
-            and contract.role_column is None
-            and not contract.expected_roles
-            for contract in contracts
-        )
         and not step.model_requirements
         and step.table_one_spec is None
         and step.trajectory_stability_spec is None

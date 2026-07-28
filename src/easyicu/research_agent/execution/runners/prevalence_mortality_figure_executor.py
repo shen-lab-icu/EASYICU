@@ -28,6 +28,7 @@ from ...figures.publication import (
 )
 from ...schema import AnalysisStep
 from .planner_display_labels import planner_binary_level_labels
+from .figure_input_capability import TypedInputCapability
 
 __all__ = [
     "PREVALENCE_MORTALITY_FIGURE_INPUTS",
@@ -67,24 +68,20 @@ def _method_head(value: Any) -> str:
     return str(value or "").strip().lower().split(" with ", 1)[0]
 
 
+#: Both panels are indexed by key while rendering, so neither is optional.
+PREVALENCE_MORTALITY_FIGURE_CAPABILITY = TypedInputCapability(
+    required=frozenset(PREVALENCE_MORTALITY_FIGURE_INPUTS),
+)
+
+
 def prevalence_mortality_figure_executor_owns_step(step: AnalysisStep) -> bool:
     """Return whether the exact two-table rendering contract is closed."""
 
-    contracts = list(step.input_consumption_contracts)
     return bool(
         step.planned_analysis_role == "auxiliary"
         and _method_head(step.method) == "visualization"
-        and tuple(step.inputs) == PREVALENCE_MORTALITY_FIGURE_INPUTS
+        and PREVALENCE_MORTALITY_FIGURE_CAPABILITY.admits_step(step)
         and list(step.expected_outputs) == [f"figure:{_FIGURE_PRODUCT}"]
-        and len(contracts) == len(PREVALENCE_MORTALITY_FIGURE_INPUTS)
-        and tuple(contract.input_key for contract in contracts)
-        == PREVALENCE_MORTALITY_FIGURE_INPUTS
-        and all(
-            contract.mode == "all_rows"
-            and contract.role_column is None
-            and not contract.expected_roles
-            for contract in contracts
-        )
         and not step.model_requirements
         and step.table_one_spec is None
         and step.trajectory_stability_spec is None

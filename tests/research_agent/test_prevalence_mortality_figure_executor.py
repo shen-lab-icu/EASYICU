@@ -203,19 +203,51 @@ def test_planner_owned_binary_level_labels_are_compiled_into_renderer() -> None:
         "Sepsis-3 present",
     )
     assert selection is not None
-    assert "category_labels=('Sepsis-3 absent', 'Sepsis-3 present')" in (
-        selection.code
-    )
+    assert "category_labels=('Sepsis-3 absent', 'Sepsis-3 present')" in (selection.code)
 
 
-def test_owner_rejects_reordered_or_widened_contract() -> None:
+def test_owner_reads_the_same_pair_in_either_declared_order() -> None:
+    """Order is a property of the Planner's list, not of the rendering.
+
+    ``run_prevalence_mortality_figure`` looks each binding up by key and
+    compares the manifest as a set, so the two tables named the other way
+    round are the same request.  Refusing it sent an otherwise complete
+    contract to the stochastic Coder over the order of a list.
+    """
+
     reversed_inputs = list(reversed(PREVALENCE_MORTALITY_FIGURE_INPUTS))
-    assert not prevalence_mortality_figure_executor_owns_step(
+
+    assert prevalence_mortality_figure_executor_owns_step(
         _step(
             inputs=reversed_inputs,
             input_consumption_contracts=[
                 ArtifactConsumptionContract(input_key=value, mode="all_rows")
                 for value in reversed_inputs
+            ],
+        )
+    )
+
+
+def test_owner_rejects_a_widened_or_narrowed_contract() -> None:
+    """Set membership still decides: an extra or missing table is refused."""
+
+    widened = [*PREVALENCE_MORTALITY_FIGURE_INPUTS, "table:unrelated_parent"]
+    assert not prevalence_mortality_figure_executor_owns_step(
+        _step(
+            inputs=widened,
+            input_consumption_contracts=[
+                ArtifactConsumptionContract(input_key=value, mode="all_rows")
+                for value in widened
+            ],
+        )
+    )
+    narrowed = [PREVALENCE_MORTALITY_FIGURE_INPUTS[0]]
+    assert not prevalence_mortality_figure_executor_owns_step(
+        _step(
+            inputs=narrowed,
+            input_consumption_contracts=[
+                ArtifactConsumptionContract(input_key=value, mode="all_rows")
+                for value in narrowed
             ],
         )
     )
@@ -253,9 +285,7 @@ def test_runner_renders_reconciled_source_backed_bundle(tmp_path: Path) -> None:
         out_dir / "prevalence_mortality_outcome_incidence_source_data.csv"
     )
     assert cohort_source.drop(columns=["display_label"]).equals(_cohort_summary())
-    assert outcome_source.drop(columns=["display_label"]).equals(
-        _outcome_incidence()
-    )
+    assert outcome_source.drop(columns=["display_label"]).equals(_outcome_incidence())
     assert cohort_source.loc[
         cohort_source["exposure_level"].eq(1.0),
         "display_label",

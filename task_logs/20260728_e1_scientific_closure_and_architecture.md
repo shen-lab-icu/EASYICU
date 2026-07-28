@@ -96,3 +96,124 @@ and a brand-new development batch.
 - Exact actual cost for the interrupted historical call cannot be reconstructed; reports must preserve it as unknown and show a conservative upper bound separately.
 - Historical duplicate artifacts are not deleted. Storage deduplication is a separate migration and must not mutate evidence-of-record.
 - Submission-grade modelling choices and figure polish are validated through the new E1 sensitivity/acceptance contracts; the old E1 figures remain diagnostic.
+
+---
+
+# Round J — Codex corrections to the owner-coverage tool, Step 02 receipt, figure capability
+
+Zero Provider calls. No image rebuilt, no run started, nothing pushed.
+
+## J1–J3. The pre-run coverage replay was over-stating three ways
+
+Codex ran `tools/owner_coverage_replay.py` and got a stderr note followed by a
+precise coverage number. Both defects reproduced locally.
+
+**Scoring a plan it had modified.** On a validation failure the tool deleted
+`robustness_specs` and scanned the remainder. Reproduced with a plan whose only
+defect was an unresolvable robustness spec: the tool printed the note to stderr
+and `05_… -> owned` to stdout. A caveat on one stream and a step-precise answer
+on the other is not a warning. `load_plan` now raises `PlanNotScannable`
+(`invalid_plan`); `main` returns 2 and prints no rows and no tally — asserted on
+both streams.
+
+**Reporting `coder` for what it could not decide.** Executors whose readable
+schema is fixed by the producing step need the host's `resolved_bindings`.
+Offline they decline by construction. New verdict `unknown_runtime_binding`,
+derived structurally: a step whose declared inputs include a typed product
+another step in the same plan promises, and for which the snapshot carries no
+bindings. `artifact:` inputs are excluded — the locked cohort's schema is host
+knowledge. On the real E1 plan this moves 3 of 10 steps out of a verdict the
+tool could not support.
+
+**Typed `SelectionContextSnapshot`** carries plan, per-step parent bindings and
+real receipt obligations. Obligations are compiled by
+`compile_flag_only_plausibility_scope` — the production compiler — never
+re-derived. Supplying them turns `conditional_receipt` into a definite answer in
+either direction (both asserted).
+
+**Coverage is not a gate.** `--require-deterministic <step_id>` is repeatable and
+makes it one (exit 1 on shortfall; exit 2 if the protocol names a step the plan
+does not contain). Without it the report says it is advisory: an open-ended
+scientific step may legitimately go to the Coder. 20 tests.
+
+## J4. Step 02 — the decline was about attributability, not capability
+
+`descriptive_cohort_summary` can compute the flag-only receipt. It declined
+because `flag_only_plausibility_obligation_findings` proves the obligation from
+the source that will run, and this executor's entrypoint is a single import
+call ⇒ `plausibility_check_not_attributable`. Verified against the real gate.
+
+The receipt comparisons are now rendered into the entrypoint over the same frame
+the summary is built from (`load_cohort_summary_frame` exported so the cohort is
+read once), and the entrypoint performs the `step_summary.json` write itself —
+the gate checks the destination as directory **and** filename **and** key, so a
+write inside an imported helper is not attributable to it. Correctness stays
+host-side: `_verified_plausibility_audit` raises before any summary exists.
+Both the obligation gate and the post-execution receipt gate return 0 findings.
+
+### Receipt had no denominator
+
+An entirely missing column and a fully observed, entirely in-range column emit
+byte-identical receipts (`below=0, above=0, out_of_range_n=0`); the gate only
+checks `total == below + above`. `plausibility_obligation`'s own docstring
+already states that "no out-of-range rows" and "we never looked" are different
+facts — the receipt lost that distinction one level down. All four host
+renderers now emit `compared_n` and `observed_n`.
+
+**Not done, deliberately:** the gate does not yet *require* `compared_n`.
+Coder-written receipts predate the field, and making it mandatory would
+introduce a fail-close that was not requested. Recorded as an open decision.
+
+14 tests, including a partly-recorded column (`compared_n == 2` of 4 rows, cohort
+still 4) and an entirely missing one (`compared_n == 0`).
+
+## J5. Figure ownership by required/optional typed input capability
+
+All four figure executors decided ownership with `tuple(step.inputs) == <its
+constant>` — order-sensitive, while every renderer looks bindings up by key and
+compares the manifest as a set. New owner
+`execution/runners/figure_input_capability.py`: `TypedInputCapability(required,
+optional)` with `admits`/`admits_step`. Order-independent; still refuses an
+unknown input (a step naming an extra table is asking for a figure that reads
+it), a missing required input, duplicates, and any contract/declaration
+mismatch.
+
+**Every renderer's `optional` is empty today**, asserted by a test. Each indexes
+every binding it declares; declaring one optional would turn a clean decline
+into a sandbox crash. So this does not by itself make E1's
+`04_missingness_and_measurement_audit_figure` ownable — that plan declares one
+audit table and the renderer needs two. That is the plan not promising the
+second table, which the E1 protocol's three-product requirement addresses;
+the renderer must not cover for it.
+
+**Genuine remaining gap:** `05_primary_adjusted_association_figure` (forest) and
+`06_robustness_sensitivity_figure` have no renderer at all. That is missing
+capability, not a matching rule.
+
+19 tests.
+
+## Attribution of test failures
+
+`tests/research_agent` full sweep: 32 failed / 7686 passed (52 min); the prior
+recorded baseline was 74 failed. Every failure visible in the captured tail is
+in the recorded baseline list.
+
+For the focused suites, a detached worktree at `8e038d7` (never `git stash`) was
+used as the baseline. Before fixing: 4 newly failing, all mine (3 receipt-shape
+assertions from `compared_n`, 1 obsolete abstention test). The 9
+`test_flag_only_plausibility_repair` failures (`ImportError:
+_records_out_of_range_evidence`) are present at baseline. After fixing, the
+focused suites are green.
+
+Two tests changed meaning rather than being deleted, because their principle
+still holds and only their instance went stale:
+
+- `test_standard_executor_abstains_when_it_cannot_emit_required_receipt` and
+  `test_the_report_cannot_claim_an_owner_the_selector_declined` moved from the
+  cohort summary (now selected) to a figure step, which still genuinely cannot
+  emit a receipt.
+- `test_owner_rejects_reordered_or_widened_contract` split: reordering is now
+  asserted *accepted*, widening/narrowing still refused.
+
+`tests/test_owner_coverage_replay.py`'s receipt-gated fixture moved for the same
+reason, and gained a test asserting the E1 Step 02 shape is now owned.

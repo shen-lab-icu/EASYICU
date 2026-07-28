@@ -26,6 +26,7 @@ from ...figures.publication import (
     save_publication_figure,
 )
 from ...schema import AnalysisStep
+from .figure_input_capability import TypedInputCapability
 
 __all__ = [
     "PREVALENCE_OUTCOME_FIGURE_INPUT",
@@ -74,22 +75,22 @@ def _figure_product(value: Any) -> str | None:
     return product
 
 
+#: One table, read whole; there is nothing this renderer could do without it.
+PREVALENCE_OUTCOME_FIGURE_CAPABILITY = TypedInputCapability(
+    required=frozenset({PREVALENCE_OUTCOME_FIGURE_INPUT}),
+)
+
+
 def prevalence_outcome_figure_executor_owns_step(step: AnalysisStep) -> bool:
     """Return whether every scientific choice is fixed by the typed contract."""
 
     products = [_figure_product(value) for value in step.expected_outputs]
-    contracts = list(step.input_consumption_contracts)
     return bool(
         step.planned_analysis_role == "auxiliary"
         and _method_head(step.method) == "visualization"
-        and list(step.inputs) == [PREVALENCE_OUTCOME_FIGURE_INPUT]
+        and PREVALENCE_OUTCOME_FIGURE_CAPABILITY.admits_step(step)
         and len(products) == 1
         and products[0] in _SUPPORTED_FIGURE_PRODUCTS
-        and len(contracts) == 1
-        and contracts[0].input_key == PREVALENCE_OUTCOME_FIGURE_INPUT
-        and contracts[0].mode == "all_rows"
-        and contracts[0].role_column is None
-        and not contracts[0].expected_roles
         and not step.model_requirements
         and step.table_one_spec is None
         and step.trajectory_stability_spec is None
