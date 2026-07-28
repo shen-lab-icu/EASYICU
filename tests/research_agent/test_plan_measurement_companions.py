@@ -268,6 +268,10 @@ def test_current_plan_authority_selects_immutable_closure_evidence(tmp_path):
         plan=closed,
         prompt_pack_version="test/v1",
     )
+    # Execution attaches host-only private bindings after the public plan has
+    # been serialized. They are not scientific plan content and must not make
+    # the immutable public authority appear stale.
+    closed.steps[0]._table_one_execution_binding = object()
 
     authority = resolve_registered_plan_authority(
         run_dir=tmp_path,
