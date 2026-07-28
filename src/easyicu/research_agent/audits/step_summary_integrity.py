@@ -849,11 +849,11 @@ class StepSummaryIntegrityValidator:
         """Find an agent-declared provenance block wherever it was written.
 
         Reading only the top level made *where* the block sits decide whether a
-        step passed.  On the 2026-07-28 E1 run the Coder emitted a complete and
-        correct receipt -- ``source='COHORT_PARQUET'``, both pairs checked,
-        ``invalid_pair_n``/``discordant_n`` zero over all 94,458 rows -- nested
-        under ``analysis``.  The gate read the top level, saw nothing, and
-        failed the step.  A correct answer must not be rejected for its address.
+        step passed.  A Coder emitted a complete and correct receipt -- declared
+        source, every pair checked, the invalid and discordant counts zero over
+        the whole frame -- nested one level down under ``analysis``.  The gate
+        read the top level, saw nothing, and failed the step.  A correct answer
+        must not be rejected for its address.
 
         This is a *tamper* lookup, not an authority lookup: the host replays
         these facts itself, so a block found here is only ever compared against
