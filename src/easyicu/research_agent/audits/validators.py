@@ -5666,7 +5666,6 @@ class PrimaryModelContractValidator:
                 declared_categorical.update(
                     cls._normalise(value) for value in raw if str(value or "").strip()
                 )
-
         cells: List[Dict[str, Any]] = []
         for covariate in covariates:
             if covariate not in frame.columns:
@@ -5679,8 +5678,9 @@ class PrimaryModelContractValidator:
                     .map(cls._normalise)
                     .eq(cls._normalise(covariate))
                 ]
-                terms = [str(value) for value in source_rows.get("term", [])]
-                modeled_as_categorical = len(source_rows) > 1 or any(
+                source_rows = source_rows[~source_rows["_term_role"].eq("availability")]
+                terms = {str(value) for value in source_rows.get("term", [])}
+                modeled_as_categorical = len(terms) > 1 or any(
                     re.search(r"(?:\bC\s*\(|\[T\.|one[_ -]?hot|dummy)", term, re.I)
                     for term in terms
                 )

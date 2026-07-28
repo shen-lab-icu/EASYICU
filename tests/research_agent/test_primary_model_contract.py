@@ -1462,6 +1462,57 @@ def test_primary_model_contract_detects_unreported_zero_event_category(
     assert "zero_cell_separation_requires_penalized_fit" in issues
 
 
+def test_numeric_covariate_availability_term_is_not_a_categorical_encoding():
+    frame = pd.DataFrame(
+        {
+            "death": [0, 1] * 20,
+            "charlson_max": list(range(20)) * 2,
+        }
+    )
+    frame.loc[frame["charlson_max"].isin([17, 18]), "death"] = 0
+    coefficients = pd.DataFrame(
+        [
+            {
+                "source_variable": "charlson_max",
+                "term": "charlson_max",
+                "_term_role": "adjustment",
+            },
+            {
+                "source_variable": "charlson_max",
+                "term": "charlson_missing",
+                "_term_role": "availability",
+            },
+        ]
+    )
+    coefficients = pd.concat([coefficients, coefficients], ignore_index=True)
+    contract = {
+        "baseline_missing_policy": "explicit_missing_category",
+        "analysis_set": "source_aware",
+    }
+
+    cells = PrimaryModelContractValidator._categorical_zero_event_cells(
+        frame=frame,
+        outcome="death",
+        covariates=["charlson_max"],
+        contract=contract,
+        coefficient_rows=coefficients,
+    )
+    assert cells == []
+
+    encoded = coefficients.assign(
+        term=["charlson_max[T.17]", "charlson_max[T.18]"] * 2,
+        _term_role=["adjustment"] * 4,
+    )
+    encoded_cells = PrimaryModelContractValidator._categorical_zero_event_cells(
+        frame=frame,
+        outcome="death",
+        covariates=["charlson_max"],
+        contract=contract,
+        coefficient_rows=encoded,
+    )
+    assert {cell["level"] for cell in encoded_cells} >= {"17", "18"}
+
+
 def test_primary_model_contract_replays_actual_adjustment_zero_cell_without_prior_plan(
     tmp_path: Path,
 ):
