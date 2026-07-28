@@ -91,43 +91,76 @@ def test_a_step_no_owner_claims_reports_every_candidate_declining() -> None:
     )
 
 
-def test_enriching_a_missingness_step_shows_scope_kept_but_contract_lost() -> None:
-    """The E1 Step 04 shape: inputs still fine, every closed contract gone."""
+def _missingness_step(**overrides: Any) -> AnalysisStep:
+    payload: Dict[str, Any] = {
+        "step_id": "04_missingness_and_event_timing_audit",
+        "intent": "Audit per-concept measurement availability.",
+        "method": "missingness_measurement_audit",
+        "planned_analysis_role": "auxiliary",
+        "inputs": [
+            "artifact:analysis_cohort",
+            "sep3_sofa2_max",
+            "sep3_sofa2_measured",
+        ],
+        "expected_outputs": ["table:missingness_measurement_audit"],
+    }
+    payload.update(overrides)
+    return AnalysisStep.model_validate(payload)
 
-    supported = AnalysisStep(
-        step_id="04_missingness_and_event_timing_audit",
-        intent="Audit per-concept measurement availability.",
-        method="missingness_measurement_audit",
-        planned_analysis_role="auxiliary",
-        inputs=["artifact:analysis_cohort", "sep3_sofa2_max", "sep3_sofa2_measured"],
-        expected_outputs=["table:missingness_measurement_audit"],
+
+def test_the_report_names_the_exact_contract_that_claimed_the_step() -> None:
+    """The E1 Step 04 shape: which of the closed contracts matched, by name."""
+
+    compact = _kinds(_report(_missingness_step()))
+    enriched = _kinds(
+        _report(
+            _missingness_step(
+                method="measurement_bias_audit",
+                expected_outputs=[
+                    "table:missingness_measurement_audit",
+                    "table:measurement_process_audit",
+                    "table:exposure_component_completeness_audit",
+                ],
+            )
+        )
     )
-    enriched = supported.model_copy(
-        update={
-            "method": "measurement_bias_audit",
-            "expected_outputs": [
-                "table:missingness_measurement_audit",
-                "table:measurement_process_audit",
-                "table:exposure_component_completeness_audit",
-            ],
-        }
+
+    assert compact["missingness_audit"] is True
+    assert compact["missingness_audit:compact_contract"] is True
+    assert compact["missingness_audit:measurement_bias_contract"] is False
+    assert enriched["missingness_audit"] is True
+    assert enriched["missingness_audit:measurement_bias_contract"] is True
+    assert enriched["missingness_audit:compact_contract"] is False
+
+
+def test_an_unrecognised_enrichment_shows_scope_kept_but_contract_lost() -> None:
+    """Inputs still legal, every closed contract gone — the readable decline."""
+
+    # A product set no contract covers is the case the old record could not
+    # distinguish from "this analysis is not deterministic at all".
+    unrecognised = _kinds(
+        _report(
+            _missingness_step(
+                method="measurement_bias_audit",
+                expected_outputs=[
+                    "table:missingness_measurement_audit",
+                    "table:measurement_process_audit",
+                    "table:exposure_component_completeness_audit",
+                    "table:informative_visit_process_model",
+                ],
+            )
+        )
     )
 
-    supported_kinds = _kinds(_report(supported))
-    enriched_kinds = _kinds(_report(enriched))
-
-    assert supported_kinds["missingness_audit"] is True
-    assert supported_kinds["missingness_audit:compact_contract"] is True
-    # Enrichment keeps the inputs legal and loses every contract: that is the
-    # distinction a reader needs, and the one the old record could not make.
-    assert enriched_kinds["missingness_audit"] is False
-    assert enriched_kinds["missingness_audit:input_scope"] is True
+    assert unrecognised["missingness_audit"] is False
+    assert unrecognised["missingness_audit:input_scope"] is True
     assert not any(
-        enriched_kinds[key]
+        unrecognised[key]
         for key in (
             "missingness_audit:availability_contract",
             "missingness_audit:complete_case_contract",
             "missingness_audit:compact_contract",
+            "missingness_audit:measurement_bias_contract",
         )
     )
 
