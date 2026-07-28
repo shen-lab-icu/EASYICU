@@ -1189,7 +1189,7 @@ def test_initial_literal_response_fails_transport_before_candidate_persistence(
     llm = _CaptureLLM(["{}"])
     receipt_path = tmp_path / "provider_receipt.json"
     budget = StepProviderCallBudget(
-        2,
+        1,
         step_id="ordered_exposure_qc",
         receipt_path=receipt_path,
     )
@@ -1208,6 +1208,78 @@ def test_initial_literal_response_fails_transport_before_candidate_persistence(
     assert budget.categories == ("initial_generation",)
     assert budget.initial_generation_resume_status() == "failed"
     assert receipt_path.exists()
+
+
+def test_incomplete_initial_response_gets_one_audited_regeneration(ra, tmp_path):
+    llm = _CaptureLLM(["{}", "import os\nvalue = 1\n"])
+    receipt_path = tmp_path / "provider_receipt.json"
+    budget = StepProviderCallBudget(
+        3,
+        step_id="ordered_exposure_qc",
+        receipt_path=receipt_path,
+    )
+    persisted = []
+    reservations = []
+
+    def persist(code):  # noqa: ANN001, ANN202
+        persisted.append(code)
+        return ContentRef(
+            sha256="a" * 64,
+            size_bytes=len(code.encode("utf-8")),
+            media_type="text/x-python",
+        )
+
+    code = CoderAgent(llm).run(
+        context=_wide_context(ra, n_families=1),
+        step=_quality_step(ra, n_families=1),
+        provider_budget=budget,
+        initial_generation_binding={"schema_version": "test"},
+        persist_candidate=persist,
+        on_initial_reserved=lambda transport_id, binding_sha256: reservations.append(
+            (transport_id, binding_sha256)
+        ),
+    )
+
+    assert code == "import os\nvalue = 1"
+    assert persisted == [code]
+    assert budget.categories == ("initial_generation", "initial_generation")
+    assert [entry["transport"]["state"] for entry in budget.initial_generation_entries] == [
+        "failed",
+        "completed",
+    ]
+    assert budget.initial_generation_entries[0]["transport"]["error_type"] == (
+        "IncompleteCoderResponseError"
+    )
+    assert len(reservations) == 2
+    assert reservations[0][0] != reservations[1][0]
+    assert "Regenerate the entire script" in llm.calls[1][0][-1].content
+
+
+def test_two_incomplete_initial_responses_fail_without_a_third_call(ra, tmp_path):
+    llm = _CaptureLLM(["{}", "still not Python"])
+    budget = StepProviderCallBudget(
+        3,
+        step_id="ordered_exposure_qc",
+        receipt_path=tmp_path / "provider_receipt.json",
+    )
+
+    with pytest.raises(ValueError, match="not a complete executable Python"):
+        CoderAgent(llm).run(
+            context=_wide_context(ra, n_families=1),
+            step=_quality_step(ra, n_families=1),
+            provider_budget=budget,
+            initial_generation_binding={"schema_version": "test"},
+            persist_candidate=lambda code: pytest.fail(
+                f"incomplete transport persisted code: {code}"
+            ),
+        )
+
+    assert len(llm.calls) == 2
+    assert budget.categories == ("initial_generation", "initial_generation")
+    assert [entry["transport"]["state"] for entry in budget.initial_generation_entries] == [
+        "failed",
+        "failed",
+    ]
 
 
 def test_interrupted_initial_generation_records_terminal_transport_failure(

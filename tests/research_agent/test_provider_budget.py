@@ -340,6 +340,34 @@ def test_terminal_initial_generation_cannot_restart_without_explicit_authority(
     assert len(budget.initial_generation_entries) == 1
 
 
+def test_local_retry_authority_requires_the_exact_failed_validation(tmp_path):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="local_retry")
+    budget = StepProviderCallBudget(3, step_id="local_retry", receipt_path=path)
+    transport_id = budget.reserve_initial_generation({"authority": "A"})
+    budget.consume("initial_generation")
+    budget.fail_initial_generation_transport(
+        provider_transport_id=transport_id,
+        error_type="IncompleteCoderResponseError",
+    )
+
+    assert (
+        budget.authorize_failed_initial_generation_retry(
+            error_type="KeyboardInterrupt",
+            max_generation_epochs=2,
+        )
+        is False
+    )
+    assert budget.authorize_failed_initial_generation_retry(
+        error_type="IncompleteCoderResponseError",
+        max_generation_epochs=2,
+    )
+    second_transport = budget.reserve_initial_generation({"authority": "A"})
+
+    assert second_transport != transport_id
+    assert len(budget.initial_generation_entries) == 2
+    assert budget.initial_generation_resume_status() == "unpaid_pending"
+
+
 def test_explicit_restart_cannot_bypass_paid_pending_initial_generation(tmp_path):
     path = provider_call_budget_receipt_path(tmp_path, step_id="paid_pending")
     first = StepProviderCallBudget(3, step_id="paid_pending", receipt_path=path)
