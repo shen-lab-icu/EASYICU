@@ -76,6 +76,80 @@ def test_meter_falls_back_to_heuristic_when_no_last_usage(ra):
     assert rec.completion_tokens >= 1
 
 
+def test_meter_recovers_all_completed_receipts_across_resume(ra, tmp_path):
+    from easyicu.research_agent.providers.llm import LLMMessage
+
+    class _ClientWithUsage:
+        name = "priced"
+
+        def complete_with_usage(self, messages, **_kwargs):
+            return "OK", {
+                "prompt_tokens": 120,
+                "completion_tokens": 30,
+                "total_tokens": 150,
+            }
+
+    runtime_dir = tmp_path / ".runtime"
+    first = ra.CostMeter(
+        runtime_dir=runtime_dir,
+        price_table={"priced": (1.0, 2.0)},
+    )
+    ra.MeteredClient(
+        _ClientWithUsage(),
+        role="planner",
+        meter=first,
+    ).complete([LLMMessage(role="user", content="first")])
+
+    resumed = ra.CostMeter(
+        runtime_dir=runtime_dir,
+        price_table={"priced": (1.0, 2.0)},
+    )
+    assert len(resumed.records) == 1
+    assert resumed.summary()["total_tokens"] == 150
+
+    ra.MeteredClient(
+        _ClientWithUsage(),
+        role="coder",
+        meter=resumed,
+    ).complete([LLMMessage(role="user", content="second")])
+    summary = resumed.summary()
+    assert len(resumed.records) == 2
+    assert summary["n_calls"] == 2
+    assert summary["total_tokens"] == 300
+    assert summary["usage_accounting"]["provider_reported"]["n_calls"] == 2
+    assert summary["usage_accounting"]["provider_reported"]["total_tokens"] == 300
+
+
+def test_cost_summary_separates_unknown_usage_from_upper_bound(ra, tmp_path):
+    from easyicu.research_agent.providers.llm import LLMMessage
+
+    meter = ra.CostMeter(
+        runtime_dir=tmp_path / ".runtime",
+        price_table={"priced": (1.0, 2.0)},
+    )
+    receipt = meter.begin_transport(
+        role="repair",
+        model="priced",
+        messages=[LLMMessage(role="user", content="interrupted")],
+        max_tokens=200,
+        temperature=0.0,
+    )
+    meter.finish_transport(
+        receipt,
+        state="cancelled",
+        error_type="KeyboardInterrupt",
+    )
+
+    summary = meter.summary()
+    accounting = summary["usage_accounting"]
+    assert accounting["provider_reported"]["n_calls"] == 0
+    assert accounting["usage_unknown"] == {
+        "n_calls": 1,
+        "states": {"cancelled": 1},
+    }
+    assert accounting["conservative_upper_bound"]["total_tokens"] > 200
+
+
 def test_estimated_cost_uses_price_table(ra):
     meter = ra.CostMeter(price_table={"toy-model": (1.0, 2.0)})
     rec = meter.record(

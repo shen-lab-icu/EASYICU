@@ -362,6 +362,58 @@ def test_failed_attempt_remains_conservatively_accounted(tmp_path):
     assert snapshot["tasks"][0]["calls"][0]["state"] == "failed_usage_unknown"
 
 
+def test_task_accounting_separates_reported_unknown_and_upper_bound(tmp_path):
+    from easyicu.research_agent.authority.provider_hard_stop import (
+        consume_active_provider_hard_stop_attempt,
+        provider_hard_stop_call_scope,
+    )
+
+    ledger = _ledger(tmp_path)
+    task = ledger.start_task("E1")
+    with provider_hard_stop_call_scope(
+        task=task,
+        role="planner",
+        model="test-model",
+        messages=_message(),
+        max_tokens=32,
+    ) as call:
+        consume_active_provider_hard_stop_attempt()
+        call.complete(
+            {
+                "prompt_tokens": 100,
+                "completion_tokens": 20,
+                "total_tokens": 120,
+            }
+        )
+    with provider_hard_stop_call_scope(
+        task=task,
+        role="repair",
+        model="test-model",
+        messages=_message(),
+        max_tokens=32,
+    ) as call:
+        consume_active_provider_hard_stop_attempt()
+        call.fail("KeyboardInterrupt")
+
+    accounting = task.accounting_summary()
+
+    assert accounting["provider_reported"] == {
+        "n_calls": 1,
+        "prompt_tokens": 100,
+        "completion_tokens": 20,
+        "total_tokens": 120,
+        "estimated_cost_usd": pytest.approx(0.00014),
+    }
+    assert accounting["usage_unknown"]["n_calls"] == 1
+    assert accounting["usage_unknown"]["states"] == {"failed_usage_unknown": 1}
+    assert accounting["conservative_upper_bound"]["n_calls"] == 2
+    assert accounting["conservative_upper_bound"]["total_tokens"] > 120
+    assert (
+        accounting["conservative_upper_bound"]["source"]
+        == "durable_provider_hard_stop_ledger"
+    )
+
+
 def test_total_only_usage_is_counted_at_the_more_expensive_rate(tmp_path):
     from easyicu.research_agent.authority.provider_hard_stop import (
         consume_active_provider_hard_stop_attempt,

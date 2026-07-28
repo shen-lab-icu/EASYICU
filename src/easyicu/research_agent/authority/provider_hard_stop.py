@@ -880,6 +880,82 @@ class ProviderHardStopLedger:
             payload["sha256"] = _payload_digest(payload)
             return json.loads(json.dumps(payload, allow_nan=False))
 
+    def task_accounting_summary(self, task_id: str) -> Dict[str, object]:
+        """Return actual, unknown, and conservative accounting for one task."""
+
+        with self._lock:
+            task = self._task_locked(task_id)
+            calls = task.get("calls")
+            if not isinstance(calls, list):
+                raise ProviderHardStopLedgerError(
+                    "Provider hard-stop call history is invalid"
+                )
+            reported_calls = 0
+            reported_prompt = 0
+            reported_completion = 0
+            reported_total = 0
+            reported_cost = 0.0
+            unknown_calls = 0
+            unknown_accounted_tokens = 0
+            unknown_accounted_cost = 0.0
+            accounted_tokens = 0
+            accounted_cost = 0.0
+            unknown_states: Dict[str, int] = {}
+            for raw_call in calls:
+                if not isinstance(raw_call, Mapping):
+                    raise ProviderHardStopLedgerError(
+                        "Provider hard-stop call record is invalid"
+                    )
+                call_tokens = int(raw_call.get("accounted_tokens") or 0)
+                call_cost = float(
+                    raw_call.get("accounted_estimated_cost_usd") or 0.0
+                )
+                accounted_tokens += call_tokens
+                accounted_cost += call_cost
+                raw_reported_total = raw_call.get("reported_total_tokens")
+                if raw_reported_total is not None:
+                    reported_calls += 1
+                    reported_prompt += int(
+                        raw_call.get("reported_prompt_tokens") or 0
+                    )
+                    reported_completion += int(
+                        raw_call.get("reported_completion_tokens") or 0
+                    )
+                    reported_total += int(raw_reported_total or 0)
+                    reported_cost += call_cost
+                    continue
+                unknown_calls += 1
+                unknown_accounted_tokens += call_tokens
+                unknown_accounted_cost += call_cost
+                state = str(raw_call.get("state") or "unknown")
+                unknown_states[state] = unknown_states.get(state, 0) + 1
+            return {
+                "schema_version": "easyicu.provider_task_cost_accounting/1",
+                "task_id": str(task_id),
+                "provider_reported": {
+                    "n_calls": reported_calls,
+                    "prompt_tokens": reported_prompt,
+                    "completion_tokens": reported_completion,
+                    "total_tokens": reported_total,
+                    "estimated_cost_usd": round(reported_cost, 12),
+                },
+                "usage_unknown": {
+                    "n_calls": unknown_calls,
+                    "accounted_tokens": unknown_accounted_tokens,
+                    "accounted_estimated_cost_usd": round(
+                        unknown_accounted_cost,
+                        12,
+                    ),
+                    "states": dict(sorted(unknown_states.items())),
+                },
+                "conservative_upper_bound": {
+                    "n_calls": len(calls),
+                    "total_tokens": accounted_tokens,
+                    "estimated_cost_usd": round(accounted_cost, 12),
+                    "source": "durable_provider_hard_stop_ledger",
+                },
+            }
+
 
 class TaskProviderHardStop:
     """One task-scoped view over the shared durable batch ledger."""
@@ -890,6 +966,11 @@ class TaskProviderHardStop:
 
     def assert_active(self) -> float:
         return self.ledger.assert_task_active(self.task_id)
+
+    def accounting_summary(self) -> Dict[str, object]:
+        """Return the durable accounting view for this task."""
+
+        return self.ledger.task_accounting_summary(self.task_id)
 
     def cap_timeout(self, requested_seconds: float) -> float:
         remaining = self.assert_active()
