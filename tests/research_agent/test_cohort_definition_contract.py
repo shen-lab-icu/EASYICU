@@ -76,6 +76,20 @@ def test_structured_cohort_passes():
     assert _cohort_definition_contract_findings(plan) == []
 
 
+def test_explicit_all_input_rows_cohort_passes():
+    plan = _plan(
+        CohortDefinition(name="primary", selection_mode="all_input_rows"),
+        step_id="01_cohort_definition",
+        step_intent="Declare the sealed input cohort as the primary population.",
+        method="cohort_definition",
+        expected_outputs=["artifact:analysis_cohort"],
+    )
+
+    assert _plan_expects_analysis_cohort(plan)
+    assert not _cohort_definition_is_empty(plan)
+    assert _cohort_definition_contract_findings(plan) == []
+
+
 def test_no_cohort_step_does_not_require_structured_cohort():
     """A legitimate whole-universe analysis (no cohort/eligibility step) must
     not be forced to declare a structured cohort."""

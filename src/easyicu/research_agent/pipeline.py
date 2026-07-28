@@ -155,6 +155,7 @@ from .planning.analysis_blueprint import (
     render_analysis_blueprint_for_prompt,
     validate_plan_against_analysis_blueprint,
 )
+from .planning.cohort_contract import cohort_definition_has_explicit_selection
 from .reporting.article_contract import (
     build_article_analysis_contract,
     validate_plan_against_article_contract,
@@ -1632,6 +1633,9 @@ class ResearchAgentPipeline:
         # used to decide kind-specific reporting-checklist applicability rather
         # than relying on fragile manuscript wording. Optional outside the bench.
         self._benchmark_task_kind = config.task_kind
+        self._required_primary_cohort_selection_mode = (
+            config.required_primary_cohort_selection_mode
+        )
         # O15 — Three-role reviewer round (statistician / clinician /
         # methodologist) driven off already-computed evidence and
         # findings. Deterministic; no extra LLM calls. Default ON.
@@ -2653,6 +2657,26 @@ class ResearchAgentPipeline:
                     ),
                 )
             )
+        if self._required_primary_cohort_selection_mode is not None:
+            population_contract = (
+                "CALLER-BOUND PRIMARY COHORT MODE: set "
+                "AnalysisPlan.cohort.selection_mode exactly to "
+                f"{self._required_primary_cohort_selection_mode!r}. "
+            )
+            if self._required_primary_cohort_selection_mode == "all_input_rows":
+                population_contract += (
+                    "Keep cohort.inclusion and cohort.exclusion empty; do not "
+                    "invent a completeness, anchor, or proxy eligibility filter."
+                )
+            else:
+                population_contract += (
+                    "Declare at least one typed inclusion/exclusion predicate."
+                )
+            planning_contract_context = "\n\n".join(
+                value
+                for value in (planning_contract_context, population_contract)
+                if value
+            )
 
         for client in self._iter_mock_clients(llm):
             client.context = agent_context
@@ -3220,6 +3244,19 @@ class ResearchAgentPipeline:
                     blueprint=analysis_blueprint,
                 )
             )
+        if self._required_primary_cohort_selection_mode is not None:
+            observed_mode = str(getattr(plan.cohort, "selection_mode", "") or "")
+            if observed_mode != self._required_primary_cohort_selection_mode:
+                raise CohortAuthorityError(
+                    "Planner primary cohort selection mode does not match the "
+                    "caller-bound contract: expected "
+                    f"{self._required_primary_cohort_selection_mode!r}, observed "
+                    f"{observed_mode!r}"
+                )
+            if not cohort_definition_has_explicit_selection(plan.cohort):
+                raise CohortAuthorityError(
+                    "Planner primary cohort selection is not explicit"
+                )
         plan_path = (
             migrated_plan_path or reused_plan_path or (run_dir / "analysis_plan.json")
         )

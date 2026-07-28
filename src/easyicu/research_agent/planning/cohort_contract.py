@@ -46,6 +46,7 @@ Aggregation = Literal[
     "count",
     "sum",
 ]
+CohortSelectionMode = Literal["predicate_filtered", "all_input_rows"]
 PredicateOp = Literal[
     "==",
     "!=",
@@ -150,15 +151,21 @@ class CohortDefinition:
     exclusion: tuple[ConceptPredicate, ...] = ()
     derived_from_named: Optional[str] = None
     locked_at: str = "not_locked"
+    selection_mode: CohortSelectionMode = "predicate_filtered"
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        payload = {
             "name": self.name,
             "inclusion": [pred.to_dict() for pred in self.inclusion],
             "exclusion": [pred.to_dict() for pred in self.exclusion],
             "derived_from_named": self.derived_from_named,
             "locked_at": self.locked_at,
         }
+        # Preserve every legacy predicate-filtered authority digest. The new
+        # coordinate is serialized only for an explicit all-row decision.
+        if self.selection_mode != "predicate_filtered":
+            payload["selection_mode"] = self.selection_mode
+        return payload
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "CohortDefinition":
@@ -182,6 +189,9 @@ class CohortDefinition:
                 else None
             ),
             locked_at=str(data.get("locked_at") or "not_locked"),
+            selection_mode=str(
+                data.get("selection_mode") or "predicate_filtered"
+            ),  # type: ignore[arg-type]
         )
 
 
@@ -325,8 +335,32 @@ def validate_concept_predicate(predicate: ConceptPredicate) -> None:
 def validate_cohort_definition(definition: CohortDefinition) -> None:
     if not definition.name:
         raise CohortSchemaError("cohort.name is required")
+    if definition.selection_mode not in {"predicate_filtered", "all_input_rows"}:
+        raise CohortSchemaError("cohort.selection_mode is invalid")
+    if definition.selection_mode == "all_input_rows" and (
+        definition.inclusion or definition.exclusion
+    ):
+        raise CohortSchemaError(
+            "cohort.selection_mode='all_input_rows' requires empty inclusion "
+            "and exclusion predicates"
+        )
     for pred in [*definition.inclusion, *definition.exclusion]:
         validate_concept_predicate(pred)
+
+
+def cohort_definition_has_explicit_selection(
+    definition: CohortDefinition | None,
+) -> bool:
+    """Whether a plan selected all rows or supplied filtering predicates."""
+
+    return bool(
+        definition is not None
+        and (
+            definition.selection_mode == "all_input_rows"
+            or definition.inclusion
+            or definition.exclusion
+        )
+    )
 
 
 def expand_named_cohort(

@@ -702,6 +702,50 @@ def test_materialize_no_definition_returns_no_file(tmp_path: Path) -> None:
     assert not (tmp_path / "cohort_analysis.parquet").exists()
 
 
+def test_materialize_explicit_all_input_rows_preserves_denominator(
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.cohort.schema import (
+        CohortDefinition,
+        materialize_locked_analysis_cohort,
+    )
+
+    universe = pd.DataFrame({"stay_id": [1, 2], "adm": ["A", None]})
+    universe_path = tmp_path / "cohort.parquet"
+    universe.to_parquet(universe_path, index=False)
+
+    result = materialize_locked_analysis_cohort(
+        run_dir=tmp_path,
+        plan=_plan_with_cohort(
+            CohortDefinition(name="primary", selection_mode="all_input_rows")
+        ),
+        universe_path=universe_path,
+    )
+
+    assert result["status"] == "applied"
+    assert result["n_universe"] == 2
+    assert result["n_cohort"] == 2
+    observed = pd.read_parquet(tmp_path / "cohort_analysis.parquet")
+    pd.testing.assert_frame_equal(observed, universe)
+
+
+def test_all_input_rows_rejects_predicates() -> None:
+    from easyicu.research_agent.cohort.schema import (
+        CohortDefinition,
+        CohortSchemaError,
+        validate_cohort_definition,
+    )
+
+    with pytest.raises(CohortSchemaError, match="requires empty"):
+        validate_cohort_definition(
+            CohortDefinition(
+                name="primary",
+                selection_mode="all_input_rows",
+                inclusion=(_age_predicate(0, 24),),
+            )
+        )
+
+
 def test_materialize_missing_column_falls_back_without_breaking(tmp_path: Path) -> None:
     """A predicate the universe cannot satisfy must not break the run: status
     'error', no parquet, caller falls back to the universe."""
