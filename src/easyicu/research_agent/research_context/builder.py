@@ -63,6 +63,7 @@ from .typed import (
     project_research_context_variables,
 )
 from ..concept_availability import normalize_database_name
+from .observation_semantics import compile_observation_semantics
 from .temporal_semantics import (
     ConceptValidationLayer,
     ICUEpisodeResolver,
@@ -652,6 +653,10 @@ def build_research_context(
             descriptors=descriptors,
             provenance=legacy_materialization_provenance,
         )
+    descriptors = compile_observation_semantics(
+        frame=df,
+        descriptors=descriptors,
+    )
 
     prefs_obj = (
         user_preferences
