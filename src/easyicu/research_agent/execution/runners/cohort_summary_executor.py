@@ -19,11 +19,14 @@ from typing import Any, Dict, Optional, Sequence
 
 import pandas as pd
 
+from ...authority.plausibility import FlagOnlyPlausibilityScope
 from ...schema import AnalysisStep
+from .plausibility_receipt import render_standard_plausibility_receipt_code
 
 __all__ = [
     "cohort_summary_executor_code",
     "cohort_summary_executor_owns_step",
+    "load_cohort_summary_frame",
     "run_cohort_summary_from_env",
 ]
 
@@ -73,20 +76,91 @@ def cohort_summary_executor_owns_step(step: AnalysisStep) -> bool:
     )
 
 
-def cohort_summary_executor_code(step: AnalysisStep) -> str:
-    """Return a small sandbox entrypoint with the exact Planner column scope."""
+def cohort_summary_executor_code(
+    step: AnalysisStep,
+    *,
+    plausibility_scope: FlagOnlyPlausibilityScope | None = None,
+) -> str:
+    """Return a small sandbox entrypoint with the exact Planner column scope.
+
+    When the step owes a flag-only plausibility receipt the comparisons are
+    rendered here rather than performed inside the imported host function.
+    That is not decoration: the pre-execution obligation gate proves the
+    obligation by locating a comparison against a bound read from the sealed
+    contract in the source that will actually run, and a source that only
+    calls a helper is ``not_attributable`` to it.  This executor used to
+    decline every receipt-bearing step for exactly that reason, sending a step
+    the host can compute exactly to the stochastic Coder instead.
+    """
 
     if not cohort_summary_executor_owns_step(step):
         raise ValueError("The step is not owned by the cohort-summary executor")
+    if plausibility_scope is not None:
+        plausibility_scope.require_step(step.step_id)
+    expected_columns = (
+        tuple(plausibility_scope.expected_columns)
+        if plausibility_scope is not None
+        else ()
+    )
+    receipt_code = (
+        render_standard_plausibility_receipt_code(
+            plausibility_scope,
+            frame_name="frame",
+        )
+        if plausibility_scope is not None
+        else ""
+    )
+    if not expected_columns:
+        return textwrap.dedent(f"""
+            from easyicu.research_agent.execution.runners.cohort_summary_executor import (
+                run_cohort_summary_from_env,
+            )
+
+            run_cohort_summary_from_env(
+                declared_columns={_declared_columns(step)!r},
+                typed_cohort_input={_typed_cohort_input(step)!r},
+            )
+            """).strip()
+
     return textwrap.dedent(f"""
+        import hashlib
+        import json
+        import os
+        from pathlib import Path
+
+        import pandas as pd
+
         from easyicu.research_agent.execution.runners.cohort_summary_executor import (
+            load_cohort_summary_frame,
             run_cohort_summary_from_env,
         )
 
-        run_cohort_summary_from_env(
-            declared_columns={_declared_columns(step)!r},
-            typed_cohort_input={_typed_cohort_input(step)!r},
+        declared_columns = {_declared_columns(step)!r}
+        typed_cohort_input = {_typed_cohort_input(step)!r}
+
+        frame, cohort_path = load_cohort_summary_frame(
+            typed_cohort_input=typed_cohort_input,
         )
+
+        {textwrap.indent(receipt_code, " " * 8).strip()}
+
+        summary = run_cohort_summary_from_env(
+            declared_columns=declared_columns,
+            typed_cohort_input=typed_cohort_input,
+            frame=frame,
+            cohort_path=cohort_path,
+            plausibility_expected_columns=plausibility_expected_columns,
+            plausibility_audit=plausibility_audit,
+            emit_step_summary=False,
+        )
+        summary["plausibility_audit"] = plausibility_audit
+        out_dir = Path(os.environ["STEP_OUT_DIR"])
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "step_summary.json").write_text(
+            json.dumps(summary, indent=2, ensure_ascii=False, allow_nan=False),
+            encoding="utf-8",
+        )
+        print(json.dumps(summary, ensure_ascii=False, allow_nan=False))
         """).strip()
 
 
@@ -185,6 +259,84 @@ def _load_typed_cohort(
     return frame, cohort_path
 
 
+def _run_dir() -> Path:
+    out_dir = Path(os.environ["STEP_OUT_DIR"])
+    return Path(os.environ.get("EASYICU_RUN_DIR") or out_dir.parents[2]).resolve()
+
+
+def load_cohort_summary_frame(
+    *,
+    typed_cohort_input: str | None,
+) -> tuple[pd.DataFrame, Path]:
+    """Load the exact bound cohort once, for both the receipt and the summary.
+
+    Exported so the rendered entrypoint can compare plausibility bounds against
+    the same frame the summary is built from, without reading the cohort twice.
+    """
+
+    if typed_cohort_input is None:
+        cohort_path = Path(os.environ["COHORT_PARQUET"]).resolve()
+        return _read_frame(cohort_path), cohort_path
+    return _load_typed_cohort(
+        input_key=typed_cohort_input,
+        run_dir=_run_dir(),
+        resolved_inputs_path=Path(
+            os.environ["EASYICU_RESOLVED_INPUTS_JSON"]
+        ).resolve(),
+    )
+
+
+def _verified_plausibility_audit(
+    audit: Optional[Dict[str, Any]],
+    *,
+    expected_columns: Sequence[str],
+) -> Optional[Dict[str, Any]]:
+    """Accept the rendered receipt only if it covers the exact sealed scope.
+
+    The caller is host-rendered source, but the check stays here so the
+    invariant travels with the summary this function writes rather than
+    depending on every future caller having rendered the block correctly.
+    """
+
+    expected = tuple(str(value) for value in expected_columns)
+    if not expected:
+        if audit:
+            raise RuntimeError(
+                "A plausibility receipt was supplied for a step with no "
+                "flag-only scope"
+            )
+        return None
+    if not isinstance(audit, dict) or set(audit) != set(expected):
+        raise RuntimeError(
+            "Plausibility receipt does not cover the exact sealed scope"
+        )
+    for column, record in audit.items():
+        if not isinstance(record, dict):
+            raise RuntimeError(f"Plausibility receipt for {column} is untyped")
+        below = record.get("below_minimum_n")
+        above = record.get("above_maximum_n")
+        total = record.get("out_of_range_n")
+        compared = record.get("compared_n")
+        counts = (below, above, total, compared)
+        if any(
+            not isinstance(value, int) or isinstance(value, bool) or value < 0
+            for value in counts
+        ):
+            raise RuntimeError(
+                f"Plausibility receipt for {column} lacks non-negative counts"
+            )
+        if total != below + above:
+            raise RuntimeError(
+                f"Plausibility receipt for {column} does not partition its total"
+            )
+        if total > compared:
+            raise RuntimeError(
+                f"Plausibility receipt for {column} flags more values than it "
+                "compared"
+            )
+    return dict(audit)
+
+
 def _load_context(run_dir: Path) -> Dict[str, Any]:
     context_path = Path(
         os.environ.get("EASYICU_RESEARCH_CONTEXT")
@@ -247,8 +399,27 @@ def run_cohort_summary_from_env(
     *,
     declared_columns: Sequence[str],
     typed_cohort_input: str | None,
+    frame: Optional[pd.DataFrame] = None,
+    cohort_path: Optional[Path] = None,
+    plausibility_expected_columns: Sequence[str] = (),
+    plausibility_audit: Optional[Dict[str, Any]] = None,
+    emit_step_summary: bool = True,
 ) -> Dict[str, Any]:
-    """Execute exact descriptive summaries from the standard runner environment."""
+    """Execute exact descriptive summaries from the standard runner environment.
+
+    ``frame``/``cohort_path`` let the rendered entrypoint hand over the cohort
+    it already loaded to compute the plausibility receipt, so the receipt and
+    the summary describe the same bytes and the cohort is read once.
+
+    ``emit_step_summary=False`` returns the summary without writing it, for the
+    receipt-bearing entrypoint that must perform the write in its own source:
+    the obligation gate proves delivery by locating the write of the receipt
+    key into the host's ``step_summary.json``, and a write hidden inside an
+    imported function is not something it can attribute.  Correctness of the
+    receipt is still decided here -- ``_verified_plausibility_audit`` raises
+    before any summary exists -- so moving the write does not move the
+    authority.
+    """
 
     columns = tuple(str(value).strip() for value in declared_columns)
     if not columns or any(not value for value in columns) or len(columns) != len(
@@ -258,20 +429,14 @@ def run_cohort_summary_from_env(
 
     out_dir = Path(os.environ["STEP_OUT_DIR"])
     out_dir.mkdir(parents=True, exist_ok=True)
-    run_dir = Path(
-        os.environ.get("EASYICU_RUN_DIR") or out_dir.parents[2]
-    ).resolve()
-    if typed_cohort_input is None:
-        cohort_path = Path(os.environ["COHORT_PARQUET"]).resolve()
-        frame = _read_frame(cohort_path)
-    else:
-        resolved_inputs_path = Path(
-            os.environ["EASYICU_RESOLVED_INPUTS_JSON"]
-        ).resolve()
-        frame, cohort_path = _load_typed_cohort(
-            input_key=typed_cohort_input,
-            run_dir=run_dir,
-            resolved_inputs_path=resolved_inputs_path,
+    run_dir = _run_dir()
+    verified_audit = _verified_plausibility_audit(
+        plausibility_audit,
+        expected_columns=plausibility_expected_columns,
+    )
+    if frame is None or cohort_path is None:
+        frame, cohort_path = load_cohort_summary_frame(
+            typed_cohort_input=typed_cohort_input,
         )
     missing_columns = [column for column in columns if column not in frame.columns]
     if missing_columns:
@@ -401,6 +566,10 @@ def run_cohort_summary_from_env(
         "adjusted_effect": None,
         "output_files": {"table:cohort_summary": table_path.name},
     }
+    if verified_audit is not None:
+        summary["plausibility_audit"] = verified_audit
+    if not emit_step_summary:
+        return summary
     (out_dir / "step_summary.json").write_text(
         json.dumps(summary, indent=2, ensure_ascii=False, allow_nan=False),
         encoding="utf-8",

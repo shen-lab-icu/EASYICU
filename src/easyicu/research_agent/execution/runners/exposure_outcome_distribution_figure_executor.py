@@ -40,6 +40,7 @@ from ...figures.publication import (
 )
 from ...schema import AnalysisStep
 from .planner_display_labels import planner_binary_level_labels
+from .figure_input_capability import TypedInputCapability
 
 __all__ = [
     "EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_INPUTS",
@@ -54,6 +55,11 @@ _DISTRIBUTION_INPUT = "table:exposure_outcome_distribution"
 EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_INPUTS = (
     _COHORT_SUMMARY_INPUT,
     _DISTRIBUTION_INPUT,
+)
+#: Both bound schemas are confirmed before this renderer claims a step, so
+#: neither input is optional.
+EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_CAPABILITY = TypedInputCapability(
+    required=frozenset(EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_INPUTS),
 )
 
 # The exact host-recorded product contracts this renderer can read.  Both are
@@ -135,23 +141,13 @@ def exposure_outcome_distribution_figure_executor_owns_step(
     the schema this renderer can read.
     """
 
-    contracts = list(step.input_consumption_contracts)
     products = [_figure_product(value) for value in step.expected_outputs]
     plan_contract_closed = bool(
         step.planned_analysis_role == "auxiliary"
         and _method_head(step.method) == "visualization"
-        and tuple(step.inputs) == EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_INPUTS
+        and EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_CAPABILITY.admits_step(step)
         and len(products) == 1
         and products[0] is not None
-        and len(contracts) == len(EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_INPUTS)
-        and tuple(contract.input_key for contract in contracts)
-        == EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_INPUTS
-        and all(
-            contract.mode == "all_rows"
-            and contract.role_column is None
-            and not contract.expected_roles
-            for contract in contracts
-        )
         and not step.model_requirements
         and step.table_one_spec is None
         and step.trajectory_stability_spec is None

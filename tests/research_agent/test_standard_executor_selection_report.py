@@ -77,13 +77,19 @@ def test_report_names_every_owner_the_selector_consults() -> None:
     # If a new executor is wired into the selector without a report entry, its
     # decline becomes invisible again — which is the whole defect being fixed.
     selector_source = inspect.getsource(selection_module.select_standard_executor)
-    reported = set(_kinds(_report(AnalysisStep(
-        step_id="00_unclaimed",
-        intent="Do something no executor owns.",
-        method="unknown_method",
-        inputs=[],
-        expected_outputs=["table:unknown_product"],
-    ))))
+    reported = set(
+        _kinds(
+            _report(
+                AnalysisStep(
+                    step_id="00_unclaimed",
+                    intent="Do something no executor owns.",
+                    method="unknown_method",
+                    inputs=[],
+                    expected_outputs=["table:unknown_product"],
+                )
+            )
+        )
+    )
     selected_kinds = {
         line.split('analysis_kind="', 1)[1].split('"', 1)[0]
         for line in selector_source.splitlines()
@@ -238,13 +244,18 @@ def test_a_raising_detail_classifier_is_recorded_not_propagated(
 def test_the_report_cannot_claim_an_owner_the_selector_declined() -> None:
     """The second-registry defect, pinned.
 
-    ``descriptive_cohort_summary``'s contract matches this step, but the
+    ``prevalence_mortality_figure``'s contract matches this step, but the
     selector declines it because the step also owes a host-verified
-    row-conservation receipt its deterministic code cannot emit.  A report that
-    re-ran the ownership predicate reported that owner as available, which is a
+    plausibility receipt its deterministic code cannot emit -- it reads two
+    parent tables, not the ranged raw columns.  A report that re-ran the
+    ownership predicate reported that owner as available, which is a
     diagnostic that lies exactly where someone is trying to find out why the
     Coder ran.  Ownership must be readable as "matched but declined", not as a
     claim.
+
+    ``descriptive_cohort_summary`` used to be the instance here.  It now
+    renders the receipt itself and is selected, so the case moved to an owner
+    that still genuinely cannot emit one.
     """
 
     from easyicu.research_agent.authority.plausibility import (
@@ -253,16 +264,20 @@ def test_the_report_cannot_claim_an_owner_the_selector_declined() -> None:
 
     step = AnalysisStep.model_validate(
         {
-            "step_id": "02_cohort_summary",
-            "intent": "Summarise the analysis cohort.",
-            "method": "descriptive_cohort_summary",
+            "step_id": "04_prevalence_mortality_figure",
+            "intent": "Render the sealed prevalence and mortality tables.",
+            "method": "visualization",
             "planned_analysis_role": "auxiliary",
-            "inputs": ["artifact:analysis_cohort", "sofa2_liver_max"],
-            "expected_outputs": ["table:cohort_summary"],
+            "inputs": ["table:cohort_summary", "table:outcome_incidence"],
+            "expected_outputs": ["figure:prevalence_mortality"],
+            "input_consumption_contracts": [
+                {"input_key": "table:cohort_summary", "mode": "all_rows"},
+                {"input_key": "table:outcome_incidence", "mode": "all_rows"},
+            ],
         }
     )
     scope = FlagOnlyPlausibilityScope(
-        step_id="02_cohort_summary",
+        step_id="04_prevalence_mortality_figure",
         expected_columns=("sofa2_liver_max",),
         source_contracts_sha256="0" * 64,
         authority_kind="raw_universe",
@@ -271,14 +286,14 @@ def test_the_report_cannot_claim_an_owner_the_selector_declined() -> None:
     report = _report(step, plausibility_scope=scope)
 
     assert report["claimed_by"] is None
-    assert report["owning_candidates"] == ["descriptive_cohort_summary"]
-    assert report["declined_after_match"] == ["descriptive_cohort_summary"]
+    assert report["owning_candidates"] == ["prevalence_mortality_figure"]
+    assert report["declined_after_match"] == ["prevalence_mortality_figure"]
     outcome = {
         entry["analysis_kind"]: entry["outcome"]
         for entry in report["candidates"]
         if entry["kind"] == "owner"
     }
-    assert outcome["descriptive_cohort_summary"] == "declined_receipt_required"
+    assert outcome["prevalence_mortality_figure"] == "declined_receipt_required"
 
 
 def test_a_report_without_a_trace_says_so_instead_of_guessing() -> None:
