@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from easyicu.research_agent.audits import validators as validators_module
 from easyicu.research_agent.audits.validators import (
     CrossStepCohortLockValidator,
     CrossStepReconciliationTraceValidator,
@@ -2735,6 +2736,51 @@ def test_llm_concept_auditor_parses_findings(ra):
     assert findings[0].validator == "llm_concept_auditor"
     assert findings[0].severity == "warning"
     assert findings[0].detail["step_id"] == "04_primary"
+
+
+def test_llm_concept_auditor_has_room_for_complete_compact_json(
+    ra,
+    monkeypatch,
+) -> None:
+    seen: dict[str, object] = {}
+
+    def _authorized_complete(
+        client,
+        messages,
+        *,
+        max_tokens: int,
+        temperature: float,
+    ) -> str:
+        seen.update(
+            client=client,
+            messages=messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+        return '{"findings":[]}'
+
+    monkeypatch.setattr(
+        validators_module,
+        "authorized_complete",
+        _authorized_complete,
+    )
+    client = object()
+    context = ra.build_research_context(
+        research_question="Describe the cohort.",
+        cohort=pd.DataFrame({"stay_id": [1, 2]}),
+        cohort_name="c",
+        database="synthetic",
+    )
+
+    findings = ra.LLMConceptAuditor(client).audit(
+        context=context,
+        script_text="print('complete')",
+    )
+
+    assert findings == []
+    assert seen["client"] is client
+    assert seen["max_tokens"] == 2048
+    assert seen["temperature"] == 0.0
 
 
 @pytest.mark.parametrize(

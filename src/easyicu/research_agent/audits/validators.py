@@ -835,7 +835,7 @@ class LLMConceptAuditor:
 
     name = "llm_concept_auditor"
 
-    def __init__(self, llm: LLMClient, *, max_tokens: int = 1024) -> None:
+    def __init__(self, llm: LLMClient, *, max_tokens: int = 2_048) -> None:
         self.llm = llm
         self.max_tokens = int(max_tokens)
 
@@ -1139,7 +1139,8 @@ class LLMConceptAuditor:
             '{"findings":[{"severity":"info|warning|error",'
             '"message":"short finding","detail":{"issue_code":"other",'
             '"optional":"context"}}]}. '
-            "Use an empty findings list if no issue is visible.\n\n"
+            "Use an empty findings list if no issue is visible; return at most four "
+            "findings, with messages under 60 words and at most 20 variables each.\n\n"
             f"Step: {step.step_id if step else '(unknown)'}\n"
             f"Step intent: {step.intent if step else '(unknown)'}\n"
             "Planner-declared step contract:\n"
