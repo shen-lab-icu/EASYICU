@@ -207,6 +207,8 @@ _PRODUCT_SLOT_SUFFIXES: Mapping[str, tuple[tuple[str, ...], ...]] = {
         ("attrition", "audit"),
     ),
     "primary_estimand": (
+        ("primary", "adjusted", "effect"),
+        ("primary", "adjusted", "association"),
         ("adjusted", "effect"),
         ("adjusted", "association"),
         ("primary", "estimand"),

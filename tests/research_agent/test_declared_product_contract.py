@@ -3049,7 +3049,6 @@ def test_host_slot_authorization_accepts_planned_primary_adjusted_effect():
         ),
         planner_parent_anchors=[
             "table:adjusted_association_estimates",
-            "artifact:primary_model_specification",
         ],
     ) == {"figure:primary_adjusted_effect": "primary_estimand"}
 
