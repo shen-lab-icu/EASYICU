@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from benchmarks.figure2_canonical9.e1_scientific_acceptance import (
     e1_scientific_acceptance_contract,
@@ -121,10 +122,19 @@ def _accepted_run(tmp_path: Path) -> Path:
     _write_summary(
         run_dir,
         step_id="04_missingness",
+        # A complete E1 closure declares all three measurement products: plain
+        # per-concept missingness, the observation process, and per-stay
+        # completeness of the exposure components.  Which executor computes
+        # them, and whether one step or three carries them, is the Planner's
+        # call; that all three exist is the protocol's.
         output_files={
             "table:missingness_measurement_audit": (
                 "missingness_measurement_audit.csv"
-            )
+            ),
+            "table:measurement_process_audit": "measurement_process_audit.csv",
+            "table:exposure_component_completeness_audit": (
+                "exposure_component_completeness_audit.csv"
+            ),
         },
         extra={
             "observation_semantics_audit": {
@@ -146,15 +156,15 @@ def _accepted_run(tmp_path: Path) -> Path:
             },
         },
     )
-    missingness_path = (
-        run_dir
-        / "steps"
-        / "04_missingness"
-        / "outputs"
-        / "missingness_measurement_audit.csv"
-    )
-    missingness.to_csv(missingness_path, index=False)
-    _register(evidence, step_id="04_missingness", artifact=missingness_path)
+    missingness_outputs = run_dir / "steps" / "04_missingness" / "outputs"
+    for filename in (
+        "missingness_measurement_audit.csv",
+        "measurement_process_audit.csv",
+        "exposure_component_completeness_audit.csv",
+    ):
+        artifact = missingness_outputs / filename
+        missingness.to_csv(artifact, index=False)
+        _register(evidence, step_id="04_missingness", artifact=artifact)
 
     primary = pd.DataFrame({"odds_ratio": [1.6]})
     _write_summary(
@@ -329,6 +339,47 @@ def test_e1_scientific_acceptance_rejects_wrong_landmark_denominator(
     codes = _reason_codes(receipt)
     assert "e1_artifact_not_registered" in codes
     assert "e1_sensitivity_denominator_mismatch" in codes
+
+
+@pytest.mark.parametrize(
+    "dropped_product",
+    [
+        "table:measurement_process_audit",
+        "table:exposure_component_completeness_audit",
+    ],
+)
+def test_e1_scientific_acceptance_rejects_a_short_measurement_declaration(
+    tmp_path: Path,
+    dropped_product: str,
+) -> None:
+    """Executor capability must not decide E1's scientific completeness.
+
+    The deterministic audit runner can emit one, two or three of these tables,
+    so a plan that declares only two still executes cleanly and produces valid
+    artifacts.  Nothing upstream of here would notice.  This is the gate that
+    has to: without the component-completeness table there is no evidence about
+    how unevenly the exposure was ascertained, and the headline association
+    cannot be read honestly.
+    """
+
+    run_dir = _accepted_run(tmp_path)
+    summary_path = (
+        run_dir / "steps" / "04_missingness" / "outputs" / "step_summary.json"
+    )
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    removed = summary["output_files"].pop(dropped_product)
+    summary_path.write_text(json.dumps(summary), encoding="utf-8")
+    # The table itself is still on disk and still registered; only the
+    # declaration is short.  A gate reading the directory would miss this.
+    assert (summary_path.parent / removed).is_file()
+
+    receipt = evaluate_e1_scientific_acceptance(
+        run_dir=run_dir,
+        contract=e1_scientific_acceptance_contract(),
+    )
+
+    assert receipt["status"] == "rejected"
+    assert "e1_required_measurement_product_absent" in _reason_codes(receipt)
 
 
 def test_e1_scientific_acceptance_rejects_filtered_primary_population(

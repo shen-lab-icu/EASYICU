@@ -18,6 +18,7 @@ from .evaluator.paper_rubric_v3 import (
 from .evaluator.suite import easyicu_evaluation_protocol_suite
 from .e1_scientific_acceptance import (
     display_label_instruction,
+    measurement_products_instruction,
     sensitivity_output_instruction,
 )
 
@@ -86,6 +87,7 @@ CANONICAL9_MIMIC_IV_PLAN: tuple[Canonical9MaterializationSpec, ...] = (
                 "functional-form sensitivity table and figure"
             ),
             sensitivity_output_instruction(),
+            measurement_products_instruction(),
         ),
         additional_semantic_guardrails=(
             (

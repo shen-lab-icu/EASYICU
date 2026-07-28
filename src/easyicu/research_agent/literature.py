@@ -38,6 +38,7 @@ from .concept_availability import (
     normalize_concept_name,
 )
 from .gates.data_answerability import analysis_answerability_findings
+from .planning.method_literature import method_literature_citations
 from .providers.mocks import MockLLMClient
 from .providers.factory import authorized_complete
 from .providers.protocol import LLMClient, LLMMessage
@@ -62,6 +63,40 @@ class CitationRecord(BaseModel):
     pmid: Optional[str] = None
 
 
+class LiteratureSearchProvenance(BaseModel):
+    """What actually produced this bundle's references.
+
+    Without this, a bundle carrying only the curated seed list still reported a
+    PRISMA flow -- "identified 4, screened 4, included 4" -- which reads exactly
+    like a completed systematic search that happened to find four papers. It is
+    not one: it is four preset references passing through untouched. The
+    distinction matters because the Planner is told to design against the
+    literature, and a reader of the run has to be able to tell whether any
+    literature was actually consulted.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: str = "easyicu.literature_search_provenance/1"
+    curated_seed_count: int = Field(
+        ...,
+        description="References supplied from the preset list, not retrieved.",
+    )
+    sources_enabled: List[str] = Field(
+        default_factory=list,
+        description="Retrieval sources this run was configured to use.",
+    )
+    sources_returning: List[str] = Field(
+        default_factory=list,
+        description="Sources that actually returned at least one record.",
+    )
+    search_conducted: bool = Field(
+        ...,
+        description="True only when at least one retrieval source was enabled.",
+    )
+    note: str = ""
+
+
 class LiteratureBundle(BaseModel):
     model_config = ConfigDict(extra="forbid")
     research_question: str
@@ -71,9 +106,15 @@ class LiteratureBundle(BaseModel):
         description=(
             "PRISMA 2020 flow counts for the literature search (O21). Expected "
             "keys: identified, screened, eligible, included, duplicates_removed. "
-            "Populated by LiteratureAgent; the manuscript can cite "
-            "{evidence:literature_prisma}."
+            "Populated by LiteratureAgent ONLY when a retrieval source actually "
+            "ran -- see ``search_provenance``. A curated-only bundle leaves this "
+            "None rather than reporting a flow through a search that never "
+            "happened. The manuscript can cite {evidence:literature_prisma}."
         ),
+    )
+    search_provenance: Optional[LiteratureSearchProvenance] = Field(
+        default=None,
+        description="Which sources produced these references, and whether any ran.",
     )
 
 
@@ -332,6 +373,12 @@ def _curated_for(ctx: ResearchContext) -> List[CitationRecord]:
         _add(_CURATED[1])  # Sepsis-3
     if _matches_prefix(("creat", "kdigo", "aki")):
         _add(_CURATED[2])  # KDIGO
+    # The methodology layer applies to every observational ICU study, so it is
+    # never conditional on which concepts are in scope.  Before this existed the
+    # curated pack was entirely topic and data-source: it told the Planner what
+    # the variables mean and nothing about how such a study is designed.
+    for payload in method_literature_citations():
+        _add(CitationRecord.model_validate(payload))
     # Always cite the database papers and EasyICU lineage.
     _add(_CURATED[3])  # ricu
     db = ctx.cohort.database.lower()
@@ -1043,15 +1090,21 @@ class LiteratureAgent:
         # * included = records present in the final merged bundle.
         identified = len(baseline)
         duplicates = 0
+        curated_seed_count = len(baseline)
+        sources_enabled: List[str] = []
+        sources_returning: List[str] = []
 
         # 2) PubMed live (T2.2). Errors are swallowed: the bundle is
         #    still useful even if the network is unreachable.
         if self.enable_pubmed:
+            sources_enabled.append("pubmed")
             client = self.pubmed_client or PubMedLiteratureClient()
             try:
                 hits = client.search_for_context(context, retmax=self.pubmed_retmax)
             except Exception:
                 hits = []
+            if hits:
+                sources_returning.append("pubmed")
             identified += len(hits)
             for rec in hits:
                 if rec.key in seen_keys or (rec.pmid and rec.pmid in seen_pmids):
@@ -1068,6 +1121,7 @@ class LiteratureAgent:
         #    are swallowed for the same reason as PubMed: literature
         #    enrichment must never break an otherwise valid analysis.
         if self.enable_tavily:
+            sources_enabled.append("tavily")
             client = self.tavily_client or TavilyLiteratureClient()
             try:
                 hits = client.search_for_context(
@@ -1075,6 +1129,8 @@ class LiteratureAgent:
                 )
             except Exception:
                 hits = []
+            if hits:
+                sources_returning.append("tavily")
             identified += len(hits)
             for rec in hits:
                 if rec.key in seen_keys or (rec.url and rec.url in seen_urls):
@@ -1089,6 +1145,7 @@ class LiteratureAgent:
 
         # 4) LLM extension (only when a real client is provided).
         if self.llm is not None and not isinstance(self.llm, MockLLMClient):
+            sources_enabled.append("llm_extension")
             existing_keys = ", ".join(c.key for c in merged)
             msgs = [
                 LLMMessage(
@@ -1119,6 +1176,8 @@ class LiteratureAgent:
             except Exception:
                 data = []
             identified += len(data)
+            if data:
+                sources_returning.append("llm_extension")
             for d in data:
                 try:
                     rec = CitationRecord.model_validate(d)
@@ -1135,17 +1194,44 @@ class LiteratureAgent:
                     seen_urls.add(rec.url)
                 merged.append(rec)
 
-        prisma = {
-            "identified": identified,
-            "duplicates_removed": duplicates,
-            "screened": max(0, identified - duplicates),
-            "eligible": len(merged),
-            "included": len(merged),
-        }
+        search_conducted = bool(sources_enabled)
+        provenance = LiteratureSearchProvenance(
+            curated_seed_count=curated_seed_count,
+            sources_enabled=sources_enabled,
+            sources_returning=sources_returning,
+            search_conducted=search_conducted,
+            note=(
+                (
+                    "Retrieval ran; PRISMA counts describe the records these "
+                    "sources returned."
+                )
+                if search_conducted
+                else (
+                    "No retrieval source was enabled. These references are the "
+                    "preset curated list only; no search was performed and no "
+                    "PRISMA flow is reported."
+                )
+            ),
+        )
+        # Only a run that actually searched gets a PRISMA flow.  Reporting one
+        # for the curated-only path made "identified 4 ... included 4" look like
+        # a systematic search that found four papers, when nothing was searched.
+        prisma = (
+            {
+                "identified": identified,
+                "duplicates_removed": duplicates,
+                "screened": max(0, identified - duplicates),
+                "eligible": len(merged),
+                "included": len(merged),
+            }
+            if search_conducted
+            else None
+        )
         return LiteratureBundle(
             research_question=context.research_question,
             citations=merged,
             prisma=prisma,
+            search_provenance=provenance,
         )
 
 

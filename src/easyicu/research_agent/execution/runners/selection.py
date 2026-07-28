@@ -14,6 +14,7 @@ from .cohort_summary_executor import (
 from .deterministic_missingness import (
     is_compact_missingness_measurement_contract,
     is_measurement_bias_audit_contract,
+    is_missingness_complete_case_contract,
     missingness_audit_cohort_input_key,
     missingness_audit_executor_owns_step,
     missingness_measurement_audit_code,
@@ -265,34 +266,34 @@ def select_standard_executor(
             step.method,
             step.expected_outputs,
         )
+        complete_case = is_missingness_complete_case_contract(
+            step.method,
+            step.expected_outputs,
+        )
         typed_cohort_input = missingness_audit_cohort_input_key(step)
+        # Each named contract keeps its own kind; anything claimed only by the
+        # capability rule is named for what it is.  The complete-case label used
+        # to be the trailing ``else``, so once ownership widened it would have
+        # been stamped on measurement-process audits that are not complete-case
+        # analyses at all -- a claim the record could not be read back from.
+        if source_availability:
+            analysis_kind = "missingness_source_availability_audit"
+            selection_reason = "missingness_source_availability_contract_preflight"
+        elif measurement_bias:
+            analysis_kind = "measurement_bias_audit"
+            selection_reason = "measurement_bias_contract_preflight"
+        elif compact_measurement:
+            analysis_kind = "missingness_measurement_audit"
+            selection_reason = "missingness_measurement_contract_preflight"
+        elif complete_case:
+            analysis_kind = "missingness_complete_case_audit"
+            selection_reason = "missingness_complete_case_contract_preflight"
+        else:
+            analysis_kind = "declared_missingness_audit_products"
+            selection_reason = "missingness_audit_product_capability_preflight"
         selection = StandardExecutorSelection(
-            analysis_kind=(
-                "missingness_source_availability_audit"
-                if source_availability
-                else (
-                    "measurement_bias_audit"
-                    if measurement_bias
-                    else (
-                        "missingness_measurement_audit"
-                        if compact_measurement
-                        else "missingness_complete_case_audit"
-                    )
-                )
-            ),
-            selection_reason=(
-                "missingness_source_availability_contract_preflight"
-                if source_availability
-                else (
-                    "measurement_bias_contract_preflight"
-                    if measurement_bias
-                    else (
-                        "missingness_measurement_contract_preflight"
-                        if compact_measurement
-                        else "missingness_complete_case_contract_preflight"
-                    )
-                )
-            ),
+            analysis_kind=analysis_kind,
+            selection_reason=selection_reason,
             progress_message="Using planner-specified missingness audit executor",
             code=missingness_measurement_audit_code(
                 step,

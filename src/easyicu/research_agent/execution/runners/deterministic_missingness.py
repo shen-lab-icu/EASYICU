@@ -41,7 +41,8 @@ from __future__ import annotations
 
 import re
 import textwrap
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 
 from ...authority.plausibility import FlagOnlyPlausibilityScope
 from ...icu_rules import companion_count_column_for_measured
@@ -49,6 +50,8 @@ from ...schema import AnalysisStep
 from .plausibility_receipt import render_standard_plausibility_receipt_code
 
 __all__ = [
+    "MISSINGNESS_AUDIT_PRODUCT_FILES",
+    "declared_audit_products_are_emittable",
     "is_compact_missingness_measurement_contract",
     "is_missingness_complete_case_contract",
     "is_missingness_measurement_availability_contract",
@@ -120,6 +123,64 @@ _MEASUREMENT_BIAS_PRODUCT_IDS = frozenset(
         "exposure_component_completeness_audit",
     }
 )
+
+# The one declaration of what this runner can emit: product id -> output file.
+# It is rendered into the generated script rather than duplicated there, because
+# the previous arrangement -- a literal inside the template plus several
+# hand-enumerated contracts out here -- is what let the two drift apart.
+#
+# Ownership is a *capability* question ("can I emit exactly these products?"),
+# and this map answers it.  Scientific sufficiency ("must this study declare the
+# component-completeness product at all?") is a different question that belongs
+# to the study protocol and the evaluator, not to an executor: being able to
+# compute two tables must never be read as a licence to accept two tables where
+# the science requires three.
+MISSINGNESS_AUDIT_PRODUCT_FILES: Mapping[str, str] = MappingProxyType(
+    {
+        "missingness_audit": "missingness_audit.csv",
+        "missingness_profile": "missingness_audit.csv",
+        "missingness_measurement_audit": "missingness_measurement_audit.csv",
+        "measurement_audit": "missingness_measurement_audit.csv",
+        # Its own table, not an alias of the missingness one: "was it ever
+        # measured" and "how often, and when" are different questions, and
+        # two declared products resolving to one file satisfies a contract
+        # without satisfying a reader.
+        "measurement_process_audit": "measurement_process_audit.csv",
+        "exposure_component_completeness_audit": (
+            "exposure_component_completeness_audit.csv"
+        ),
+        "measurement_source_audit": "measurement_source_audit.csv",
+        "measurement_availability": "measurement_availability.csv",
+        "measurement_availability_audit": "measurement_availability_audit.csv",
+        "data_quality_audit": "missingness_measurement_audit.csv",
+        "source_coverage": "measurement_source_audit.csv",
+        "analytic_denominator": "analytic_denominators.csv",
+        "analytic_denominators": "analytic_denominators.csv",
+        "complete_case_attrition": "analytic_denominators.csv",
+        "cohort_flow": "cohort_flow.csv",
+    }
+)
+
+# Every method token that can appear in a declared count-only audit label.  The
+# product side is the load-bearing guard -- a model or test step cannot declare
+# audit products -- so this vocabulary only has to keep prose out.
+_AUDIT_METHOD_VOCABULARY = frozenset(
+    _MISSINGNESS_AVAILABILITY_METHOD_TOKENS
+    | _MISSINGNESS_COMPLETE_CASE_METHOD_TOKENS
+    | _COMPACT_MISSINGNESS_MEASUREMENT_TOKENS
+    | _MEASUREMENT_BIAS_METHOD_TOKENS
+    | {"data", "quality", "availability", "profile", "denominator", "denominators"}
+)
+
+
+def _render_product_files() -> str:
+    """Render the capability map as readable source for the generated script."""
+
+    lines = "".join(
+        f"    {product!r}: {filename!r},\n"
+        for product, filename in MISSINGNESS_AUDIT_PRODUCT_FILES.items()
+    )
+    return "{\n" + lines + "}"
 
 
 def _contract_tokens(value: object) -> frozenset[str]:
@@ -243,6 +304,55 @@ def is_measurement_bias_audit_contract(
     return {value.split(":", 1)[1] for value in outputs} == _MEASUREMENT_BIAS_PRODUCT_IDS
 
 
+def declared_audit_products_are_emittable(
+    method: object,
+    expected_outputs: Sequence[object],
+) -> bool:
+    """Classify any declared audit product set this runner can actually emit.
+
+    The four named contracts above each enumerate one product set that a past
+    Planner revision happened to produce.  That made coverage the intersection
+    of shapes already seen: the same runner owned a one-product and a
+    three-product declaration but not the two-product one in between, and every
+    replan risked landing in a gap and silently demoting a pure counting step to
+    the LLM coder.  The Planner is *supposed* to vary its declared products;
+    what must not vary is whether a computable step gets a reliable executor.
+
+    So ownership is decided against the capability map instead of an enumerated
+    list of blessed shapes:
+
+    * the declared set is non-empty and free of duplicates;
+    * every declared product is a ``table:`` product this runner can emit;
+    * the declared products resolve to as many *distinct* files as there are
+      products.
+
+    That last rule is the one doing real work.  Several product ids are aliases
+    onto one file, so without it a step could declare two products, be claimed,
+    and be satisfied by a single table -- a contract met without a reader being
+    given the second thing they were promised.  Ambiguity fails closed.
+    """
+
+    method_tokens = _contract_tokens(method)
+    if not (
+        method_tokens
+        and method_tokens <= _AUDIT_METHOD_VOCABULARY
+        and bool(method_tokens & {"audit", "missingness", "availability"})
+    ):
+        return False
+
+    outputs = [str(value or "").strip().casefold() for value in expected_outputs]
+    if not outputs or len(set(outputs)) != len(outputs):
+        return False
+    if any(not value.startswith("table:") for value in outputs):
+        return False
+
+    products = [value.split(":", 1)[1] for value in outputs]
+    if any(product not in MISSINGNESS_AUDIT_PRODUCT_FILES for product in products):
+        return False
+    files = {MISSINGNESS_AUDIT_PRODUCT_FILES[product] for product in products}
+    return len(files) == len(products)
+
+
 def _cohort_input_scope(step: AnalysisStep) -> tuple[bool, str | None]:
     """Resolve an optional single typed row-membership authority."""
 
@@ -281,6 +391,9 @@ def missingness_audit_cohort_input_key(step: AnalysisStep) -> str | None:
 def missingness_audit_executor_owns_step(step: AnalysisStep) -> bool:
     """Own a closed, auxiliary count-only missingness contract."""
 
+    # The named contracts remain, because they are what gives a recognised shape
+    # its specific ``analysis_kind``.  The capability rule is what stops an
+    # unnamed-but-computable shape from falling through to the coder.
     contract_is_supported = is_missingness_measurement_availability_contract(
         step.method,
         step.expected_outputs,
@@ -291,6 +404,9 @@ def missingness_audit_executor_owns_step(step: AnalysisStep) -> bool:
         step.method,
         step.expected_outputs,
     ) or is_measurement_bias_audit_contract(
+        step.method,
+        step.expected_outputs,
+    ) or declared_audit_products_are_emittable(
         step.method,
         step.expected_outputs,
     )
@@ -1317,29 +1433,7 @@ def missingness_measurement_audit_code(
         n_binary_event_status = int(
             (audit["indicator_semantics"] == "binary_event_presence").sum()
         )
-        product_files = {
-            "missingness_audit": "missingness_audit.csv",
-            "missingness_profile": "missingness_audit.csv",
-            "missingness_measurement_audit": "missingness_measurement_audit.csv",
-            "measurement_audit": "missingness_measurement_audit.csv",
-            # Its own table, not an alias of the missingness one: "was it ever
-            # measured" and "how often, and when" are different questions, and
-            # two declared products resolving to one file satisfies a contract
-            # without satisfying a reader.
-            "measurement_process_audit": "measurement_process_audit.csv",
-            "exposure_component_completeness_audit": (
-                "exposure_component_completeness_audit.csv"
-            ),
-            "measurement_source_audit": "measurement_source_audit.csv",
-            "measurement_availability": "measurement_availability.csv",
-            "measurement_availability_audit": "measurement_availability_audit.csv",
-            "data_quality_audit": "missingness_measurement_audit.csv",
-            "source_coverage": "measurement_source_audit.csv",
-            "analytic_denominator": "analytic_denominators.csv",
-            "analytic_denominators": "analytic_denominators.csv",
-            "complete_case_attrition": "analytic_denominators.csv",
-            "cohort_flow": "cohort_flow.csv",
-        }
+        product_files = __EASYICU_PRODUCT_FILES__
         declared_output_files = {}
         for output in requested_outputs:
             product = output.split(":", 1)[-1].strip()
@@ -1419,6 +1513,10 @@ def missingness_measurement_audit_code(
     template = template.replace(
         "__EASYICU_TYPED_COHORT_INPUT__",
         repr(typed_cohort_input),
+    )
+    template = template.replace(
+        "__EASYICU_PRODUCT_FILES__",
+        _render_product_files(),
     )
     template = template.replace(
         "__EASYICU_MEASUREMENT_PROVENANCE_SCOPE__",

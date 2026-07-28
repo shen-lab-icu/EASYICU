@@ -180,20 +180,115 @@ def test_a_permuted_product_id_is_refused(label: str, outputs: list[str]) -> Non
 def test_every_owned_product_id_is_a_key_the_generator_looks_up() -> None:
     """Lock the classifier's ids against the generator's own lookup table.
 
-    ``product_files`` lives inside the generated-script template, so the two
-    cannot share one object.  They can still be prevented from drifting: every
-    id the contract claims must appear as a key the template resolves, or the
-    runner would accept a contract it cannot fulfil.
+    This used to scrape ``product_files`` back out of the generated-script
+    template, because the map lived there and the classifier's ids lived
+    separately in the module -- two copies that could only be compared by
+    reading source.  The map is now one module constant that is *rendered* into
+    the script, so drift is structurally impossible; what is still worth pinning
+    is that it really is rendered rather than re-hardcoded, and that every id
+    the named contract claims is a key of it.
     """
 
     from easyicu.research_agent.execution.runners import deterministic_missingness
 
-    source = Path(deterministic_missingness.__file__).read_text(encoding="utf-8")
-    template = source.split("product_files = {", 1)[1].split("}", 1)[0]
-    keys = set(re.findall(r'"([a-z0-9_]+)":', template))
-
-    missing = deterministic_missingness._MEASUREMENT_BIAS_PRODUCT_IDS - keys
+    capability = deterministic_missingness.MISSINGNESS_AUDIT_PRODUCT_FILES
+    missing = deterministic_missingness._MEASUREMENT_BIAS_PRODUCT_IDS - set(capability)
     assert not missing, f"contract claims ids the generator cannot emit: {missing}"
+
+    generated = deterministic_missingness.missingness_measurement_audit_code(_step())
+    rendered = generated.split("product_files = {", 1)[1].split("\n}", 1)[0]
+    keys = set(re.findall(r"'([a-z0-9_]+)':", rendered))
+    assert keys == set(capability), (
+        "the generated script must render the capability map, not its own copy"
+    )
+
+
+def test_a_declared_product_set_the_runner_can_emit_is_owned() -> None:
+    """The two-product gap that demoted a computable step to the LLM coder.
+
+    The named contracts covered a one-product and a three-product declaration
+    but not the two-product one in between, so a legitimate replan landed in a
+    hole and the audit fell through to the coder, where it failed.  Ownership is
+    a capability question, and the runner can emit both of these tables.
+    """
+
+    plan = AnalysisPlan(research_question="q", robustness_specs=[], steps=[])
+    outputs = [
+        "table:missingness_measurement_audit",
+        "table:measurement_process_audit",
+    ]
+
+    step = _step(method="data_quality_audit", expected_outputs=outputs)
+    selection = select_standard_executor(step, plan=plan)
+
+    assert selection is not None
+    # Named contracts keep their names; a capability claim says what it is
+    # rather than borrowing the complete-case label it used to fall through to.
+    assert selection.analysis_kind == "declared_missingness_audit_products"
+
+
+@pytest.mark.parametrize(
+    ("label", "outputs"),
+    [
+        (
+            "two products that resolve to one file",
+            ["table:missingness_measurement_audit", "table:data_quality_audit"],
+        ),
+        (
+            "two aliases of the plain missingness table",
+            ["table:missingness_audit", "table:missingness_profile"],
+        ),
+    ],
+)
+def test_declared_products_collapsing_onto_one_file_are_refused(
+    label: str,
+    outputs: list[str],
+) -> None:
+    """A promise of two tables must not be settled with one.
+
+    Several product ids are aliases onto the same output file.  Widening
+    ownership to "any set of known products" would let such a pair be claimed
+    and then satisfied by a single table -- the contract met, the reader short
+    one of the two things they were told they would get.  Ambiguity fails
+    closed and the step goes to the ordinary path instead.
+    """
+
+    from easyicu.research_agent.execution.runners.deterministic_missingness import (
+        MISSINGNESS_AUDIT_PRODUCT_FILES,
+        declared_audit_products_are_emittable,
+    )
+
+    files = {
+        MISSINGNESS_AUDIT_PRODUCT_FILES[value.split(":", 1)[1]] for value in outputs
+    }
+    assert len(files) == 1, f"{label} must be a genuine alias collapse to be a test"
+
+    assert not declared_audit_products_are_emittable("data_quality_audit", outputs)
+    plan = AnalysisPlan(research_question="q", robustness_specs=[], steps=[])
+    step = _step(method="data_quality_audit", expected_outputs=outputs)
+    assert select_standard_executor(step, plan=plan) is None
+
+
+def test_the_capability_rule_does_not_swallow_a_model_step() -> None:
+    """Widening ownership must not let a counting runner claim an estimate."""
+
+    from easyicu.research_agent.execution.runners.deterministic_missingness import (
+        declared_audit_products_are_emittable,
+    )
+
+    assert not declared_audit_products_are_emittable(
+        "adjusted_association_models",
+        ["table:adjusted_association_estimates"],
+    )
+    # Even under an audit-sounding method: the product side is what decides.
+    assert not declared_audit_products_are_emittable(
+        "data_quality_audit",
+        ["table:adjusted_association_estimates"],
+    )
+    assert not declared_audit_products_are_emittable(
+        "data_quality_audit",
+        ["figure:missingness_measurement_audit"],
+    )
 
 
 def test_the_compact_contract_still_means_one_product() -> None:
