@@ -140,6 +140,12 @@ from ..gates.concept import (
 )
 from ..gates.plausibility_receipt import plausibility_audit_receipt_findings
 from ..authority.coder_authority import HostCoderAuthority
+from ..authority.plausibility import (
+    FlagOnlyPlausibilityScope,
+    StepPlausibilityAuthority,
+    compile_resumed_flag_only_plausibility_scope,
+    compile_step_plausibility_authority,
+)
 from ..cohort.repair import extract_cohort_definition_from_prose
 from ..cohort.schema import (
     CohortDefinition,
@@ -165,7 +171,7 @@ from ..resources.coder import (
     bind_materialized_coder_authority,
     bind_primary_cohort_role,
 )
-from ..research_context.typed import resolved_raw_input_contracts
+from ..research_context.typed import resolved_raw_input_contracts_for_step
 from ..contracts.runtime import ValidationFinding, _ExecutePhaseResult, _PlanPhaseResult
 from .runners.deterministic_descriptive import absolute_risk_context_code
 from .runners.deterministic_missingness import (
@@ -495,6 +501,7 @@ _STANDARD_EXECUTOR_INTERNAL_PENDING_ARTIFACTS = frozenset(
 _FIGURE_CONTRACT_SOURCE_DATA_SCHEMA_REPAIR_ID = "figure_contract_source_data_schema_v1"
 _COHORT_TRANSLATION_PROVIDER_CATEGORY = "cohort_definition_translation"
 _HOST_COHORT_TRANSLATION_BUDGET_STEP_ID = "host_cohort_definition_translation"
+_RAW_UNIVERSE_EXECUTION_ROLE = "raw_universe_for_primary_analysis_cohort_producer"
 
 
 def _submit_in_current_context(executor: Any, callback: Any, *args: Any) -> Any:
@@ -920,62 +927,6 @@ def _planner_materialized_cohort_prompt_payload(
         separators=(",", ":"),
     )
 
-
-def _raw_contract_inputs_for_step(
-    *,
-    planner_declared_inputs: Sequence[str],
-    primary_cohort_execution_receipt: Optional[Mapping[str, Any]],
-) -> tuple[str, ...]:
-    """Include only host-resolved cohort predicates beyond Planner inputs."""
-
-    names = [str(value) for value in planner_declared_inputs]
-    if primary_cohort_execution_receipt is None:
-        return tuple(names)
-    flow = primary_cohort_execution_receipt.get("ordered_predicate_flow")
-    if not isinstance(flow, list):
-        raise MaterializedMetadataError(
-            "primary cohort execution receipt lacks ordered predicate flow"
-        )
-    for row in flow:
-        if not isinstance(row, Mapping):
-            raise MaterializedMetadataError(
-                "primary cohort execution receipt contains an invalid predicate"
-            )
-        resolved_column = row.get("resolved_column")
-        if resolved_column is None:
-            continue
-        if not (
-            isinstance(resolved_column, str)
-            and resolved_column.strip()
-            and ":" not in resolved_column
-        ):
-            raise MaterializedMetadataError(
-                "primary cohort execution receipt has an invalid resolved column"
-            )
-        if resolved_column not in names:
-            names.append(resolved_column)
-    return tuple(names)
-
-
-def _resolved_raw_input_contracts_for_step(
-    *,
-    coder_base_context: ResearchContext,
-    coder_context: ResearchContext,
-    planner_declared_inputs: Sequence[str],
-    primary_cohort_execution_receipt: Optional[Mapping[str, Any]],
-) -> Optional[Dict[str, Any]]:
-    """Resolve exact receipt columns without widening the Coder prompt."""
-
-    contract_inputs = _raw_contract_inputs_for_step(
-        planner_declared_inputs=planner_declared_inputs,
-        primary_cohort_execution_receipt=primary_cohort_execution_receipt,
-    )
-    authority_context = (
-        coder_base_context
-        if primary_cohort_execution_receipt is not None
-        else coder_context
-    )
-    return resolved_raw_input_contracts(authority_context, contract_inputs)
 
 
 def _failed_contract_code_can_be_reused_before_coder(
@@ -2599,6 +2550,7 @@ _STALE_RESOLVED_INPUT_RECEIPT_FIELDS = (
     "resolved_inputs_path",
     "resolved_inputs_sha256",
     "revalidated_input_bindings_fingerprint",
+    "flag_only_plausibility_scope",
 )
 
 
@@ -2833,6 +2785,20 @@ def _resume_success_dependencies(
     return dependencies
 
 
+def _fresh_plausibility_receipt_findings(
+    step_summary: Mapping[str, Any],
+    step: AnalysisStep,
+    script_text: str,
+    authority: StepPlausibilityAuthority,
+) -> List[ValidationFinding]:
+    return plausibility_audit_receipt_findings(
+        step_summary=step_summary,
+        step=step,
+        script_text=script_text,
+        scope=authority.scope,
+    )
+
+
 def _evaluate_final_deterministic_gates(
     *,
     context: ResearchContext,
@@ -2846,6 +2812,7 @@ def _evaluate_final_deterministic_gates(
     step_record: Mapping[str, Any],
     completed_step_records: Sequence[Mapping[str, Any]],
     resolved_input_bindings: Mapping[str, Mapping[str, Any]],
+    plausibility_scope: FlagOnlyPlausibilityScope,
     script_text: str,
     attempt_id: str,
     checkpoint_id: str,
@@ -2982,9 +2949,9 @@ def _evaluate_final_deterministic_gates(
     contract_findings.extend(
         plausibility_audit_receipt_findings(
             step_summary=step_summary,
-            context=context,
             step=step,
             script_text=script_text,
+            scope=plausibility_scope,
         )
     )
     figure_source_findings = figure_source_validator.audit(
@@ -3432,11 +3399,18 @@ def _selectively_revalidate_resume_successes(
                 run_dir=run_dir,
             )
             script_text = script_path.read_text(encoding="utf-8")
+            plausibility_scope = compile_resumed_flag_only_plausibility_scope(
+                prior_record=prior_record,
+                run_dir=run_dir,
+                context=context,
+                step=step,
+            )
             code_findings = _bind_findings_to_step_attempt(
                 _deterministic_code_gate_findings(
                     context=context,
                     step=step,
                     script_text=script_text,
+                    plausibility_scope=plausibility_scope,
                 ),
                 step_id=step_id,
                 attempt_id=attempt_id,
@@ -3500,6 +3474,7 @@ def _selectively_revalidate_resume_successes(
                     step_record=prior_record,
                     completed_step_records=completed_records,
                     resolved_input_bindings=resolved_bindings,
+                    plausibility_scope=plausibility_scope,
                     script_text=script_text,
                     attempt_id=attempt_id,
                     checkpoint_id=checkpoint_id,
@@ -3621,6 +3596,7 @@ def _selectively_revalidate_resume_successes(
             **stamp,
         }
         _discard_stale_resolved_input_receipts(replayed)
+        replayed["flag_only_plausibility_scope"] = plausibility_scope.to_dict()
         replayed["revalidated_input_bindings_fingerprint"] = (
             _resume_typed_input_bindings_fingerprint(resolved_bindings)
         )
@@ -5158,13 +5134,10 @@ def run_execute_phase(
             universe_path=universe_path,
             cohort_path=cohort_path,
         )
-        primary_cohort_uses_universe = step_execution_cohort_path == universe_path
-        if primary_cohort_uses_universe:
+        if step_execution_cohort_path == universe_path:
             step_record.update(
                 {
-                    "execution_cohort_role": (
-                        "raw_universe_for_primary_analysis_cohort_producer"
-                    ),
+                    "execution_cohort_role": _RAW_UNIVERSE_EXECUTION_ROLE,
                     "execution_cohort_sha256": sha256_of_file(universe_path),
                     "authoritative_analysis_cohort_sha256": sha256_of_file(cohort_path),
                 }
@@ -5428,7 +5401,7 @@ def run_execute_phase(
                 universe_path=universe_path,
                 analysis_cohort_path=run_input_authority_state.analysis_path,
             )
-            if primary_cohort_uses_universe
+            if step_record.get("execution_cohort_role") == _RAW_UNIVERSE_EXECUTION_ROLE
             and bool(
                 getattr(plan.cohort, "inclusion", ())
                 or getattr(plan.cohort, "exclusion", ())
@@ -5448,7 +5421,7 @@ def run_execute_phase(
             authority=coder_authority,
             locked_cohort_payload=(
                 _planner_locked_cohort_prompt_payload(plan)
-                if primary_cohort_uses_universe
+                if step_record.get("execution_cohort_role") == _RAW_UNIVERSE_EXECUTION_ROLE
                 else None
             ),
             materialized_execution_payload=(
@@ -5735,24 +5708,27 @@ def run_execute_phase(
         step_execution_cohort_path = _bind_step_execution_cohort(
             run_dir, step_execution_cohort_path, resolved_input_bindings, step_record
         )
-        primary_cohort_uses_universe = step_execution_cohort_path == universe_path
+        plausibility_authority = compile_step_plausibility_authority(
+            context=context,
+            step=step,
+            raw_input_contracts=resolved_raw_input_contracts_for_step(
+                coder_base_context=coder_base_context,
+                coder_context=coder_context,
+                planner_declared_inputs=step.inputs,
+                primary_cohort_execution_receipt=primary_cohort_execution_receipt,
+            ),
+        )
+        step_record["flag_only_plausibility_scope"] = plausibility_authority.scope.to_dict()
         resolved_inputs_path = _write_resolved_inputs_manifest(
             run_dir=run_dir,
             step_id=step.step_id,
             planner_declared_inputs=step.inputs,
             bindings=resolved_input_bindings,
             context_path=plan_result.context_path,
-            raw_input_contracts=_resolved_raw_input_contracts_for_step(
-                coder_base_context=coder_base_context,
-                coder_context=coder_context,
-                planner_declared_inputs=step.inputs,
-                primary_cohort_execution_receipt=(
-                    primary_cohort_execution_receipt
-                ),
-            ),
+            raw_input_contracts=plausibility_authority.raw_input_contracts(),
             host_verified_cohort_execution_receipt=(
                 primary_cohort_execution_receipt
-                if primary_cohort_uses_universe
+                if step_execution_cohort_path == universe_path
                 else None
             ),
         )
@@ -5764,6 +5740,7 @@ def run_execute_phase(
             context=coder_context,
             step=step,
             resolved_input_bindings=resolved_input_bindings,
+            plausibility_scope=plausibility_authority.scope,
             runtime_import_names=pipeline._validated_runtime_capabilities or (),
             step_record=step_record,
             reviewed_memory_runtime=pipeline._reviewed_memory_runtime,
@@ -7139,7 +7116,7 @@ def run_execute_phase(
             authority=ConceptAuditAuthority(
                 context=context,
                 step=step,
-                resolved_input_bindings=resolved_input_bindings,
+                resolved_input_bindings=resolved_input_bindings, plausibility_scope=plausibility_authority.scope,
                 environment_sha256=concept_audit_environment_sha256,
                 auditor_implementation_sha256=(
                     llm_concept_auditor_implementation_sha256
@@ -8640,7 +8617,7 @@ def run_execute_phase(
                 run_result.outputs_safe_to_collect
             )
             authority_findings: List[ValidationFinding] = []
-            if primary_cohort_uses_universe:
+            if step_record.get("execution_cohort_role") == _RAW_UNIVERSE_EXECUTION_ROLE:
                 cohort_authority_finding = _execution_input_authority_integrity_finding(
                     step_id=step.step_id,
                     universe_path=universe_path,
@@ -9546,26 +9523,11 @@ def run_execute_phase(
                             },
                         )
                     )
-                # A deterministic PRIMARY runner owns its step's contract: if it
-                # produced the core estimate, planner-requested extra outputs it
-                # does not emit are advisory, never a reason to repair-away the
-                # trustworthy estimate.
+                # PRIMARY runners keep their trustworthy core estimate.
                 early_contract_findings = _demote_step_contract_for_primary_runner(
                     step_record, visual_step_summary, early_contract_findings
                 )
-                # The receipt check belongs here as well as in the final gate.
-                # A missing or malformed `plausibility_audit` is exactly the
-                # kind of mistake one Coder repair fixes, and evaluating it only
-                # after evidence registration turned it into a terminal record:
-                # the step would die holding a finding that says precisely what
-                # to write. The final gate keeps its own copy, so a repair that
-                # does not actually produce the receipt still cannot seal.
-                early_contract_findings += plausibility_audit_receipt_findings(
-                    step_summary=visual_step_summary,
-                    context=context,
-                    step=step,
-                    script_text=code,
-                )
+                early_contract_findings += _fresh_plausibility_receipt_findings(visual_step_summary, step, code, plausibility_authority)
                 early_contract_errors = [
                     f for f in early_contract_findings if f.severity == "error"
                 ]
@@ -11051,7 +11013,7 @@ def run_execute_phase(
             step_record=step_record,
             completed_step_records=completed_records_snapshot,
             resolved_input_bindings=resolved_input_bindings,
-            script_text=code,
+            plausibility_scope=plausibility_authority.scope, script_text=code,
             attempt_id=attempt_id,
             checkpoint_id=review_checkpoint_id,
             stat_validator=stat_validator,

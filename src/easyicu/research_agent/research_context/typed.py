@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence, Union
 
@@ -26,8 +27,11 @@ from easyicu.concept.metadata_projection import (
     is_range_preserving_projection,
 )
 
-from ..intake.materialized_metadata import MaterializedCohortAuthorityRef
-from ..intake.materialized_metadata import VerifiedMaterializedCohortAuthority
+from ..intake.materialized_metadata import (
+    MaterializedCohortAuthorityRef,
+    MaterializedMetadataError,
+    VerifiedMaterializedCohortAuthority,
+)
 from ..intake.materialized_trajectory import (
     MaterializedTrajectoryAuthorityRef,
     TrajectoryConceptBinding,
@@ -798,10 +802,99 @@ def materialized_input_prompt_projection(
     return result
 
 
+def _closed_observed_levels(
+    domain: Optional[Mapping[str, Any]],
+) -> Optional[List[Any]]:
+    """Return a small exact observed domain, or ``None`` when it is unsafe."""
+
+    if domain is None:
+        return None
+    observed_levels = domain.get("levels")
+    n_unique = domain.get("n_unique")
+    if not (
+        isinstance(observed_levels, list)
+        and 1 <= len(observed_levels) <= 8
+        and isinstance(n_unique, int)
+        and not isinstance(n_unique, bool)
+        and n_unique == len(observed_levels)
+    ):
+        return None
+    try:
+        encoded_levels = [
+            (
+                type(value).__name__,
+                json.dumps(
+                    value,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                ),
+            )
+            for value in observed_levels
+            if value is not None and isinstance(value, (bool, int, float, str))
+        ]
+    except (TypeError, ValueError):
+        return None
+    if (
+        len(encoded_levels) != len(observed_levels)
+        or len(set(encoded_levels)) != len(encoded_levels)
+    ):
+        return None
+    return list(observed_levels)
+
+
+def _legacy_raw_input_contract(variable: ConceptDescriptor) -> Dict[str, Any]:
+    """Project a V1 descriptor into an executable, step-sealed contract.
+
+    V1 contexts do not carry a materialized sidecar, but their descriptors are
+    still host-generated from the exact in-memory cohort and are sealed in the
+    run input.  Persisting this bounded projection keeps legacy/offline runs
+    executable without letting generated code rediscover policy from the whole
+    ResearchContext.
+    """
+
+    fact: Dict[str, Any] = {
+        "column": variable.name,
+        "dtype": variable.dtype,
+    }
+    if variable.unit:
+        fact["unit"] = variable.unit
+    if variable.valid_range is not None:
+        bounds = list(variable.valid_range)
+        if len(bounds) != 2 or any(
+            isinstance(bound, bool)
+            or not isinstance(bound, (int, float))
+            or not math.isfinite(float(bound))
+            for bound in bounds
+        ):
+            raise ValueError(
+                f"legacy descriptor {variable.name!r} has an invalid valid_range"
+            )
+        minimum, maximum = bounds
+        if float(minimum) > float(maximum):
+            raise ValueError(
+                f"legacy descriptor {variable.name!r} has a reversed valid_range"
+            )
+        fact["analysis_plausibility_range"] = {
+            "minimum": minimum,
+            "maximum": maximum,
+        }
+        fact["plausibility_policy"] = {
+            "range_policy": "flag_only",
+            "out_of_range_action": "retain_and_flag",
+        }
+    levels = _closed_observed_levels(variable.observed_domain)
+    if levels is not None:
+        fact["allowed_values"] = levels
+        fact["allowed_values_basis"] = "sealed_research_context_observed_domain"
+    return fact
+
+
 def resolved_raw_input_contracts(
     context: ResearchContextAuthority,
     planner_declared_inputs: Sequence[str],
-) -> Optional[Dict[str, Any]]:
+) -> Dict[str, Any]:
     """Return exact executable metadata for Planner-declared raw columns.
 
     The outbound prompt projection is explanatory transport, while generated
@@ -812,9 +905,6 @@ def resolved_raw_input_contracts(
     existing ``inputs`` authority and are intentionally excluded here.
     """
 
-    if not isinstance(context, ResearchContextV2):
-        return None
-    context = ResearchContextV2.model_validate(context.model_dump(mode="python"))
     raw_names = [
         str(value).strip()
         for value in planner_declared_inputs
@@ -822,9 +912,40 @@ def resolved_raw_input_contracts(
     ]
     if len(raw_names) != len(set(raw_names)):
         raise ValueError("Planner-declared raw inputs must be unique")
-    cohort = context.materialized_inputs.cohort
     variables = {variable.name: variable for variable in context.variables}
     contracts: Dict[str, Any] = {}
+    if not isinstance(context, ResearchContextV2):
+        for name in raw_names:
+            variable = variables.get(name)
+            if variable is None:
+                raise ValueError(
+                    f"Planner-declared raw input {name!r} lacks a context descriptor"
+                )
+            contracts[name] = _legacy_raw_input_contract(variable)
+        payload: Dict[str, Any] = {
+            "schema_version": "easyicu.resolved_raw_input_contracts/1",
+            "authority_scope": (
+                "host_generated_sealed_research_context_constraints"
+            ),
+            "scientific_ownership": (
+                "Planner retains cohort, exposure, outcome, method, covariates, "
+                "and estimand decisions"
+            ),
+            "contracts": contracts,
+        }
+        canonical = json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+        payload["contracts_sha256"] = hashlib.sha256(canonical).hexdigest()
+        return payload
+
+    context = ResearchContextV2.model_validate(context.model_dump(mode="python"))
+    cohort = context.materialized_inputs.cohort
+    variables = {variable.name: variable for variable in context.variables}
     for name in raw_names:
         binding = cohort.column_bindings.get(name)
         if binding is None:
@@ -842,42 +963,12 @@ def resolved_raw_input_contracts(
             and isinstance(variable.observed_domain, Mapping)
             else None
         )
-        observed_levels = domain.get("levels") if domain is not None else None
-        n_unique = domain.get("n_unique") if domain is not None else None
-        if (
-            "allowed_values" not in fact
-            and isinstance(observed_levels, list)
-            and 1 <= len(observed_levels) <= 8
-            and isinstance(n_unique, int)
-            and not isinstance(n_unique, bool)
-            and n_unique == len(observed_levels)
-        ):
-            try:
-                encoded_levels = [
-                    (
-                        type(value).__name__,
-                        json.dumps(
-                            value,
-                            ensure_ascii=False,
-                            sort_keys=True,
-                            separators=(",", ":"),
-                            allow_nan=False,
-                        ),
-                    )
-                    for value in observed_levels
-                    if value is not None
-                    and isinstance(value, (bool, int, float, str))
-                ]
-            except (TypeError, ValueError):
-                encoded_levels = []
-            if (
-                len(encoded_levels) == len(observed_levels)
-                and len(set(encoded_levels)) == len(encoded_levels)
-            ):
-                fact["allowed_values"] = list(observed_levels)
-                fact["allowed_values_basis"] = (
-                    "sealed_research_context_observed_domain"
-                )
+        observed_levels = _closed_observed_levels(domain)
+        if "allowed_values" not in fact and observed_levels is not None:
+            fact["allowed_values"] = observed_levels
+            fact["allowed_values_basis"] = (
+                "sealed_research_context_observed_domain"
+            )
         if binding.analysis_plausibility_range is not None:
             fact["plausibility_policy"] = {
                 "range_policy": "flag_only",
@@ -904,6 +995,63 @@ def resolved_raw_input_contracts(
     ).encode("utf-8")
     payload["contracts_sha256"] = hashlib.sha256(canonical).hexdigest()
     return payload
+
+
+def raw_contract_inputs_for_step(
+    *,
+    planner_declared_inputs: Sequence[str],
+    primary_cohort_execution_receipt: Optional[Mapping[str, Any]],
+) -> tuple[str, ...]:
+    """Add only host-resolved cohort predicates to exact Planner inputs."""
+
+    names = [str(value) for value in planner_declared_inputs]
+    if primary_cohort_execution_receipt is None:
+        return tuple(names)
+    flow = primary_cohort_execution_receipt.get("ordered_predicate_flow")
+    if not isinstance(flow, list):
+        raise MaterializedMetadataError(
+            "primary cohort execution receipt lacks ordered predicate flow"
+        )
+    for row in flow:
+        if not isinstance(row, Mapping):
+            raise MaterializedMetadataError(
+                "primary cohort execution receipt contains an invalid predicate"
+            )
+        resolved_column = row.get("resolved_column")
+        if resolved_column is None:
+            continue
+        if not (
+            isinstance(resolved_column, str)
+            and resolved_column.strip()
+            and ":" not in resolved_column
+        ):
+            raise MaterializedMetadataError(
+                "primary cohort execution receipt has an invalid resolved column"
+            )
+        if resolved_column not in names:
+            names.append(resolved_column)
+    return tuple(names)
+
+
+def resolved_raw_input_contracts_for_step(
+    *,
+    coder_base_context: ResearchContextAuthority,
+    coder_context: ResearchContextAuthority,
+    planner_declared_inputs: Sequence[str],
+    primary_cohort_execution_receipt: Optional[Mapping[str, Any]],
+) -> Dict[str, Any]:
+    """Resolve exact step receipt columns without widening the Coder prompt."""
+
+    contract_inputs = raw_contract_inputs_for_step(
+        planner_declared_inputs=planner_declared_inputs,
+        primary_cohort_execution_receipt=primary_cohort_execution_receipt,
+    )
+    authority_context = (
+        coder_base_context
+        if primary_cohort_execution_receipt is not None
+        else coder_context
+    )
+    return resolved_raw_input_contracts(authority_context, contract_inputs)
 
 
 def materialized_input_prompt_attachment(
@@ -1239,5 +1387,7 @@ __all__ = [
     "parse_research_context",
     "parse_research_context_json",
     "project_research_context_variables",
+    "raw_contract_inputs_for_step",
     "resolved_raw_input_contracts",
+    "resolved_raw_input_contracts_for_step",
 ]

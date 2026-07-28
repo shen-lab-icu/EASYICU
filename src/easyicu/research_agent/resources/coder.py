@@ -19,10 +19,13 @@ from typing import Any, Iterable, Literal, Mapping, MutableMapping, Sequence
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..authority.coder_authority import HostCoderAuthority
+from ..authority.plausibility import FlagOnlyPlausibilityScope
 from ..authority.typed_binding import (
     _coder_authority_with_typed_parent_schema_receipts,
 )
-from ..gates.plausibility_receipt import RECEIPT_CONTRACT_CLAUSE
+from ..gates.plausibility_receipt import (
+    render_plausibility_receipt_scope_guidance,
+)
 from ..contracts.method_packages import (
     BASELINE_PACKAGES,
     CURATED_METHOD_PACKAGES,
@@ -550,9 +553,13 @@ def bind_primary_cohort_role(
 def bind_execution_cohort_runtime(
     *,
     authority: HostCoderAuthority,
+    plausibility_scope: FlagOnlyPlausibilityScope | None = None,
 ) -> HostCoderAuthority:
     """Explain the host-owned current-cohort and raw-domain coordinates."""
 
+    plausibility_guidance = render_plausibility_receipt_scope_guidance(
+        plausibility_scope
+    )
     return authority.append(
         "CURRENT EXECUTION COHORT (host-owned runtime contract): "
         "COHORT_PARQUET is the exact cohort selected for this step. The "
@@ -575,7 +582,7 @@ def bind_execution_cohort_runtime(
         "`plausibility_policy.out_of_range_action` is binding, not a "
         "suggestion: `retain_and_flag` means keep every such row and record a "
         "flag column or count -- never drop, clip, impute, or raise on it. "
-        f"{RECEIPT_CONTRACT_CLAUSE} "
+        f"{plausibility_guidance} "
         "Treat a finite out-of-range value as a fatal input error only where "
         "the policy itself says so. Keep source "
         "missingness distinct from non-finite values: count non-finite only "
@@ -596,6 +603,7 @@ def attach_step_coder_input_authority(
     context: ResearchContext,
     step: AnalysisStep,
     resolved_input_bindings: Mapping[str, Mapping[str, object]],
+    plausibility_scope: FlagOnlyPlausibilityScope,
     runtime_import_names: Iterable[str],
     step_record: MutableMapping[str, object],
     reviewed_memory_runtime: ReviewedMemoryRuntime | None = None,
@@ -603,7 +611,11 @@ def attach_step_coder_input_authority(
 ) -> HostCoderAuthority:
     """Bind typed-input receipts and optional selected resources for one step."""
 
-    authority = bind_execution_cohort_runtime(authority=authority)
+    plausibility_scope.require_step(step.step_id)
+    authority = bind_execution_cohort_runtime(
+        authority=authority,
+        plausibility_scope=plausibility_scope,
+    )
     authority = _coder_authority_with_typed_parent_schema_receipts(
         authority=authority,
         bindings=resolved_input_bindings,

@@ -8,19 +8,19 @@ can tell the difference. These tests are about what the step actually produced.
 
 from __future__ import annotations
 
+import inspect
+
 import pytest
 
+from easyicu.research_agent.authority.plausibility import (
+    FlagOnlyPlausibilityScope,
+)
 from easyicu.research_agent.gates.plausibility_receipt import (
     RECEIPT_CONTRACT_CLAUSE,
     RECEIPT_CONTRACT_SENTENCE,
     plausibility_audit_receipt_findings,
 )
-from easyicu.research_agent.schema import (
-    AnalysisStep,
-    CohortDescriptor,
-    ConceptDescriptor,
-    ResearchContext,
-)
+from easyicu.research_agent.schema import AnalysisStep
 
 # Enough of a script to put the step under the obligation: it reads the sealed
 # range, so it owes a receipt.
@@ -34,37 +34,44 @@ COMPLIANT = {
 }
 
 
-def _context(*, ranged: bool = True) -> ResearchContext:
-    return ResearchContext(
-        research_question="Assess a continuous ICU marker.",
-        cohort=CohortDescriptor(
-            cohort_name="c", database="synthetic", n_stays=3, n_patients=3
-        ),
-        variables=[
-            ConceptDescriptor(
-                name="marker",
-                dtype="float64",
-                valid_range=[0.0, 10.0] if ranged else None,
-            )
-        ],
-    )
-
-
 def _step() -> AnalysisStep:
     return AnalysisStep(step_id="06_primary", intent="associate", method="logistic")
 
 
-def _reasons(summary, *, ranged: bool = True, script: str = READS_THE_RANGE):
+def _scope(*columns: str) -> FlagOnlyPlausibilityScope:
+    return FlagOnlyPlausibilityScope(
+        step_id=_step().step_id,
+        expected_columns=tuple(sorted(columns)),
+        source_contracts_sha256="0" * 64,
+        authority_kind="test_resolved_raw_input_contracts",
+    )
+
+
+def _reasons(
+    summary,
+    *,
+    ranged: bool = True,
+    script: str = READS_THE_RANGE,
+    scope: FlagOnlyPlausibilityScope | None = None,
+):
+    active_scope = (
+        scope if scope is not None else _scope(*(("marker",) if ranged else ()))
+    )
     findings = plausibility_audit_receipt_findings(
         step_summary=summary,
-        context=_context(ranged=ranged),
         step=_step(),
         script_text=script,
+        scope=active_scope,
     )
     assert all(finding.severity == "error" for finding in findings)
     # Every block quotes the contract, so a repair is told the exact shape it
     # owes rather than being asked to guess one.
-    assert all(RECEIPT_CONTRACT_SENTENCE in finding.message for finding in findings)
+    assert all(
+        RECEIPT_CONTRACT_SENTENCE in finding.message
+        or (finding.detail or {}).get("reason")
+        == "plausibility_audit_without_step_authority"
+        for finding in findings
+    )
     return {str((finding.detail or {}).get("reason")) for finding in findings}
 
 
@@ -166,7 +173,10 @@ def test_a_policy_object_naming_a_different_action_is_still_blocked():
         ),
         pytest.param(
             {"other_column": COMPLIANT},
-            "plausibility_audit_variable_not_declared",
+            {
+                "plausibility_audit_variable_not_declared",
+                "plausibility_audit_expected_variable_missing",
+            },
             id="undeclared_variable",
         ),
         pytest.param(
@@ -196,27 +206,77 @@ def test_a_receipt_that_does_not_carry_the_counts_is_blocked(receipt, reason):
     Python, so a receipt can record that something happened while recording
     nothing about how much."""
 
-    assert _reasons({"plausibility_audit": receipt}) == {reason}
+    expected = reason if isinstance(reason, set) else {reason}
+    assert _reasons({"plausibility_audit": receipt}) == expected
 
 
 def test_a_run_that_declares_no_range_owes_no_receipt():
     assert _reasons({}, ranged=False) == set()
 
 
-def test_a_step_that_never_reads_the_range_owes_no_receipt():
-    """Same trigger as the static gate, so the two halves cannot disagree about
-    which steps are under the obligation."""
+def test_a_scoped_step_cannot_erase_its_receipt_by_omitting_the_range_read():
+    """The immutable step scope, not generated source text, owns the duty."""
 
-    assert _reasons({}, script="rows = [1, 2, 3]\n") == set()
+    assert _reasons({}, script="rows = [1, 2, 3]\n") == {
+        "plausibility_audit_receipt_absent"
+    }
 
 
 def test_the_repair_receipt_alone_puts_a_step_under_the_obligation():
-    """After the deterministic repair the script may no longer name the range,
-    and that is exactly when the LLM auditor goes quiet. The marker keeps the
-    obligation alive."""
+    """A repair marker cannot erase an already host-owned obligation."""
 
     repaired = "pass  # _easyicu_flag_only_plausibility_range_retained_v1\n"
     assert _reasons({}, script=repaired) == {"plausibility_audit_receipt_absent"}
+
+
+def test_a_repair_marker_cannot_create_an_obligation_for_an_empty_scope():
+    repaired = "pass  # _easyicu_flag_only_plausibility_range_retained_v1\n"
+    assert _reasons({}, ranged=False, script=repaired) == set()
+
+
+def test_an_empty_scope_rejects_a_nonempty_policy_receipt():
+    assert _reasons(
+        {"plausibility_audit": {"marker": COMPLIANT}},
+        ranged=False,
+    ) == {"plausibility_audit_without_step_authority"}
+
+
+@pytest.mark.parametrize(
+    "payload",
+    ["retain_and_flag", [{"unexpected": "shape"}], 1, False],
+)
+def test_an_empty_scope_rejects_any_malformed_receipt_claim(payload):
+    assert _reasons(
+        {"plausibility_audit": payload},
+        ranged=False,
+    ) == {"plausibility_audit_without_step_authority"}
+
+
+def test_exact_scope_requires_every_expected_column_and_no_extra_column():
+    exact = _scope("marker", "second_marker")
+    assert _reasons(
+        {
+            "plausibility_audit": {
+                "marker": COMPLIANT,
+                "unrelated_global_marker": COMPLIANT,
+            }
+        },
+        scope=exact,
+    ) == {
+        "plausibility_audit_expected_variable_missing",
+        "plausibility_audit_variable_not_declared",
+    }
+
+
+def test_list_receipts_reject_duplicate_records_for_one_expected_column():
+    assert _reasons(
+        {
+            "plausibility_audit": [
+                {"variable": "marker", **COMPLIANT},
+                {"variable": "marker", **COMPLIANT},
+            ]
+        }
+    ) == {"plausibility_audit_variable_duplicate"}
 
 
 def test_the_published_contract_and_the_gate_share_their_field_names():
@@ -271,24 +331,28 @@ def test_a_missing_receipt_enters_the_repair_loop_instead_of_sealing_the_step():
         [
             "_step_deterministic_contract_findings",
             "_demote_step_contract_for_primary_runner",
-            "plausibility_audit_receipt_findings",
+            "_fresh_plausibility_receipt_findings",
             "_deterministic_summary_repair",
             "deterministic_contract_repair",
             "_step_contract_repair_guidance",
         ],
     )
-    assert "plausibility_audit_receipt_findings" in order, (
+    receipt_gate = "_fresh_plausibility_receipt_findings"
+    assert receipt_gate in order, (
         "the receipt check never runs in the pre-registration gate, so a "
         "missing receipt can only ever be terminal"
+    )
+    assert "plausibility_audit_receipt_findings" in inspect.getsource(
+        phase._fresh_plausibility_receipt_findings
     )
     # Raised with the other early contract findings...
     assert (
         order["_step_deterministic_contract_findings"]
-        < order["plausibility_audit_receipt_findings"]
+        < order[receipt_gate]
     )
     assert (
         order["_demote_step_contract_for_primary_runner"]
-        < order["plausibility_audit_receipt_findings"]
+        < order[receipt_gate]
     )
     # ...and before every repair the loop can spend on them.
     for repair in (
@@ -296,7 +360,7 @@ def test_a_missing_receipt_enters_the_repair_loop_instead_of_sealing_the_step():
         "deterministic_contract_repair",
         "_step_contract_repair_guidance",
     ):
-        assert order["plausibility_audit_receipt_findings"] < order[repair], repair
+        assert order[receipt_gate] < order[repair], repair
 
 
 def test_a_receipt_finding_is_not_one_of_the_unrepairable_terminal_classes():
@@ -313,9 +377,9 @@ def test_a_receipt_finding_is_not_one_of_the_unrepairable_terminal_classes():
 
     findings = plausibility_audit_receipt_findings(
         step_summary={"rows": 1},
-        context=_context(),
         step=_step(),
         script_text=READS_THE_RANGE,
+        scope=_scope("marker"),
     )
     assert findings
     assert _locked_measurement_data_quality_issues(findings) == []

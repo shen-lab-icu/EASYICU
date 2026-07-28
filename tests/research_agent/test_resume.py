@@ -2332,11 +2332,32 @@ import pandas as pd
 
 df = pd.read_parquet(os.environ["COHORT_PARQUET"])
 out = os.environ["STEP_OUT_DIR"]
+with open(
+    os.environ["EASYICU_RESOLVED_INPUTS_JSON"], "r", encoding="utf-8"
+) as f:
+    resolved = json.load(f)
+plausibility_audit = {}
+for column, contract in resolved["raw_input_contracts"]["contracts"].items():
+    bounds = contract.get("analysis_plausibility_range")
+    if bounds is None:
+        continue
+    numeric = pd.to_numeric(df[column], errors="coerce")
+    lower = bounds.get("minimum")
+    upper = bounds.get("maximum")
+    below_n = int((numeric < lower).sum()) if lower is not None else 0
+    above_n = int((numeric > upper).sum()) if upper is not None else 0
+    plausibility_audit[column] = {
+        "policy": "retain_and_flag",
+        "below_minimum_n": below_n,
+        "above_maximum_n": above_n,
+        "out_of_range_n": below_n + above_n,
+    }
 summary = {
     "predictor": "sofa2",
     "n": int(len(df)),
     "sofa2_median": float(df["sofa2"].median()),
     "mortality_rate": float(df["death"].mean()),
+    "plausibility_audit": plausibility_audit,
 }
 pd.DataFrame([summary]).to_csv(os.path.join(out, "cohort_summary.csv"), index=False)
 summary["output_files"] = {

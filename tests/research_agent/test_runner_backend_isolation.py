@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -60,6 +61,7 @@ def test_ordinary_pipeline_backend_does_not_follow_docker_availability(
     )
     # Ordinary Pipeline tests are fixed to one deterministic backend.
     assert pipeline_module.select_safe_runner_kind(image="easyicu:test") == "subprocess"
+    assert os.environ["EASYICU_ALLOW_UNSAFE_HOST_FALLBACK"] == "1"
     # Test isolation must not rewrite the production-facing Pipeline default.
     pipeline = ra.ResearchAgentPipeline(workdir=tmp_path / "work")
     assert pipeline._runner_kind == "auto"

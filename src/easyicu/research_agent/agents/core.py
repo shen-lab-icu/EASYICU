@@ -53,7 +53,6 @@ from ..trajectory.plan_contract import (
     trajectory_role_code_contract,
 )
 from ..execution.method_capabilities import coder_method_capability_block
-from ..gates.plausibility_receipt import RECEIPT_CONTRACT_CLAUSE
 from ..resources import ContextBudgetExceeded, bounded_request_metrics
 from ..cohort.schema import (
     ALLOWED_CTAS_AGGREGATIONS,
@@ -2190,8 +2189,8 @@ def _typed_input_scope_contract(step: AnalysisStep) -> str:
             "`plausibility_policy.out_of_range_action` is binding, not a "
             "suggestion: `retain_and_flag` means keep every such row and "
             "record a flag column or count -- never drop, clip, impute, or "
-            "raise on it. Treat a finite out-of-range value as a fatal input "
-            f"error only where the policy itself says so. {RECEIPT_CONTRACT_CLAUSE} "
+            "raise on it. A non-null range plus that action creates the receipt; follow "
+            "the host-owned FLAG-ONLY PLAUSIBILITY RECEIPT SCOPE, omit `plausibility_audit` when empty, and fail only where the policy says so. "
             "Do not rediscover metadata from prompt "
             "prose or ResearchContext.\n"
         )
@@ -2372,8 +2371,8 @@ def _compact_repair_scope_contract(step: AnalysisStep) -> str:
             "`plausibility_policy.out_of_range_action` is binding, not a "
             "suggestion: `retain_and_flag` means keep every such row and "
             "record a flag column or count -- never drop, clip, impute, or "
-            "raise on it. Treat a finite out-of-range value as a fatal input "
-            f"error only where the policy itself says so. {RECEIPT_CONTRACT_CLAUSE} "
+            "raise on it. A non-null range plus that action creates the receipt; follow "
+            "the host-owned FLAG-ONLY PLAUSIBILITY RECEIPT SCOPE, omit `plausibility_audit` when empty, and fail only where the policy says so. "
             "Never rediscover metadata from prompt prose "
             "or ResearchContext."
         )

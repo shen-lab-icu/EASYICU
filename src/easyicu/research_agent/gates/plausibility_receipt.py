@@ -26,16 +26,18 @@ told to write blocks every script, so the same constants that the gates read are
 rendered into the Coder's binding instructions -- the contract and its enforcer
 cannot drift apart because they are the same object.
 
-Case neutrality: the variable names come from ``context``; nothing here knows
-which study, benchmark, column or bound is in play.
+Case neutrality: variable names come from the exact sealed step contracts;
+nothing here knows which study, benchmark, column or bound is in play.
 """
 
 from __future__ import annotations
 
 import ast
+import json
 from typing import Any, Mapping, Optional, Sequence, Set
 
-from ..schema import AnalysisStep, ResearchContext, ValidationFinding
+from ..authority.plausibility import FlagOnlyPlausibilityScope
+from ..schema import AnalysisStep, ValidationFinding
 
 #: The sealed host contract key a script reads to obtain the bounds.  Its
 #: presence is what proves the script is exercising the typed policy rather
@@ -155,45 +157,63 @@ def mentions_a_plausibility_range(tree: ast.AST) -> bool:
     )
 
 
-def ranged_variable_names(context: ResearchContext) -> list[str]:
-    """The declared variables that carry a plausibility range.
-
-    ``variables`` is a required field on every real context; the ``getattr`` is
-    for the composition tests that pass a bare stub, and a context with no
-    variables genuinely declares no range.
-    """
-
-    return sorted(
-        str(descriptor.name)
-        for descriptor in getattr(context, "variables", ())
-        if descriptor.valid_range is not None
-    )
-
-
 def step_is_under_the_flag_only_obligation(
     *,
     script_text: str,
     tree: Optional[ast.AST],
-    context: ResearchContext,
+    scope: FlagOnlyPlausibilityScope,
 ) -> Optional[str]:
     """Why this step owes a receipt, or ``None`` if it does not.
 
-    The trigger is the host's own typed policy plus the script's use of it, so
-    it survives the LLM auditor going quiet -- which is the whole point.  A step
-    that never reads the sealed range is out of scope here **and is not thereby
-    proven compliant**; widening the trigger to every step that merely touches a
-    ranged variable would put a domain audit on every step in every study, which
-    is a scientific scope decision for the run's owner rather than something a
-    gate should take by implication.
+    The host-owned step scope creates the obligation.  Source text only
+    describes how the script tried to implement it; generated code cannot opt
+    out by omitting the range key, and a generic helper cannot pull unrelated
+    variables from the wider ResearchContext into this step.
     """
 
-    if not ranged_variable_names(context):
+    if not scope.expected_columns:
         return None
     if REPAIR_RECEIPT_MARKER in str(script_text or ""):
         return "deterministic_repair_receipt"
     if tree is not None and mentions_a_plausibility_range(tree):
         return "declared_range_read"
-    return None
+    return "step_scoped_raw_input_contract"
+
+
+def render_plausibility_receipt_scope_guidance(
+    scope: Optional[FlagOnlyPlausibilityScope],
+) -> str:
+    """Render Coder guidance from the same scope enforced by both gates."""
+
+    if scope is None:
+        return (
+            "Only an exact current-step raw-input contract with a non-null "
+            "`analysis_plausibility_range` and "
+            "`plausibility_policy.out_of_range_action == 'retain_and_flag'` "
+            "creates a receipt obligation. Never infer one from the broader "
+            f"ResearchContext. When such a contract exists, {RECEIPT_CONTRACT_CLAUSE}"
+        )
+    if not scope.expected_columns:
+        return (
+            "FLAG-ONLY PLAUSIBILITY RECEIPT SCOPE (host-owned): []. This step "
+            "has no raw-input contract with both a non-null "
+            "`analysis_plausibility_range` and `retain_and_flag`. Do not write "
+            "a non-empty `plausibility_audit`, do not claim that policy for a "
+            "no-range input, and do not audit variables from the broader "
+            f"ResearchContext. Scope SHA-256: {scope.scope_sha256}."
+        )
+    columns = json.dumps(
+        list(scope.expected_columns),
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    return (
+        "FLAG-ONLY PLAUSIBILITY RECEIPT SCOPE (host-owned): exact resolved "
+        f"columns {columns}. Write exactly one receipt record for every listed "
+        "column and no others; a no-range input and an unrelated "
+        "ResearchContext variable are outside this step's authority. "
+        f"{RECEIPT_CONTRACT_CLAUSE} Scope SHA-256: {scope.scope_sha256}."
+    )
 
 
 def _declares_the_policy(value: Any) -> bool:
@@ -251,9 +271,9 @@ def _receipt_records(payload: Any) -> Optional[list[tuple[Any, Any]]]:
 def plausibility_audit_receipt_findings(
     *,
     step_summary: Mapping[str, Any],
-    context: ResearchContext,
     step: AnalysisStep,
     script_text: str,
+    scope: FlagOnlyPlausibilityScope,
 ) -> list[ValidationFinding]:
     """Check that the executed step actually left the receipt behind.
 
@@ -263,6 +283,7 @@ def plausibility_audit_receipt_findings(
     its own is only an intention -- so both run.
     """
 
+    scope.require_step(step.step_id)
     tree: Optional[ast.AST]
     try:
         tree = ast.parse(str(script_text or ""))
@@ -271,29 +292,37 @@ def plausibility_audit_receipt_findings(
     trigger = step_is_under_the_flag_only_obligation(
         script_text=script_text,
         tree=tree,
-        context=context,
+        scope=scope,
     )
-    if trigger is None:
-        return []
-
-    declared = ranged_variable_names(context)
+    declared = list(scope.expected_columns)
     step_id = str(step.step_id)
     detail_base = {
         "step_id": step_id,
         "issue_code": "flag_only_plausibility_receipt",
         "policy": RECEIPT_POLICY_VALUE,
-        "policy_authority": "typed_research_context_plausibility_policy",
+        "policy_authority": scope.authority_kind,
         "trigger": trigger,
         "receipt_key": RECEIPT_SUMMARY_KEY,
-        "ranged_variables": declared,
+        "expected_columns": declared,
+        "source_contracts_sha256": scope.source_contracts_sha256,
+        "scope_sha256": scope.scope_sha256,
     }
 
-    def _blocked(reason: str, message: str, **extra: Any) -> list[ValidationFinding]:
+    def _blocked(
+        reason: str,
+        message: str,
+        *,
+        quote_contract: bool = True,
+        **extra: Any,
+    ) -> list[ValidationFinding]:
+        rendered = (
+            f"{message} {RECEIPT_CONTRACT_SENTENCE}" if quote_contract else message
+        )
         return [
             ValidationFinding(
                 validator=_VALIDATOR,
                 severity="error",
-                message=f"{message} {RECEIPT_CONTRACT_SENTENCE}",
+                message=rendered,
                 detail={**detail_base, "reason": reason, **extra},
             )
         ]
@@ -303,6 +332,29 @@ def plausibility_audit_receipt_findings(
         if isinstance(step_summary, Mapping)
         else None
     )
+    if trigger is None:
+        if payload is None:
+            return []
+        records = _receipt_records(payload)
+        if records == []:
+            return []
+        return _blocked(
+            "plausibility_audit_without_step_authority",
+            (
+                f"Step {step_id} wrote a non-empty {RECEIPT_SUMMARY_KEY!r} "
+                "receipt even though its exact raw-input contracts declare no "
+                "flag-only plausibility obligation. Remove the unsupported "
+                "policy claim; do not substitute variables from the broader "
+                "ResearchContext."
+            ),
+            quote_contract=False,
+            observed_variables=[
+                str(variable or "").strip() or None for variable, _ in records
+            ]
+            if records is not None
+            else None,
+            observed_type=type(payload).__name__,
+        )
     if payload is None:
         return _blocked(
             "plausibility_audit_receipt_absent",
@@ -327,6 +379,7 @@ def plausibility_audit_receipt_findings(
         )
 
     findings: list[ValidationFinding] = []
+    seen: set[str] = set()
     for variable, record in records:
         name = str(variable or "").strip()
         located = {"variable": name or None}
@@ -342,14 +395,28 @@ def plausibility_audit_receipt_findings(
                 )
             )
             continue
+        if name in seen:
+            findings.extend(
+                _blocked(
+                    "plausibility_audit_variable_duplicate",
+                    (
+                        f"Step {step_id} wrote more than one "
+                        f"{RECEIPT_SUMMARY_KEY!r} record for {name!r}. Each "
+                        "expected column must appear exactly once."
+                    ),
+                    **located,
+                )
+            )
+            continue
+        seen.add(name)
         if name not in declared:
             findings.extend(
                 _blocked(
                     "plausibility_audit_variable_not_declared",
                     (
                         f"Step {step_id} audited {name!r}, which is not one of "
-                        "the variables the host declared a plausibility range "
-                        "for. Key the receipt by the exact resolved column."
+                        "the exact current-step raw inputs for which the host "
+                        "declared a flag-only plausibility policy."
                     ),
                     **located,
                 )
@@ -429,6 +496,18 @@ def plausibility_audit_receipt_findings(
                     out_of_range_n=total,
                 )
             )
+    missing = sorted(set(declared) - seen)
+    if missing:
+        findings.extend(
+            _blocked(
+                "plausibility_audit_expected_variable_missing",
+                (
+                    f"Step {step_id} omitted {len(missing)} exact current-step "
+                    "flag-only plausibility receipt record(s)."
+                ),
+                missing_variables=missing,
+            )
+        )
     return findings
 
 
@@ -449,6 +528,6 @@ __all__ = [
     "REPAIR_RECEIPT_MARKER",
     "mentions_a_plausibility_range",
     "plausibility_audit_receipt_findings",
-    "ranged_variable_names",
+    "render_plausibility_receipt_scope_guidance",
     "step_is_under_the_flag_only_obligation",
 ]

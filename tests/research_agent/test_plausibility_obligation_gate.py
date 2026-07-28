@@ -14,6 +14,9 @@ import pathlib
 
 import pytest
 
+from easyicu.research_agent.authority.plausibility import (
+    FlagOnlyPlausibilityScope,
+)
 from easyicu.research_agent.gates.concept import deterministic_code_gate_findings
 from easyicu.research_agent.gates.plausibility_obligation import (
     REPAIR_RECEIPT_MARKER,
@@ -57,6 +60,12 @@ def validate_allowed_numeric(values, column, manifest):
         numeric = values.dropna().astype(float)
 """
 
+HELPER_CALL = """
+
+
+validate_allowed_numeric(frame["marker"], "marker", manifest)
+"""
+
 REJECTS = (
     HEADER
     + HELPER_HEAD
@@ -65,7 +74,7 @@ REJECTS = (
         if upper is not None and (numeric > float(upper)).any():
             raise RuntimeError(f"{column} is above the plausibility maximum")
 
-
+validate_allowed_numeric(frame["marker"], "marker", manifest)
 write_json(SUMMARY_PATH, {"rows": 1})
 """
 )
@@ -84,7 +93,7 @@ RECORDS_NOTHING = (
     + REPAIR_RECEIPT_MARKER
     + """
 
-
+validate_allowed_numeric(frame["marker"], "marker", manifest)
 write_json(SUMMARY_PATH, {"rows": 1})
 """
 )
@@ -95,7 +104,7 @@ LOCAL_ONLY = (
     + """        below_n = int((numeric < float(lower)).sum()) if lower is not None else 0
         above_n = int((numeric > float(upper)).sum()) if upper is not None else 0
 
-
+validate_allowed_numeric(frame["marker"], "marker", manifest)
 write_json(SUMMARY_PATH, {"rows": 1})
 """
 )
@@ -111,7 +120,7 @@ plausibility_audit = {}
             "above_n": int((numeric > float(upper)).sum()) if upper is not None else 0,
         }
 
-
+validate_allowed_numeric(frame["marker"], "marker", manifest)
 write_json(SUMMARY_PATH, {"plausibility_audit": plausibility_audit})
 """
 )
@@ -127,7 +136,7 @@ plausibility_audit = {}
                 "below_n": int((numeric < float(lower)).sum()),
             }
 
-
+validate_allowed_numeric(frame["marker"], "marker", manifest)
 write_json(SUMMARY_PATH, {"plausibility_audit": plausibility_audit})
 """
 )
@@ -138,7 +147,7 @@ FILTERS = (
     + """        outside = (numeric < float(lower)) | (numeric > float(upper))
         kept = numeric[~outside]
 
-
+validate_allowed_numeric(frame["marker"], "marker", manifest)
 write_json(SUMMARY_PATH, {"rows": 1})
 """
 )
@@ -164,14 +173,39 @@ def _step() -> AnalysisStep:
     return AnalysisStep(step_id="06_primary", intent="associate", method="logistic")
 
 
+def _scope(*, ranged: bool = True) -> FlagOnlyPlausibilityScope:
+    return FlagOnlyPlausibilityScope(
+        step_id=_step().step_id,
+        expected_columns=("marker",) if ranged else (),
+        source_contracts_sha256="0" * 64,
+        authority_kind="test_resolved_raw_input_contracts",
+    )
+
+
 def _reasons(code: str, *, ranged: bool = True) -> set[str]:
     findings = flag_only_plausibility_obligation_findings(
         ast.parse(code),
         script_text=code,
-        context=_context(ranged=ranged),
         step=_step(),
+        scope=_scope(ranged=ranged),
     )
     assert all(finding.severity == "error" for finding in findings)
+    return {str((finding.detail or {}).get("reason")) for finding in findings}
+
+
+def _reasons_for_columns(code: str, *columns: str) -> set[str]:
+    scope = FlagOnlyPlausibilityScope(
+        step_id=_step().step_id,
+        expected_columns=tuple(sorted(columns)),
+        source_contracts_sha256="0" * 64,
+        authority_kind="test_resolved_raw_input_contracts",
+    )
+    findings = flag_only_plausibility_obligation_findings(
+        ast.parse(code),
+        script_text=code,
+        step=_step(),
+        scope=scope,
+    )
     return {str((finding.detail or {}).get("reason")) for finding in findings}
 
 
@@ -181,12 +215,190 @@ def test_a_script_that_records_the_count_in_a_written_output_passes():
     assert _reasons(DECLARED) == set()
 
 
+def test_an_uncalled_helper_cannot_certify_literal_receipts() -> None:
+    """A perfect-looking dead function is not evidence that a check ran."""
+
+    dead_helper = DECLARED.replace(
+        'validate_allowed_numeric(frame["marker"], "marker", manifest)\n',
+        "",
+    )
+
+    assert _reasons(dead_helper) == {"plausibility_check_not_attributable"}
+
+
+def test_one_called_column_cannot_certify_another_literal_receipt() -> None:
+    forged_second = DECLARED.replace(
+        'write_json(SUMMARY_PATH, {"plausibility_audit": plausibility_audit})',
+        """
+plausibility_audit["second_marker"] = {
+    "policy": "retain_and_flag",
+    "below_minimum_n": 0,
+    "above_maximum_n": 0,
+    "out_of_range_n": 0,
+}
+write_json(SUMMARY_PATH, {"plausibility_audit": plausibility_audit})
+""",
+    )
+
+    assert _reasons_for_columns(forged_second, "marker", "second_marker") == {
+        "plausibility_scope_column_not_attributable"
+    }
+
+
+def test_each_called_scope_column_can_share_one_generic_validator() -> None:
+    both = DECLARED.replace(
+        'validate_allowed_numeric(frame["marker"], "marker", manifest)',
+        'validate_allowed_numeric(frame["marker"], "marker", manifest)\n'
+        'validate_allowed_numeric(frame["second_marker"], "second_marker", manifest)',
+    )
+
+    assert _reasons_for_columns(both, "marker", "second_marker") == set()
+
+
+def test_module_loop_over_sealed_contracts_covers_each_runtime_column() -> None:
+    direct_loop = (
+        HEADER
+        + """
+plausibility_audit = {}
+contracts = manifest["raw_input_contracts"]["contracts"]
+for column, contract in contracts.items():
+    bounds = contract.get("analysis_plausibility_range")
+    if bounds is None:
+        continue
+    lower = bounds.get("minimum")
+    upper = bounds.get("maximum")
+    numeric = frame[column].dropna().astype(float)
+    below_n = int((numeric < lower).sum()) if lower is not None else 0
+    above_n = int((numeric > upper).sum()) if upper is not None else 0
+    plausibility_audit[column] = {
+        "policy": "retain_and_flag",
+        "below_minimum_n": below_n,
+        "above_maximum_n": above_n,
+        "out_of_range_n": below_n + above_n,
+    }
+
+write_json(SUMMARY_PATH, {"plausibility_audit": plausibility_audit})
+"""
+    )
+
+    assert _reasons_for_columns(direct_loop, "marker", "second_marker") == set()
+
+
+def test_contract_loop_cannot_certify_comparisons_on_unrelated_data() -> None:
+    unrelated = (
+        HEADER
+        + """
+plausibility_audit = {}
+contracts = manifest["raw_input_contracts"]["contracts"]
+for column, contract in contracts.items():
+    bounds = contract.get("analysis_plausibility_range")
+    lower = bounds.get("minimum")
+    numeric = frame["unrelated"].dropna().astype(float)
+    below_n = int((numeric < lower).sum()) if lower is not None else 0
+    plausibility_audit[column] = {
+        "policy": "retain_and_flag",
+        "below_minimum_n": below_n,
+        "above_maximum_n": 0,
+        "out_of_range_n": below_n,
+    }
+
+write_json(SUMMARY_PATH, {"plausibility_audit": plausibility_audit})
+"""
+    )
+
+    assert _reasons_for_columns(unrelated, "marker", "second_marker") == {
+        "plausibility_scope_column_not_attributable"
+    }
+
+
 def test_rejecting_an_out_of_range_value_is_blocked():
     assert "flag_only_plausibility_range_rejected" in _reasons(REJECTS)
 
 
 def test_filtering_out_of_range_rows_is_blocked():
     assert "flag_only_plausibility_range_filtered" in _reasons(FILTERS)
+
+
+@pytest.mark.parametrize(
+    "operation, transform",
+    [
+        (
+            "drop",
+            """
+        outside = (numeric < float(lower)) | (numeric > float(upper))
+        transformed = numeric.drop(index=numeric.index[outside])
+""",
+        ),
+        (
+            "query",
+            """
+        table = numeric.to_frame(name=column)
+        expression = f"`{column}` >= {float(lower)} and `{column}` <= {float(upper)}"
+        transformed = table.query(expression)
+""",
+        ),
+        (
+            "clip",
+            """
+        transformed = numeric.clip(
+            lower=float(lower),
+            upper=float(upper),
+        )
+""",
+        ),
+        (
+            "where",
+            """
+        outside = (numeric < float(lower)) | (numeric > float(upper))
+        transformed = numeric.where(~outside)
+""",
+        ),
+    ],
+)
+def test_pandas_range_transform_spellings_are_blocked(
+    operation: str,
+    transform: str,
+) -> None:
+    code = DECLARED.replace(
+        "        plausibility_audit[column] = {",
+        transform + "        plausibility_audit[column] = {",
+    )
+
+    findings = flag_only_plausibility_obligation_findings(
+        ast.parse(code),
+        script_text=code,
+        step=_step(),
+        scope=_scope(),
+    )
+    transformed = [
+        finding
+        for finding in findings
+        if (finding.detail or {}).get("reason")
+        == "flag_only_plausibility_range_transformed"
+    ]
+
+    assert len(transformed) == 1
+    assert transformed[0].detail["operation"] == operation
+
+
+@pytest.mark.parametrize(
+    "unrelated",
+    [
+        '        projection = frame.drop(columns=["unused"], errors="ignore")\n',
+        '        eligible = frame.query("eligible == 1")\n',
+        "        display = frame[\"display\"].clip(lower=0, upper=1)\n",
+        "        labelled = frame[\"marker\"].where(frame[\"eligible\"] == 1)\n",
+    ],
+)
+def test_unrelated_pandas_transforms_are_not_plausibility_rejections(
+    unrelated: str,
+) -> None:
+    code = DECLARED.replace(
+        "        plausibility_audit[column] = {",
+        unrelated + "        plausibility_audit[column] = {",
+    )
+
+    assert _reasons(code) == set()
 
 
 def test_a_repaired_script_that_records_nothing_is_blocked():
@@ -285,7 +497,8 @@ plausibility_audit = {}
         ) if lower is not None else 0
 
 
-"""
+	"""
+        + HELPER_CALL
         + sink
         + "\n"
     )
@@ -344,6 +557,7 @@ plausibility_audit = {}
 
 summary = {"plausibility_audit": plausibility_audit}
 """
+        + HELPER_CALL
         + sink
         + "\n"
     )
@@ -371,7 +585,7 @@ plausibility_audit = {}
             (numeric < float(lower)).sum()
         ) if lower is not None else 0
 
-
+validate_allowed_numeric(frame["marker"], "marker", manifest)
 pd.DataFrame([plausibility_audit]).to_csv(STEP_OUT_DIR / "range_audit.csv")
 write_json(SUMMARY_PATH, {"output_files": {"table:range": "range_audit.csv"}})
 """
@@ -412,7 +626,7 @@ plausibility_audit = {}
             (numeric < float(lower)).sum()
         ) if lower is not None else 0
 
-
+validate_allowed_numeric(frame["marker"], "marker", manifest)
 write_json(SUMMARY_PATH, {"%s": plausibility_audit})
 """
         % summary_key
@@ -438,7 +652,7 @@ plausibility_audit = {}
             (numeric < float(lower)).sum()
         ) if lower is not None else 0
 
-
+validate_allowed_numeric(frame["marker"], "marker", manifest)
 receipt = {"plausibility_audit": plausibility_audit}
 write_json(SUMMARY_PATH, {"quality": receipt})
 """
@@ -471,7 +685,7 @@ plausibility_audit = {}
             ),
         }
 
-
+validate_allowed_numeric(frame["marker"], "marker", manifest)
 write_json("/tmp/step_summary.json", {"plausibility_audit": plausibility_audit})
 write_json(
     SUMMARY_PATH,
@@ -516,7 +730,7 @@ def write_summary(summary, out_dir):
             (numeric < float(lower)).sum()
         ) if lower is not None else 0
 
-
+validate_allowed_numeric(frame["marker"], "marker", manifest)
 write_summary({"plausibility_audit": plausibility_audit}, STEP_OUT_DIR)
 """
     )
@@ -576,6 +790,7 @@ out_dir = Path("/tmp")
 """
         + HELPER_HEAD
         + RECORD_THE_COUNTS
+        + HELPER_CALL
         + """
 
 write_json(out_dir / "step_summary.json", {"plausibility_audit": plausibility_audit})
@@ -612,6 +827,7 @@ def stage_to_scratch(payload):
 """
         + HELPER_HEAD
         + RECORD_THE_COUNTS
+        + HELPER_CALL
         + """
 
 stage_to_scratch({"plausibility_audit": plausibility_audit})
@@ -638,6 +854,7 @@ plausibility_audit = {}
 """
         + HELPER_HEAD
         + RECORD_THE_COUNTS
+        + HELPER_CALL
         + """
 
 plausibility_audit = ZEROS
@@ -663,6 +880,7 @@ plausibility_audit = {}
 """
         + HELPER_HEAD
         + RECORD_THE_COUNTS
+        + HELPER_CALL
         + """
 
 write_json(SUMMARY_PATH, {"plausibility_audit": plausibility_audit})
@@ -730,6 +948,7 @@ plausibility_audit = {}
 """
         + HELPER_HEAD
         + RECORD_THE_COUNTS
+        + HELPER_CALL
         + COUNT_AT_MODULE_LEVEL
         + guard
         + """
@@ -755,11 +974,42 @@ plausibility_audit = {}
 """
         + HELPER_HEAD
         + RECORD_THE_COUNTS
+        + HELPER_CALL
         + COUNT_AT_MODULE_LEVEL
         + """
 if out_of_range_n != 0:
     raise RuntimeError("out-of-range values present")
 
+
+write_json(SUMMARY_PATH, {"plausibility_audit": plausibility_audit})
+"""
+    )
+    assert "flag_only_plausibility_range_rejected" in _reasons(code)
+
+
+@pytest.mark.parametrize(
+    "fake_policy",
+    [
+        'fake_policy = "fail_closed"\n',
+        'policy = "fail_closed"\nfake_policy = policy\n',
+    ],
+)
+def test_a_lookalike_or_rebound_policy_cannot_hide_a_fatal_stop(fake_policy):
+    """Only the action read from the sealed contract can exempt a fallback."""
+
+    code = (
+        HEADER
+        + """
+plausibility_audit = {}
+"""
+        + HELPER_HEAD
+        + RECORD_THE_COUNTS
+        + HELPER_CALL
+        + COUNT_AT_MODULE_LEVEL
+        + fake_policy
+        + """
+if out_of_range_n > 0 and fake_policy != "retain_and_flag":
+    raise RuntimeError("out-of-range values present")
 
 write_json(SUMMARY_PATH, {"plausibility_audit": plausibility_audit})
 """
@@ -790,6 +1040,7 @@ with open("resolved.json", "r", encoding="utf-8") as handle:
 """
         + HELPER_HEAD
         + RECORD_THE_COUNTS
+        + HELPER_CALL
         + """
 
 summary_path = STEP_OUT_DIR / "step_summary.json"
@@ -833,13 +1084,13 @@ def test_the_gate_reads_the_output_directory_the_host_actually_sets():
 
 
 def test_no_declared_range_means_no_obligation():
-    """A run whose context declares no range never emitted this policy."""
+    """An empty exact step scope never emitted this policy."""
 
     assert _reasons(REJECTS, ranged=False) == set()
 
 
-def test_a_step_that_never_touches_a_range_is_out_of_scope():
-    """The trigger is the typed policy, not every step in a ranged study."""
+def test_a_scoped_step_cannot_opt_out_by_omitting_the_range_read():
+    """Generated source cannot erase a host-owned non-empty obligation."""
 
     unrelated = (
         HEADER
@@ -849,7 +1100,21 @@ kept = [row for row in rows if row > 1]
 write_json(SUMMARY_PATH, {"kept": len(kept)})
 """
     )
-    assert _reasons(unrelated) == set()
+    assert _reasons(unrelated) == {"plausibility_check_not_attributable"}
+
+
+def test_a_global_ranged_variable_does_not_widen_an_empty_step_scope():
+    """The study-wide ResearchContext is descriptive, not step authority."""
+
+    unrelated = (
+        HEADER
+        + """
+rows = [1, 2, 3]
+write_json(SUMMARY_PATH, {"rows": len(rows)})
+"""
+    )
+    assert _context(ranged=True).variables[0].valid_range is not None
+    assert _reasons(unrelated, ranged=False) == set()
 
 
 def test_a_cohort_eligibility_threshold_is_not_a_plausibility_check():
@@ -922,6 +1187,7 @@ def test_the_gate_runs_inside_the_shared_deterministic_code_gate():
         context=_context(),
         step=_step(),
         script_text=RECORDS_NOTHING,
+        plausibility_scope=_scope(),
     )
     obligations = [
         finding

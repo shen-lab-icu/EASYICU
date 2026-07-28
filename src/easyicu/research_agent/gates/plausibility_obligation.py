@@ -43,17 +43,18 @@ structural check means nobody looked, which is exactly the reading this module
 exists to refuse -- so ``not_attributable`` costs a provider repair rather than
 buying a free pass.
 
-Case neutrality: every variable name comes from ``context``.  Nothing here
-knows which study, benchmark, column or bound is in play.
+Case neutrality: every variable name comes from the exact sealed step scope.
+Nothing here knows which study, benchmark, column or bound is in play.
 """
 
 from __future__ import annotations
 
 import ast
-from typing import Iterator, Optional, Sequence, Set
+import re
+from typing import Iterator, Mapping, Optional, Sequence, Set
 
-from ..audits.validators import _unwrapped_bound_name
-from ..schema import AnalysisStep, ResearchContext, ValidationFinding
+from ..authority.plausibility import FlagOnlyPlausibilityScope
+from ..schema import AnalysisStep, ValidationFinding
 from .plausibility_receipt import (
     CANONICAL_STEP_SUMMARY_FILENAME,
     HOST_OUTPUT_DIR_ENV_KEYS,
@@ -62,7 +63,6 @@ from .plausibility_receipt import (
     RECEIPT_POLICY_VALUE,
     RECEIPT_SUMMARY_KEY,
     REPAIR_RECEIPT_MARKER,
-    ranged_variable_names,
     step_is_under_the_flag_only_obligation,
 )
 
@@ -113,6 +113,102 @@ _TERMINATING_CALLS = frozenset({"exit", "_exit", "sys_exit"})
 #: Wrappers that do not change which file a path expression names.
 _PATH_CONSTRUCTORS = frozenset({"Path", "PosixPath", "PurePath", "PurePosixPath"})
 _PATH_IDENTITY = frozenset({"absolute", "expanduser", "resolve"})
+_CALLBACK_DISPATCHERS = frozenset(
+    {"agg", "aggregate", "apply", "applymap", "filter", "map", "transform"}
+)
+
+
+def _active_nodes(
+    tree: ast.AST,
+    active_node_ids: Optional[Set[int]],
+) -> Iterator[ast.AST]:
+    """Walk only code that can run from the module entry point."""
+
+    return (
+        node
+        for node in ast.walk(tree)
+        if active_node_ids is None or id(node) in active_node_ids
+    )
+
+
+class _RuntimeReachability:
+    """Conservative module-entry reachability for locally defined helpers.
+
+    A function body is not evidence merely because it exists in the file.
+    Earlier versions walked the whole AST, so an uncalled helper containing a
+    perfect comparison-to-receipt chain could certify literal zero receipts
+    written by unrelated module code.  This index enters a helper only after a
+    reachable direct call (or a small, explicit callback dispatcher) names its
+    unique definition.
+
+    Dynamic dispatch is intentionally not guessed.  If the generated script
+    hides the obligation behind an unresolvable callback, the gate asks for a
+    repair instead of treating dead-looking code as executed evidence.
+    """
+
+    def __init__(self, tree: ast.Module) -> None:
+        self.tree = tree
+        definitions: dict[str, list[ast.AST]] = {}
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                definitions.setdefault(node.name, []).append(node)
+        self.definitions = {
+            name: nodes[0] for name, nodes in definitions.items() if len(nodes) == 1
+        }
+        self.active_node_ids: Set[int] = {id(tree)}
+        self.reachable_function_ids: Set[int] = set()
+        self._activate_statements(tree.body)
+        self._close_calls()
+
+    def _activate_statements(self, statements: Sequence[ast.stmt]) -> None:
+        pending: list[ast.AST] = list(statements)
+        while pending:
+            node = pending.pop()
+            if isinstance(
+                node,
+                (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef),
+            ):
+                # Creating the object is active; its body is not.
+                self.active_node_ids.add(id(node))
+                continue
+            if id(node) in self.active_node_ids:
+                continue
+            self.active_node_ids.add(id(node))
+            pending.extend(ast.iter_child_nodes(node))
+
+    def _activate_function(self, function: ast.AST) -> bool:
+        if id(function) in self.reachable_function_ids:
+            return False
+        self.reachable_function_ids.add(id(function))
+        self.active_node_ids.add(id(function))
+        self._activate_statements(function.body)
+        return True
+
+    def _close_calls(self) -> None:
+        while True:
+            grew = False
+            for node in ast.walk(self.tree):
+                if id(node) not in self.active_node_ids or not isinstance(node, ast.Call):
+                    continue
+                callee = node.func
+                if isinstance(callee, ast.Name):
+                    function = self.definitions.get(callee.id)
+                    if function is not None:
+                        grew = self._activate_function(function) or grew
+                dispatcher = (
+                    callee.attr
+                    if isinstance(callee, ast.Attribute)
+                    else callee.id if isinstance(callee, ast.Name) else ""
+                )
+                if dispatcher not in _CALLBACK_DISPATCHERS:
+                    continue
+                for argument in _call_arguments(node):
+                    if isinstance(argument, ast.Name):
+                        function = self.definitions.get(argument.id)
+                        if function is not None:
+                            grew = self._activate_function(function) or grew
+            if not grew:
+                break
 
 
 def _strip_path_wrappers(node: ast.AST) -> ast.AST:
@@ -726,6 +822,13 @@ def _unwrap_numeric_narrowing(node: ast.AST) -> ast.AST:
     return node
 
 
+def _unwrapped_bound_name(node: ast.AST) -> Optional[str]:
+    """Return the local name under supported numeric narrowing calls."""
+
+    unwrapped = _unwrap_numeric_narrowing(node)
+    return unwrapped.id if isinstance(unwrapped, ast.Name) else None
+
+
 def _branch_values(node: ast.AST) -> list[ast.AST]:
     """Every value a (possibly conditional) expression can take.
 
@@ -739,7 +842,11 @@ def _branch_values(node: ast.AST) -> list[ast.AST]:
     return [node]
 
 
-def _plausibility_range_and_bound_names(tree: ast.AST) -> tuple[Set[str], Set[str]]:
+def _plausibility_range_and_bound_names(
+    tree: ast.AST,
+    *,
+    active_node_ids: Optional[Set[int]] = None,
+) -> tuple[Set[str], Set[str]]:
     """Local names holding a bound read out of a declared plausibility range.
 
     The bound, not the series, is what identifies a plausibility check.  An
@@ -754,7 +861,7 @@ def _plausibility_range_and_bound_names(tree: ast.AST) -> tuple[Set[str], Set[st
 
     assignments = [
         node
-        for node in ast.walk(tree)
+        for node in _active_nodes(tree, active_node_ids)
         if isinstance(node, ast.Assign) and len(node.targets) == 1
     ]
     single = [node for node in assignments if isinstance(node.targets[0], ast.Name)]
@@ -824,6 +931,73 @@ def _plausibility_range_and_bound_names(tree: ast.AST) -> tuple[Set[str], Set[st
         if not grew:
             break
     return ranges, bounds
+
+
+def _declared_policy_action_names(
+    tree: ast.AST,
+    *,
+    active_node_ids: Optional[Set[int]] = None,
+) -> Set[str]:
+    """Names whose every binding reads the sealed out-of-range action."""
+
+    assignments: dict[str, list[ast.AST]] = {}
+    for node in _active_nodes(tree, active_node_ids):
+        if not (
+            isinstance(node, (ast.Assign, ast.AnnAssign))
+            and getattr(node, "value", None) is not None
+        ):
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        for target in targets:
+            if isinstance(target, ast.Name):
+                assignments.setdefault(target.id, []).append(node.value)
+
+    def _accesses(value: ast.AST, key: str, containers: Set[str]) -> bool:
+        access = _accessed_key(value)
+        if access is None or access[1] != key:
+            return False
+        container = access[0]
+        if not containers:
+            return True
+        if isinstance(container, ast.Name) and container.id in containers:
+            return True
+        nested = _accessed_key(container)
+        return nested is not None and nested[1] == "plausibility_policy"
+
+    policy_mappings: Set[str] = set()
+    for _ in range(len(assignments) + 1):
+        grew = False
+        for name, values in assignments.items():
+            if name in policy_mappings or not values:
+                continue
+            if all(
+                _accesses(value, "plausibility_policy", set())
+                or isinstance(value, ast.Name)
+                and value.id in policy_mappings
+                for value in values
+            ):
+                policy_mappings.add(name)
+                grew = True
+        if not grew:
+            break
+
+    actions: Set[str] = set()
+    for _ in range(len(assignments) + 1):
+        grew = False
+        for name, values in assignments.items():
+            if name in actions or not values:
+                continue
+            if all(
+                _accesses(value, "out_of_range_action", policy_mappings)
+                or isinstance(value, ast.Name)
+                and value.id in actions
+                for value in values
+            ):
+                actions.add(name)
+                grew = True
+        if not grew:
+            break
+    return actions
 
 
 def _denotes_a_bound(node: ast.AST, ranges: Set[str], bounds: Set[str]) -> bool:
@@ -907,7 +1081,11 @@ def _initialises_an_accumulator(node: ast.AST) -> bool:
     return False
 
 
-def _writer_functions(tree: ast.AST) -> Set[str]:
+def _writer_functions(
+    tree: ast.AST,
+    *,
+    active_node_ids: Optional[Set[int]] = None,
+) -> Set[str]:
     """Locally defined helpers that write, recognised by body rather than name.
 
     Generated scripts routinely funnel every artifact through one small helper.
@@ -917,13 +1095,14 @@ def _writer_functions(tree: ast.AST) -> Set[str]:
 
     return {
         function.name
-        for function in ast.walk(tree)
+        for function in _active_nodes(tree, active_node_ids)
         if isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef))
         and any(
             isinstance(inner, ast.Call)
             and isinstance(inner.func, ast.Attribute)
             and inner.func.attr in _WRITER_ATTRIBUTES
             for inner in ast.walk(function)
+            if active_node_ids is None or id(inner) in active_node_ids
         )
     }
 
@@ -952,7 +1131,11 @@ def _is_terminal_failure(statements: Sequence[ast.stmt]) -> bool:
     return False
 
 
-def _plausibility_comparisons(tree: ast.Module) -> list[ast.Compare]:
+def _plausibility_comparisons(
+    tree: ast.Module,
+    *,
+    active_node_ids: Optional[Set[int]] = None,
+) -> list[ast.Compare]:
     """Ordering comparisons that test a value against a declared bound.
 
     Anchored on the bound rather than on the column, which is also what makes
@@ -961,11 +1144,14 @@ def _plausibility_comparisons(tree: ast.Module) -> list[ast.Compare]:
     comparison and only the bound identifies the check.
     """
 
-    ranges, bounds = _plausibility_range_and_bound_names(tree)
+    ranges, bounds = _plausibility_range_and_bound_names(
+        tree,
+        active_node_ids=active_node_ids,
+    )
     if not ranges and not bounds:
         return []
     found: list[ast.Compare] = []
-    for node in ast.walk(tree):
+    for node in _active_nodes(tree, active_node_ids):
         if not (
             isinstance(node, ast.Compare)
             and len(node.ops) == 1
@@ -980,6 +1166,250 @@ def _plausibility_comparisons(tree: ast.Module) -> list[ast.Compare]:
     return found
 
 
+def _expected_column_literals(
+    node: ast.AST,
+    expected_columns: Set[str],
+) -> Set[str]:
+    return {
+        str(inner.value)
+        for inner in ast.walk(node)
+        if isinstance(inner, ast.Constant)
+        and isinstance(inner.value, str)
+        and inner.value in expected_columns
+    }
+
+
+def _expected_data_column_literals(
+    node: ast.AST,
+    expected_columns: Set[str],
+) -> Set[str]:
+    return {
+        str(inner.slice.value)
+        for inner in ast.walk(node)
+        if isinstance(inner, ast.Subscript)
+        and isinstance(inner.slice, ast.Constant)
+        and isinstance(inner.slice.value, str)
+        and inner.slice.value in expected_columns
+    }
+
+
+def _target_names(node: ast.AST) -> Set[str]:
+    return {
+        inner.id
+        for inner in ast.walk(node)
+        if isinstance(inner, ast.Name)
+        and isinstance(inner.ctx, (ast.Store, ast.Del))
+    }
+
+
+def _reads_the_raw_contract_mapping(
+    node: ast.AST,
+    assignments: dict[str, list[ast.AST]],
+    *,
+    seen: Optional[Set[str]] = None,
+) -> bool:
+    """Whether an expression iterates the host-sealed raw contract mapping."""
+
+    seen = set() if seen is None else set(seen)
+    constants = {
+        inner.value
+        for inner in ast.walk(node)
+        if isinstance(inner, ast.Constant) and isinstance(inner.value, str)
+    }
+    if {"raw_input_contracts", "contracts"} <= constants:
+        return True
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+        if node.func.attr in {"items", "keys", "values"}:
+            return _reads_the_raw_contract_mapping(
+                node.func.value,
+                assignments,
+                seen=seen,
+            )
+    if not isinstance(node, ast.Name) or node.id in seen:
+        return False
+    seen.add(node.id)
+    values = assignments.get(node.id, ())
+    return bool(values) and all(
+        _reads_the_raw_contract_mapping(value, assignments, seen=seen)
+        for value in values
+    )
+
+
+def _comparison_scope_coverage(
+    tree: ast.Module,
+    comparisons: Sequence[ast.Compare],
+    *,
+    active_node_ids: Set[int],
+    expected_columns: Sequence[str],
+) -> Set[str]:
+    """Columns whose comparison is connected to reachable step code.
+
+    The receipt gate checks the exact output-key set after execution.  This
+    preflight proves the other half: every expected column is connected to a
+    reachable comparison, either by a literal call argument/direct data access
+    or by a loop over the sealed raw-contract mapping.  A single invoked helper
+    can no longer lend credibility to hand-written receipts for other columns.
+    """
+
+    expected = set(expected_columns)
+    if not expected:
+        return set()
+    parent = {
+        id(child): outer
+        for outer in ast.walk(tree)
+        for child in ast.iter_child_nodes(outer)
+    }
+    assignments: dict[str, list[ast.AST]] = {}
+    for node in _active_nodes(tree, active_node_ids):
+        if (
+            isinstance(node, (ast.Assign, ast.AnnAssign))
+            and getattr(node, "value", None) is not None
+        ):
+            targets = (
+                list(node.targets) if isinstance(node, ast.Assign) else [node.target]
+            )
+            for target in targets:
+                for name in _target_names(target):
+                    assignments.setdefault(name, []).append(node.value)
+
+    def _owner(node: ast.AST) -> Optional[ast.AST]:
+        current = parent.get(id(node))
+        while current is not None and not isinstance(
+            current,
+            (ast.FunctionDef, ast.AsyncFunctionDef),
+        ):
+            current = parent.get(id(current))
+        return current
+
+    calls = [
+        node
+        for node in _active_nodes(tree, active_node_ids)
+        if isinstance(node, ast.Call)
+    ]
+
+    def _upstream_names(node: ast.AST) -> Set[str]:
+        pending = [
+            inner.id
+            for inner in ast.walk(node)
+            if isinstance(inner, ast.Name) and isinstance(inner.ctx, ast.Load)
+        ]
+        seen_names: Set[str] = set()
+        while pending:
+            name = pending.pop()
+            if name in seen_names:
+                continue
+            seen_names.add(name)
+            for value in assignments.get(name, ()):
+                pending.extend(
+                    inner.id
+                    for inner in ast.walk(value)
+                    if isinstance(inner, ast.Name)
+                    and isinstance(inner.ctx, ast.Load)
+                )
+        return seen_names
+
+    def _upstream_literals(node: ast.AST) -> Set[str]:
+        literals = _expected_column_literals(node, expected)
+        for name in _upstream_names(node):
+            for value in assignments.get(name, ()):
+                literals.update(_expected_column_literals(value, expected))
+        return literals
+
+    range_names, bound_names = _plausibility_range_and_bound_names(
+        tree,
+        active_node_ids=active_node_ids,
+    )
+
+    def _data_operand(comparison: ast.Compare) -> Optional[ast.AST]:
+        left_is_bound = _denotes_a_bound(
+            comparison.left,
+            range_names,
+            bound_names,
+        )
+        right = comparison.comparators[0]
+        right_is_bound = _denotes_a_bound(right, range_names, bound_names)
+        if left_is_bound == right_is_bound:
+            return None
+        return right if left_is_bound else comparison.left
+
+    def _loop_contract_key_names(loop: ast.For | ast.AsyncFor) -> Set[str]:
+        """Names that identify a contract key in this mapping iteration."""
+
+        iterator = loop.iter
+        if isinstance(iterator, ast.Call) and isinstance(
+            iterator.func,
+            ast.Attribute,
+        ):
+            if iterator.func.attr == "values":
+                return set()
+            if iterator.func.attr == "items":
+                if isinstance(loop.target, (ast.Tuple, ast.List)) and loop.target.elts:
+                    return _target_names(loop.target.elts[0])
+                return set()
+        return _target_names(loop.target)
+
+    covered: Set[str] = set()
+    for comparison in comparisons:
+        owner = _owner(comparison)
+        if owner is None:
+            statement: ast.AST = comparison
+            current = parent.get(id(comparison))
+            while current is not None and not isinstance(current, ast.stmt):
+                current = parent.get(id(current))
+            if current is not None:
+                statement = current
+            covered.update(_upstream_literals(statement))
+            data_operand = _data_operand(comparison)
+            current = parent.get(id(comparison))
+            while current is not None:
+                if isinstance(current, (ast.For, ast.AsyncFor)):
+                    key_names = _loop_contract_key_names(current)
+                    if (
+                        data_operand is not None
+                        and key_names.intersection(_upstream_names(data_operand))
+                        and _reads_the_raw_contract_mapping(
+                            current.iter,
+                            assignments,
+                        )
+                    ):
+                        covered.update(expected)
+                    break
+                current = parent.get(id(current))
+            continue
+
+        covered.update(_expected_data_column_literals(owner, expected))
+        owner_calls = [
+            call
+            for call in calls
+            if isinstance(call.func, ast.Name) and call.func.id == owner.name
+        ]
+        for call in owner_calls:
+            covered.update(_expected_column_literals(call, expected))
+            current = parent.get(id(call))
+            while current is not None and current is not owner:
+                if isinstance(current, (ast.For, ast.AsyncFor)):
+                    loop_names = _target_names(current.target)
+                    call_names = {
+                        inner.id
+                        for argument in _call_arguments(call)
+                        for inner in ast.walk(argument)
+                        if isinstance(inner, ast.Name)
+                        and isinstance(inner.ctx, ast.Load)
+                    }
+                    if loop_names.intersection(call_names):
+                        covered.update(
+                            _expected_column_literals(current.iter, expected)
+                        )
+                        if _reads_the_raw_contract_mapping(
+                            current.iter,
+                            assignments,
+                        ):
+                            covered.update(expected)
+                    break
+                current = parent.get(id(current))
+    return covered
+
+
 class _FlagFlow:
     """Where the out-of-range record is computed, and where it ends up.
 
@@ -989,8 +1419,15 @@ class _FlagFlow:
     block, so its limits cost provider repairs instead of buying passes.
     """
 
-    def __init__(self, tree: ast.Module, comparisons: Sequence[ast.Compare]) -> None:
+    def __init__(
+        self,
+        tree: ast.Module,
+        comparisons: Sequence[ast.Compare],
+        *,
+        active_node_ids: Optional[Set[int]] = None,
+    ) -> None:
         self.tree = tree
+        self.active_node_ids = active_node_ids
         self.compared = {id(node) for node in comparisons}
         self.parents = {
             id(child): parent
@@ -1006,7 +1443,10 @@ class _FlagFlow:
         #: directory in one place and something else in another is neither.
         self.destinations = _Destinations(tree)
         self.scopes = self.destinations.scopes
-        self.writer_functions = _writer_functions(tree)
+        self.writer_functions = _writer_functions(
+            tree,
+            active_node_ids=active_node_ids,
+        )
         self._resolve()
         #: Names no later binding replaces with something that cannot carry.
         self.certified: Set[tuple] = self._resolve_certified()
@@ -1023,6 +1463,16 @@ class _FlagFlow:
         #: both is how an ordinary contract assertion gets reported as a
         #: plausibility rejection.
         self.direct_values: Set[str] = self._resolve_direct_values()
+
+    def _nodes(self) -> Iterator[ast.AST]:
+        return _active_nodes(self.tree, self.active_node_ids)
+
+    def _function_nodes(self, function: ast.AST) -> Iterator[ast.AST]:
+        return (
+            node
+            for node in ast.walk(function)
+            if self.active_node_ids is None or id(node) in self.active_node_ids
+        )
 
     def _reaches(self, node: ast.AST, names: Set[tuple], functions: Set[str]) -> bool:
         for inner in ast.walk(node):
@@ -1070,12 +1520,12 @@ class _FlagFlow:
     def _resolve(self) -> None:
         assignments = [
             node
-            for node in ast.walk(self.tree)
+            for node in self._nodes()
             if isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign))
         ]
         functions = [
             node
-            for node in ast.walk(self.tree)
+            for node in self._nodes()
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
         ]
         # Each pass adds at least one name or stops, so the number of
@@ -1098,7 +1548,7 @@ class _FlagFlow:
                     isinstance(inner, ast.Return)
                     and inner.value is not None
                     and self._carries(inner.value)
-                    for inner in ast.walk(function)
+                    for inner in self._function_nodes(function)
                 ):
                     self.returning_functions.add(function.name)
                     grew = True
@@ -1157,7 +1607,7 @@ class _FlagFlow:
     def _resolve_certainly_returning(self) -> Set[str]:
         functions = [
             node
-            for node in ast.walk(self.tree)
+            for node in self._nodes()
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
         ]
         certain: Set[str] = set()
@@ -1170,7 +1620,7 @@ class _FlagFlow:
                     isinstance(inner, ast.Return)
                     and inner.value is not None
                     and self._reaches(inner.value, self.certified, certain)
-                    for inner in ast.walk(function)
+                    for inner in self._function_nodes(function)
                 ):
                     certain.add(function.name)
                     grew = True
@@ -1182,7 +1632,7 @@ class _FlagFlow:
         direct: Set[tuple] = set()
         assignments = [
             node
-            for node in ast.walk(self.tree)
+            for node in self._nodes()
             if isinstance(node, ast.Assign)
             and len(node.targets) == 1
             and isinstance(node.targets[0], ast.Name)
@@ -1247,7 +1697,7 @@ class _FlagFlow:
     def records_a_structured_value(self) -> bool:
         """Whether the mask is turned into a kept indicator or number."""
 
-        for node in ast.walk(self.tree):
+        for node in self._nodes():
             if (
                 isinstance(node, ast.Assign)
                 and any(isinstance(target, ast.Subscript) for target in node.targets)
@@ -1306,7 +1756,7 @@ class _FlagFlow:
         """
 
         names: Set[tuple] = set()
-        for node in ast.walk(self.tree):
+        for node in self._nodes():
             if isinstance(node, ast.Assign):
                 for target in node.targets:
                     if (
@@ -1345,8 +1795,18 @@ class _FlagFlow:
                 if key is not None:
                     names.add(key)
 
-        assignments = _single_name_assignments(self.tree)
-        functions = _function_definitions(self.tree)
+        assignments = [
+            node
+            for node in self._nodes()
+            if isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+        ]
+        functions = [
+            node
+            for node in self._nodes()
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        ]
         returning: Set[str] = set()
         for _ in range(len(assignments) + len(functions) + 1):
             grew = False
@@ -1388,7 +1848,7 @@ class _FlagFlow:
                     isinstance(inner, ast.Return)
                     and inner.value is not None
                     and self._is_receipt_mapping(inner.value, names)
-                    for inner in ast.walk(function)
+                    for inner in self._function_nodes(function)
                 ):
                     returning.add(function.name)
                     grew = True
@@ -1457,7 +1917,7 @@ class _FlagFlow:
         """
 
         deliveries: list[ast.AST] = []
-        for node in ast.walk(self.tree):
+        for node in self._nodes():
             if not isinstance(node, ast.Call):
                 continue
             callee = node.func
@@ -1497,7 +1957,7 @@ class _FlagFlow:
         return False
 
     def has_unconditional_computation(self) -> bool:
-        for node in ast.walk(self.tree):
+        for node in self._nodes():
             if not isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
                 continue
             value = getattr(node, "value", None)
@@ -1517,7 +1977,10 @@ class _FlagFlow:
         return False
 
 
-def _tests_the_declared_action(node: ast.AST) -> Optional[bool]:
+def _tests_the_declared_action(
+    node: ast.AST,
+    policy_action_names: Set[str],
+) -> Optional[bool]:
     """Whether a test decides on the policy being the declared flag-only action.
 
     Returns ``True`` for a test that is taken *when the policy is* that action,
@@ -1529,26 +1992,38 @@ def _tests_the_declared_action(node: ast.AST) -> Optional[bool]:
 
     if isinstance(node, ast.BoolOp):
         for value in node.values:
-            decided = _tests_the_declared_action(value)
+            decided = _tests_the_declared_action(value, policy_action_names)
             if decided is not None:
                 return decided
         return None
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
-        inner = _tests_the_declared_action(node.operand)
+        inner = _tests_the_declared_action(node.operand, policy_action_names)
         return None if inner is None else not inner
     if not isinstance(node, ast.Compare) or len(node.ops) != 1:
         return None
     if not isinstance(node.ops[0], (ast.Eq, ast.NotEq)):
         return None
     operands = [node.left, node.comparators[0]]
-    names = any(
-        isinstance(side, ast.Constant) and side.value == RECEIPT_POLICY_VALUE
-        for side in operands
-    )
-    return isinstance(node.ops[0], ast.Eq) if names else None
+    literal_positions = [
+        index
+        for index, side in enumerate(operands)
+        if isinstance(side, ast.Constant) and side.value == RECEIPT_POLICY_VALUE
+    ]
+    if len(literal_positions) != 1:
+        return None
+    other = operands[1 - literal_positions[0]]
+    if not (
+        isinstance(other, ast.Name) and other.id in policy_action_names
+    ):
+        return None
+    return isinstance(node.ops[0], ast.Eq)
 
 
-def _guarded_by_a_different_policy(flow: _FlagFlow, node: ast.AST) -> bool:
+def _guarded_by_a_different_policy(
+    flow: _FlagFlow,
+    node: ast.AST,
+    policy_action_names: Set[str],
+) -> bool:
     """Whether a terminal branch is only reachable under a *different* policy.
 
     Generated scripts guard their own fatal fallback on the policy they were
@@ -1565,7 +2040,10 @@ def _guarded_by_a_different_policy(flow: _FlagFlow, node: ast.AST) -> bool:
     child = node
     for outer in flow.ancestors(node):
         if isinstance(outer, ast.If):
-            decided = _tests_the_declared_action(outer.test)
+            decided = _tests_the_declared_action(
+                outer.test,
+                policy_action_names,
+            )
             if decided is not None:
                 in_body = any(child is statement for statement in outer.body)
                 # Reached when the policy IS the declared action only if the
@@ -1576,21 +2054,177 @@ def _guarded_by_a_different_policy(flow: _FlagFlow, node: ast.AST) -> bool:
     return False
 
 
+def _query_expression_reads_a_declared_bound(
+    node: ast.AST,
+    *,
+    bound_names: Set[str],
+    assignments: Mapping[str, Sequence[ast.AST]],
+    seen: Optional[Set[str]] = None,
+) -> bool:
+    """Whether a pandas-query expression is derived from a contract bound.
+
+    ``DataFrame.query`` hides its comparisons inside a string, so the normal
+    AST comparison walk cannot see them.  Generated code uses either an
+    f-string/``format`` value or pandas' ``@lower`` spelling.  Follow simple
+    aliases as well; a query string assigned one line earlier is not weaker
+    evidence merely because it has a name.
+    """
+
+    seen = set() if seen is None else set(seen)
+    if any(
+        isinstance(inner, ast.Name)
+        and isinstance(inner.ctx, ast.Load)
+        and inner.id in bound_names
+        for inner in ast.walk(node)
+    ):
+        return True
+    for inner in ast.walk(node):
+        if not (
+            isinstance(inner, ast.Constant) and isinstance(inner.value, str)
+        ):
+            continue
+        if any(
+            re.search(
+                rf"(?<![A-Za-z0-9_])@{re.escape(name)}(?![A-Za-z0-9_])",
+                inner.value,
+            )
+            for name in bound_names
+        ):
+            return True
+    if not isinstance(node, ast.Name) or node.id in seen:
+        return False
+    seen.add(node.id)
+    return any(
+        _query_expression_reads_a_declared_bound(
+            value,
+            bound_names=bound_names,
+            assignments=assignments,
+            seen=seen,
+        )
+        for value in assignments.get(node.id, ())
+    )
+
+
+def _flag_only_range_transform(
+    node: ast.Call,
+    *,
+    flow: _FlagFlow,
+    range_names: Set[str],
+    bound_names: Set[str],
+    assignments: Mapping[str, Sequence[ast.AST]],
+) -> Optional[str]:
+    """Return the mutating/filtering operation tied to the flag-only range.
+
+    The obligation is about preserving rows and values, not merely avoiding
+    ``df[mask]``.  Pandas exposes equivalent spellings through method calls;
+    those are blocked only when their arguments are connected to the
+    out-of-range mask or a bound read from the sealed contract.
+    """
+
+    if not isinstance(node.func, ast.Attribute):
+        return None
+    operation = node.func.attr
+    positional = list(node.args)
+    keywords = {keyword.arg: keyword.value for keyword in node.keywords}
+
+    if operation == "drop":
+        selectors = [
+            *positional,
+            *(
+                value
+                for key, value in keywords.items()
+                if key in {"index", "labels"}
+            ),
+        ]
+        return operation if any(flow.rejects_on(value) for value in selectors) else None
+
+    if operation in {"where", "mask"}:
+        condition = positional[0] if positional else keywords.get("cond")
+        return (
+            operation
+            if condition is not None and flow.rejects_on(condition)
+            else None
+        )
+
+    if operation == "clip":
+        candidates = [
+            *positional[:2],
+            *(
+                value
+                for key, value in keywords.items()
+                if key in {"lower", "upper"}
+            ),
+        ]
+        return (
+            operation
+            if any(
+                _denotes_a_bound(value, range_names, bound_names)
+                for value in candidates
+            )
+            else None
+        )
+
+    if operation == "query":
+        expression = positional[0] if positional else keywords.get("expr")
+        return (
+            operation
+            if expression is not None
+            and _query_expression_reads_a_declared_bound(
+                expression,
+                bound_names=bound_names,
+                assignments=assignments,
+            )
+            else None
+        )
+    return None
+
+
 def _rejection_findings(
     tree: ast.Module,
     flow: _FlagFlow,
     *,
     step_id: str,
     detail_base: dict,
+    active_node_ids: Optional[Set[int]] = None,
 ) -> list[ValidationFinding]:
     findings: list[ValidationFinding] = []
-    for node in ast.walk(tree):
+    range_names, bound_names = _plausibility_range_and_bound_names(
+        tree,
+        active_node_ids=active_node_ids,
+    )
+    policy_action_names = _declared_policy_action_names(
+        tree,
+        active_node_ids=active_node_ids,
+    )
+    assignments: dict[str, list[ast.AST]] = {}
+    for active in _active_nodes(tree, active_node_ids):
+        if not (
+            isinstance(active, (ast.Assign, ast.AnnAssign))
+            and getattr(active, "value", None) is not None
+        ):
+            continue
+        targets = (
+            list(active.targets) if isinstance(active, ast.Assign) else [active.target]
+        )
+        for target in targets:
+            for name in _target_names(target):
+                assignments.setdefault(name, []).append(active.value)
+
+    for node in _active_nodes(tree, active_node_ids):
         if (
             isinstance(node, ast.If)
             and flow.rejects_on(node.test)
             and _is_terminal_failure(node.body)
-            and not _guarded_by_a_different_policy(flow, node)
-            and _tests_the_declared_action(node.test) is not False
+            and not _guarded_by_a_different_policy(
+                flow,
+                node,
+                policy_action_names,
+            )
+            and _tests_the_declared_action(
+                node.test,
+                policy_action_names,
+            )
+            is not False
         ):
             findings.append(
                 ValidationFinding(
@@ -1629,6 +2263,33 @@ def _rejection_findings(
                     },
                 )
             )
+        if isinstance(node, ast.Call):
+            operation = _flag_only_range_transform(
+                node,
+                flow=flow,
+                range_names=range_names,
+                bound_names=bound_names,
+                assignments=assignments,
+            )
+            if operation is not None:
+                findings.append(
+                    ValidationFinding(
+                        validator=_VALIDATOR,
+                        severity="error",
+                        message=(
+                            f"Step {step_id} uses pandas `{operation}` to remove "
+                            "or replace values based on its declared plausibility "
+                            "range. That range is flag-only: preserve the original "
+                            "rows and values and record the count."
+                        ),
+                        detail={
+                            **detail_base,
+                            "reason": "flag_only_plausibility_range_transformed",
+                            "operation": operation,
+                            "line": node.lineno,
+                        },
+                    )
+                )
     return findings
 
 
@@ -1636,24 +2297,25 @@ def flag_only_plausibility_obligation_findings(
     tree: Optional[ast.Module],
     *,
     script_text: str,
-    context: ResearchContext,
     step: AnalysisStep,
+    scope: FlagOnlyPlausibilityScope,
 ) -> list[ValidationFinding]:
     """Check both halves of ``retain_and_flag`` without consulting an auditor."""
 
+    scope.require_step(step.step_id)
     text = str(script_text or "")
     if tree is None:
         try:
             tree = ast.parse(text)
         except SyntaxError:
             return []
-    # The trigger is the host's typed policy plus the script's use of it, and
-    # it is shared with the post-execution receipt check so the two halves of
-    # the obligation can never disagree about which steps owe one.
+    # The host-owned step scope is shared with the post-execution receipt check,
+    # so generated source cannot make the two halves disagree about which step
+    # owes the obligation.
     trigger = step_is_under_the_flag_only_obligation(
         script_text=text,
         tree=tree,
-        context=context,
+        scope=scope,
     )
     if trigger is None:
         return []
@@ -1663,12 +2325,19 @@ def flag_only_plausibility_obligation_findings(
         "step_id": step_id,
         "issue_code": "flag_only_plausibility_obligation",
         "policy": "retain_and_flag",
-        "policy_authority": "typed_research_context_plausibility_policy",
+        "policy_authority": scope.authority_kind,
         "trigger": trigger,
-        "ranged_variables": ranged_variable_names(context),
+        "expected_columns": list(scope.expected_columns),
+        "source_contracts_sha256": scope.source_contracts_sha256,
+        "scope_sha256": scope.scope_sha256,
     }
 
-    comparisons = _plausibility_comparisons(tree)
+    reachability = _RuntimeReachability(tree)
+    active_node_ids = reachability.active_node_ids
+    comparisons = _plausibility_comparisons(
+        tree,
+        active_node_ids=active_node_ids,
+    )
     if not comparisons:
         return [
             ValidationFinding(
@@ -1690,12 +2359,46 @@ def flag_only_plausibility_obligation_findings(
             )
         ]
 
-    flow = _FlagFlow(tree, comparisons)
+    covered_columns = _comparison_scope_coverage(
+        tree,
+        comparisons,
+        active_node_ids=active_node_ids,
+        expected_columns=scope.expected_columns,
+    )
+    missing_columns = sorted(set(scope.expected_columns) - covered_columns)
+    if missing_columns:
+        return [
+            ValidationFinding(
+                validator=_VALIDATOR,
+                severity="error",
+                message=(
+                    f"Step {step_id} does not connect every exact flag-only "
+                    "plausibility column to reachable comparison code. Call "
+                    "the validator for each listed column or iterate the "
+                    "host-sealed raw-input contract mapping before writing "
+                    f"its receipt. {RECEIPT_CONTRACT_SENTENCE}"
+                ),
+                detail={
+                    **detail_base,
+                    "reason": "plausibility_scope_column_not_attributable",
+                    "flag_evidence": "partial_scope",
+                    "covered_columns": sorted(covered_columns),
+                    "missing_columns": missing_columns,
+                },
+            )
+        ]
+
+    flow = _FlagFlow(
+        tree,
+        comparisons,
+        active_node_ids=active_node_ids,
+    )
     findings = _rejection_findings(
         tree,
         flow,
         step_id=step_id,
         detail_base=detail_base,
+        active_node_ids=active_node_ids,
     )
 
     records = flow.records_a_structured_value()
