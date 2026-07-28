@@ -460,6 +460,16 @@ def _build_planner_user_prompt(
         "every other result or figure in a separate step. If only an "
         "ungrouped cohort description is wanted, "
         "emit `table:cohort_summary` instead and omit table_one_spec. "
+        "A step that declares the exact output "
+        "`table:exposure_outcome_distribution` MUST also declare "
+        "`exposure_outcome_distribution_spec`: the exposure column, its closed "
+        "exposure_levels, the outcome column, the exact outcome_positive_value "
+        "that counts as the event, and a denominator_policy of either "
+        "'all_declared_rows' or 'observed_outcome_rows'. Which denominator a "
+        "prevalence or rate is taken over is part of the study design, not a "
+        "rendering detail, so state it. The host will not infer the exposure, "
+        "the outcome, or the event value from column names or from input "
+        "order. Preserve observed scalar types exactly, as for table_one_spec. "
         "A primary cohort construction/eligibility + attrition step is also a "
         "strict execution boundary: it must declare exactly one materialised "
         "closed cohort product (`artifact:analysis_cohort`, "
@@ -796,6 +806,7 @@ def _planner_retry_response_projection(raw: str) -> str:
         "input_consumption_contracts",
         "table_one_spec",
         "trajectory_stability_spec",
+        "exposure_outcome_distribution_spec",
     )
     raw_steps = payload.get("steps")
     steps = raw_steps if isinstance(raw_steps, list) else []
@@ -1174,6 +1185,22 @@ class PlannerAgent:
                     f"every retrieved card: {undecided_cards!r}"
                 )
         _validate_table_one_observed_levels(plan, context)
+        missing_distribution_specs = [
+            step.step_id
+            for step in plan.steps
+            if "table:exposure_outcome_distribution" in step.expected_outputs
+            and step.exposure_outcome_distribution_spec is None
+        ]
+        if missing_distribution_specs and not llm_is_mockish(
+            getattr(self, "llm", None)
+        ):
+            raise ValueError(
+                "Planner exposure/outcome distribution steps must declare "
+                "exposure_outcome_distribution_spec; missing for "
+                f"{missing_distribution_specs!r}. The exposure, outcome, event "
+                "value and denominator policy are scientific choices and are not "
+                "inferred from column names or input order."
+            )
         missing_table_one_specs = [
             step.step_id
             for step in plan.steps
@@ -1421,8 +1448,7 @@ class ReplannerAgent(PlannerAgent):
             ),
         ]
         replanner_bytes = sum(
-            len(str(message.content or "").encode("utf-8"))
-            for message in messages
+            len(str(message.content or "").encode("utf-8")) for message in messages
         )
         if replanner_bytes > _PLANNER_PROMPT_BYTE_LIMIT:
             raise PlannerPromptBudgetError(

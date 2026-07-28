@@ -9,7 +9,6 @@ model, or report an effect estimate.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 import os
@@ -22,6 +21,7 @@ import pandas as pd
 from ...authority.plausibility import FlagOnlyPlausibilityScope
 from ...schema import AnalysisStep
 from .plausibility_receipt import render_standard_plausibility_receipt_code
+from .typed_cohort_binding import load_step_cohort_frame, run_dir_from_env
 
 __all__ = [
     "cohort_summary_executor_code",
@@ -43,8 +43,10 @@ def _typed_cohort_input(step: AnalysisStep) -> str | None:
         return ""
     input_key = next(iter(typed_inputs))
     kind, separator, product = input_key.partition(":")
-    if separator and product and (
-        kind == "cohort" or input_key == "artifact:analysis_cohort"
+    if (
+        separator
+        and product
+        and (kind == "cohort" or input_key == "artifact:analysis_cohort")
     ):
         return input_key
     return ""
@@ -111,7 +113,8 @@ def cohort_summary_executor_code(
         else ""
     )
     if not expected_columns:
-        return textwrap.dedent(f"""
+        return textwrap.dedent(
+            f"""
             from easyicu.research_agent.execution.runners.cohort_summary_executor import (
                 run_cohort_summary_from_env,
             )
@@ -120,9 +123,11 @@ def cohort_summary_executor_code(
                 declared_columns={_declared_columns(step)!r},
                 typed_cohort_input={_typed_cohort_input(step)!r},
             )
-            """).strip()
+            """
+        ).strip()
 
-    return textwrap.dedent(f"""
+    return textwrap.dedent(
+        f"""
         import hashlib
         import json
         import os
@@ -161,107 +166,8 @@ def cohort_summary_executor_code(
             encoding="utf-8",
         )
         print(json.dumps(summary, ensure_ascii=False, allow_nan=False))
-        """).strip()
-
-
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _contained_regular_file(path: Path, root: Path) -> Optional[Path]:
-    root = root.resolve()
-    candidate = Path(path)
-    try:
-        candidate.relative_to(root)
-    except ValueError:
-        return None
-    cursor = candidate
-    while cursor != root:
-        if cursor.is_symlink():
-            return None
-        parent = cursor.parent
-        if parent == cursor:
-            return None
-        cursor = parent
-    if not candidate.is_file():
-        return None
-    try:
-        resolved = candidate.resolve(strict=True)
-        resolved.relative_to(root)
-    except (OSError, ValueError):
-        return None
-    return resolved
-
-
-def _read_frame(path: Path) -> pd.DataFrame:
-    suffix = path.suffix.casefold()
-    if suffix in {".parquet", ".pq"}:
-        return pd.read_parquet(path)
-    if suffix == ".csv":
-        return pd.read_csv(path)
-    if suffix == ".tsv":
-        return pd.read_csv(path, sep="\t")
-    raise RuntimeError("Typed cohort table format is unsupported")
-
-
-def _load_typed_cohort(
-    *,
-    input_key: str,
-    run_dir: Path,
-    resolved_inputs_path: Path,
-) -> tuple[pd.DataFrame, Path]:
-    try:
-        payload = json.loads(resolved_inputs_path.read_text(encoding="utf-8"))
-    except Exception as exc:
-        raise RuntimeError("Resolved input manifest is unreadable") from exc
-    inputs = payload.get("inputs") if isinstance(payload, dict) else None
-    binding = inputs.get(input_key) if isinstance(inputs, dict) else None
-    if not isinstance(binding, dict):
-        raise RuntimeError(f"Missing exact typed cohort binding: {input_key}")
-    relative_path = binding.get("relative_path")
-    expected_sha256 = binding.get("sha256")
-    contract = binding.get("product_contract")
-    if (
-        not isinstance(relative_path, str)
-        or not relative_path
-        or not isinstance(expected_sha256, str)
-        or len(expected_sha256) != 64
-        or not isinstance(contract, dict)
-    ):
-        raise RuntimeError("Typed cohort binding is incomplete")
-    candidate = run_dir / relative_path
-    cohort_path = _contained_regular_file(candidate, run_dir)
-    if cohort_path is None:
-        raise RuntimeError("Typed cohort binding is not a contained regular file")
-    if _sha256_file(cohort_path) != expected_sha256:
-        raise RuntimeError("Typed cohort digest verification failed")
-    columns = contract.get("columns")
-    row_count = contract.get("row_count")
-    if (
-        not isinstance(columns, list)
-        or not columns
-        or not all(isinstance(value, str) and value for value in columns)
-        or len(columns) != len(set(columns))
-        or not isinstance(row_count, int)
-        or isinstance(row_count, bool)
-        or row_count < 0
-    ):
-        raise RuntimeError("Typed cohort product_contract is incomplete")
-    frame = _read_frame(cohort_path)
-    if list(frame.columns) != columns:
-        raise RuntimeError("Typed cohort columns do not match product_contract")
-    if len(frame) != row_count:
-        raise RuntimeError("Typed cohort row count does not match product_contract")
-    return frame, cohort_path
-
-
-def _run_dir() -> Path:
-    out_dir = Path(os.environ["STEP_OUT_DIR"])
-    return Path(os.environ.get("EASYICU_RUN_DIR") or out_dir.parents[2]).resolve()
+        """
+    ).strip()
 
 
 def load_cohort_summary_frame(
@@ -270,20 +176,12 @@ def load_cohort_summary_frame(
 ) -> tuple[pd.DataFrame, Path]:
     """Load the exact bound cohort once, for both the receipt and the summary.
 
-    Exported so the rendered entrypoint can compare plausibility bounds against
-    the same frame the summary is built from, without reading the cohort twice.
+    Kept as this module's published name; the rule itself is owned by
+    ``typed_cohort_binding`` so every executor that reads a bound cohort
+    verifies it identically.
     """
 
-    if typed_cohort_input is None:
-        cohort_path = Path(os.environ["COHORT_PARQUET"]).resolve()
-        return _read_frame(cohort_path), cohort_path
-    return _load_typed_cohort(
-        input_key=typed_cohort_input,
-        run_dir=_run_dir(),
-        resolved_inputs_path=Path(
-            os.environ["EASYICU_RESOLVED_INPUTS_JSON"]
-        ).resolve(),
-    )
+    return load_step_cohort_frame(typed_cohort_input=typed_cohort_input)
 
 
 def _verified_plausibility_audit(
@@ -307,9 +205,7 @@ def _verified_plausibility_audit(
             )
         return None
     if not isinstance(audit, dict) or set(audit) != set(expected):
-        raise RuntimeError(
-            "Plausibility receipt does not cover the exact sealed scope"
-        )
+        raise RuntimeError("Plausibility receipt does not cover the exact sealed scope")
     for column, record in audit.items():
         if not isinstance(record, dict):
             raise RuntimeError(f"Plausibility receipt for {column} is untyped")
@@ -339,8 +235,7 @@ def _verified_plausibility_audit(
 
 def _load_context(run_dir: Path) -> Dict[str, Any]:
     context_path = Path(
-        os.environ.get("EASYICU_RESEARCH_CONTEXT")
-        or run_dir / "research_context.json"
+        os.environ.get("EASYICU_RESEARCH_CONTEXT") or run_dir / "research_context.json"
     )
     try:
         payload = json.loads(context_path.read_text(encoding="utf-8"))
@@ -422,14 +317,16 @@ def run_cohort_summary_from_env(
     """
 
     columns = tuple(str(value).strip() for value in declared_columns)
-    if not columns or any(not value for value in columns) or len(columns) != len(
-        set(columns)
+    if (
+        not columns
+        or any(not value for value in columns)
+        or len(columns) != len(set(columns))
     ):
         raise RuntimeError("Declared cohort-summary columns are not closed and unique")
 
     out_dir = Path(os.environ["STEP_OUT_DIR"])
     out_dir.mkdir(parents=True, exist_ok=True)
-    run_dir = _run_dir()
+    run_dir = run_dir_from_env()
     verified_audit = _verified_plausibility_audit(
         plausibility_audit,
         expected_columns=plausibility_expected_columns,
@@ -441,8 +338,7 @@ def run_cohort_summary_from_env(
     missing_columns = [column for column in columns if column not in frame.columns]
     if missing_columns:
         raise RuntimeError(
-            "Declared cohort-summary columns are absent: "
-            + ", ".join(missing_columns)
+            "Declared cohort-summary columns are absent: " + ", ".join(missing_columns)
         )
 
     context = _load_context(run_dir)

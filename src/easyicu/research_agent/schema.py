@@ -953,6 +953,71 @@ class TableOneSpec(BaseModel):
         return self
 
 
+class ExposureOutcomeDistributionSpec(BaseModel):
+    """Planner-owned exposure-by-outcome distribution design.
+
+    The host executes this declaration but never decides which column is the
+    exposure, which is the outcome, which outcome value counts as the event,
+    whose rows form each denominator, or how the interval is built. Those are
+    scientific choices; an executor that infers them from column names, from
+    input ordering, or from prose has taken a decision that belongs to the
+    Planner.
+
+    ``denominator_policy`` is the field that carries the most weight. A
+    prevalence over every declared row and a rate among rows with an observed
+    outcome are different quantities, and which one a study reports is part of
+    its design rather than a rendering detail, so it is declared rather than
+    defaulted.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["easyicu.exposure_outcome_distribution/1"] = (
+        "easyicu.exposure_outcome_distribution/1"
+    )
+    exposure: str
+    exposure_levels: List[Any] = Field(min_length=2)
+    outcome: str
+    outcome_positive_value: Any = Field(
+        description=(
+            "The exact observed value that counts as the event. Declared "
+            "because a binary outcome is not always encoded 1/0, and guessing "
+            "silently inverts every rate in the table."
+        ),
+    )
+    denominator_policy: Literal["all_declared_rows", "observed_outcome_rows"]
+    missing_exposure_policy: Literal["fail_closed"] = "fail_closed"
+    interval_method: Literal["wilson"] = "wilson"
+
+    @field_validator("exposure_levels")
+    @classmethod
+    def _closed_exposure_levels(cls, values: List[Any]) -> List[Any]:
+        return _closed_table_one_levels(
+            values, label="exposure_outcome_distribution exposure_levels"
+        )
+
+    @field_validator("outcome_positive_value")
+    @classmethod
+    def _closed_positive_value(cls, value: Any) -> Any:
+        return _closed_table_one_levels(
+            [value], label="exposure_outcome_distribution outcome_positive_value"
+        )[0]
+
+    @model_validator(mode="after")
+    def _closed_design(self) -> "ExposureOutcomeDistributionSpec":
+        self.exposure = str(self.exposure or "").strip()
+        self.outcome = str(self.outcome or "").strip()
+        if not self.exposure:
+            raise ValueError("exposure_outcome_distribution exposure must be non-empty")
+        if not self.outcome:
+            raise ValueError("exposure_outcome_distribution outcome must be non-empty")
+        if self.exposure == self.outcome:
+            raise ValueError(
+                "exposure_outcome_distribution exposure and outcome must differ"
+            )
+        return self
+
+
 class AnalysisStep(BaseModel):
     """One step in a planner-emitted analysis plan."""
 
@@ -1019,6 +1084,18 @@ class AnalysisStep(BaseModel):
             "eligible only when this complete typed packet is present."
         ),
     )
+    exposure_outcome_distribution_spec: Optional[ExposureOutcomeDistributionSpec] = (
+        Field(
+            default=None,
+            description=(
+                "Planner-owned exposure, outcome, event value, denominator "
+                "policy and interval method for an exact "
+                "table:exposure_outcome_distribution output. Without it the "
+                "step has no typed statement of which column is which, and "
+                "the host must not infer that from names or input order."
+            ),
+        )
+    )
 
     def required_primary_exposure_sources(self) -> tuple[str, ...]:
         """Return required PRIMARY sources from the Planner-owned model roster."""
@@ -1027,8 +1104,7 @@ class AnalysisStep(BaseModel):
             dict.fromkeys(
                 item.exposure_source
                 for item in self.model_requirements
-                if item.analysis_role == "primary"
-                and item.required_for_step_success
+                if item.analysis_role == "primary" and item.required_for_step_success
             )
         )
 
@@ -1053,9 +1129,7 @@ class AnalysisStep(BaseModel):
         sources = {
             source.casefold() for source in self.required_primary_exposure_sources()
         }
-        return [
-            term for term in terms if str(term).strip().casefold() not in sources
-        ]
+        return [term for term in terms if str(term).strip().casefold() not in sources]
 
     @model_validator(mode="after")
     def _model_requirement_ids_are_unique(self) -> "AnalysisStep":
@@ -1067,9 +1141,7 @@ class AnalysisStep(BaseModel):
             declared_outputs = {
                 str(value or "").strip() for value in self.expected_outputs
             }
-            unsupported_outputs = sorted(
-                declared_outputs - TABLE_ONE_CLOSED_OUTPUTS
-            )
+            unsupported_outputs = sorted(declared_outputs - TABLE_ONE_CLOSED_OUTPUTS)
             if unsupported_outputs:
                 raise ValueError(
                     "table_one_spec supports only the closed host-executable "
@@ -1086,6 +1158,22 @@ class AnalysisStep(BaseModel):
                 raise ValueError(
                     "table_one_spec variables must be explicit step inputs; "
                     f"missing {missing_inputs!r}"
+                )
+        if self.exposure_outcome_distribution_spec is not None:
+            if "table:exposure_outcome_distribution" not in self.expected_outputs:
+                raise ValueError(
+                    "exposure_outcome_distribution_spec requires expected output "
+                    "'table:exposure_outcome_distribution'"
+                )
+            spec_columns = {
+                self.exposure_outcome_distribution_spec.exposure,
+                self.exposure_outcome_distribution_spec.outcome,
+            }
+            missing_spec_inputs = sorted(spec_columns - set(self.inputs))
+            if missing_spec_inputs:
+                raise ValueError(
+                    "exposure_outcome_distribution_spec exposure and outcome must "
+                    f"be explicit step inputs; missing {missing_spec_inputs!r}"
                 )
         consumption_keys = [
             contract.input_key for contract in self.input_consumption_contracts

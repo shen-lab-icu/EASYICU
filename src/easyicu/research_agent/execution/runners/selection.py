@@ -7,6 +7,10 @@ from typing import Any, Mapping
 
 from ...authority.plausibility import FlagOnlyPlausibilityScope
 from ...schema import AnalysisPlan, AnalysisStep
+from .exposure_outcome_distribution_executor import (
+    exposure_outcome_distribution_executor_code,
+    exposure_outcome_distribution_executor_owns_step,
+)
 from .cohort_summary_executor import (
     cohort_summary_executor_code,
     cohort_summary_executor_owns_step,
@@ -105,8 +109,7 @@ def select_standard_executor(
     if plausibility_scope is not None:
         plausibility_scope.require_step(step.step_id)
     receipt_required = bool(
-        plausibility_scope is not None
-        and plausibility_scope.expected_columns
+        plausibility_scope is not None and plausibility_scope.expected_columns
     )
 
     def _note(analysis_kind: str, contract_matches: bool, outcome: str) -> None:
@@ -159,6 +162,30 @@ def select_standard_executor(
             )
         )
     _missed("descriptive_cohort_summary")
+    if exposure_outcome_distribution_executor_owns_step(step):
+        if receipt_required:
+            # This owner emits no flag-only receipt, so it declines rather than
+            # claiming a step whose obligation it cannot discharge.
+            _receipt_declined("exposure_outcome_distribution")
+            return None
+        typed_cohort_inputs = tuple(
+            str(value or "").strip()
+            for value in step.inputs
+            if str(value or "").strip().startswith("cohort:")
+            or str(value or "").strip() == "artifact:analysis_cohort"
+        )
+        return _selected(
+            StandardExecutorSelection(
+                analysis_kind="exposure_outcome_distribution",
+                selection_reason="exposure_outcome_distribution_contract_preflight",
+                progress_message=(
+                    "Using planner-declared exposure/outcome distribution executor"
+                ),
+                code=exposure_outcome_distribution_executor_code(step),
+                consumed_input_keys=typed_cohort_inputs,
+            )
+        )
+    _missed("exposure_outcome_distribution")
     if prevalence_outcome_figure_executor_owns_step(step):
         if receipt_required:
             _receipt_declined("prevalence_outcome_figure")
@@ -228,9 +255,7 @@ def select_standard_executor(
         return _selected(
             StandardExecutorSelection(
                 analysis_kind="missingness_measurement_figure",
-                selection_reason=(
-                    "missingness_measurement_figure_contract_preflight"
-                ),
+                selection_reason=("missingness_measurement_figure_contract_preflight"),
                 progress_message=(
                     "Using planner-scoped missingness/measurement figure executor"
                 ),
