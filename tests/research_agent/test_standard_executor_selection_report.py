@@ -30,12 +30,45 @@ def _plan() -> AnalysisPlan:
     )
 
 
-def _report(step: AnalysisStep, **kwargs: Any) -> Dict[str, Any]:
-    return standard_executor_candidate_report(step, plan=_plan(), **kwargs)
+def _report(
+    step: AnalysisStep,
+    *,
+    plan: AnalysisPlan | None = None,
+    plausibility_scope: Any = None,
+    **kwargs: Any,
+) -> Dict[str, Any]:
+    """Report what the real selector concluded for this exact step.
+
+    The report is a renderer over the selector's trace, so a test that built the
+    record any other way would be testing a path production never takes.
+    """
+
+    plan = _plan() if plan is None else plan
+    trace: list[selection_module.StandardExecutorCandidate] = []
+    selection = selection_module.select_standard_executor(
+        step,
+        plan=plan,
+        plausibility_scope=plausibility_scope,
+        trace=trace,
+    )
+    kwargs.setdefault(
+        "claimed_by", None if selection is None else selection.analysis_kind
+    )
+    return standard_executor_candidate_report(
+        step,
+        plan=plan,
+        trace=trace,
+        **kwargs,
+    )
 
 
 def _kinds(report: Dict[str, Any]) -> Dict[str, bool]:
-    return {entry["analysis_kind"]: entry["owns"] for entry in report["candidates"]}
+    return {
+        entry["analysis_kind"]: bool(
+            entry["contract_matches"] if entry["kind"] == "owner" else entry["matches"]
+        )
+        for entry in report["candidates"]
+    }
 
 
 def test_report_names_every_owner_the_selector_consults() -> None:
@@ -86,8 +119,11 @@ def test_a_step_no_owner_claims_reports_every_candidate_declining() -> None:
     assert report["declared_raw_input_count"] == 1
     assert report["declared_typed_inputs"] == []
     assert report["owning_candidates"] == []
+    assert report["trace_available"] is True
     assert not any(
-        entry["owns"] for entry in report["candidates"] if entry["kind"] == "owner"
+        entry["contract_matches"]
+        for entry in report["candidates"]
+        if entry["kind"] == "owner"
     )
 
 
@@ -165,8 +201,21 @@ def test_an_unrecognised_enrichment_shows_scope_kept_but_contract_lost() -> None
     )
 
 
-def test_a_raising_predicate_is_recorded_not_propagated() -> None:
+def test_a_raising_detail_classifier_is_recorded_not_propagated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Observability must never be able to fail a step."""
+
+    from easyicu.research_agent.execution.runners import deterministic_missingness
+
+    def _explode(*_args: Any, **_kwargs: Any) -> bool:
+        raise RuntimeError("contract classifier exploded")
+
+    monkeypatch.setattr(
+        deterministic_missingness,
+        "missingness_audit_input_scope_supported",
+        _explode,
+    )
 
     step = AnalysisStep(
         step_id="09_bespoke_analysis",
@@ -176,19 +225,78 @@ def test_a_raising_predicate_is_recorded_not_propagated() -> None:
         expected_outputs=["table:bespoke_product"],
     )
 
-    class Exploding:
-        @property
-        def display_labels(self) -> Dict[str, str]:
-            raise RuntimeError("plan display_labels exploded")
-
-    report = standard_executor_candidate_report(step, plan=Exploding())
+    report = standard_executor_candidate_report(step, plan=_plan(), trace=[])
 
     assert report["claimed_by"] is None
     assert report["owning_candidates"] == []
     errored = [entry for entry in report["candidates"] if entry.get("error")]
-    assert errored, "an exploding plan surface must be recorded on some candidate"
-    assert all(entry["owns"] is False for entry in errored)
+    assert errored, "a raising classifier must be recorded on its candidate"
+    assert all(entry["matches"] is False for entry in errored)
     assert all("RuntimeError" in entry["error"] for entry in errored)
+
+
+def test_the_report_cannot_claim_an_owner_the_selector_declined() -> None:
+    """The second-registry defect, pinned.
+
+    ``descriptive_cohort_summary``'s contract matches this step, but the
+    selector declines it because the step also owes a host-verified
+    row-conservation receipt its deterministic code cannot emit.  A report that
+    re-ran the ownership predicate reported that owner as available, which is a
+    diagnostic that lies exactly where someone is trying to find out why the
+    Coder ran.  Ownership must be readable as "matched but declined", not as a
+    claim.
+    """
+
+    from easyicu.research_agent.authority.plausibility import (
+        FlagOnlyPlausibilityScope,
+    )
+
+    step = AnalysisStep.model_validate(
+        {
+            "step_id": "02_cohort_summary",
+            "intent": "Summarise the analysis cohort.",
+            "method": "descriptive_cohort_summary",
+            "planned_analysis_role": "auxiliary",
+            "inputs": ["artifact:analysis_cohort", "sofa2_liver_max"],
+            "expected_outputs": ["table:cohort_summary"],
+        }
+    )
+    scope = FlagOnlyPlausibilityScope(
+        step_id="02_cohort_summary",
+        expected_columns=("sofa2_liver_max",),
+        source_contracts_sha256="0" * 64,
+        authority_kind="raw_universe",
+    )
+
+    report = _report(step, plausibility_scope=scope)
+
+    assert report["claimed_by"] is None
+    assert report["owning_candidates"] == ["descriptive_cohort_summary"]
+    assert report["declined_after_match"] == ["descriptive_cohort_summary"]
+    outcome = {
+        entry["analysis_kind"]: entry["outcome"]
+        for entry in report["candidates"]
+        if entry["kind"] == "owner"
+    }
+    assert outcome["descriptive_cohort_summary"] == "declined_receipt_required"
+
+
+def test_a_report_without_a_trace_says_so_instead_of_guessing() -> None:
+    """An absent diagnostic is recoverable; a confident wrong one is not."""
+
+    step = AnalysisStep(
+        step_id="09_bespoke_analysis",
+        intent="Something outside every closed contract.",
+        method="bespoke_method",
+        inputs=[],
+        expected_outputs=["table:bespoke_product"],
+    )
+
+    report = standard_executor_candidate_report(step, plan=_plan())
+
+    assert report["trace_available"] is False
+    assert report["owning_candidates"] == []
+    assert not any(entry["kind"] == "owner" for entry in report["candidates"])
 
 
 def test_execute_phase_records_the_report_for_claimed_and_unclaimed_steps() -> None:

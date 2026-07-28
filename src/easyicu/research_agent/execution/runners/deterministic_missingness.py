@@ -105,10 +105,20 @@ _MEASUREMENT_BIAS_METHOD_TOKENS = frozenset(
         "timing",
     }
 )
-_MEASUREMENT_BIAS_PRODUCT_TOKEN_SETS = (
-    frozenset({"missingness", "measurement", "audit"}),
-    frozenset({"measurement", "process", "audit"}),
-    frozenset({"exposure", "component", "completeness", "audit"}),
+# The exact product ids this runner can emit.  Recognition must not be looser
+# than production: an earlier revision matched each product by its *token set*,
+# which accepts any permutation of the same words -- ``audit_process_measurement``
+# passed the contract while the generator's ``product_files`` map, which is keyed
+# on the exact id, could not produce it.  The step was then claimed and failed
+# afterwards for a missing declared product, which is strictly worse than never
+# claiming it.  ``test_measurement_bias_audit_contract`` locks these ids against
+# the generated template so the two cannot drift apart.
+_MEASUREMENT_BIAS_PRODUCT_IDS = frozenset(
+    {
+        "missingness_measurement_audit",
+        "measurement_process_audit",
+        "exposure_component_completeness_audit",
+    }
 )
 
 
@@ -205,10 +215,14 @@ def is_measurement_bias_audit_contract(
 
     A replanner that adds the observation-process and component-completeness
     products is asking for more science, not different science; the counts are
-    still pure per-concept accounting.  Ownership is still exact: three typed
-    tables whose structured product names carry these three token sets, and a
-    method drawn only from the closed audit vocabulary.  Anything else fails
-    closed rather than letting this count-only runner swallow a model or test.
+    still pure per-concept accounting.  Ownership is exact in both directions:
+    the three declared products must be precisely the three product ids this
+    runner emits, and the method must be drawn only from the closed audit
+    vocabulary.  A method label may vary compositionally, but a product id may
+    not: it is the key the generator looks the output file up by, so accepting a
+    spelling the generator cannot produce would claim the step and then fail it.
+    Anything else fails closed rather than letting this count-only runner
+    swallow a model or a test.
     """
 
     method_tokens = _contract_tokens(method)
@@ -220,20 +234,13 @@ def is_measurement_bias_audit_contract(
     ):
         return False
     outputs = [str(value or "").strip().casefold() for value in expected_outputs]
-    if len(outputs) != len(_MEASUREMENT_BIAS_PRODUCT_TOKEN_SETS):
+    if len(outputs) != len(_MEASUREMENT_BIAS_PRODUCT_IDS):
         return False
     if len(set(outputs)) != len(outputs):
         return False
     if any(not value.startswith("table:") for value in outputs):
         return False
-    observed = [_contract_tokens(value.split(":", 1)[1]) for value in outputs]
-    remaining = list(observed)
-    for required in _MEASUREMENT_BIAS_PRODUCT_TOKEN_SETS:
-        match = next((tokens for tokens in remaining if tokens == required), None)
-        if match is None:
-            return False
-        remaining.remove(match)
-    return not remaining
+    return {value.split(":", 1)[1] for value in outputs} == _MEASUREMENT_BIAS_PRODUCT_IDS
 
 
 def _cohort_input_scope(step: AnalysisStep) -> tuple[bool, str | None]:

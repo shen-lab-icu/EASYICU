@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -128,6 +129,71 @@ def test_the_contract_fails_closed(label: str, overrides: Dict[str, Any]) -> Non
         select_standard_executor(_step(**overrides), plan=plan).analysis_kind
         != "measurement_bias_audit"
     )
+
+
+@pytest.mark.parametrize(
+    ("label", "outputs"),
+    [
+        (
+            "one permuted id",
+            [
+                "table:missingness_measurement_audit",
+                "table:audit_process_measurement",
+                "table:exposure_component_completeness_audit",
+            ],
+        ),
+        (
+            "two permuted ids",
+            [
+                "table:missingness_measurement_audit",
+                "table:audit_process_measurement",
+                "table:completeness_exposure_component_audit",
+            ],
+        ),
+        (
+            "a same-word id the generator has no key for",
+            [
+                "table:audit_measurement_missingness",
+                "table:measurement_process_audit",
+                "table:exposure_component_completeness_audit",
+            ],
+        ),
+    ],
+)
+def test_a_permuted_product_id_is_refused(label: str, outputs: list[str]) -> None:
+    """Recognition must not be looser than production.
+
+    These ids carry exactly the right words in the wrong order.  A token-set
+    match accepts them; the generator looks its output file up by the exact id
+    and cannot emit them.  Claiming the step and then failing it for a missing
+    declared product is strictly worse than declining to the ordinary Coder
+    path, so the contract must refuse them here.
+    """
+
+    plan = AnalysisPlan(research_question="q", robustness_specs=[], steps=[])
+
+    assert not is_measurement_bias_audit_contract("measurement_bias_audit", outputs)
+    selection = select_standard_executor(_step(expected_outputs=outputs), plan=plan)
+    assert selection is None or selection.analysis_kind != "measurement_bias_audit"
+
+
+def test_every_owned_product_id_is_a_key_the_generator_looks_up() -> None:
+    """Lock the classifier's ids against the generator's own lookup table.
+
+    ``product_files`` lives inside the generated-script template, so the two
+    cannot share one object.  They can still be prevented from drifting: every
+    id the contract claims must appear as a key the template resolves, or the
+    runner would accept a contract it cannot fulfil.
+    """
+
+    from easyicu.research_agent.execution.runners import deterministic_missingness
+
+    source = Path(deterministic_missingness.__file__).read_text(encoding="utf-8")
+    template = source.split("product_files = {", 1)[1].split("}", 1)[0]
+    keys = set(re.findall(r'"([a-z0-9_]+)":', template))
+
+    missing = deterministic_missingness._MEASUREMENT_BIAS_PRODUCT_IDS - keys
+    assert not missing, f"contract claims ids the generator cannot emit: {missing}"
 
 
 def test_the_compact_contract_still_means_one_product() -> None:

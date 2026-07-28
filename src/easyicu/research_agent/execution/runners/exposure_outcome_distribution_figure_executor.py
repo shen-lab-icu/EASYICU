@@ -751,13 +751,3 @@ def run_exposure_outcome_distribution_figure(
         encoding="utf-8",
     )
     return summary
-
-
-def _outcome_title(
-    display_labels: Mapping[str, str] | None,
-    outcome_variable: str,
-) -> str:
-    """Prefer the Planner's own name for the outcome variable."""
-
-    label = str((display_labels or {}).get(outcome_variable, "") or "").strip()
-    return label or outcome_variable

@@ -343,6 +343,32 @@ def test_owner_declines_without_one_planner_label_pair(tmp_path: Path) -> None:
         )
 
 
+def test_a_missing_outcome_label_renders_a_reader_title_not_a_machine_name() -> None:
+    """One module-level name, one definition.
+
+    ``_outcome_title`` was defined twice; the later definition shadowed the
+    earlier one for every caller and fell back to the raw variable, so a step
+    whose Planner supplied no outcome display label titled its figure
+    ``in_hospital_death``.  A duplicate definition is invisible at the call
+    site, so lock the behaviour rather than the line count.
+    """
+
+    from easyicu.research_agent.execution.runners import (
+        exposure_outcome_distribution_figure_executor as mod,
+    )
+
+    source = Path(mod.__file__).read_text(encoding="utf-8")
+    assert source.count("\ndef _outcome_title(") == 1
+
+    assert mod._outcome_title(None, "in_hospital_death") == "In hospital death"
+    assert mod._outcome_title({}, "in_hospital_death") == "In hospital death"
+    assert (
+        mod._outcome_title({"in_hospital_death": "In-hospital mortality"},
+                           "in_hospital_death")
+        == "In-hospital mortality"
+    )
+
+
 def test_code_generation_refuses_an_unowned_step() -> None:
     with pytest.raises(ValueError, match="not owned"):
         exposure_outcome_distribution_figure_executor_code(
