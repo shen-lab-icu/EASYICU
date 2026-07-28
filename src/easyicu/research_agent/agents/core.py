@@ -1763,8 +1763,19 @@ class CriticAgent:
         findings: Sequence[str],
     ) -> CritiqueReport:
         scientific_summary = summarize_step_scientific_semantics(step_summary)
-        concerns = [msg for msg in findings if msg]
+        deterministic_concerns = [msg for msg in findings if msg]
+        concerns = list(deterministic_concerns)
         concerns.extend(issue.message for issue in scientific_summary.issues)
+        concerns.extend(
+            (
+                "[scientific_semantics:event_time_before_origin_reported] "
+                f"{metric.variable} reports {metric.before_origin_n} event times "
+                "before the declared origin; timing analyses must exclude or "
+                "resolve them under the reviewed protocol."
+            )
+            for metric in scientific_summary.metrics
+            if metric.before_origin_n
+        )
         status: str = "pass"
         if not evidence_refs:
             status = "blocked"
@@ -1773,7 +1784,7 @@ class CriticAgent:
             issue.severity == "error" for issue in scientific_summary.issues
         ):
             status = "blocked"
-        elif concerns:
+        elif deterministic_concerns or scientific_summary.issues:
             status = "needs_revision"
         suggested_repairs = list(
             dict.fromkeys(issue.repair for issue in scientific_summary.issues)

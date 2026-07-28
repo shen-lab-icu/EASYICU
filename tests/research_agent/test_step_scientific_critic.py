@@ -90,9 +90,30 @@ def test_missing_typed_semantics_receipt_blocks_missingness_step(ra):
     )
 
 
-def test_negative_event_time_blocks_critic_with_attributable_code(ra):
+def test_negative_event_time_audit_passes_with_attributable_protocol_finding(ra):
     summary = _valid_summary()
     summary["observation_semantics_audit"]["death_time"]["before_origin_n"] = 28
+    summary["temporal_validity_audit"] = {
+        "status": "flagged_requires_downstream_protocol",
+        "reason_codes": ["event_time_before_declared_origin:death_time:28"],
+    }
+
+    critique = CriticAgent().review_step(
+        step=_step(ra),
+        step_summary=summary,
+        evidence_refs=_evidence(ra),
+        findings=[],
+    )
+
+    assert critique.status == "pass"
+    assert any(
+        "event_time_before_origin_reported" in item for item in critique.concerns
+    )
+    assert critique.suggested_repairs == []
+
+
+def test_unresolved_temporal_analysis_still_blocks_critic(ra):
+    summary = _valid_summary()
     summary["temporal_validity_audit"] = {
         "status": "blocked",
         "reason_codes": ["event_time_before_declared_origin:death_time:28"],
@@ -106,8 +127,7 @@ def test_negative_event_time_blocks_critic_with_attributable_code(ra):
     )
 
     assert critique.status == "blocked"
-    assert any("event_time_before_origin" in item for item in critique.concerns)
-    assert any("Correct the time origin" in item for item in critique.suggested_repairs)
+    assert any("temporal_validity_blocked" in item for item in critique.concerns)
 
 
 def test_unclosed_event_partition_blocks_critic(ra):

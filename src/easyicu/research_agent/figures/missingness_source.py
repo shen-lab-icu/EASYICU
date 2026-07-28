@@ -251,7 +251,10 @@ def _validated_source_frame(
         merged.loc[conditional_time, "event_absent_n"]
     ).all():
         return None
-    if not merged.loc[conditional_time, "before_origin_n"].eq(0).all():
+    if (
+        merged.loc[conditional_time, "before_origin_n"]
+        > merged.loc[conditional_time, "measured_one_n"]
+    ).any():
         return None
 
     structural = kinds == "structural_no_source"
@@ -265,6 +268,14 @@ def _validated_source_frame(
     merged.loc[binary_event, "observed_or_present_n"] = merged.loc[
         binary_event, "event_present_n"
     ]
+    merged["invalid_before_origin_n"] = 0
+    merged.loc[conditional_time, "invalid_before_origin_n"] = merged.loc[
+        conditional_time, "before_origin_n"
+    ]
+    merged.loc[conditional_time, "observed_or_present_n"] = (
+        merged.loc[conditional_time, "n_nonmissing"]
+        - merged.loc[conditional_time, "invalid_before_origin_n"]
+    )
     merged["absent_or_not_applicable_n"] = merged["not_applicable_n_missing"]
     merged.loc[binary_event, "absent_or_not_applicable_n"] = merged.loc[
         binary_event, "event_absent_n"
@@ -275,6 +286,9 @@ def _validated_source_frame(
     )
     merged["not_applicable_pct"] = (
         merged["absent_or_not_applicable_n"].astype(float) * 100.0 / denominator
+    )
+    merged["invalid_before_origin_pct"] = (
+        merged["invalid_before_origin_n"].astype(float) * 100.0 / denominator
     )
     return merged.sort_values(
         ["missing_pct", "concept"], ascending=[False, True]
@@ -327,9 +341,11 @@ def render_missingness_source_bundle(
             "event_present_n",
             "event_absent_n",
             "before_origin_n",
+            "invalid_before_origin_n",
             "available_pct",
             "missing_pct",
             "not_applicable_pct",
+            "invalid_before_origin_pct",
             "indicator_semantics",
             "missingness_kind",
         ],
@@ -354,6 +370,7 @@ def render_missingness_source_bundle(
     available = source["available_pct"].astype(float)
     missing = source["missing_pct"].astype(float)
     not_applicable = source["not_applicable_pct"].astype(float)
+    invalid_before_origin = source["invalid_before_origin_pct"].astype(float)
     structural_no_source = (
         source["missingness_kind"].astype(str).eq("structural_no_source")
     )
@@ -369,8 +386,18 @@ def render_missingness_source_bundle(
     )
     ax.barh(
         positions,
-        plotted_missing,
+        invalid_before_origin,
         left=plotted_available,
+        color=palette["red_soft"],
+        edgecolor=palette["red"],
+        linewidth=0.5,
+        height=0.62,
+        label="Invalid before time origin",
+    )
+    ax.barh(
+        positions,
+        plotted_missing,
+        left=plotted_available + invalid_before_origin,
         color=palette["neutral_light"],
         height=0.62,
         label="Missing among eligible",
@@ -378,7 +405,7 @@ def render_missingness_source_bundle(
     ax.barh(
         positions,
         not_applicable,
-        left=plotted_available + plotted_missing,
+        left=plotted_available + invalid_before_origin + plotted_missing,
         color=palette["neutral"],
         alpha=0.45,
         height=0.62,
@@ -411,6 +438,7 @@ def render_missingness_source_bundle(
         event_present_n,
         event_absent_n,
         eligible_n,
+        before_origin_n,
     ) in enumerate(
         zip(
             missing,
@@ -421,6 +449,7 @@ def render_missingness_source_bundle(
             source["event_present_n"],
             source["event_absent_n"],
             source["eligible_n_missing"],
+            source["before_origin_n"],
         )
     ):
         if kind == "structural_no_source":
@@ -432,8 +461,9 @@ def render_missingness_source_bundle(
             )
         elif semantics == "conditional_event_time":
             label = (
-                f"Time missing {int(missing_n):,}/{int(eligible_n):,} "
-                "event-positive"
+                f"Valid {int(eligible_n - missing_n - before_origin_n):,}; "
+                f"before origin {int(before_origin_n):,}; "
+                f"missing {int(missing_n):,}/{int(eligible_n):,}"
             )
         else:
             label = f"Missing {missing_pct:.1f}% ({int(missing_n):,}/{int(total_n):,})"
@@ -445,8 +475,9 @@ def render_missingness_source_bundle(
     contract = make_figure_contract(
         figure_id="figure:missingness_measurement",
         core_claim=(
-            "Availability, event absence, conditional non-applicability, and true "
-            "missingness are reported for every Planner-declared audit input."
+            "Availability, invalid pre-origin times, event absence, conditional "
+            "non-applicability, and true missingness are reported for every "
+            "Planner-declared audit input."
         ),
         archetype="quantitative_grid",
         width_mm=183.0,
@@ -457,9 +488,9 @@ def render_missingness_source_bundle(
                 "title": "Measurement availability",
                 "role": "data_quality",
                 "claim": (
-                    "Observed or event-present, truly missing, event-absent or "
-                    "not-applicable, and structural no-source counts form a "
-                    "typed closed partition."
+                    "Observed or event-present, invalid pre-origin, truly missing, "
+                    "event-absent or not-applicable, and structural no-source "
+                    "counts form a typed closed partition."
                 ),
                 "evidence_ids": [source_path.name],
                 # Anchor the sealed renderer's authorized figure product slot to

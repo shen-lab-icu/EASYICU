@@ -965,7 +965,7 @@ def test_typed_conditional_event_time_uses_event_positive_denominator(
     assert observed["n_complete"] == 4
 
 
-def test_typed_conditional_event_time_before_origin_blocks(
+def test_typed_conditional_event_time_before_origin_is_reported_for_protocol(
     tmp_path: Path,
 ) -> None:
     cohort = pd.DataFrame(
@@ -999,14 +999,12 @@ def test_typed_conditional_event_time_before_origin_blocks(
 
     audit = pd.read_csv(out_dir / "missingness_measurement_audit.csv")
     row = audit.loc[audit["concept"] == "death_time"].iloc[0]
-    assert summary["status"] == "blocked"
+    assert summary["status"] == "ok"
     assert summary["temporal_validity_audit"] == {
-        "status": "blocked",
+        "status": "flagged_requires_downstream_protocol",
         "reason_codes": ["event_time_before_declared_origin:death_time:1"],
     }
-    assert "event_time_before_declared_origin:death_time:1" in str(
-        summary["blocking_reason"]
-    )
+    assert summary["blocking_reason"] is None
     assert row["before_origin_n"] == 1
 
 

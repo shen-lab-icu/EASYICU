@@ -501,7 +501,7 @@ def test_sealed_missingness_renderer_uses_typed_event_semantics(
             "not_applicable_n": [0, 90],
             "event_present_n": [40, 10],
             "event_absent_n": [60, 90],
-            "before_origin_n": [0, 0],
+            "before_origin_n": [0, 1],
             "indicator_semantics": [
                 "binary_event_presence",
                 "conditional_event_time",
@@ -543,12 +543,13 @@ def test_sealed_missingness_renderer_uses_typed_event_semantics(
     assert susp_inf["available_pct"] == pytest.approx(40.0)
     assert susp_inf["not_applicable_pct"] == pytest.approx(60.0)
     assert susp_inf["missing_pct"] == pytest.approx(0.0)
-    assert death_time["available_pct"] == pytest.approx(8.0)
+    assert death_time["available_pct"] == pytest.approx(7.0)
+    assert death_time["invalid_before_origin_pct"] == pytest.approx(1.0)
     assert death_time["not_applicable_pct"] == pytest.approx(90.0)
     assert death_time["missing_pct"] == pytest.approx(2.0)
     svg = (out / "missingness_measurement_panel.svg").read_text(encoding="utf-8")
     assert "Event present 40; absent 60" in svg
-    assert "Time missing 2/10 event-positive" in svg
+    assert "Valid 7; before origin 1; missing 2/10" in svg
 
 
 def test_sealed_missingness_panel_anchors_authorized_product_slot(
