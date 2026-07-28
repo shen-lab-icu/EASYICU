@@ -855,3 +855,157 @@ def test_a_process_median_outside_its_own_quartiles_is_rejected():
         frame.loc[target, "median"] = 50.0
 
     assert "median outside its own q1-q3 range" in _process_rows_error(mutate)
+
+
+# --------------------------------------------------------------------------
+# L0: the renderer claims a step by its typed contract, not by the spelling of
+# the figure product.  The id is a Planner-owned label; competence is fixed by
+# the two required inputs and their verified schemas.
+# --------------------------------------------------------------------------
+
+
+#: Transcribed verbatim from the real 12-step authority plan
+#: (``analysis_plan_revision_3``) of run ``run_20260728T131514_c54ead``.  It is
+#: a *fixture*: the production renderer must contain no branch that recognises
+#: this benchmark item, and the assertions below are about the shape of the
+#: contract, never about the case.
+_REAL_PLAN_FIGURE_STEP = {
+    "step_id": "05_missingness_measurement_process_audit_figure",
+    "planned_analysis_role": "auxiliary",
+    "method": "visualization",
+    "inputs": [
+        "table:missingness_measurement_audit",
+        "table:measurement_process_audit",
+    ],
+    "expected_outputs": ["figure:missingness_event_timing"],
+    "intent": "Render the publication figure(s) declared by the parent step.",
+    "input_consumption_contracts": [
+        ArtifactConsumptionContract(
+            input_key="table:missingness_measurement_audit", mode="all_rows"
+        ),
+        ArtifactConsumptionContract(
+            input_key="table:measurement_process_audit", mode="all_rows"
+        ),
+    ],
+}
+
+
+@pytest.mark.parametrize(
+    "product",
+    [
+        "measurement_process_overview",
+        "missingness_event_timing",
+        "data_quality",
+        "f1",
+        "a",
+    ],
+)
+def test_any_legal_product_id_is_owned_when_the_typed_contract_closes(
+    product: str,
+) -> None:
+    """The spelling of the label is not a capability question."""
+
+    assert missingness_measurement_figure_executor_owns_step(
+        _step(expected_outputs=[f"figure:{product}"])
+    )
+
+
+def test_the_real_plans_figure_step_is_owned() -> None:
+    """The step this renderer was written for, exactly as the Planner wrote it.
+
+    Before L0 every ``owns_step`` clause passed except the product name, so a
+    renderer that consumes precisely these two tables refused the work and the
+    step fell to the Coder.
+    """
+
+    step = AnalysisStep.model_validate(_REAL_PLAN_FIGURE_STEP)
+    assert missingness_measurement_figure_executor_owns_step(step)
+    selection = select_standard_executor(
+        step, plan=AnalysisPlan(research_question="Test", steps=[step])
+    )
+    assert selection is not None
+    assert selection.analysis_kind == "missingness_measurement_figure"
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        "figure:../../etc/passwd",
+        "figure:a/b",
+        "figure:.hidden",
+        "figure:",
+        "figure:UPPER",
+        "figure:1leading_digit",
+        "figure:trailing space",
+        "figure:" + "x" * 129,
+        "table:missingness_measurement_audit",
+        "missingness_event_timing",
+    ],
+)
+def test_an_unsafe_or_malformed_product_id_is_refused_by_the_selector(
+    output: str,
+) -> None:
+    assert not missingness_measurement_figure_executor_owns_step(
+        _step(expected_outputs=[output])
+    )
+
+
+def test_two_declared_figures_are_refused_even_when_both_are_legal() -> None:
+    assert not missingness_measurement_figure_executor_owns_step(
+        _step(expected_outputs=["figure:one", "figure:two"])
+    )
+
+
+@pytest.mark.parametrize(
+    "product",
+    ["../../escape", "a/b", "", "UPPER", ".hidden", "x" * 129],
+)
+def test_the_runtime_refuses_an_unsafe_product_id_without_trusting_its_caller(
+    tmp_path: Path, product: str
+) -> None:
+    """``run_...`` is public and interpolates this id into a path.
+
+    The selector already parses it out of ``figure:<id>``; the entry point does
+    not take that on trust.
+    """
+
+    with pytest.raises(ValueError, match="unsafe or malformed figure product id"):
+        run_missingness_measurement_figure(
+            out_dir=tmp_path / "out",
+            run_dir=tmp_path / "run",
+            resolved_inputs={},
+            step_id=STEP_ID,
+            figure_product=product,
+        )
+
+
+def test_a_renamed_product_still_renders_the_same_verified_bundle(
+    tmp_path: Path,
+) -> None:
+    """Renaming the label changes the filenames and nothing else."""
+
+    run_dir, manifest = _binding(tmp_path)
+    result = run_missingness_measurement_figure(
+        out_dir=tmp_path / "out",
+        run_dir=run_dir,
+        resolved_inputs=manifest,
+        step_id=STEP_ID,
+        figure_product="measurement_process_overview",
+    )
+    assert result["figure_path"] == "measurement_process_overview.png"
+    assert (tmp_path / "out" / "measurement_process_overview.png").exists()
+    assert (
+        tmp_path / "out" / "measurement_process_overview_missingness_source_data.csv"
+    ).exists()
+
+
+def test_the_renderer_carries_no_case_specific_branch() -> None:
+    """Ownership is decided by the typed contract, not by recognising a case."""
+
+    import easyicu.research_agent.execution.runners.missingness_measurement_figure_executor as module
+
+    source = Path(module.__file__).read_text()
+    for token in ("sepsis", "sep3", "e1_", "_e1", "94,458", "missingness_event_timing"):
+        assert (
+            token not in source.lower()
+        ), f"case-specific token in production: {token}"

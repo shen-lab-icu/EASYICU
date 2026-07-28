@@ -52,13 +52,28 @@ MISSINGNESS_MEASUREMENT_FIGURE_INPUTS = (
     MISSINGNESS_MEASUREMENT_AUDIT_INPUT,
     MEASUREMENT_PROCESS_AUDIT_INPUT,
 )
-_SUPPORTED_FIGURE_PRODUCTS = frozenset(
-    {
-        "data_quality",
-        "missingness_measurement_audit",
-        "missingness_measurement",
-    }
-)
+#: A figure product id is a Planner-owned *label*, not a capability claim.  What
+#: this renderer can draw is fixed by its two required typed inputs and their
+#: verified schemas, both checked below; the id never selects a panel, a
+#: variable or a transform.  An allow-list of spellings therefore refuses work
+#: this renderer is competent to do: a plan naming the two audit tables exactly,
+#: under the right contracts, was declined for the spelling of its label alone.
+#:
+#: The id is still constrained, because it becomes a path segment and a
+#: filename stem: ``out_dir / figure_product`` and ``{figure_product}.png``.
+#: The length bound is set by that use -- the longest suffix this module
+#: appends is ``_source_missingness_panel_source_data.csv`` -- so a legal id
+#: cannot produce an ENAMETOOLONG failure after the run has already paid for
+#: the analysis.
+_FIGURE_PRODUCT_ID = re.compile(r"[a-z][a-z0-9_]{0,127}")
+
+
+def _is_safe_figure_product_id(value: Any) -> bool:
+    """Whether ``value`` is a legal, path-safe figure product id."""
+
+    return bool(_FIGURE_PRODUCT_ID.fullmatch(str(value or "")))
+
+
 _AUDIT_COLUMNS = (
     "variable",
     "metric",
@@ -109,11 +124,7 @@ def _method_head(value: Any) -> str:
 
 def _figure_product(value: Any) -> str | None:
     kind, separator, product = str(value or "").strip().partition(":")
-    if (
-        kind != "figure"
-        or not separator
-        or not re.fullmatch(r"[a-z][a-z0-9_]*", product)
-    ):
+    if kind != "figure" or not separator or not _is_safe_figure_product_id(product):
         return None
     return product
 
@@ -138,7 +149,7 @@ def missingness_measurement_figure_executor_owns_step(step: AnalysisStep) -> boo
         step.planned_analysis_role == "auxiliary"
         and _method_head(step.method) == "visualization"
         and len(products) == 1
-        and products[0] in _SUPPORTED_FIGURE_PRODUCTS
+        and products[0] is not None
         and not step.model_requirements
         and step.table_one_spec is None
         and step.trajectory_stability_spec is None
@@ -578,8 +589,11 @@ def run_missingness_measurement_figure(
 ) -> Mapping[str, Any]:
     """Render the verified missingness/measurement pair and write its contract."""
 
-    if figure_product not in _SUPPORTED_FIGURE_PRODUCTS:
-        raise ValueError("unsupported missingness/measurement figure product")
+    # The selector parses this id out of ``figure:<id>``; this entry point is
+    # public, so it re-checks rather than trusting its caller.  Everything below
+    # interpolates it into a path.
+    if not _is_safe_figure_product_id(figure_product):
+        raise ValueError("unsafe or malformed figure product id")
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     bindings = _load_bindings(
