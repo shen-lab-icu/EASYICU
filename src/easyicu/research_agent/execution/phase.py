@@ -3280,6 +3280,7 @@ def _selectively_revalidate_resume_successes(
         prior_record = restore_revalidated_resolved_inputs_sha256(
             prior_record=prior_record,
             checkpoint_history=history,
+            run_dir=run_dir,
         )
         step_id = str(prior_record.get("step_id") or "").strip()
         invalid_upstream = sorted(
@@ -11747,6 +11748,7 @@ def run_execute_phase(
         return _ExecutePhaseResult(
             plan=plan,
             per_step_records=per_step_records,
+            step_attempt_history=step_attempt_history,
             probe_summary=probe_summary,
             runtime_state=runtime_state,
             flush_partial_manifest=_flush_partial_manifest,
@@ -11919,6 +11921,7 @@ def run_execute_phase(
     return _ExecutePhaseResult(
         plan=plan,
         per_step_records=per_step_records,
+        step_attempt_history=step_attempt_history,
         probe_summary=probe_summary,
         runtime_state=runtime_state,
         flush_partial_manifest=_flush_partial_manifest,

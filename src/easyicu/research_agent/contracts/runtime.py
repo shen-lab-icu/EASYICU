@@ -70,6 +70,7 @@ class _ExecutePhaseResult:
 
     plan: AnalysisPlan
     per_step_records: List[Dict[str, Any]]
+    step_attempt_history: List[Dict[str, Any]]
     probe_summary: Dict[str, Any]
     runtime_state: AgentRuntimeState
     flush_partial_manifest: Callable[[Optional[Dict[str, Any]]], None]

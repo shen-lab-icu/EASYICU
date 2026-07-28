@@ -496,14 +496,17 @@ def restore_revalidated_resolved_inputs_sha256(
     *,
     prior_record: Mapping[str, Any],
     checkpoint_history: Sequence[Mapping[str, Any]],
+    run_dir: Path,
 ) -> Dict[str, Any]:
     """Recover only the immutable input digest lost by an old replay projection.
 
     A short-lived resume implementation removed ``resolved_inputs_sha256`` from
     a successful revalidation checkpoint along with mutable convenience
     receipts.  Recovery is allowed only for that explicit checkpoint shape and
-    only from an earlier success naming the same executed capsule and code.  The
-    caller must still pass the result through capsule verification.
+    only from an earlier success naming the same executed capsule and code, or
+    from the exact content-addressed executed capsule selected by the current
+    checkpoint.  The caller must still pass the result through capsule
+    verification.
     """
 
     restored = dict(prior_record)
@@ -528,6 +531,51 @@ def restore_revalidated_resolved_inputs_sha256(
         ):
             restored["resolved_inputs_sha256"] = candidate_digest
             break
+    if restored.get("resolved_inputs_sha256"):
+        return restored
+
+    attempt_id = str(restored.get("attempt_id") or "")
+    raw_capsule_ref = restored.get("step_authority_capsule_ref")
+    if (
+        re.fullmatch(
+            rf"{re.escape(step_id)}:resume_revalidation:[1-9][0-9]*",
+            attempt_id,
+        )
+        is None
+        or restored.get("step_authority_capsule_stage")
+        not in _EXECUTED_CAPSULE_STAGES
+        or not isinstance(raw_capsule_ref, Mapping)
+    ):
+        return restored
+    try:
+        capsule_ref = StepAuthorityCapsuleRef.model_validate(dict(raw_capsule_ref))
+        capsule = load_verified_step_authority_capsule(
+            run_dir,
+            ref=capsule_ref,
+            expected_step_id=step_id,
+        ).capsule
+        execution = capsule.execution
+        capsule_digest = str(capsule.resolved_inputs.sha256)
+        if (
+            capsule.stage not in _EXECUTED_CAPSULE_STAGES
+            or execution is None
+            or capsule.candidate_code.sha256 != code_sha256
+            or execution.code_sha256 != code_sha256
+            or _SHA256_PATTERN.fullmatch(capsule_digest) is None
+            or execution.resolved_inputs_sha256 != capsule_digest
+            or execution.returncode != 0
+            or execution.timed_out
+            or not execution.outputs_safe_to_collect
+        ):
+            return restored
+    except (
+        AttributeError,
+        StepAuthorityCapsuleError,
+        TypeError,
+        ValueError,
+    ):
+        return restored
+    restored["resolved_inputs_sha256"] = capsule_digest
     return restored
 
 

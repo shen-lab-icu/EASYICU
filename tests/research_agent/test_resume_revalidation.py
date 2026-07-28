@@ -1032,6 +1032,102 @@ def test_old_revalidation_projection_recovers_digest_from_matching_history(
     assert latest["attempt_id"].endswith(":resume_revalidation:2")
 
 
+def test_finalized_projection_recovers_digest_from_exact_executed_capsule(
+    replay_environment,
+    monkeypatch,
+):
+    pipeline_execute, run_dir, evidence = replay_environment
+    step = AnalysisStep(step_id="01_model", intent="Fit the planned model.")
+    original, _, _ = _register_success(
+        run_dir=run_dir,
+        evidence=evidence,
+        step=step,
+    )
+    projected = {
+        **original,
+        **pipeline_execute._deterministic_gate_stamp(),
+        "attempt_id": f"{step.step_id}:resume_revalidation:1",
+        "revalidated_without_execution": True,
+    }
+    projected.pop("resolved_inputs_sha256")
+    next_stamp = {
+        **pipeline_execute._deterministic_gate_stamp(),
+        "deterministic_gate_engine_code_sha256": "3" * 64,
+        "deterministic_gate_fingerprint": "4" * 64,
+    }
+    monkeypatch.setattr(
+        pipeline_execute,
+        "_deterministic_gate_stamp",
+        lambda: next_stamp,
+    )
+    monkeypatch.setattr(
+        pipeline_execute,
+        "_evaluate_final_deterministic_gates",
+        lambda **_kwargs: _empty_gates(pipeline_execute),
+    )
+
+    result = _revalidate(
+        pipeline_execute,
+        run_dir=run_dir,
+        evidence=evidence,
+        records=[projected],
+        attempt_history=[],
+        plan=AnalysisPlan(research_question="Question", steps=[step]),
+    )
+    latest = result.resume_state["per_step_records"][-1]
+
+    assert result.revalidated_step_ids == (step.step_id,)
+    assert result.invalidated_step_ids == ()
+    assert latest["resolved_inputs_sha256"] == original["resolved_inputs_sha256"]
+    assert latest["attempt_id"].endswith(":resume_revalidation:2")
+
+
+def test_finalized_projection_does_not_recover_from_mismatched_code_capsule(
+    replay_environment,
+    monkeypatch,
+):
+    pipeline_execute, run_dir, evidence = replay_environment
+    step = AnalysisStep(step_id="01_model", intent="Fit the planned model.")
+    original, _, _ = _register_success(
+        run_dir=run_dir,
+        evidence=evidence,
+        step=step,
+    )
+    projected = {
+        **original,
+        **pipeline_execute._deterministic_gate_stamp(),
+        "attempt_id": f"{step.step_id}:resume_revalidation:1",
+        "revalidated_without_execution": True,
+        "executed_code_sha256": "9" * 64,
+    }
+    projected.pop("resolved_inputs_sha256")
+    next_stamp = {
+        **pipeline_execute._deterministic_gate_stamp(),
+        "deterministic_gate_engine_code_sha256": "3" * 64,
+        "deterministic_gate_fingerprint": "4" * 64,
+    }
+    monkeypatch.setattr(
+        pipeline_execute,
+        "_deterministic_gate_stamp",
+        lambda: next_stamp,
+    )
+
+    result = _revalidate(
+        pipeline_execute,
+        run_dir=run_dir,
+        evidence=evidence,
+        records=[projected],
+        attempt_history=[],
+        plan=AnalysisPlan(research_question="Question", steps=[step]),
+    )
+    latest = result.resume_state["per_step_records"][-1]
+
+    assert result.revalidated_step_ids == ()
+    assert result.invalidated_step_ids == (step.step_id,)
+    assert latest["status"] == "resume_validator_invalid"
+    assert "lacks a resolved-inputs SHA-256" in latest["resume_invalidation_reason"]
+
+
 def test_prior_blocking_critic_cannot_be_upgraded_by_replay(
     replay_environment,
     monkeypatch,

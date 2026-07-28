@@ -1565,6 +1565,14 @@ class AnalysisManifest(BaseModel):
             "The same records are streamed to manifest_partial.json during a run."
         ),
     )
+    step_attempt_history: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description=(
+            "Append-only execution and deterministic-revalidation history. "
+            "Unlike per_step_records, this retains superseded attempts needed "
+            "to audit or safely resume a finalized run."
+        ),
+    )
     cost_records: List[CostRecord] = Field(default_factory=list)
     reproducibility: Optional[Dict[str, Any]] = Field(
         default=None,
