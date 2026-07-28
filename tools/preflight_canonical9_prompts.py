@@ -21,6 +21,15 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--jsonl", type=Path, required=True)
     parser.add_argument("--out-dir", type=Path, required=True)
+    parser.add_argument(
+        "--task-id",
+        action="append",
+        default=[],
+        help=(
+            "Exact Canonical9 task id expected in a development subset; repeat "
+            "for multiple tasks. Omit to require the full canonical suite."
+        ),
+    )
     return parser
 
 
@@ -34,6 +43,7 @@ def main(argv: list[str] | None = None) -> int:
     report = run_canonical9_prompt_preflight(
         jsonl_path=args.jsonl,
         output_dir=args.out_dir,
+        task_ids=args.task_id or None,
     )
     summary = {
         "status": report["status"],
