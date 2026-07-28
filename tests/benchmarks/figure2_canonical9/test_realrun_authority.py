@@ -1883,8 +1883,6 @@ def test_batch_ledger_rejects_tampered_receipt(tmp_path) -> None:
 
 def test_run_ehrflowbench_writes_receipt_and_ledger(tmp_path, monkeypatch) -> None:
     """Allowed path with a STUBBED runner/pipeline: receipt + 9-child ledger."""
-    import pandas as pd
-
     import tools.run_research_agent_bench as bench
 
     cohort_paths = _cohorts(tmp_path)
@@ -1896,9 +1894,11 @@ def test_run_ehrflowbench_writes_receipt_and_ledger(tmp_path, monkeypatch) -> No
     out_root = tmp_path / _BATCH_ID
     binding = _binding(frozen, out_root)
 
-    # Stub the heavy cohort I/O and the pipeline execution (no real Provider).
+    # Stub bounded cohort metadata and pipeline execution (no real Provider).
     monkeypatch.setattr(
-        pd, "read_parquet", lambda *a, **k: pd.DataFrame({"stay_id": [1], "x": [2]})
+        bench,
+        "_cohort_shape_without_materialization",
+        lambda path: (1, ["stay_id", "x"]),
     )
     monkeypatch.setattr(
         "easyicu.research_agent.intake.materialized_metadata."
@@ -1929,6 +1929,12 @@ def test_run_ehrflowbench_writes_receipt_and_ledger(tmp_path, monkeypatch) -> No
                 "publication_artifacts_ready": True,
                 "execution_paper_eligible": True,
                 "paper_authorized": True,
+                "execution_complete": True,
+                "step_scientific_requirements_complete": True,
+                "required_step_count": 1,
+                "completed_step_count": 1,
+                "failed_step_ids": [],
+                "missing_step_ids": [],
                 "n_errors": 0,
                 "figure2_evaluation_attempt": {
                     "status": "valid",
@@ -1984,11 +1990,152 @@ def test_run_ehrflowbench_writes_receipt_and_ledger(tmp_path, monkeypatch) -> No
         assert child["manifest_sha256"]
 
 
+def test_incomplete_batch_ledger_downgrades_acceptance_before_write(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No accepted terminal artifact may survive a failed batch binding."""
+
+    import tools.run_research_agent_bench as bench
+    from benchmarks.figure2_canonical9 import realrun_authority
+    from benchmarks.figure2_canonical9.evaluator import acceptance
+
+    cohort_paths = _cohorts(tmp_path)
+    jsonl_path = tmp_path / "canonical.jsonl"
+    _write_jsonl(jsonl_path, cohort_paths)
+    frozen = {
+        task_id: production_cohort_input_sha256(cohort_paths[task_id])
+        for task_id in FIGURE2_TASK_IDS
+    }
+    out_root = tmp_path / _BATCH_ID
+    binding = _binding(frozen, out_root)
+
+    monkeypatch.setattr(
+        bench,
+        "_cohort_shape_without_materialization",
+        lambda path: (1, ["stay_id", "x"]),
+    )
+    monkeypatch.setattr(
+        "easyicu.research_agent.intake.materialized_metadata."
+        "load_verified_materialized_cohort_authority",
+        lambda *a, **k: object(),
+    )
+
+    def fake_item(*, item, out_root, **kwargs):
+        run_id = f"run_{item.key}"
+        workdir = Path(out_root) / item.key / "aware" / run_id
+        workdir.mkdir(parents=True, exist_ok=True)
+        identity = _manifest_identity(
+            kwargs["pipeline_options"]["execution_input_authority_sha256"]
+        )
+        (workdir / "manifest.json").write_text(
+            json.dumps({"run_id": run_id, "execution_identity": identity}),
+            encoding="utf-8",
+        )
+        return {
+            "item_key": item.key,
+            "aware": {
+                "arm": "aware",
+                "status": "ok",
+                "run_id": run_id,
+                "workdir": str(workdir),
+                "execution_identity": identity,
+                "publication_ready": True,
+                "manuscript_ready": True,
+                "publication_artifacts_ready": True,
+                "execution_paper_eligible": True,
+                "paper_authorized": True,
+                "execution_complete": True,
+                "step_scientific_requirements_complete": True,
+                "required_step_count": 1,
+                "completed_step_count": 1,
+                "failed_step_ids": [],
+                "missing_step_ids": [],
+                "n_errors": 0,
+                "figure2_evaluation_attempt": {
+                    "status": "valid",
+                    "envelope": {
+                        "scorecard": {
+                            "scorecard_canonical_json": json.dumps(
+                                {"tristate": "gate_reportable"}
+                            )
+                        }
+                    },
+                },
+            },
+        }
+
+    monkeypatch.setattr(bench, "_run_one_item_from_cohort", fake_item)
+    monkeypatch.setattr(bench, "_aggregate", lambda _scores: {"aware": {}})
+    monkeypatch.setattr(bench, "_render_markdown", lambda **_kwargs: "fixture\n")
+    safety_calls: list[str] = []
+    monkeypatch.setattr(
+        bench,
+        "_ensure_formal_figure2_safety_and_rescore",
+        lambda **kwargs: safety_calls.append(str(kwargs["item"].key)),
+    )
+    accepted = acceptance.Figure2PaperAcceptance(
+        schema_version=acceptance.FIGURE2_PAPER_ACCEPTANCE_SCHEMA,
+        status="accepted",
+        results_sha256="0" * 64,
+        expected_execution_identity_sha256="1" * 64,
+        expected_execution_identity_freeze_sha256="2" * 64,
+        expected_task_ids=tuple(FIGURE2_TASK_IDS),
+        observed_task_ids=tuple(FIGURE2_TASK_IDS),
+        verified_tasks=tuple(
+            acceptance.VerifiedFigure2Task(
+                task_id=task_id,
+                run_id=f"run_{task_id}",
+                attempt_sha256=hashlib.sha256(task_id.encode()).hexdigest(),
+                tristate="gate_reportable",
+            )
+            for task_id in FIGURE2_TASK_IDS
+        ),
+    )
+    monkeypatch.setattr(
+        acceptance,
+        "evaluate_figure2_paper_acceptance",
+        lambda *a, **k: accepted,
+    )
+    monkeypatch.setattr(
+        realrun_authority,
+        "build_batch_ledger",
+        lambda *a, **k: {
+            "schema_version": "fixture",
+            "complete": False,
+            "children": [],
+        },
+    )
+
+    exit_code = bench._run_ehrflowbench_jsonl(
+        jsonl_path=jsonl_path,
+        out_root=out_root,
+        seed=7,
+        arms=["aware"],
+        provider=_PROVIDER,
+        model=_MODEL,
+        batch_binding=binding,
+        pipeline_options=bench._benchmark_pipeline_options(
+            max_total_steps=None,
+            disable_replanning=False,
+            max_code_repair_attempts=None,
+        ),
+    )
+
+    assert exit_code == 2
+    assert safety_calls == list(FIGURE2_TASK_IDS)
+    terminal = json.loads(
+        (out_root / "figure2_paper_acceptance.json").read_text(encoding="utf-8")
+    )
+    assert terminal["status"] == "invalid"
+    assert "BATCH_LEDGER_INVALID" in {
+        issue["code"] for issue in terminal["issues"]
+    }
+
+
 def test_formal_batch_does_not_start_e2_when_e1_canary_is_diagnostic(
     tmp_path, monkeypatch
 ) -> None:
-    import pandas as pd
-
     import tools.run_research_agent_bench as bench
 
     cohort_paths = _cohorts(tmp_path)
@@ -2001,7 +2148,9 @@ def test_formal_batch_does_not_start_e2_when_e1_canary_is_diagnostic(
     out_root = tmp_path / _BATCH_ID
     binding = _binding(frozen, out_root)
     monkeypatch.setattr(
-        pd, "read_parquet", lambda *a, **k: pd.DataFrame({"stay_id": [1], "x": [2]})
+        bench,
+        "_cohort_shape_without_materialization",
+        lambda path: (1, ["stay_id", "x"]),
     )
     monkeypatch.setattr(
         "easyicu.research_agent.intake.materialized_metadata."
