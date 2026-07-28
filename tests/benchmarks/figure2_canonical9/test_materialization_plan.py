@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import pytest
+
 from benchmarks.figure2_canonical9.evaluator.paper_rubric_v3 import (
     Figure2PaperRubricManifest,
     default_figure2_paper_rubric_path,
@@ -11,7 +13,10 @@ from benchmarks.figure2_canonical9.materialization_plan import (
     CANONICAL9_MIMIC_IV_PLAN,
     validate_canonical9_mimic_iv_plan,
 )
-from tools.materialize_canonical9_miiv import _build_jsonl_row
+from tools.materialize_canonical9_miiv import (
+    _build_jsonl_row,
+    _select_materialization_specs,
+)
 
 
 def test_materialization_plan_separates_scoring_concepts_from_sealed_columns():
@@ -117,3 +122,26 @@ def test_e1_materialized_item_receives_only_its_case_protocol_overlay(tmp_path):
     assert not any(
         "24-hour landmark" in item for item in e2_row["semantic_guardrails"]
     )
+
+
+def test_materializer_can_select_one_development_case_without_reordering():
+    selected = _select_materialization_specs(
+        ["h3_trajectory_clustering", "e1_sepsis3_prevalence_mortality"]
+    )
+    assert [spec.task_id for spec in selected] == [
+        "e1_sepsis3_prevalence_mortality",
+        "h3_trajectory_clustering",
+    ]
+    assert len(_select_materialization_specs([])) == 9
+
+
+def test_materializer_rejects_unknown_or_duplicate_case_selection():
+    with pytest.raises(ValueError, match="unknown Canonical9 task"):
+        _select_materialization_specs(["not_a_task"])
+    with pytest.raises(ValueError, match="must be unique"):
+        _select_materialization_specs(
+            [
+                "e1_sepsis3_prevalence_mortality",
+                "e1_sepsis3_prevalence_mortality",
+            ]
+        )
