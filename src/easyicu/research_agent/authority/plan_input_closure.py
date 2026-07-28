@@ -11,10 +11,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
-from ..plan_utils import _augment_measurement_companion_inputs
-from ..schema import AnalysisPlan, ResearchContext, ValidationFinding
+from ..schema import AnalysisPlan, AnalysisStep, ResearchContext, ValidationFinding
 from .evidence_store import EvidenceStore, sha256_of_bytes
 from .plan_scope import measurement_companion_input_closure_evidence_id
 from .runtime_artifacts import verified_run_evidence_path
@@ -24,6 +23,16 @@ __all__ = [
     "close_measurement_companion_inputs",
     "register_measurement_companion_input_closure",
 ]
+
+_WIDE_MEASUREMENT_VALUE_SUFFIXES = (
+    "_median",
+    "_first",
+    "_last",
+    "_mean",
+    "_max",
+    "_min",
+    "_sum",
+)
 
 
 @dataclass(frozen=True)
@@ -40,9 +49,61 @@ def close_measurement_companion_inputs(
     plan: AnalysisPlan,
     context: ResearchContext,
 ) -> tuple[AnalysisPlan, List[ValidationFinding]]:
-    """Apply the single canonical structural measurement-input closure."""
+    """Close exact registered measurement-provenance input pairs.
 
-    return _augment_measurement_companion_inputs(plan=plan, context=context)
+    This owner changes only public step inputs.  In particular, it must not
+    create or replace private execution bindings owned by other authorities.
+    """
+
+    available = {str(variable.name) for variable in context.variables}
+    revised_steps: List[AnalysisStep] = []
+    additions_by_step: Dict[str, List[str]] = {}
+    for step in plan.steps or []:
+        inputs = [str(value) for value in (step.inputs or [])]
+        seen = set(inputs)
+        additions: List[str] = []
+        for input_name in list(inputs):
+            if ":" in input_name:
+                continue
+            if input_name.endswith("_measured"):
+                companions = (f"{input_name[:-9]}_n",)
+            elif input_name.endswith("_n"):
+                companions = (f"{input_name[:-2]}_measured",)
+            else:
+                suffix = next(
+                    filter(input_name.endswith, _WIDE_MEASUREMENT_VALUE_SUFFIXES), None
+                )
+                if suffix is None:
+                    continue
+                base = input_name[: -len(suffix)]
+                companions = (f"{base}_measured", f"{base}_n")
+            for companion in companions:
+                if companion in available and companion not in seen:
+                    inputs.append(companion)
+                    additions.append(companion)
+                    seen.add(companion)
+        if additions:
+            additions_by_step[str(step.step_id)] = additions
+            revised_steps.append(step.model_copy(update={"inputs": inputs}))
+        else:
+            revised_steps.append(step)
+
+    if not additions_by_step:
+        return plan, []
+    revised = plan.model_copy(update={"steps": revised_steps})
+    finding = ValidationFinding(
+        validator="planner_input_closure",
+        severity="info",
+        message=(
+            "Added registered count/measured provenance companions for "
+            "planner-selected per-stay measurement summaries."
+        ),
+        detail={
+            "reason": "measurement_companion_input_closure",
+            "added_inputs_by_step": additions_by_step,
+        },
+    )
+    return revised, [finding]
 
 
 def register_measurement_companion_input_closure(
