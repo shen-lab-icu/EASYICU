@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 from benchmarks.figure2_canonical9.evaluator.paper_rubric_v3 import (
     Figure2PaperRubricManifest,
     default_figure2_paper_rubric_path,
@@ -9,6 +11,7 @@ from benchmarks.figure2_canonical9.materialization_plan import (
     CANONICAL9_MIMIC_IV_PLAN,
     validate_canonical9_mimic_iv_plan,
 )
+from tools.materialize_canonical9_miiv import _build_jsonl_row
 
 
 def test_materialization_plan_separates_scoring_concepts_from_sealed_columns():
@@ -29,6 +32,26 @@ def test_materialization_plan_separates_scoring_concepts_from_sealed_columns():
     assert by_id["e1_sepsis3_prevalence_mortality"].operational_exposure == (
         "sep3_sofa2_max"
     )
+    e1 = by_id["e1_sepsis3_prevalence_mortality"]
+    assert e1.positive_only_event_concepts == ("susp_inf", "sep3_sofa2")
+    assert "e1_scientific_closure" in str(e1.task_protocol_version)
+    e1_protocol = " ".join(
+        [
+            *e1.additional_expected_outputs,
+            *e1.additional_semantic_guardrails,
+        ]
+    )
+    for required in (
+        "stay count",
+        "missing death_time",
+        "negative event times",
+        "24-hour landmark",
+        "non-readmission ICU stays",
+        "standardized mean differences",
+        "flexible age and Charlson",
+        "Sepsis-3 absent/present",
+    ):
+        assert required in e1_protocol
     assert by_id["e2_lactate_mortality"].operational_exposure == "lact_max"
     assert by_id["e3_kdigo_gradient"].operational_exposure == "aki_stage_max"
     assert by_id["m1_hepatobiliary_missingness"].operational_exposure == "bili_max"
@@ -53,3 +76,44 @@ def test_patient_split_and_trajectory_cases_have_explicit_execution_contracts():
     assert h3.emit_trajectory is True
     assert h3.trajectory_window == (0.0, 72.0)
     assert {"sofa2", "lact"}.issubset(h3.trajectory_concepts)
+
+
+def test_e1_materialized_item_receives_only_its_case_protocol_overlay(tmp_path):
+    tasks = {
+        task.task_id: task for task in easyicu_evaluation_protocol_suite().tasks
+    }
+    specs = {spec.task_id: spec for spec in CANONICAL9_MIMIC_IV_PLAN}
+    reference = SimpleNamespace(
+        file="cohort_authority.json",
+        to_dict=lambda: {"file": "cohort_authority.json"},
+    )
+    verified = SimpleNamespace(reference=reference)
+
+    e1_row = _build_jsonl_row(
+        task=tasks["e1_sepsis3_prevalence_mortality"],
+        spec=specs["e1_sepsis3_prevalence_mortality"],
+        case_dir=tmp_path,
+        cohort_path=tmp_path / "e1.parquet",
+        cohort_verified=verified,
+        trajectory_path=None,
+        trajectory_verified=None,
+    )
+    e2_row = _build_jsonl_row(
+        task=tasks["e2_lactate_mortality"],
+        spec=specs["e2_lactate_mortality"],
+        case_dir=tmp_path,
+        cohort_path=tmp_path / "e2.parquet",
+        cohort_verified=verified,
+        trajectory_path=None,
+        trajectory_verified=None,
+    )
+
+    assert "e1_scientific_closure" in e1_row["protocol_version"]
+    assert any("24-hour landmark" in item for item in e1_row["semantic_guardrails"])
+    assert any(
+        "functional-form sensitivity" in item for item in e1_row["expected_outputs"]
+    )
+    assert e2_row["protocol_version"] == "easyicu_evaluation_protocol_suite/v2"
+    assert not any(
+        "24-hour landmark" in item for item in e2_row["semantic_guardrails"]
+    )

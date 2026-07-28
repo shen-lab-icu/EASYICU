@@ -33,6 +33,9 @@ class Canonical9MaterializationSpec:
     trajectory_window: Optional[tuple[float, float]] = None
     identity_mode: str = "stay"
     positive_only_event_concepts: tuple[str, ...] = ()
+    additional_expected_outputs: tuple[str, ...] = ()
+    additional_semantic_guardrails: tuple[str, ...] = ()
+    task_protocol_version: Optional[str] = None
     notes: Optional[str] = None
 
 
@@ -71,11 +74,61 @@ CANONICAL9_MIMIC_IV_PLAN: tuple[Canonical9MaterializationSpec, ...] = (
         static_concepts=_STATIC_CORE,
         exposure_concept="sepsis3",
         operational_exposure="sep3_sofa2_max",
-        positive_only_event_concepts=("sep3_sofa2",),
+        positive_only_event_concepts=("susp_inf", "sep3_sofa2"),
+        additional_expected_outputs=(
+            "missingness and event-timing audit",
+            (
+                "adjusted association with timing, repeated-stay, and "
+                "functional-form sensitivity table and figure"
+            ),
+        ),
+        additional_semantic_guardrails=(
+            (
+                "Use ICU stays as the analysis unit. Do not call a stay count a "
+                "patient count when no patient identifier is available."
+            ),
+            (
+                "Treat an absent susp_inf row as no recorded suspected-infection "
+                "event, and a missing death_time for a survivor as not applicable "
+                "rather than ordinary measurement missingness."
+            ),
+            (
+                "Audit death_time against ICU admission, report and exclude "
+                "negative event times from timing-based analyses, and do not hide "
+                "deaths inside the first-24-hour exposure-classification window."
+            ),
+            (
+                "Keep full-cohort prevalence and absolute mortality descriptive. "
+                "For the adjusted association, report a prespecified 24-hour "
+                "landmark sensitivity among stays alive at the landmark and label "
+                "the estimand as observational rather than causal."
+            ),
+            (
+                "Because patient identity is unavailable, report a sensitivity "
+                "restricted to non-readmission ICU stays instead of claiming "
+                "patient-clustered inference."
+            ),
+            (
+                "Report standardized mean differences in Table 1 and include a "
+                "sensitivity allowing flexible age and Charlson functional form; "
+                "do not rely on large-sample P values or linearity alone."
+            ),
+            (
+                "Use clinical display labels such as Sepsis-3 absent/present, "
+                "never Category 0/1."
+            ),
+        ),
+        task_protocol_version=(
+            "easyicu_evaluation_protocol_suite/v2+"
+            "e1_scientific_closure/20260728-v1"
+        ),
         notes=(
             "Use the typed sep3_sofa2 concept as the Sepsis-3 criterion and "
-            "susp_inf as its suspected-infection component. Report the exact "
-            "operational denominator; never substitute an ICD-only proxy."
+            "susp_inf as its positive-only suspected-infection event component. "
+            "Report the exact operational denominator; never substitute an "
+            "ICD-only proxy. The primary prevalence denominator remains all "
+            "eligible ICU stays; timing and repeated-stay restrictions are "
+            "explicit sensitivity estimands, not silent cohort replacements."
         ),
     ),
     Canonical9MaterializationSpec(
