@@ -150,20 +150,19 @@ def _augment_measurement_companion_inputs(
         for input_name in list(inputs):
             if ":" in input_name:
                 continue
-            suffix = next(
-                (
-                    candidate
-                    for candidate in _WIDE_MEASUREMENT_VALUE_SUFFIXES
-                    if input_name.endswith(candidate)
-                ),
-                None,
-            )
-            if suffix is None:
-                continue
-            base = input_name[: -len(suffix)]
-            if not base:
-                continue
-            for companion in (f"{base}_measured", f"{base}_n"):
+            if input_name.endswith("_measured"):
+                companions = (f"{input_name[:-9]}_n",)
+            elif input_name.endswith("_n"):
+                companions = (f"{input_name[:-2]}_measured",)
+            else:
+                suffix = next(
+                    filter(input_name.endswith, _WIDE_MEASUREMENT_VALUE_SUFFIXES), None
+                )
+                if suffix is None:
+                    continue
+                base = input_name[: -len(suffix)]
+                companions = (f"{base}_measured", f"{base}_n")
+            for companion in companions:
                 if companion in available and companion not in seen:
                     inputs.append(companion)
                     additions.append(companion)
