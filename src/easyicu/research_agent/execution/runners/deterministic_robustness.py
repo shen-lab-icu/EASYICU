@@ -23,6 +23,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Sequence
 
+from ...authority.plausibility import FlagOnlyPlausibilityScope
+from ...authority.planned_role import unique_verified_primary_record
 from ...cohort.schema import build_cohort, coerce_cohort_definition
 from ...robustness.estimators import (
     _data_with_predicate_aliases,
@@ -32,7 +34,6 @@ from ...robustness.primary_effect import (
     _extract_primary_effect_payload_from_records,
     _primary_effect_payload_is_complete,
 )
-from ...authority.planned_role import unique_verified_primary_record
 from ...robustness.membership import (
     _identifier_column,
     _membership_audit,
@@ -46,6 +47,8 @@ from ...robustness.panel import (
     robustness_specs_sha,
     validate_robustness_specs,
 )
+from ...schema import AnalysisStep
+from .plausibility_receipt import render_standard_plausibility_receipt_code
 
 __all__ = ["replay_locked_memberships", "robustness_sensitivity_preflight_code"]
 
@@ -122,16 +125,89 @@ _AUTHORITY_SNAPSHOT_SHA_ENV = "EASYICU_RUN_ARTIFACT_AUTHORITY_SNAPSHOT_SHA256"
 _AUTHORITY_ERROR_ENV = "EASYICU_RUN_ARTIFACT_AUTHORITY_ERROR"
 
 
-def robustness_sensitivity_preflight_code() -> str:
-    """Return the dispatch-ready deterministic robustness runner script."""
+def robustness_sensitivity_preflight_code(
+    step: AnalysisStep | None = None,
+    *,
+    plausibility_scope: FlagOnlyPlausibilityScope | None = None,
+) -> str:
+    """Return the dispatch-ready deterministic robustness runner script.
 
-    return textwrap.dedent("""
-        from easyicu.research_agent.execution.runners.deterministic_robustness import (
-            _run_robustness_preflight_from_env,
+    The robustness runner can consume the pre-filter universe when a locked
+    cohort variant needs it.  A flag-only plausibility receipt therefore audits
+    that exact frame when present, otherwise the locked analysis cohort.  The
+    comparisons and the canonical ``step_summary.json`` write stay visible in
+    the generated source so the static obligation gate can prove both.
+    """
+
+    if plausibility_scope is not None:
+        if step is None:
+            raise ValueError(
+                "a robustness plausibility scope requires an exact analysis step"
+            )
+        plausibility_scope.require_step(step.step_id)
+    plausibility_code = (
+        render_standard_plausibility_receipt_code(
+            plausibility_scope,
+            frame_name="plausibility_frame",
         )
+        if plausibility_scope is not None
+        else ""
+    )
+    receipt_persistence = (
+        textwrap.dedent(
+            """
+            summary_path = Path(os.environ["STEP_OUT_DIR"]) / "step_summary.json"
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            summary["plausibility_audit"] = plausibility_audit
+            summary_path.write_text(
+                json.dumps(
+                    summary,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    allow_nan=False,
+                ),
+                encoding="utf-8",
+            )
+            """
+        ).strip()
+        if plausibility_scope is not None and plausibility_scope.expected_columns
+        else ""
+    )
+    return (
+        textwrap.dedent(
+            """
+            import hashlib
+            import json
+            import os
+            from pathlib import Path
 
-        _run_robustness_preflight_from_env()
-        """)
+            import pandas as pd
+
+            from easyicu.research_agent.execution.runners.deterministic_robustness import (
+                _run_robustness_preflight_from_env,
+            )
+            """
+        ).strip()
+        + (
+            "\n\n"
+            + textwrap.dedent(
+                """
+                plausibility_source_path = Path(
+                    os.environ.get("EASYICU_UNIVERSE_PARQUET")
+                    or os.environ["COHORT_PARQUET"]
+                )
+                plausibility_frame = pd.read_parquet(plausibility_source_path)
+                """
+            ).strip()
+            + "\n\n"
+            + plausibility_code
+            if plausibility_code
+            else ""
+        )
+        + "\n\n_run_robustness_preflight_from_env()"
+        + (f"\n\n{receipt_persistence}" if receipt_persistence else "")
+        + "\n"
+    )
 
 
 def _run_robustness_preflight_from_env() -> None:

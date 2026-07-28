@@ -6639,7 +6639,10 @@ def run_execute_phase(
                 total_steps=total_steps,
                 fallback_reason=reason,
             )
-            return robustness_sensitivity_preflight_code()
+            return robustness_sensitivity_preflight_code(
+                step,
+                plausibility_scope=plausibility_authority.scope,
+            )
 
         def _missingness_audit_preflight_supported() -> bool:
             """True for a missingness / measurement-process AUDIT step.

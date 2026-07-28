@@ -12,19 +12,32 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from easyicu.research_agent.authority.plausibility import (
+    FlagOnlyPlausibilityScope,
+)
 from easyicu.research_agent.cohort.schema import (
     CohortDefinition,
     ConceptPredicate,
     TimeWindow,
     cohort_definition_sha,
 )
+from easyicu.research_agent.execution.runners import (
+    deterministic_robustness as robustness_module,
+)
 from easyicu.research_agent.execution.runners.deterministic_robustness import (
     robustness_sensitivity_preflight_code,
+)
+from easyicu.research_agent.gates.plausibility_obligation import (
+    flag_only_plausibility_obligation_findings,
+)
+from easyicu.research_agent.gates.plausibility_receipt import (
+    plausibility_audit_receipt_findings,
 )
 from easyicu.research_agent.robustness.panel import (
     RobustnessSpec,
     robustness_specs_sha,
 )
+from easyicu.research_agent.schema import AnalysisStep
 
 
 def _predicate(concept_id: str, op: str, value: object) -> ConceptPredicate:
@@ -248,6 +261,144 @@ def _run_generated(
         )
     code = robustness_sensitivity_preflight_code()
     exec(compile(code, "<robustness-preflight>", "exec"), {})
+
+
+def test_preflight_binds_plausibility_receipt_to_exact_scope(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    step = AnalysisStep(
+        step_id="06_robustness_sensitivity",
+        planned_analysis_role="sensitivity",
+        intent="Replay the locked sensitivity analysis.",
+        inputs=["artifact:analysis_cohort", "age"],
+        expected_outputs=["table:robustness_matrix"],
+        method="robustness_sensitivity",
+    )
+    raw_contracts: dict[str, object] = {
+        "schema_version": "easyicu.resolved_raw_input_contracts/1",
+        "authority_scope": (
+            "host_verified_physical_representation_and_domain_constraints"
+        ),
+        "scientific_ownership": "Planner retains scientific decisions",
+        "contracts": {
+            "age": {
+                "column": "age",
+                "analysis_plausibility_range": {
+                    "minimum": 0.0,
+                    "maximum": 100.0,
+                },
+                "plausibility_policy": {
+                    "range_policy": "flag_only",
+                    "out_of_range_action": "retain_and_flag",
+                },
+            }
+        },
+    }
+    contracts_sha256 = hashlib.sha256(
+        json.dumps(
+            raw_contracts,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
+    raw_contracts["contracts_sha256"] = contracts_sha256
+    scope = FlagOnlyPlausibilityScope(
+        step_id=step.step_id,
+        expected_columns=("age",),
+        source_contracts_sha256=contracts_sha256,
+        authority_kind="resolved_raw_input_contracts",
+    )
+
+    run_dir = tmp_path / "run"
+    out_dir = run_dir / "steps" / step.step_id / "outputs"
+    out_dir.mkdir(parents=True)
+    cohort_path = run_dir / "cohort.parquet"
+    universe_path = run_dir / "universe.parquet"
+    pd.DataFrame({"age": [20.0, 50.0]}).to_parquet(cohort_path, index=False)
+    pd.DataFrame({"age": [-1.0, 50.0, 101.0]}).to_parquet(
+        universe_path,
+        index=False,
+    )
+    resolved_path = run_dir / "resolved_inputs.json"
+    resolved_path.write_text(
+        json.dumps(
+            {
+                "step_id": step.step_id,
+                "raw_input_contracts": raw_contracts,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("STEP_OUT_DIR", str(out_dir))
+    monkeypatch.setenv("COHORT_PARQUET", str(cohort_path))
+    monkeypatch.setenv("EASYICU_UNIVERSE_PARQUET", str(universe_path))
+    monkeypatch.setenv("EASYICU_RESOLVED_INPUTS_JSON", str(resolved_path))
+
+    def _write_robustness_summary() -> None:
+        (out_dir / "step_summary.json").write_text(
+            json.dumps({"status": "ok"}),
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr(
+        robustness_module,
+        "_run_robustness_preflight_from_env",
+        _write_robustness_summary,
+    )
+    code = robustness_sensitivity_preflight_code(
+        step,
+        plausibility_scope=scope,
+    )
+    assert (
+        flag_only_plausibility_obligation_findings(
+            None,
+            script_text=code,
+            step=step,
+            scope=scope,
+        )
+        == []
+    )
+
+    exec(compile(code, "<robustness-preflight>", "exec"), {})
+
+    summary = json.loads((out_dir / "step_summary.json").read_text("utf-8"))
+    assert summary["plausibility_audit"] == {
+        "age": {
+            "policy": "retain_and_flag",
+            "below_minimum_n": 1,
+            "above_maximum_n": 1,
+            "out_of_range_n": 2,
+        }
+    }
+    assert (
+        plausibility_audit_receipt_findings(
+            step_summary=summary,
+            step=step,
+            script_text=code,
+            scope=scope,
+        )
+        == []
+    )
+
+
+def test_preflight_scope_requires_its_exact_step() -> None:
+    step = AnalysisStep(
+        step_id="06_robustness_sensitivity",
+        intent="Replay robustness.",
+        method="robustness_sensitivity",
+    )
+    scope = FlagOnlyPlausibilityScope(
+        step_id=step.step_id,
+        expected_columns=("age",),
+        source_contracts_sha256="0" * 64,
+        authority_kind="resolved_raw_input_contracts",
+    )
+
+    with pytest.raises(ValueError, match="requires an exact analysis step"):
+        robustness_sensitivity_preflight_code(plausibility_scope=scope)
 
 
 def test_preflight_emits_renderer_contract_and_nonindependent_scalar_outcomes(
