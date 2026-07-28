@@ -49,6 +49,7 @@ root, so it is recorded here but not part of this repository commit.
 
 - acceptance, safety issuer/runner, bench integration, and real-run authority:
   `177 passed`;
+- complete Figure 2 evaluator directory after the freeze: `271 passed`;
 - Ruff on all touched benchmark source and tests: passed;
 - launcher `bash -n`: passed;
 - bounded Parquet and CSV shape tests prove the pre-pipeline adapter does not
@@ -56,8 +57,13 @@ root, so it is recorded here but not part of this repository commit.
 
 ## Freeze boundary
 
-The scorer-tree digest is intentionally not changed inside this implementation
-commit. After the evaluator source is committed and its tests are stable,
-refresh the v3 scorer digest once in a separate, reviewable freeze commit.
-That freeze must happen before a formal paid run, not after it; changing the
-scorer after observing experiment results would make the evaluation post hoc.
+The scorer-tree digest was intentionally not changed inside the implementation
+commit. After that source was committed and its 177 tests were stable, the v3
+scorer was frozen once in a separate commit:
+
+```text
+ac5c8f63772e0d303d23b232adef2c80b6ee2fe2c358234bbe3be3ba2c014fc5
+```
+
+This freeze occurs before any formal paid run. Changing the scorer after
+observing experiment results would make the evaluation post hoc.
