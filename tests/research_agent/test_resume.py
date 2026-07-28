@@ -4197,7 +4197,14 @@ def test_resume_adopts_legacy_figure_edge_migration_without_replanning(
     partial = json.loads(
         (run_dir / "manifest_partial.json").read_text(encoding="utf-8")
     )
-    assert partial["plan_path"] == revision_path.name
+    assert partial["plan_path"] == revision_record.relative_path
+    assert partial["current_plan_authority"] == {
+        "schema_version": "easyicu.current_plan_authority/1",
+        "evidence_id": revision_record.evidence_id,
+        "relative_path": revision_record.relative_path,
+        "sha256": revision_record.sha256,
+        "revision": 4,
+    }
     assert any(
         finding.get("validator") == "planner_schema_migration"
         and (finding.get("detail") or {}).get("kind") == "legacy_figure_render_edge"
@@ -4319,6 +4326,8 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
     assert manifest["per_step_records"], "final manifest dropped per-step records"
     assert manifest["per_step_records"] == partial["per_step_records"]
     assert manifest["per_step_records"][0]["status"] == "ok"
+    assert manifest["current_plan_authority"] == partial["current_plan_authority"]
+    assert manifest["plan_path"] == manifest["current_plan_authority"]["relative_path"]
     assert manifest["step_attempt_history"] == []
     assert manifest["step_attempt_history_ref"]["record_count"] == len(
         partial["step_attempt_history"]

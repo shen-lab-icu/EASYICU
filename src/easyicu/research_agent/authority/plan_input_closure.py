@@ -14,14 +14,19 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from ..schema import AnalysisPlan, AnalysisStep, ResearchContext, ValidationFinding
-from .evidence_store import EvidenceStore, sha256_of_bytes
-from .plan_scope import measurement_companion_input_closure_evidence_id
+from .evidence_store import EvidenceStore, sha256_of_bytes, sha256_of_file
+from .plan_scope import (
+    measurement_companion_input_closure_evidence_id,
+    verified_plan_evidence_rank,
+)
 from .runtime_artifacts import verified_run_evidence_path
 
 __all__ = [
     "RegisteredPlanInputClosure",
+    "RegisteredPlanAuthority",
     "close_measurement_companion_inputs",
     "register_measurement_companion_input_closure",
+    "resolve_registered_plan_authority",
 ]
 
 _WIDE_MEASUREMENT_VALUE_SUFFIXES = (
@@ -42,6 +47,25 @@ class RegisteredPlanInputClosure:
     plan_path: Path
     evidence_path: Path
     evidence_id: str
+
+
+@dataclass(frozen=True)
+class RegisteredPlanAuthority:
+    """Exact immutable plan selected for execution and final reporting."""
+
+    evidence_id: str
+    relative_path: str
+    sha256: str
+    revision: int
+
+    def to_dict(self) -> Dict[str, object]:
+        return {
+            "schema_version": "easyicu.current_plan_authority/1",
+            "evidence_id": self.evidence_id,
+            "relative_path": self.relative_path,
+            "sha256": self.sha256,
+            "revision": self.revision,
+        }
 
 
 def close_measurement_companion_inputs(
@@ -154,4 +178,49 @@ def register_measurement_companion_input_closure(
         plan_path=source_path,
         evidence_path=verified_path,
         evidence_id=evidence_id,
+    )
+
+
+def resolve_registered_plan_authority(
+    *,
+    run_dir: Path,
+    evidence: EvidenceStore,
+    plan: AnalysisPlan,
+    plan_path: Path,
+) -> RegisteredPlanAuthority:
+    """Resolve one current plan to its immutable EvidenceStore record."""
+
+    selected_digest = sha256_of_file(Path(plan_path))
+    candidates = []
+    for record in evidence.records():
+        payload = record.model_dump(mode="json")
+        rank = verified_plan_evidence_rank(payload)
+        if rank is None or record.sha256 != selected_digest:
+            continue
+        verified_path = verified_run_evidence_path(run_dir, record)
+        if verified_path is None:
+            continue
+        try:
+            registered_plan = AnalysisPlan.model_validate_json(
+                verified_path.read_text(encoding="utf-8")
+            )
+        except (OSError, TypeError, ValueError):
+            continue
+        if registered_plan != plan:
+            continue
+        candidates.append((rank, record))
+    if not candidates:
+        raise ValueError(
+            "current analysis plan is not bound to immutable EvidenceStore authority"
+        )
+    highest_rank = max(rank for rank, _ in candidates)
+    selected = [record for rank, record in candidates if rank == highest_rank]
+    if len(selected) != 1:
+        raise ValueError("current analysis plan authority is ambiguous")
+    record = selected[0]
+    return RegisteredPlanAuthority(
+        evidence_id=record.evidence_id,
+        relative_path=record.relative_path,
+        sha256=record.sha256,
+        revision=int(plan.revision),
     )

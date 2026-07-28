@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from easyicu.research_agent.authority.plan_input_closure import (
     close_measurement_companion_inputs,
+    register_measurement_companion_input_closure,
+    resolve_registered_plan_authority,
 )
+from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.authority.table_one_binding import (
     bind_table_one_execution_spec,
     restore_table_one_private_checkpoint,
@@ -226,3 +229,53 @@ def test_measurement_closure_preserves_table_one_private_checkpoint(tmp_path):
         context=resumed_context,
     )
     assert table_one_private_code_label_map(revised.steps[0]) == original_tokens
+
+
+def test_current_plan_authority_selects_immutable_closure_evidence(tmp_path):
+    context = ResearchContext(
+        research_question="Audit one measurement.",
+        cohort=CohortDescriptor(
+            cohort_name="demo",
+            database="synthetic",
+            n_stays=10,
+            n_patients=10,
+        ),
+        variables=[
+            ConceptDescriptor(name="signal_first", dtype="float64"),
+            ConceptDescriptor(name="signal_n", dtype="int64"),
+        ],
+    )
+    plan = AnalysisPlan(
+        research_question=context.research_question,
+        revision=3,
+        steps=[
+            AnalysisStep(
+                step_id="quality",
+                intent="Audit the measurement.",
+                method="data_quality_audit",
+                inputs=["signal_first"],
+                expected_outputs=["table:quality"],
+            )
+        ],
+    )
+    closed, findings = close_measurement_companion_inputs(plan=plan, context=context)
+    assert findings
+    evidence = EvidenceStore(tmp_path)
+    registered = register_measurement_companion_input_closure(
+        run_dir=tmp_path,
+        evidence=evidence,
+        plan=closed,
+        prompt_pack_version="test/v1",
+    )
+
+    authority = resolve_registered_plan_authority(
+        run_dir=tmp_path,
+        evidence=evidence,
+        plan=closed,
+        plan_path=registered.evidence_path,
+    )
+
+    assert authority.evidence_id == registered.evidence_id
+    assert authority.revision == 3
+    assert authority.relative_path.startswith("evidence/")
+    assert authority.sha256 == evidence.get(registered.evidence_id).sha256
