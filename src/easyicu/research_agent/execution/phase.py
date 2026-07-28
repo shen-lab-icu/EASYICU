@@ -6711,6 +6711,7 @@ def run_execute_phase(
             step,
             plan=plan,
             plausibility_scope=plausibility_authority.scope,
+            resolved_bindings=resolved_input_bindings,
         )
         preflight_standard_code = None
         if standard_executor is not None:
