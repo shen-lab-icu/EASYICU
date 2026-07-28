@@ -196,6 +196,22 @@ def _build_jsonl_row(
     trajectory_verified: object | None,
 ) -> dict[str, object]:
     authority_ref = cohort_verified.reference
+    expected_outputs = list(
+        dict.fromkeys(
+            [
+                *task.expected_outputs,
+                *getattr(spec, "additional_expected_outputs", ()),
+            ]
+        )
+    )
+    semantic_guardrails = list(
+        dict.fromkeys(
+            [
+                *task.semantic_guardrails,
+                *getattr(spec, "additional_semantic_guardrails", ()),
+            ]
+        )
+    )
     row: dict[str, object] = {
         "schema_version": _JSONL_SCHEMA,
         "key": task.task_id,
@@ -208,15 +224,17 @@ def _build_jsonl_row(
         "kind": task.kind,
         "difficulty": task.difficulty,
         "category": task.category,
-        "expected_outputs": list(task.expected_outputs),
-        "semantic_guardrails": list(task.semantic_guardrails),
+        "expected_outputs": expected_outputs,
+        "semantic_guardrails": semantic_guardrails,
         "evaluation_notes": list(task.evaluation_notes),
         "target_databases": list(task.target_databases),
         "gold_answer_status": task.gold_answer_status,
         "benchmark_family": "easyicu_figure2_canonical9",
         "evidence_basis": "native_typed_mimic_iv_materialization",
         "claim_scope": "owner_authorized_development_until_final_freeze",
-        "protocol_version": "easyicu_evaluation_protocol_suite/v2",
+        "protocol_version": (
+            spec.task_protocol_version or "easyicu_evaluation_protocol_suite/v2"
+        ),
         "rubric_version": "easyicu.figure2_paper_rubric/20260719-v3",
         "cohort_path": str(cohort_path),
         "cohort_authority_required": True,
