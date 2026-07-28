@@ -59,6 +59,7 @@ from easyicu.research_agent.intake.materialized_trajectory import (  # noqa: E40
 
 _RECEIPT_SCHEMA = "easyicu.canonical9_miiv_materialization/2"
 _JSONL_SCHEMA = "easyicu.canonical9_ehrflowbench_jsonl/1"
+_DEVELOPMENT_BINDING_SCHEMA = "easyicu.canonical9_development_binding_receipt/1"
 
 
 def _canonical_json_bytes(value: object, *, newline: bool = True) -> bytes:
@@ -70,6 +71,19 @@ def _canonical_json_bytes(value: object, *, newline: bool = True) -> bytes:
         allow_nan=False,
     ).encode("utf-8")
     return raw + (b"\n" if newline else b"")
+
+
+def _build_development_binding_receipt(
+    *, jsonl_path: Path, jsonl_raw: bytes
+) -> dict[str, object]:
+    """Bind a materialized JSONL to the launcher's non-paper authority lane."""
+
+    return {
+        "schema_version": _DEVELOPMENT_BINDING_SCHEMA,
+        "paper_authority": False,
+        "output_jsonl": str(jsonl_path.resolve()),
+        "output_sha256": hashlib.sha256(jsonl_raw).hexdigest(),
+    }
 
 
 def _atomic_write(path: Path, raw: bytes) -> None:
@@ -452,6 +466,14 @@ def materialize(args: argparse.Namespace) -> Path:
     jsonl_path = output_root / "canonical9_miiv.jsonl"
     jsonl_raw = b"".join(_canonical_json_bytes(row, newline=True) for row in rows)
     _atomic_write(jsonl_path, jsonl_raw)
+    development_binding_path = output_root / "development_binding_receipt.json"
+    development_binding_raw = _canonical_json_bytes(
+        _build_development_binding_receipt(
+            jsonl_path=jsonl_path,
+            jsonl_raw=jsonl_raw,
+        )
+    )
+    _atomic_write(development_binding_path, development_binding_raw)
     receipt = {
         "schema_version": _RECEIPT_SCHEMA,
         "paper_authority": False,
@@ -473,6 +495,10 @@ def materialize(args: argparse.Namespace) -> Path:
         "identity_mapping_sha256": bridge["mapping_sha256"],
         "ehrflowbench_jsonl_path": str(jsonl_path),
         "ehrflowbench_jsonl_sha256": hashlib.sha256(jsonl_raw).hexdigest(),
+        "development_binding_receipt_path": str(development_binding_path),
+        "development_binding_receipt_sha256": hashlib.sha256(
+            development_binding_raw
+        ).hexdigest(),
         "cases": cases,
     }
     _atomic_write(

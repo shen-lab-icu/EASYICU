@@ -1,3 +1,4 @@
+import hashlib
 from types import SimpleNamespace
 
 import pytest
@@ -15,6 +16,7 @@ from benchmarks.figure2_canonical9.materialization_plan import (
 )
 from tools.materialize_canonical9_miiv import (
     _build_jsonl_row,
+    _build_development_binding_receipt,
     _select_materialization_specs,
 )
 
@@ -156,3 +158,20 @@ def test_materializer_rejects_unknown_or_duplicate_case_selection():
                 "e1_sepsis3_prevalence_mortality",
             ]
         )
+
+
+def test_materializer_builds_launcher_ready_nonpaper_binding(tmp_path):
+    jsonl_path = (tmp_path / "canonical9_miiv.jsonl").resolve()
+    jsonl_raw = b'{"key":"e1_sepsis3_prevalence_mortality"}\n'
+
+    receipt = _build_development_binding_receipt(
+        jsonl_path=jsonl_path,
+        jsonl_raw=jsonl_raw,
+    )
+
+    assert receipt == {
+        "schema_version": "easyicu.canonical9_development_binding_receipt/1",
+        "paper_authority": False,
+        "output_jsonl": str(jsonl_path),
+        "output_sha256": hashlib.sha256(jsonl_raw).hexdigest(),
+    }
