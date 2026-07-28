@@ -182,6 +182,7 @@ _TABLE_ONE_SDK_GUIDANCE = """GROUPED TABLE 1 CONTRACT:
 - `table_one_spec` is the sole authority for grouping, closed levels, summaries, and tests.
 - Use the exact `table_one_spec` attached to this step; do not recreate, extend, or rename its fields in local code.
 - Call `easyicu.research_agent.methods.table_one.build_grouped_table_one(frame, table_one_spec)` and save its returned long-form source table unchanged as `table_one.csv`.
+- For exactly two declared groups, the SDK output includes comparison-minus-reference standardized differences for every continuous row and categorical level; preserve those fields unchanged.
 - Do not hand-roll another test, coerce values, or replace the grouped table with an overall-only description.
 - If the summary also reports measurement-source states for a declared value/measured/count triad, call `easyicu.research_agent.methods.source_status.reconcile_measurement_source_status` with the exact three keyword column names. Publish its status table and provenance receipt unchanged; do not reconstruct overlapping source-status masks or rename unmeasured rows as source-present summary failures.
 - A grouped Table 1 does not need an additional source-status summary when the Planner did not request one; per-group missingness in the host Table 1 is sufficient."""

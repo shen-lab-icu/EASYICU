@@ -1315,7 +1315,8 @@ def _table_semantic_roles(
         and "schema_version" in columns
         and all(
             not row.get("schema_version")
-            or row["schema_version"].strip() == "easyicu.table_one_result/1"
+            or row["schema_version"].strip()
+            in {"easyicu.table_one_result/1", "easyicu.table_one_result/2"}
             for row in rows
         )
     ):

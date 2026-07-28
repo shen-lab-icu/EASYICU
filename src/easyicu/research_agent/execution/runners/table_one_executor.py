@@ -331,6 +331,7 @@ def table_one_executor_code(
                 "Overall and comparison groups use the exact Planner-declared levels.",
                 "Missing n (%) uses each displayed group's full denominator.",
                 "P values use the exact Planner-declared test family without adjustment because this is a descriptive baseline table.",
+                "For two-group tables, standardized differences use comparison minus reference over the equal-weight pooled standard deviation.",
                 "No row, variable, level, or test was selected by the executor.",
             ],
         }}
