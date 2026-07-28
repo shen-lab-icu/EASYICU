@@ -37,7 +37,9 @@ from tools.owner_coverage_replay import (
     PlanNotScannable,
     SelectionContextSnapshot,
     load_plan,
+    load_run_context,
     main,
+    receipt_obligations_from_run,
     replay_owner_coverage,
 )
 
@@ -514,5 +516,572 @@ def test_json_output_carries_the_tally_and_the_declared_protocol(
     assert payload["tally"][OWNED] == 1
     assert payload["tally"][CONDITIONAL_RECEIPT] == 1
     assert payload["deterministic_required_step_ids"] == [
+        "05_missingness_measurement_process_audit"
+    ]
+
+
+# --------------------------------------------------------------------------
+# "I cannot validate this" is not "the pipeline would reject this".
+#
+# The E1 plan names ``icu_readmission`` in a robustness spec's cohort
+# override.  It is not a packaged dictionary concept; it is a column of the
+# materialised cohort, which the bench registers with
+# ``register_cohort_concept_ids`` before planning.  The pipeline accepted that
+# plan and ran it.  Reporting it as ``invalid_plan`` -- printed as "a plan the
+# pipeline would reject" -- was a false statement about a run that happened,
+# and it is the permissive-direction failure inverted: over-strict, but still
+# an answer the tool did not hold.
+# --------------------------------------------------------------------------
+
+
+_MATERIALISED_COLUMN = "icu_readmission"
+
+
+def _plan_naming_a_materialised_column() -> dict[str, Any]:
+    return _plan_payload(
+        _audit_step(),
+        robustness_specs=[
+            {
+                "spec_id": "rs_readmission",
+                "description": "Exclude readmissions.",
+                "axis": "cohort",
+                "cohort_override": {
+                    "name": "no_readmission",
+                    "selection_mode": "predicate_filtered",
+                    "inclusion": [
+                        {
+                            "concept_id": _MATERIALISED_COLUMN,
+                            "op": "==",
+                            "value": 0,
+                            "aggregation": "any",
+                            "time_window": {
+                                "anchor": "icu_admit",
+                                "start_offset_hours": 0.0,
+                                "end_offset_hours": 24.0,
+                            },
+                        }
+                    ],
+                    "exclusion": [],
+                },
+            }
+        ],
+    )
+
+
+def _raw_contracts(*columns: str) -> dict[str, Any]:
+    """The exact resolved-contract envelope the host seals, digest included."""
+
+    import hashlib
+
+    payload: dict[str, Any] = {
+        "schema_version": "easyicu.resolved_raw_input_contracts/1",
+        "authority_scope": (
+            "host_verified_physical_representation_and_domain_constraints"
+        ),
+        "scientific_ownership": "Planner retains scientific decisions",
+        "contracts": {
+            column: {
+                "column": column,
+                "physical_role": "value",
+                "availability_basis": "direct_source",
+                "analysis_plausibility_range": {"minimum": 0.0, "maximum": 10.0},
+                "plausibility_policy": {
+                    "range_policy": "flag_only",
+                    "out_of_range_action": "retain_and_flag",
+                },
+            }
+            for column in columns
+        },
+    }
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    payload["contracts_sha256"] = hashlib.sha256(encoded).hexdigest()
+    return payload
+
+
+def _write_run_dir(
+    tmp_path: Path,
+    *,
+    plan_payload: dict[str, Any] | None = None,
+    cohort_columns: tuple[str, ...] = (_MATERIALISED_COLUMN, "age", "death"),
+    cohort_sha256: str = "c" * 64,
+    authority_cohort_sha256: str | None = None,
+    tamper_authority: bool = False,
+    tamper_plan: bool = False,
+    tamper_bindings_for: str | None = None,
+    drop_binding_digest_for: str | None = None,
+    duplicate_record_for: str | None = None,
+    stray_binding_file: bool = False,
+    evidence_disagrees: bool = False,
+    resolved_inputs: dict[str, dict[str, Any]] | None = None,
+) -> Path:
+    """A run directory shaped like the ones the pipeline actually seals.
+
+    Every artefact the loader consumes is reached through a digest the manifest
+    records, so the fixture has to write those digests too -- which is exactly
+    what makes the tampering cases below expressible.
+    """
+
+    import hashlib
+
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(exist_ok=True)
+
+    authority = {
+        "cohort_sha256": authority_cohort_sha256 or cohort_sha256,
+        "cohort_columns": list(cohort_columns),
+    }
+    body = json.dumps(authority, indent=2).encode("utf-8")
+    digest = hashlib.sha256(body).hexdigest()
+    name = f"cohort_authority.sha256-{digest}.json"
+    if tamper_authority:
+        body += b"\n"
+    (run_dir / name).write_bytes(body)
+    (run_dir / "run_input_capsule.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "easyicu.run_input_capsule/2",
+                "cohort_sha256": cohort_sha256,
+                "materialized_cohort_authority_ref": {
+                    "file": name,
+                    "sha256": digest,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    evidence_dir = run_dir / "evidence"
+    evidence_dir.mkdir(exist_ok=True)
+    plan_rel = "evidence/analysis_plan_revision_3__analysis_plan_revision_3.json"
+    plan_body = json.dumps(
+        plan_payload
+        if plan_payload is not None
+        else _plan_naming_a_materialised_column()
+    ).encode("utf-8")
+    plan_digest = hashlib.sha256(plan_body).hexdigest()
+    if tamper_plan:
+        plan_body += b"\n"
+    (run_dir / plan_rel).write_bytes(plan_body)
+
+    binding_dir = run_dir / "resolved_inputs"
+    binding_dir.mkdir(exist_ok=True)
+    records: list[dict[str, Any]] = []
+    for step_id, payload in (resolved_inputs or {}).items():
+        capsule = json.dumps({"step_id": step_id, **payload}).encode("utf-8")
+        capsule_digest = hashlib.sha256(capsule).hexdigest()
+        if tamper_bindings_for == step_id:
+            capsule += b"\n"
+        (binding_dir / f"{step_id}.json").write_bytes(capsule)
+        records.append(
+            {
+                "step_id": step_id,
+                "resolved_inputs_path": f"resolved_inputs/{step_id}.json",
+                "resolved_inputs_sha256": (
+                    None if drop_binding_digest_for == step_id else capsule_digest
+                ),
+            }
+        )
+    if duplicate_record_for is not None:
+        records.append(
+            {
+                "step_id": duplicate_record_for,
+                "resolved_inputs_path": f"resolved_inputs/{duplicate_record_for}.json",
+                "resolved_inputs_sha256": "0" * 64,
+            }
+        )
+    if stray_binding_file:
+        (binding_dir / "99_left_over_attempt.json").write_text("{}", encoding="utf-8")
+
+    (run_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "plan_path": plan_rel,
+                "current_plan_authority": {
+                    "schema_version": "easyicu.current_plan_authority/1",
+                    "evidence_id": "analysis_plan_revision_3",
+                    "relative_path": plan_rel,
+                    "sha256": plan_digest,
+                    "revision": 3,
+                },
+                "evidence": [
+                    {
+                        "evidence_id": "analysis_plan_revision_3",
+                        "relative_path": plan_rel,
+                        "sha256": ("f" * 64) if evidence_disagrees else plan_digest,
+                    }
+                ],
+                "per_step_records": records,
+            }
+        ),
+        encoding="utf-8",
+    )
+    return run_dir
+
+
+def _authority_plan(run_dir: Path) -> Path:
+    return run_dir / "evidence/analysis_plan_revision_3__analysis_plan_revision_3.json"
+
+
+def test_an_id_a_run_registers_is_missing_context_not_an_invalid_plan(
+    tmp_path: Path,
+) -> None:
+    plan_path = _write(tmp_path, _plan_naming_a_materialised_column())
+
+    with pytest.raises(PlanNotScannable) as caught:
+        load_plan(plan_path)
+
+    assert caught.value.reason_code == "missing_validation_context"
+    assert _MATERIALISED_COLUMN in str(caught.value)
+    # The false claim that produced this fix must not survive anywhere in the
+    # message: this plan is one the pipeline accepted.
+    assert "would reject" not in str(caught.value)
+
+
+def test_the_run_registry_makes_the_same_plan_validate(tmp_path: Path) -> None:
+    plan_path = _write(tmp_path, _plan_naming_a_materialised_column())
+    run_dir = _write_run_dir(tmp_path)
+
+    plan = load_plan(plan_path, run_context=load_run_context(run_dir))
+
+    assert [str(step.step_id) for step in plan.steps] == [
+        "05_missingness_measurement_process_audit"
+    ]
+    assert len(plan.robustness_specs) == 1
+
+
+def test_registering_the_run_registry_does_not_leak_out_of_the_call(
+    tmp_path: Path,
+) -> None:
+    """The next question must get the same answer as the first one."""
+
+    plan_path = _write(tmp_path, _plan_naming_a_materialised_column())
+    load_plan(plan_path, run_context=load_run_context(_write_run_dir(tmp_path)))
+
+    with pytest.raises(PlanNotScannable) as caught:
+        load_plan(plan_path)
+    assert caught.value.reason_code == "missing_validation_context"
+
+
+def test_a_column_no_run_context_backs_is_still_missing_context(
+    tmp_path: Path,
+) -> None:
+    """A context that does not cover the id proves nothing about the plan.
+
+    It may be the wrong run's context.  Answering ``invalid_plan`` here would
+    let a mismatched pair of inputs condemn a plan that is fine.
+    """
+
+    plan_path = _write(tmp_path, _plan_naming_a_materialised_column())
+    run_dir = _write_run_dir(tmp_path, cohort_columns=("age", "death"))
+
+    with pytest.raises(PlanNotScannable) as caught:
+        load_plan(plan_path, run_context=load_run_context(run_dir))
+
+    assert caught.value.reason_code == "missing_validation_context"
+    assert "would reject" not in str(caught.value)
+
+
+def test_a_plan_broken_for_any_other_reason_is_still_invalid(
+    tmp_path: Path,
+) -> None:
+    """The new reason code must not become a blanket excuse."""
+
+    payload = _plan_payload(
+        _audit_step(),
+        robustness_specs=[{"spec_id": "rs1", "kind": "not_a_kind", "description": "x"}],
+    )
+    run_dir = _write_run_dir(tmp_path, plan_payload=payload)
+
+    with pytest.raises(PlanNotScannable) as caught:
+        load_plan(_authority_plan(run_dir), run_context=load_run_context(run_dir))
+
+    assert caught.value.reason_code == "invalid_plan"
+
+
+# --------------------------------------------------------------------------
+# The registry is reached by digest, not by directory listing.
+# --------------------------------------------------------------------------
+
+
+def test_an_authority_that_does_not_match_its_declared_digest_is_refused(
+    tmp_path: Path,
+) -> None:
+    run_dir = _write_run_dir(tmp_path, tamper_authority=True)
+
+    with pytest.raises(PlanNotScannable) as caught:
+        load_run_context(run_dir)
+
+    assert caught.value.reason_code == "missing_validation_context"
+    assert "digest" in str(caught.value)
+
+
+def test_an_authority_for_a_different_cohort_is_refused(tmp_path: Path) -> None:
+    run_dir = _write_run_dir(
+        tmp_path, cohort_sha256="a" * 64, authority_cohort_sha256="b" * 64
+    )
+
+    with pytest.raises(PlanNotScannable) as caught:
+        load_run_context(run_dir)
+
+    assert caught.value.reason_code == "missing_validation_context"
+    assert "different cohort" in str(caught.value)
+
+
+def test_a_run_without_a_capsule_reference_is_refused(tmp_path: Path) -> None:
+    run_dir = tmp_path / "bare"
+    run_dir.mkdir()
+    (run_dir / "run_input_capsule.json").write_text(
+        json.dumps({"cohort_sha256": "d" * 64}), encoding="utf-8"
+    )
+
+    with pytest.raises(PlanNotScannable) as caught:
+        load_run_context(run_dir)
+
+    assert caught.value.reason_code == "missing_validation_context"
+
+
+# --------------------------------------------------------------------------
+# Recorded bindings turn an unknown into a definite verdict.
+# --------------------------------------------------------------------------
+
+
+def test_recorded_bindings_settle_a_step_the_offline_scan_could_not(
+    tmp_path: Path,
+) -> None:
+    payload = _plan_payload(_unowned_step(), _downstream_figure_step())
+    run_dir = _write_run_dir(
+        tmp_path,
+        plan_payload=payload,
+        resolved_inputs={
+            "06_downstream_render": {
+                "inputs": {"table:bespoke_product": {"product": "bespoke_product"}}
+            }
+        },
+    )
+    plan_path = _authority_plan(run_dir)
+    context = load_run_context(run_dir)
+
+    without = replay_owner_coverage(plan_path)
+    with_run = replay_owner_coverage(
+        snapshot=SelectionContextSnapshot(
+            plan=load_plan(plan_path, run_context=context),
+            resolved_bindings=context.resolved_bindings,
+        )
+    )
+
+    assert without[1].verdict == UNKNOWN_RUNTIME_BINDING
+    assert with_run[1].verdict == CODER
+
+
+def test_a_step_the_run_never_reached_stays_unknown(tmp_path: Path) -> None:
+    """Absent bindings are absent, not an answer."""
+
+    payload = _plan_payload(_unowned_step(), _downstream_figure_step())
+    run_dir = _write_run_dir(tmp_path, plan_payload=payload)
+    plan_path = _authority_plan(run_dir)
+    context = load_run_context(run_dir)
+
+    rows = replay_owner_coverage(
+        snapshot=SelectionContextSnapshot(
+            plan=load_plan(plan_path, run_context=context),
+            resolved_bindings=context.resolved_bindings,
+        )
+    )
+
+    assert rows[1].verdict == UNKNOWN_RUNTIME_BINDING
+
+
+def test_obligations_are_only_compiled_for_steps_the_run_recorded(
+    tmp_path: Path,
+) -> None:
+    """No recorded contracts must not read as "this step owes no receipt"."""
+
+    payload = _plan_payload(_audit_step(), _receipt_gated_step())
+    run_dir = _write_run_dir(
+        tmp_path,
+        plan_payload=payload,
+        resolved_inputs={
+            "05_missingness_measurement_process_audit": {
+                "inputs": {},
+                "raw_input_contracts": _raw_contracts("sep3_sofa2_measured"),
+            }
+        },
+    )
+    context = load_run_context(run_dir)
+    plan = load_plan(_authority_plan(run_dir), run_context=context)
+
+    scopes = receipt_obligations_from_run(plan, run_context=context)
+
+    assert set(scopes) == {"05_missingness_measurement_process_audit"}
+
+
+# --------------------------------------------------------------------------
+# Every binding is read at the digest the manifest recorded for it.
+#
+# The first version of the run-context loader scanned ``resolved_inputs/*.json``
+# off the directory.  That accepts a capsule the run never sealed -- a leftover
+# from an earlier attempt, or an edited one -- and every verdict downstream
+# silently inherits it.  Only the cohort authority was actually digest-bound,
+# so "all digest-bound" was not yet true.
+# --------------------------------------------------------------------------
+
+
+def _one_binding() -> dict[str, dict[str, Any]]:
+    return {
+        "06_downstream_render": {
+            "inputs": {"table:bespoke_product": {"product": "bespoke_product"}}
+        }
+    }
+
+
+def test_a_binding_capsule_that_does_not_match_its_digest_is_refused(
+    tmp_path: Path,
+) -> None:
+    run_dir = _write_run_dir(
+        tmp_path,
+        resolved_inputs=_one_binding(),
+        tamper_bindings_for="06_downstream_render",
+    )
+
+    with pytest.raises(PlanNotScannable) as caught:
+        load_run_context(run_dir)
+
+    assert caught.value.reason_code == "missing_validation_context"
+    assert "declared digest" in str(caught.value)
+
+
+def test_a_path_without_a_digest_is_refused(tmp_path: Path) -> None:
+    """Half a receipt proves nothing; it must not read as a whole one."""
+
+    run_dir = _write_run_dir(
+        tmp_path,
+        resolved_inputs=_one_binding(),
+        drop_binding_digest_for="06_downstream_render",
+    )
+
+    with pytest.raises(PlanNotScannable) as caught:
+        load_run_context(run_dir)
+
+    assert "half a binding receipt" in str(caught.value)
+
+
+def test_two_manifest_records_for_one_step_are_refused(tmp_path: Path) -> None:
+    run_dir = _write_run_dir(
+        tmp_path,
+        resolved_inputs=_one_binding(),
+        duplicate_record_for="06_downstream_render",
+    )
+
+    with pytest.raises(PlanNotScannable) as caught:
+        load_run_context(run_dir)
+
+    assert "more than once" in str(caught.value)
+
+
+def test_a_binding_capsule_no_manifest_record_claims_is_refused(
+    tmp_path: Path,
+) -> None:
+    """The directory-scan defect, pinned from the other side."""
+
+    run_dir = _write_run_dir(
+        tmp_path, resolved_inputs=_one_binding(), stray_binding_file=True
+    )
+
+    with pytest.raises(PlanNotScannable) as caught:
+        load_run_context(run_dir)
+
+    assert "99_left_over_attempt.json" in str(caught.value)
+
+
+def test_a_capsule_filed_under_another_steps_id_is_refused(tmp_path: Path) -> None:
+    run_dir = _write_run_dir(tmp_path, resolved_inputs=_one_binding())
+    manifest_path = run_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["per_step_records"][0]["step_id"] = "07_a_different_step"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(PlanNotScannable) as caught:
+        load_run_context(run_dir)
+
+    assert "filed it under" in str(caught.value)
+
+
+def test_a_binding_path_outside_the_run_is_refused(tmp_path: Path) -> None:
+    run_dir = _write_run_dir(tmp_path, resolved_inputs=_one_binding())
+    manifest_path = run_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["per_step_records"][0]["resolved_inputs_path"] = "../elsewhere.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(PlanNotScannable) as caught:
+        load_run_context(run_dir)
+
+    assert "escapes the run directory" in str(caught.value)
+
+
+# --------------------------------------------------------------------------
+# The scanned plan must be the revision the run treated as authoritative.
+# --------------------------------------------------------------------------
+
+
+def test_a_tampered_authority_plan_is_refused(tmp_path: Path) -> None:
+    with pytest.raises(PlanNotScannable) as caught:
+        load_run_context(_write_run_dir(tmp_path, tamper_plan=True))
+
+    assert caught.value.reason_code == "missing_validation_context"
+    assert "current_plan_authority" in str(caught.value)
+
+
+def test_an_evidence_record_that_disagrees_with_the_manifest_is_refused(
+    tmp_path: Path,
+) -> None:
+    """Two records of which plan is authoritative must agree, or neither counts."""
+
+    with pytest.raises(PlanNotScannable) as caught:
+        load_run_context(_write_run_dir(tmp_path, evidence_disagrees=True))
+
+    assert "disagrees with current_plan_authority" in str(caught.value)
+
+
+def test_scanning_a_plan_that_is_not_the_authority_is_refused(
+    tmp_path: Path,
+) -> None:
+    """A file name check would have passed this; only the digest catches it.
+
+    The revision the run executed and the copy sitting at the run root can be
+    different bytes -- in the real E1 run they are.  Pairing one run's context
+    with another revision produces verdicts for neither.
+    """
+
+    run_dir = _write_run_dir(tmp_path)
+    other = _write(tmp_path, _plan_payload(_audit_step()), name="analysis_plan.json")
+
+    with pytest.raises(PlanNotScannable) as caught:
+        load_plan(other, run_context=load_run_context(run_dir))
+
+    assert caught.value.reason_code == "plan_not_authority"
+
+
+def test_run_dir_alone_scans_the_authority_plan(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The run knows which revision it ran; the operator should not have to."""
+
+    run_dir = _write_run_dir(
+        tmp_path,
+        plan_payload=_plan_payload(_audit_step()),
+        resolved_inputs=_one_binding(),
+    )
+
+    assert main(["--run-dir", str(run_dir), "--json"]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert [row["step_id"] for row in payload["steps"]] == [
         "05_missingness_measurement_process_audit"
     ]

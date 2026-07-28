@@ -1,20 +1,42 @@
-"""Report which plan steps a deterministic executor would own. Zero Provider.
+"""Replay which plan steps a deterministic executor owned. Zero Provider.
 
-Motivation: on the 2026-07-28 E1 run exactly one of nine executed steps got a
-deterministic owner, and that step was the only contested one that did not
-fail.  Finding that out cost a real run.  Reading it off a recorded plan costs
-nothing, so it should be read first.
+**This is a post-run replay, not a preflight.**  It reads a plan a run already
+executed together with that run's own sealed context, and reports what the
+production selector concluded.  That is useful -- on the 2026-07-28 E1 run only
+three of twelve steps had a deterministic owner, which is most of the
+explanation for why the run failed -- but it is *not* a guarantee obtainable
+before spending money.
 
-The one thing this tool must not do is flatter the plan.  A coverage report
-that over-states ownership green-lights exactly the run that then falls
-through to the coder -- worse than no report, because it was trusted.  Three
-distinct ways to over-state are refused here:
+The gap is specific and worth stating rather than blurring: steps the run never
+reached have no recorded bindings, so their owners cannot be resolved and they
+come back ``unknown_runtime_binding``.  In the real E1 plan all three
+unexecuted figure steps land there.  Turning this into a genuine preflight
+requires **prospective** bindings -- pre-compiling each unexecuted step's
+readable schema from the producing step's Planner-declared typed product
+contract, rather than from a binding that does not exist yet -- and a preflight
+that still reports ``unknown`` for any step has not answered the question it
+was asked.  That work is not done here.
+
+The one thing this tool must not do is state something it does not know.  A
+coverage report that over-states ownership green-lights exactly the run that
+then falls through to the coder -- worse than no report, because it was
+trusted.  An over-strict one condemns a plan that ran fine.  Both are the same
+defect: answering in whichever direction is available rather than saying which
+fact is missing.  Four refusals:
 
 * **Scoring a plan that did not validate.**  An earlier version dropped
   ``robustness_specs`` when the plan failed validation and scanned what was
   left.  That changes the plan's semantics and then reports a precise-looking
   number for a plan nobody would run.  A plan that does not validate is
   ``invalid_plan``: no coverage is produced at all.
+
+* **Calling a missing registry an invalid plan.**  A plan may name a
+  ``concept_id`` that is not a packaged concept because the run registered it
+  as a pre-materialised cohort column.  Offline that registry does not exist,
+  so validation fails for a reason that says nothing about the plan; the E1
+  plan trips this on ``icu_readmission`` and the pipeline accepted it.  That
+  is ``missing_validation_context``, and ``--run-dir`` resolves it from the
+  run's own digest-bound authority.
 
 * **Calling an unknown a coder step.**  Executors whose readable schema is
   fixed by the *producing* step need the host's ``resolved_bindings``, which
@@ -45,17 +67,21 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass, field
+import hashlib
 import json
 from pathlib import Path
+import re
 import sys
 from typing import Any, Mapping, Sequence
 
 __all__ = [
     "PlanNotScannable",
+    "RunValidationContext",
     "SelectionContextSnapshot",
     "StepCoverage",
     "compile_receipt_obligations",
     "load_plan",
+    "load_run_context",
     "main",
     "replay_owner_coverage",
 ]
@@ -154,13 +180,308 @@ class SelectionContextSnapshot:
         )
 
 
-def load_plan(plan_path: Path) -> Any:
-    """Return a fully validated ``AnalysisPlan`` or refuse.
+@dataclass(frozen=True, slots=True)
+class RunValidationContext:
+    """Run-scoped facts an offline scan lacks, taken only from digest-bound records.
 
-    Nothing is dropped, coerced or retried to make a plan validate.  A plan
-    the pipeline would reject is one this tool must not describe.
+    Every field here is read from an artifact the run itself sealed, and the
+    cohort column registry is reached through the capsule's
+    ``materialized_cohort_authority_ref`` -- file name *and* sha256 -- rather
+    than by picking whichever ``cohort_authority.*.json`` happens to be in the
+    directory.  A registry assembled the loose way would let this tool validate
+    a plan against a cohort the run never used, which is the same class of
+    error as scoring a plan it had quietly edited.
     """
 
+    run_dir: Path
+    cohort_sha256: str
+    cohort_columns: frozenset[str]
+    cohort_authority_path: Path
+    resolved_bindings: Mapping[str, Mapping[str, Any]]
+    raw_input_contracts: Mapping[str, Mapping[str, Any]]
+    plan_authority_path: Path
+    plan_authority_sha256: str
+
+    @property
+    def steps_with_bindings(self) -> frozenset[str]:
+        return frozenset(self.resolved_bindings)
+
+
+_REASON = "missing_validation_context"
+
+
+def _read_json(path: Path, *, reason: str = _REASON) -> Any:
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise PlanNotScannable(reason, f"{path}: {exc}") from exc
+    try:
+        return json.loads(raw)
+    except ValueError as exc:
+        raise PlanNotScannable(reason, f"{path}: {exc}") from exc
+
+
+def _inside(run_dir: Path, relative: str, *, what: str) -> Path:
+    """Resolve a manifest-declared path, refusing anything outside the run."""
+
+    if not relative:
+        raise PlanNotScannable(_REASON, f"{what}: empty path")
+    candidate = (run_dir / relative).resolve()
+    root = run_dir.resolve()
+    if not candidate.is_relative_to(root):
+        raise PlanNotScannable(
+            _REASON, f"{what}: {relative!r} escapes the run directory"
+        )
+    return candidate
+
+
+def _verified_bytes(path: Path, declared: str, *, what: str) -> bytes:
+    try:
+        payload = path.read_bytes()
+    except OSError as exc:
+        raise PlanNotScannable(_REASON, f"{what}: {path}: {exc}") from exc
+    actual = hashlib.sha256(payload).hexdigest()
+    if not declared or actual != declared.lower():
+        raise PlanNotScannable(
+            _REASON,
+            f"{what}: {path.name} does not match its declared digest.\n"
+            f"  declared {declared or '(none)'}\n  actual   {actual}",
+        )
+    return payload
+
+
+def _plan_authority(run_dir: Path, manifest: Mapping[str, Any]) -> tuple[Path, str]:
+    """The one plan revision this run executed, agreed by manifest and store.
+
+    ``current_plan_authority`` names it and the EvidenceStore record for the
+    same ``evidence_id`` repeats the path and digest.  Both are checked: a
+    manifest pointer alone would let an edited authority block redirect the
+    scan, and the store record alone would not say which revision was current.
+    """
+
+    authority = manifest.get("current_plan_authority")
+    if not isinstance(authority, Mapping):
+        raise PlanNotScannable(
+            _REASON,
+            f"{run_dir.name}/manifest.json declares no current_plan_authority, "
+            "so there is no\n  authoritative plan revision to scan.",
+        )
+    evidence_id = str(authority.get("evidence_id") or "")
+    relative = str(authority.get("relative_path") or "")
+    declared = str(authority.get("sha256") or "")
+    path = _inside(run_dir, relative, what="current_plan_authority")
+    _verified_bytes(path, declared, what="current_plan_authority")
+
+    records = manifest.get("evidence")
+    matches = [
+        record
+        for record in (records if isinstance(records, list) else ())
+        if isinstance(record, Mapping)
+        and str(record.get("evidence_id") or "") == evidence_id
+    ]
+    if len(matches) != 1:
+        raise PlanNotScannable(
+            _REASON,
+            f"the evidence store holds {len(matches)} records for "
+            f"{evidence_id!r}; exactly one must back\n  the current plan "
+            "authority.",
+        )
+    record = matches[0]
+    if (
+        str(record.get("sha256") or "").lower() != declared.lower()
+        or str(record.get("relative_path") or "") != relative
+    ):
+        raise PlanNotScannable(
+            _REASON,
+            f"the evidence record for {evidence_id!r} disagrees with "
+            "current_plan_authority;\n  the run's own two records of which plan "
+            "is authoritative do not match.",
+        )
+    return path, declared.lower()
+
+
+def _bindings_from_manifest(
+    run_dir: Path, manifest: Mapping[str, Any]
+) -> tuple[dict[str, Mapping[str, Any]], dict[str, Mapping[str, Any]]]:
+    """Read each step's binding capsule at the digest the manifest recorded.
+
+    Scanning ``resolved_inputs/*.json`` off the directory would accept a file
+    the run never sealed -- a leftover from an earlier attempt, or an edited
+    one -- and every verdict downstream would inherit it.
+    """
+
+    records = manifest.get("per_step_records")
+    if not isinstance(records, list):
+        raise PlanNotScannable(
+            _REASON, f"{run_dir.name}/manifest.json has no per_step_records"
+        )
+    bindings: dict[str, Mapping[str, Any]] = {}
+    contracts: dict[str, Mapping[str, Any]] = {}
+    seen: set[str] = set()
+    referenced: set[Path] = set()
+    for record in records:
+        if not isinstance(record, Mapping):
+            continue
+        step_id = str(record.get("step_id") or "")
+        if not step_id:
+            continue
+        if step_id in seen:
+            raise PlanNotScannable(
+                _REASON,
+                f"manifest.per_step_records names {step_id!r} more than once; "
+                "which binding is\n  authoritative is undecidable.",
+            )
+        seen.add(step_id)
+        relative = record.get("resolved_inputs_path")
+        declared = record.get("resolved_inputs_sha256")
+        if relative is None and declared is None:
+            continue  # the step never resolved its inputs; absent, not empty
+        if bool(relative) != bool(declared):
+            raise PlanNotScannable(
+                _REASON,
+                f"{step_id}: half a binding receipt (path={relative!r}, "
+                f"sha256={declared!r}); a path without\n  a digest is not "
+                "evidence of anything.",
+            )
+        path = _inside(run_dir, str(relative), what=f"{step_id} resolved_inputs")
+        payload = _verified_bytes(path, str(declared), what=f"{step_id} bindings")
+        referenced.add(path)
+        capsule = json.loads(payload.decode("utf-8"))
+        if not isinstance(capsule, Mapping):
+            raise PlanNotScannable(_REASON, f"{path}: not a JSON object")
+        if str(capsule.get("step_id") or "") != step_id:
+            raise PlanNotScannable(
+                _REASON,
+                f"{path.name} names step {capsule.get('step_id')!r} but the "
+                f"manifest filed it under {step_id!r}.",
+            )
+        step_inputs = capsule.get("inputs")
+        if isinstance(step_inputs, Mapping):
+            bindings[step_id] = dict(step_inputs)
+        raw = capsule.get("raw_input_contracts")
+        if isinstance(raw, Mapping):
+            contracts[step_id] = dict(raw)
+
+    directory = run_dir / "resolved_inputs"
+    if directory.is_dir():
+        stray = sorted(
+            path.name
+            for path in directory.glob("*.json")
+            if path.resolve() not in referenced
+        )
+        if stray:
+            raise PlanNotScannable(
+                _REASON,
+                "resolved_inputs/ holds "
+                f"{', '.join(stray)}, which no manifest record claims.\n"
+                "  An unclaimed binding capsule has no authority and may be a "
+                "stale attempt; refusing\n  rather than guessing which files "
+                "belong to this run.",
+            )
+    return bindings, contracts
+
+
+def load_run_context(run_dir: Path) -> RunValidationContext:
+    """Load the digest-bound validation context a run sealed for itself.
+
+    Every fact is verified against the digest the run recorded for it, and
+    nothing is discovered by listing a directory.
+    """
+
+    manifest = _read_json(run_dir / "manifest.json")
+    if not isinstance(manifest, Mapping):
+        raise PlanNotScannable(_REASON, f"{run_dir}: manifest.json is not an object")
+    plan_path, plan_sha256 = _plan_authority(run_dir, manifest)
+
+    capsule = _read_json(run_dir / "run_input_capsule.json")
+    if not isinstance(capsule, Mapping):
+        raise PlanNotScannable(
+            _REASON, f"{run_dir}: run_input_capsule.json is not an object"
+        )
+    cohort_sha256 = str(capsule.get("cohort_sha256") or "")
+    ref = capsule.get("materialized_cohort_authority_ref")
+    if not cohort_sha256 or not isinstance(ref, Mapping):
+        raise PlanNotScannable(
+            _REASON,
+            f"{run_dir.name}/run_input_capsule.json carries no materialised "
+            "cohort authority reference,\n"
+            "  so there is no digest-bound column registry to validate a plan "
+            "against.",
+        )
+    authority_path = _inside(
+        run_dir, str(ref.get("file") or ""), what="cohort authority"
+    )
+    payload = _verified_bytes(
+        authority_path, str(ref.get("sha256") or ""), what="cohort authority"
+    )
+    authority = json.loads(payload.decode("utf-8"))
+    if str(authority.get("cohort_sha256") or "") != cohort_sha256:
+        raise PlanNotScannable(
+            _REASON,
+            f"{authority_path.name} describes a different cohort than the run "
+            "capsule names;\n  its column registry is not this run's.",
+        )
+    columns = frozenset(str(c) for c in (authority.get("cohort_columns") or ()))
+    if not columns:
+        raise PlanNotScannable(
+            _REASON, f"{authority_path.name} declares no cohort columns"
+        )
+
+    bindings, contracts = _bindings_from_manifest(run_dir, manifest)
+    return RunValidationContext(
+        run_dir=run_dir,
+        cohort_sha256=cohort_sha256,
+        cohort_columns=columns,
+        cohort_authority_path=authority_path,
+        resolved_bindings=bindings,
+        raw_input_contracts=contracts,
+        plan_authority_path=plan_path,
+        plan_authority_sha256=plan_sha256,
+    )
+
+
+_UNKNOWN_CONCEPT_ID = re.compile(r"unknown concept_id:\s*(\S+)")
+
+
+def _unknown_concept_ids(exc: BaseException) -> tuple[str, ...]:
+    """Concept ids the plan names that static dictionary validation rejects."""
+
+    errors = getattr(exc, "errors", None)
+    messages: list[str] = []
+    if callable(errors):
+        try:
+            messages = [str(item.get("msg", "")) for item in errors()]
+        except Exception:  # pragma: no cover - pydantic shape change
+            messages = []
+    if not messages:
+        messages = [str(exc)]
+    found: list[str] = []
+    for message in messages:
+        for match in _UNKNOWN_CONCEPT_ID.finditer(message):
+            found.append(match.group(1))
+    return tuple(dict.fromkeys(found))
+
+
+def load_plan(
+    plan_path: Path, *, run_context: "RunValidationContext | None" = None
+) -> Any:
+    """Return a fully validated ``AnalysisPlan`` or refuse.
+
+    Nothing is dropped, coerced or retried to make a plan validate.
+
+    Two refusals, and the difference between them matters.  A plan may name a
+    ``concept_id`` that is not in the packaged dictionary because the run
+    registered it as a pre-materialised cohort column
+    (``register_cohort_concept_ids``); the E1 plan does exactly this for
+    ``icu_readmission`` and the pipeline accepted it.  Offline that column
+    registry does not exist, so validation fails for a reason that says
+    nothing about the plan.  Reporting that as ``invalid_plan`` -- "a plan the
+    pipeline would reject" -- is a false statement about a run that happened.
+    That case is ``missing_validation_context``: supply the run's digest-bound
+    context and ask again.
+    """
+
+    from easyicu.research_agent.cohort.schema import cohort_concept_id_scope
     from easyicu.research_agent.schema import AnalysisPlan
 
     try:
@@ -175,9 +496,63 @@ def load_plan(plan_path: Path) -> Any:
         raise PlanNotScannable("plan_not_json", f"{plan_path}: not a JSON object")
     if "steps" not in payload and isinstance(payload.get("plan"), Mapping):
         payload = payload["plan"]
+
+    if run_context is not None:
+        actual = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+        if actual != run_context.plan_authority_sha256:
+            raise PlanNotScannable(
+                "plan_not_authority",
+                f"{plan_path.name} is not the plan {run_context.run_dir.name} "
+                "executed.\n"
+                f"  scanned    {actual}\n"
+                f"  authority  {run_context.plan_authority_sha256} "
+                f"({run_context.plan_authority_path.name})\n"
+                "  A run's context only explains the plan that run executed; "
+                "pairing it with a\n  different revision produces verdicts for "
+                "neither.",
+            )
+
+    registered = () if run_context is None else run_context.cohort_columns
     try:
-        return AnalysisPlan.model_validate(payload)
+        with cohort_concept_id_scope(registered):
+            return AnalysisPlan.model_validate(payload)
     except Exception as exc:
+        pending = _unknown_concept_ids(exc)
+        if pending:
+            # Prove the claim instead of pattern-matching it: if registering
+            # exactly these ids makes the plan validate, the only thing wrong
+            # was the missing registry.
+            try:
+                with cohort_concept_id_scope([*registered, *pending]):
+                    AnalysisPlan.model_validate(payload)
+            except Exception:
+                pass
+            else:
+                named = ", ".join(pending)
+                if run_context is None:
+                    raise PlanNotScannable(
+                        "missing_validation_context",
+                        f"{plan_path.name} names {named}, which the packaged "
+                        "concept dictionary does not contain.\n"
+                        "  A run registers its pre-materialised cohort columns "
+                        "before planning, so this is\n"
+                        "  most likely a real column of that run's cohort and "
+                        "NOT an invalid plan.\n"
+                        "  Offline this tool cannot tell. Pass --run-dir to "
+                        "supply the run's own\n"
+                        "  digest-bound column registry and ask again.",
+                    ) from exc
+                raise PlanNotScannable(
+                    "missing_validation_context",
+                    f"{plan_path.name} names {named}, which is neither a "
+                    "packaged concept nor one of the\n"
+                    f"  {len(run_context.cohort_columns)} columns of the cohort "
+                    f"bound to {run_context.run_dir.name}.\n"
+                    "  Either this plan belongs to a different run or that "
+                    "run's authority is incomplete;\n"
+                    "  no coverage is reported for a plan whose validation "
+                    "context does not match it.",
+                ) from exc
         raise PlanNotScannable(
             "invalid_plan",
             f"{plan_path.name} does not validate as an AnalysisPlan.\n"
@@ -209,6 +584,34 @@ def compile_receipt_obligations(
             context=context,
             step=step,
             raw_input_contracts=raw_input_contracts,
+        )
+    return scopes
+
+
+def receipt_obligations_from_run(
+    plan: Any, *, run_context: RunValidationContext
+) -> dict[str, Any]:
+    """Compile the real obligation for each step whose run recorded its contracts.
+
+    A step with no recorded contracts is left out rather than given an empty
+    obligation: "this step owes no receipt" and "this run never got far enough
+    to say" are different facts, and only the first one is an answer.
+    """
+
+    from easyicu.research_agent.authority.plausibility import (
+        compile_flag_only_plausibility_scope,
+    )
+
+    scopes: dict[str, Any] = {}
+    for step in plan.steps:
+        step_id = str(step.step_id)
+        recorded = run_context.raw_input_contracts.get(step_id)
+        if recorded is None:
+            continue
+        scopes[step_id] = compile_flag_only_plausibility_scope(
+            context=None,
+            step=step,
+            raw_input_contracts=recorded,
         )
     return scopes
 
@@ -327,7 +730,27 @@ def _tally(rows: Sequence[StepCoverage]) -> dict[str, int]:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("plan", type=Path, help="an analysis_plan*.json from a run")
+    parser.add_argument(
+        "plan",
+        type=Path,
+        nargs="?",
+        default=None,
+        help=(
+            "an analysis_plan*.json from a run. Optional with --run-dir, which "
+            "knows which revision that run treated as authoritative; given "
+            "both, the file must BE that revision."
+        ),
+    )
+    parser.add_argument(
+        "--run-dir",
+        type=Path,
+        default=None,
+        help=(
+            "the run directory that produced this plan. Supplies the run's own "
+            "digest-bound cohort column registry, typed product bindings and "
+            "receipt obligations, turning unknown verdicts into definite ones."
+        ),
+    )
     parser.add_argument(
         "--json", action="store_true", help="emit machine-readable rows"
     )
@@ -344,17 +767,34 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    if args.plan is None and args.run_dir is None:
+        parser.error("give a plan path, a --run-dir, or both")
     try:
-        plan = load_plan(args.plan)
+        run_context = None if args.run_dir is None else load_run_context(args.run_dir)
+        plan_path = args.plan
+        if plan_path is None:
+            assert run_context is not None
+            plan_path = run_context.plan_authority_path
+        plan = load_plan(plan_path, run_context=run_context)
     except PlanNotScannable as exc:
         print(f"not scannable [{exc.reason_code}]: {exc}", file=sys.stderr)
         return 2
 
     required = frozenset(args.require_deterministic) or None
-    snapshot = SelectionContextSnapshot(
-        plan=plan,
-        deterministic_required_step_ids=required,
-    )
+    if run_context is None:
+        snapshot = SelectionContextSnapshot(
+            plan=plan,
+            deterministic_required_step_ids=required,
+        )
+    else:
+        snapshot = SelectionContextSnapshot(
+            plan=plan,
+            resolved_bindings=run_context.resolved_bindings,
+            plausibility_scopes=receipt_obligations_from_run(
+                plan, run_context=run_context
+            ),
+            deterministic_required_step_ids=required,
+        )
     rows = replay_owner_coverage(snapshot=snapshot)
 
     if required:
@@ -437,6 +877,14 @@ def _print_report(rows: Sequence[StepCoverage]) -> None:
             "real bindings or obligations to\nresolve it; do not read it as "
             "either answer."
         )
+    print()
+    print(
+        "This is a post-run REPLAY, not a preflight. A step the run never "
+        "reached has no\nrecorded binding, so its owner cannot be resolved "
+        "here at all. Using this as a\nlaunch guarantee would need prospective "
+        "bindings compiled from the producing step's\ndeclared typed product "
+        "contract, and would have to leave no UNKNOWN at all."
+    )
 
 
 if __name__ == "__main__":  # pragma: no cover - exercised via tests
