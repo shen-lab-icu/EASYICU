@@ -200,6 +200,12 @@ _COMPACT_QUALITY_AUDIT_GUIDANCE = """WIDE DATA-QUALITY AUDIT CONTRACT:
 - Preserve missingness. Never use silent `fillna(0)`, drop newly invalid coercions, reinterpret unavailable source data as a normal value, or turn a plausibility/audit range into exclusion or capping. A derivation mismatch may be claimed only where comparable source and supplied values both exist.
 - Source-status fractions use the locked cohort as denominator; value-level distributions use their explicitly named valid-observed denominator. Keep these populations distinct and record any numeric-coercion or range flags without silently changing either population."""
 
+_COMPACT_ADJUSTED_EXECUTION_GUIDANCE = """ADJUSTED-MODEL EXECUTION CONTRACT (compact):
+- Build one analysis frame from the exact declared outcome, exposure, and covariates. Encode categoricals before numeric coercion and choose every reference by a prespecified outcome-blind rule. Use one shared complete-case mask across all required fields; report full, complete-case, and dropped counts plus per-variable missingness, and never impute exposure or outcome unless the Planner authorizes it.
+- Require finite outcome/design values, add the intercept explicitly, and assert that the exact exposure term is present. Preserve the full model-safety rules and Planner `model_requirements`/`model_contracts` schema above; do not label a failed or non-estimable fit as fitted.
+- Input binding, provenance, row alignment, and structural-accounting failures must propagate. Only a genuine post-validation model-fit failure may exit normally after writing the required non-fitted model contract, null estimates, and a non-empty `fit_failure_reason`.
+- Serialize JSON as Python primitives with non-finite values as null and CSV as scalar cells. Emit only the declared table and required summary/diagnostics."""
+
 
 def normalised_method_head(method: object) -> str:
     """Return the exact scientific method head before an optional rider."""
@@ -656,6 +662,55 @@ def compact_quality_audit_coder_guide_for_step(
         ),
     )
     return "\n\n".join((base, _COMPACT_QUALITY_AUDIT_GUIDANCE)).strip()
+
+
+def compact_adjusted_model_coder_guide_for_step(
+    full_guide: str,
+    step: AnalysisStep,
+) -> str:
+    """Compact generic execution tutorials for an explicit adjusted model."""
+
+    method = normalised_method_head(step.method)
+    if not (
+        step.model_requirements
+        or method in _ADJUSTED_ASSOCIATION_METHODS
+        or method == PLANNED_MODEL_REQUIREMENTS_STEP_METHOD
+    ):
+        return coder_guide_for_step(full_guide, step)
+    base = coder_guide_for_step(
+        full_guide,
+        step,
+        _exclude_sections=frozenset(
+            {
+                "runtime",
+                "helper_guard",
+                "serialization",
+                "hygiene",
+                "complete_case",
+                "timing_guard",
+                "statistics",
+                "model_failure",
+            }
+        ),
+    )
+    return "\n\n".join((base, _COMPACT_ADJUSTED_EXECUTION_GUIDANCE)).strip()
+
+
+def compact_initial_coder_guide_for_step(
+    full_guide: str,
+    step: AnalysisStep,
+) -> str:
+    """Route an oversized initial prompt by typed step structure."""
+
+    method = normalised_method_head(step.method)
+    if _figure_contract_applies(step):
+        return compact_rendering_coder_guide_for_step(full_guide, step)
+    if (
+        _quality_control_contract_applies(step)
+        or canonical_analysis_family(method) == "data_quality_audit"
+    ):
+        return compact_quality_audit_coder_guide_for_step(full_guide, step)
+    return compact_adjusted_model_coder_guide_for_step(full_guide, step)
 
 
 def coder_context_requires_method_constraints(step: AnalysisStep) -> bool:
@@ -1221,6 +1276,8 @@ def scoped_coder_context(
 
 
 __all__ = [
+    "compact_adjusted_model_coder_guide_for_step",
+    "compact_initial_coder_guide_for_step",
     "compact_quality_audit_coder_guide_for_step",
     "compact_rendering_coder_guide_for_step",
     "coder_context_requires_method_constraints",

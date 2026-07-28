@@ -17,6 +17,8 @@ from easyicu.research_agent.repairs.patch import PATCH_FORMAT
 from easyicu.research_agent.resources.coder import bind_execution_cohort_runtime
 from easyicu.research_agent.authority.coder_authority import HostCoderAuthority
 from easyicu.research_agent.research_context.prompt_scope import (
+    compact_adjusted_model_coder_guide_for_step,
+    compact_initial_coder_guide_for_step,
     compact_quality_audit_coder_guide_for_step,
     compact_rendering_coder_guide_for_step,
     coder_context_requires_method_constraints,
@@ -36,6 +38,7 @@ from easyicu.research_agent.repairs.reasons import (
 )
 from easyicu.research_agent.schema import (
     MissingnessProfile,
+    PlannedModelRequirement,
     TemporalConstraint,
     UserPreferences,
     ValidationFinding,
@@ -1049,6 +1052,93 @@ def test_compact_quality_guide_is_structural_not_intent_routed(ra):
     assert "CLINICAL SCORE AND MISSINGNESS SEMANTICS:" not in guide
     assert "MECHANICAL PYTHON CONTRACT:" in guide
     assert "OUTPUT SERIALIZATION CONTRACT:" in guide
+
+
+def test_compact_adjusted_guide_preserves_model_authority_not_intent(ra):
+    requirement = PlannedModelRequirement(
+        requirement_id="primary_binary_model",
+        outcome="outcome",
+        outcome_type="binary",
+        method_family="logistic_regression",
+        exposure_source="declared_family_0_first",
+        analysis_role="primary",
+        analysis_set="complete_case",
+    )
+    step = ra.AnalysisStep(
+        step_id="adjusted",
+        intent="Human prose contains no model keywords.",
+        inputs=["declared_family_0_first", "outcome"],
+        expected_outputs=["table:adjusted_association_estimates"],
+        method="adjusted_association_models",
+        model_requirements=[requirement],
+    )
+
+    guide = compact_adjusted_model_coder_guide_for_step(
+        load_prompt_pack()["coder"],
+        step,
+    )
+
+    assert "For a regression step that explicitly requests" in guide
+    assert "Before fitting, audit every categorical predictor" in guide
+    assert "ADJUSTED-MODEL EXECUTION CONTRACT (compact):" in guide
+    assert "STATISTICS APIs:" not in guide
+    assert "Treat `COHORT_PARQUET`" not in guide
+    assert "PANDAS IDIOM GOTCHAS" not in guide
+    descriptive = step.model_copy(
+        update={
+            "method": "descriptive",
+            "expected_outputs": ["table:cohort_summary"],
+            "model_requirements": [],
+        }
+    )
+    assert compact_adjusted_model_coder_guide_for_step(
+        load_prompt_pack()["coder"], descriptive
+    ) == coder_guide_for_step(load_prompt_pack()["coder"], descriptive)
+
+
+def test_wide_adjusted_prompt_compacts_without_losing_authority(ra):
+    requirement = PlannedModelRequirement(
+        requirement_id="primary_binary_model",
+        outcome="outcome",
+        outcome_type="binary",
+        method_family="logistic_regression",
+        exposure_source="declared_family_0_first",
+        analysis_role="primary",
+        analysis_set="complete_case",
+    )
+    step = ra.AnalysisStep(
+        step_id="adjusted",
+        intent="Fit the Planner-declared adjusted association.",
+        inputs=[
+            "artifact:analysis_cohort",
+            "declared_family_0_first",
+            "declared_family_0_measured",
+            "declared_family_0_n",
+            "outcome",
+        ],
+        expected_outputs=["table:adjusted_association_estimates"],
+        method="adjusted_association_models",
+        model_requirements=[requirement],
+    )
+    authority_marker = "host-adjusted-authority:" + ("x" * 10_000)
+    llm = _CaptureLLM(["import os\nvalue = 1\n"])
+
+    CoderAgent(llm).run(
+        context=_wide_context(ra),
+        step=step,
+        host_authority=HostCoderAuthority.from_values([authority_marker]),
+    )
+
+    messages = llm.calls[0][0]
+    payload = "\n".join(str(message.content or "") for message in messages)
+    assert _payload_bytes(messages) <= 42_000
+    assert authority_marker in payload
+    assert str(step.inputs) in payload
+    assert requirement.requirement_id in payload
+    assert "ADJUSTED-MODEL EXECUTION CONTRACT (compact):" in payload
+    assert compact_initial_coder_guide_for_step(
+        load_prompt_pack()["coder"], step
+    ) in payload
 
 
 def test_initial_prompt_compacts_non_consumed_source_concept_companions(ra):
