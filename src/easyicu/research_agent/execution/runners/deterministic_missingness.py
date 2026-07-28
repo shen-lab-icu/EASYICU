@@ -55,6 +55,7 @@ __all__ = [
     "missingness_audit_cohort_input_key",
     "missingness_audit_executor_owns_step",
     "missingness_audit_input_scope_supported",
+    "is_measurement_bias_audit_contract",
     "missingness_measurement_audit_code",
     "source_availability_audit_executor_owns_step",
 ]
@@ -85,6 +86,29 @@ _MISSINGNESS_COMPLETE_CASE_METHOD_TOKENS = frozenset(
 )
 _COMPACT_MISSINGNESS_MEASUREMENT_TOKENS = frozenset(
     {"audit", "measurement", "missingness"}
+)
+# The enriched three-product shape a replanner produces when it asks for the
+# observation process and component completeness as well as plain missingness.
+# Enriching a step's science must not cost it its deterministic owner.
+_MEASUREMENT_BIAS_METHOD_TOKENS = frozenset(
+    {
+        "and",
+        "audit",
+        "bias",
+        "completeness",
+        "component",
+        "event",
+        "exposure",
+        "measurement",
+        "missingness",
+        "process",
+        "timing",
+    }
+)
+_MEASUREMENT_BIAS_PRODUCT_TOKEN_SETS = (
+    frozenset({"missingness", "measurement", "audit"}),
+    frozenset({"measurement", "process", "audit"}),
+    frozenset({"exposure", "component", "completeness", "audit"}),
 )
 
 
@@ -173,6 +197,45 @@ def is_compact_missingness_measurement_contract(
     )
 
 
+def is_measurement_bias_audit_contract(
+    method: object,
+    expected_outputs: Sequence[object],
+) -> bool:
+    """Classify the enriched three-product measurement-bias audit contract.
+
+    A replanner that adds the observation-process and component-completeness
+    products is asking for more science, not different science; the counts are
+    still pure per-concept accounting.  Ownership is still exact: three typed
+    tables whose structured product names carry these three token sets, and a
+    method drawn only from the closed audit vocabulary.  Anything else fails
+    closed rather than letting this count-only runner swallow a model or test.
+    """
+
+    method_tokens = _contract_tokens(method)
+    if not (
+        method_tokens
+        and method_tokens <= _MEASUREMENT_BIAS_METHOD_TOKENS
+        and "audit" in method_tokens
+        and ("bias" in method_tokens or "process" in method_tokens)
+    ):
+        return False
+    outputs = [str(value or "").strip().casefold() for value in expected_outputs]
+    if len(outputs) != len(_MEASUREMENT_BIAS_PRODUCT_TOKEN_SETS):
+        return False
+    if len(set(outputs)) != len(outputs):
+        return False
+    if any(not value.startswith("table:") for value in outputs):
+        return False
+    observed = [_contract_tokens(value.split(":", 1)[1]) for value in outputs]
+    remaining = list(observed)
+    for required in _MEASUREMENT_BIAS_PRODUCT_TOKEN_SETS:
+        match = next((tokens for tokens in remaining if tokens == required), None)
+        if match is None:
+            return False
+        remaining.remove(match)
+    return not remaining
+
+
 def _cohort_input_scope(step: AnalysisStep) -> tuple[bool, str | None]:
     """Resolve an optional single typed row-membership authority."""
 
@@ -218,6 +281,9 @@ def missingness_audit_executor_owns_step(step: AnalysisStep) -> bool:
         step.method,
         step.expected_outputs,
     ) or is_compact_missingness_measurement_contract(
+        step.method,
+        step.expected_outputs,
+    ) or is_measurement_bias_audit_contract(
         step.method,
         step.expected_outputs,
     )
@@ -461,9 +527,14 @@ def missingness_measurement_audit_code(
         requested_inputs = []
         requested_outputs = []
         observation_semantics_by_column = {}
+        declared_primary_exposure = ""
         context_path = run_dir / "research_context.json"
         if context_path.is_file():
             ctx = json.loads(context_path.read_text("utf-8"))
+            # The host declares the exposure; this runner never guesses one from
+            # a column name.  It is used only to stratify completeness counts,
+            # never to select rows, define a group, or estimate anything.
+            declared_primary_exposure = str(ctx.get("primary_exposure") or "").strip()
             for variable in ctx.get("variables") or []:
                 if not isinstance(variable, dict):
                     continue
@@ -965,6 +1036,180 @@ def missingness_measurement_audit_code(
             out_dir / "measurement_availability_audit.csv", index=False
         )
 
+        # --- measurement process: how OFTEN, and when ---------------------------
+        # Distinct from the missingness table, which answers "was it measured at
+        # all".  This one carries the observation-process facts the ICU rules ask
+        # for: repeat-measurement counts, conditional applicability, and event
+        # times recorded before the origin.
+        process_rows = []
+        for record in rows:
+            base = record["concept"]
+            count_candidate = base + "_n"
+            count_col = (
+                count_candidate
+                if count_candidate in df.columns
+                else low.get(count_candidate.lower())
+            )
+            counts = (
+                pd.to_numeric(df[count_col], errors="coerce")
+                if count_col is not None
+                else pd.Series(dtype=float)
+            )
+            positive = counts[counts > 0] if len(counts) else counts
+            process_rows.append(
+                {
+                    "concept": base,
+                    "variable": record["variable"],
+                    "value_column": record["value_column"],
+                    "measurement_count_column": count_col or "",
+                    "n_total": n_total,
+                    "measured_one_n": record["measured_one_n"],
+                    "measurement_total_n": (
+                        int(counts.fillna(0).sum()) if len(counts) else 0
+                    ),
+                    "measurement_count_median_when_measured": (
+                        float(positive.median()) if len(positive) else float("nan")
+                    ),
+                    "measurement_count_max": (
+                        int(counts.max()) if len(counts) and counts.notna().any() else 0
+                    ),
+                    "repeat_measured_n": (
+                        int((counts > 1).sum()) if len(counts) else 0
+                    ),
+                    "eligible_n": record["eligible_n"],
+                    "not_applicable_n": record["not_applicable_n"],
+                    "event_present_n": record["event_present_n"],
+                    "event_absent_n": record["event_absent_n"],
+                    "before_origin_n": record["before_origin_n"],
+                    "indicator_semantics": record["indicator_semantics"],
+                    "missingness_kind": record["missingness_kind"],
+                }
+            )
+        measurement_process_audit = pd.DataFrame(process_rows)
+        measurement_process_audit.to_csv(
+            out_dir / "measurement_process_audit.csv", index=False
+        )
+
+        # --- component completeness, stratified by the declared exposure --------
+        # Differential completeness between exposure strata is the mechanism by
+        # which a derived exposure can look associated with an outcome purely
+        # because sicker patients are measured more.  Counting it is
+        # deterministic; interpreting it is not, and this runner does not.
+        exposure_column = None
+        exposure_levels = []
+        exposure_note = "no primary exposure declared in the research context"
+        if declared_primary_exposure:
+            exposure_column = (
+                declared_primary_exposure
+                if declared_primary_exposure in df.columns
+                else low.get(declared_primary_exposure.lower())
+            )
+            if exposure_column is None:
+                exposure_note = (
+                    "declared primary exposure %r is not a cohort column"
+                    % declared_primary_exposure
+                )
+            else:
+                observed = df[exposure_column].dropna().unique().tolist()
+                if len(observed) > 10:
+                    exposure_column = None
+                    exposure_note = (
+                        "declared primary exposure has %d levels; completeness is "
+                        "reported unstratified" % len(observed)
+                    )
+                else:
+                    exposure_levels = sorted(observed, key=lambda value: str(value))
+                    exposure_note = "stratified by the declared primary exposure"
+
+        completeness_rows = []
+        for record in rows:
+            base = record["concept"]
+            value_col = record["value_column"] or None
+            mask = (
+                semantic_complete_masks.get(value_col)
+                if value_col is not None
+                else None
+            )
+            if mask is None:
+                flag_col = base + "_measured"
+                resolved_flag = (
+                    flag_col if flag_col in df.columns else low.get(flag_col.lower())
+                )
+                mask = (
+                    pd.to_numeric(df[resolved_flag], errors="coerce").eq(1)
+                    if resolved_flag is not None
+                    else pd.Series(False, index=df.index)
+                )
+            # Semantic completeness and the raw indicator are BOTH reported.
+            # For an event concept the declared ICU rule makes an absent row a
+            # complete negative observation, so semantic completeness is 100 %
+            # in every stratum — which is exactly where a differential
+            # observation process would hide.  The raw indicator rate is what
+            # lets a reader judge whether that rule is safe here.
+            raw_flag_col = base + "_measured"
+            resolved_raw_flag = (
+                raw_flag_col
+                if raw_flag_col in df.columns
+                else low.get(raw_flag_col.lower())
+            )
+            raw_mask = (
+                pd.to_numeric(df[resolved_raw_flag], errors="coerce").eq(1)
+                if resolved_raw_flag is not None
+                else pd.Series(False, index=df.index)
+            )
+            strata = [("__all__", pd.Series(True, index=df.index))]
+            if exposure_column is not None:
+                strata.extend(
+                    (str(level), df[exposure_column].eq(level))
+                    for level in exposure_levels
+                )
+            for label, selector in strata:
+                stratum_n = int(selector.sum())
+                measured_n = int((mask & selector).sum())
+                raw_indicator_n = int((raw_mask & selector).sum())
+                completeness_rows.append(
+                    {
+                        "concept": base,
+                        "variable": record["variable"],
+                        "value_column": record["value_column"],
+                        "exposure_variable": exposure_column or "",
+                        "exposure_category": label,
+                        "n_stratum": stratum_n,
+                        "measured_n": measured_n,
+                        "measured_pct": (
+                            round(100.0 * measured_n / stratum_n, 6)
+                            if stratum_n
+                            else float("nan")
+                        ),
+                        "value_missing_n": stratum_n - measured_n,
+                        "value_missing_pct": (
+                            round(100.0 * (stratum_n - measured_n) / stratum_n, 6)
+                            if stratum_n
+                            else float("nan")
+                        ),
+                        # Empty, not zero, when the concept carries no
+                        # ``_measured`` indicator at all: a 0 there reads as
+                        # "never measured" when it means "not applicable".
+                        "raw_indicator_one_n": (
+                            raw_indicator_n
+                            if resolved_raw_flag is not None
+                            else float("nan")
+                        ),
+                        "raw_indicator_one_pct": (
+                            round(100.0 * raw_indicator_n / stratum_n, 6)
+                            if resolved_raw_flag is not None and stratum_n
+                            else float("nan")
+                        ),
+                        "has_measured_indicator": bool(resolved_raw_flag is not None),
+                        "indicator_semantics": record["indicator_semantics"],
+                        "missingness_kind": record["missingness_kind"],
+                    }
+                )
+        exposure_component_completeness_audit = pd.DataFrame(completeness_rows)
+        exposure_component_completeness_audit.to_csv(
+            out_dir / "exposure_component_completeness_audit.csv", index=False
+        )
+
         # --- declared analytic denominators ----------------------------------
         resolved_inputs = []
         missing_declared_inputs = []
@@ -1070,7 +1315,14 @@ def missingness_measurement_audit_code(
             "missingness_profile": "missingness_audit.csv",
             "missingness_measurement_audit": "missingness_measurement_audit.csv",
             "measurement_audit": "missingness_measurement_audit.csv",
-            "measurement_process_audit": "missingness_measurement_audit.csv",
+            # Its own table, not an alias of the missingness one: "was it ever
+            # measured" and "how often, and when" are different questions, and
+            # two declared products resolving to one file satisfies a contract
+            # without satisfying a reader.
+            "measurement_process_audit": "measurement_process_audit.csv",
+            "exposure_component_completeness_audit": (
+                "exposure_component_completeness_audit.csv"
+            ),
             "measurement_source_audit": "measurement_source_audit.csv",
             "measurement_availability": "measurement_availability.csv",
             "measurement_availability_audit": "measurement_availability_audit.csv",
@@ -1101,6 +1353,13 @@ def missingness_measurement_audit_code(
             "cohort_input_key": typed_cohort_input or "COHORT_PARQUET",
             "n_total": n_total,
             "n_concepts_audited": int(len(audit)),
+            "exposure_component_completeness": {
+                "exposure_variable": exposure_column or "",
+                "exposure_categories": [str(level) for level in exposure_levels],
+                "stratified": bool(exposure_column is not None),
+                "note": exposure_note,
+                "n_rows": int(len(exposure_component_completeness_audit)),
+            },
             "n_structural_no_source": n_structural,
             "n_binary_event_status": n_binary_event_status,
             "all_requested_inputs_complete_n": complete_n,

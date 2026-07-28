@@ -45,6 +45,7 @@ def _candidate_predicates(
     from .cohort_summary_executor import cohort_summary_executor_owns_step
     from .deterministic_missingness import (
         is_compact_missingness_measurement_contract,
+        is_measurement_bias_audit_contract,
         is_missingness_complete_case_contract,
         is_missingness_measurement_availability_contract,
         missingness_audit_executor_owns_step,
@@ -122,6 +123,13 @@ def _candidate_predicates(
             "detail",
             "missingness_audit:compact_contract",
             lambda step: is_compact_missingness_measurement_contract(
+                step.method, step.expected_outputs
+            ),
+        ),
+        (
+            "detail",
+            "missingness_audit:measurement_bias_contract",
+            lambda step: is_measurement_bias_audit_contract(
                 step.method, step.expected_outputs
             ),
         ),

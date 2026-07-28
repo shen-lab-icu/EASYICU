@@ -13,6 +13,7 @@ from .cohort_summary_executor import (
 )
 from .deterministic_missingness import (
     is_compact_missingness_measurement_contract,
+    is_measurement_bias_audit_contract,
     missingness_audit_cohort_input_key,
     missingness_audit_executor_owns_step,
     missingness_measurement_audit_code,
@@ -180,24 +181,36 @@ def select_standard_executor(
             step.method,
             step.expected_outputs,
         )
+        measurement_bias = is_measurement_bias_audit_contract(
+            step.method,
+            step.expected_outputs,
+        )
         typed_cohort_input = missingness_audit_cohort_input_key(step)
         return StandardExecutorSelection(
             analysis_kind=(
                 "missingness_source_availability_audit"
                 if source_availability
                 else (
-                    "missingness_measurement_audit"
-                    if compact_measurement
-                    else "missingness_complete_case_audit"
+                    "measurement_bias_audit"
+                    if measurement_bias
+                    else (
+                        "missingness_measurement_audit"
+                        if compact_measurement
+                        else "missingness_complete_case_audit"
+                    )
                 )
             ),
             selection_reason=(
                 "missingness_source_availability_contract_preflight"
                 if source_availability
                 else (
-                    "missingness_measurement_contract_preflight"
-                    if compact_measurement
-                    else "missingness_complete_case_contract_preflight"
+                    "measurement_bias_contract_preflight"
+                    if measurement_bias
+                    else (
+                        "missingness_measurement_contract_preflight"
+                        if compact_measurement
+                        else "missingness_complete_case_contract_preflight"
+                    )
                 )
             ),
             progress_message="Using planner-specified missingness audit executor",
