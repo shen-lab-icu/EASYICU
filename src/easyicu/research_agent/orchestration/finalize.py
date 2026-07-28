@@ -843,6 +843,9 @@ def finalise_success(
         encoding="utf-8",
     )
 
+    # Flush first so the in-memory append-only attempt ledger includes the
+    # final current snapshots before both durable manifests are serialized.
+    execute_result.flush_partial_manifest()
     manifest = AnalysisManifest(
         run_id=run_id,
         research_question=context.research_question,
@@ -853,6 +856,7 @@ def finalise_success(
         evidence=evidence.records(),
         findings=findings,
         per_step_records=per_step_records,
+        step_attempt_history=list(execute_result.step_attempt_history),
         cost_records=cost_records_for_manifest,
         reproducibility=reproducibility_summary,
         provider_authorization=provider_authorization_manifest(pipeline._llm),
@@ -907,7 +911,6 @@ def finalise_success(
         notes=manifest_notes,
     )
     manifest_path = run_dir / "manifest.json"
-    execute_result.flush_partial_manifest()
     write_run_checkpoint(manifest_path, manifest.model_dump(mode="json"))
 
     if pipeline._memory is not None:
