@@ -165,6 +165,9 @@ def test_the_error_names_the_consumer_not_only_the_role() -> None:
         (78_401, 20_804, "analyzer", "analyzer_interpretation"),
         (66_119, 17_088, "planner", "cohort_extraction"),
         (53_393, 13_988, "analyzer", "vlm_visual_qa"),
+        # Fresh E1 2026-07-28: the retired 42 KB Coder-local ceiling rejected
+        # this ordinary step before transport despite the unified token budget.
+        (52_302, 14_000, "coder", "coder_initial_generation"),
     ],
 )
 def test_real_observed_prompts_are_not_refused(
@@ -574,6 +577,10 @@ def test_the_live_analyzer_consumers_are_all_declared() -> None:
         "concept_audit",
         "vlm_visual_qa",
     }
+
+
+def test_the_live_coder_consumer_is_declared() -> None:
+    assert set(declared_consumers_for_role("coder")) == {"coder_initial_generation"}
 
 
 def test_every_budget_declares_a_rationale() -> None:

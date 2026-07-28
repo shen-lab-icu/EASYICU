@@ -2004,7 +2004,6 @@ _MAX_PRE_EXEC_COMPATIBILITY_REPAIRS = 2
 # 8192 roughly doubles the headroom. If truncation recurs at this cap, add a
 # finish_reason=="length" continuation rather than raising it blindly.
 _CODER_MAX_TOKENS = 8192
-_CODER_INITIAL_PROMPT_BYTE_LIMIT = 42_000
 _CODER_INITIAL_PROMPT_TARGET_BYTES = 38_000
 _CODER_PATCH_PROMPT_BYTE_LIMIT = 30_000
 _CODER_REWRITE_PROMPT_BYTE_LIMIT = 65_000
@@ -2549,11 +2548,6 @@ class CoderAgent:
                 ),
                 LLMMessage(role="user", content=user_content),
             ]
-        _enforce_coder_prompt_budget(
-            messages,
-            mode="initial_generation",
-            limit_bytes=_CODER_INITIAL_PROMPT_BYTE_LIMIT,
-        )
         initial_transport_id: Optional[str] = None
         if provider_budget is not None and initial_generation_binding is not None:
             initial_transport_id = provider_budget.reserve_initial_generation(

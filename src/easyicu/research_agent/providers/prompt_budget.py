@@ -167,6 +167,14 @@ PROMPT_TRANSPORT_BUDGETS: Mapping[str, PromptConsumerBudget] = {
             rationale="Cohort definition extraction.",
         ),
         PromptConsumerBudget(
+            consumer="coder_initial_generation",
+            role="coder",
+            rationale=(
+                "Initial analysis-script generation after step-scoped context "
+                "and host authority are assembled."
+            ),
+        ),
+        PromptConsumerBudget(
             consumer="legacy_model_roster_migration",
             role="planner",
             rationale=(

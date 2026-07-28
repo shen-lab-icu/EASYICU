@@ -3996,7 +3996,12 @@ def run_execute_phase(
         plan_result.resume_state = resume_revalidation.resume_state
         resume_controller.resume_state = resume_revalidation.resume_state
 
-    coder_llm_client = role_resolver("coder")
+    coder_llm_client = budgeted_role_client(
+        role_resolver,
+        "coder",
+        "coder_initial_generation",
+        limit_tokens=pipeline._max_prompt_tokens_per_call,
+    )
     fallback_coder_provider_identity_sha256 = canonical_sha256(
         pipeline._llm_signature(coder_llm_client)
     )
