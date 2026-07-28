@@ -27,6 +27,11 @@ from .prevalence_outcome_figure_executor import (
     prevalence_outcome_figure_executor_code,
     prevalence_outcome_figure_executor_owns_step,
 )
+from .prevalence_mortality_figure_executor import (
+    PREVALENCE_MORTALITY_FIGURE_INPUTS,
+    prevalence_mortality_figure_executor_code,
+    prevalence_mortality_figure_executor_owns_step,
+)
 from .table_one_executor import table_one_executor_code, table_one_executor_owns_step
 from .trajectory_stability_executor import (
     STABILITY_EXECUTOR_INPUTS,
@@ -88,6 +93,18 @@ def select_standard_executor(
             progress_message="Using planner-scoped prevalence/outcome figure executor",
             code=prevalence_outcome_figure_executor_code(step),
             consumed_input_keys=(PREVALENCE_OUTCOME_FIGURE_INPUT,),
+        )
+    if prevalence_mortality_figure_executor_owns_step(step):
+        if receipt_required:
+            return None
+        return StandardExecutorSelection(
+            analysis_kind="prevalence_mortality_figure",
+            selection_reason="prevalence_mortality_figure_contract_preflight",
+            progress_message=(
+                "Using planner-scoped prevalence/mortality figure executor"
+            ),
+            code=prevalence_mortality_figure_executor_code(step),
+            consumed_input_keys=PREVALENCE_MORTALITY_FIGURE_INPUTS,
         )
     if missingness_measurement_figure_executor_owns_step(step):
         if receipt_required:
