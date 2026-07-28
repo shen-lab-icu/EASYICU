@@ -1385,6 +1385,16 @@ def _run_one_arm(
     # trajectory-item applicability by kind (cross-sectional clustering vs
     # longitudinal) instead of fragile manuscript wording (M3 false-open).
     opts.setdefault("task_kind", getattr(item, "kind", None))
+    scientific_contract = getattr(item, "scientific_acceptance_contract", None)
+    if isinstance(scientific_contract, Mapping):
+        required_cohort_mode = str(
+            scientific_contract.get("primary_cohort_selection_mode") or ""
+        ).strip()
+        if required_cohort_mode:
+            opts.setdefault(
+                "required_primary_cohort_selection_mode",
+                required_cohort_mode,
+            )
     pipeline = ResearchAgentPipeline(
         workdir=workdir,
         llm=llm,

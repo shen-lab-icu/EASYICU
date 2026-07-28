@@ -67,7 +67,17 @@ def _accepted_run(tmp_path: Path) -> Path:
     run_dir.mkdir(parents=True)
     contract = e1_scientific_acceptance_contract()
     (run_dir / "analysis_plan.json").write_text(
-        json.dumps({"display_labels": contract["required_display_labels"]}),
+        json.dumps(
+            {
+                "display_labels": contract["required_display_labels"],
+                "cohort": {
+                    "name": "primary",
+                    "selection_mode": "all_input_rows",
+                    "inclusion": [],
+                    "exclusion": [],
+                },
+            }
+        ),
         encoding="utf-8",
     )
     evidence: list[dict[str, object]] = []
@@ -80,6 +90,7 @@ def _accepted_run(tmp_path: Path) -> Path:
             "icu_readmission": [0, 0, 1, 0, 1],
         }
     )
+    cohort.to_parquet(run_dir / "cohort.parquet", index=False)
     _write_summary(
         run_dir,
         step_id="01_cohort",
@@ -318,6 +329,55 @@ def test_e1_scientific_acceptance_rejects_wrong_landmark_denominator(
     codes = _reason_codes(receipt)
     assert "e1_artifact_not_registered" in codes
     assert "e1_sensitivity_denominator_mismatch" in codes
+
+
+def test_e1_scientific_acceptance_rejects_filtered_primary_population(
+    tmp_path: Path,
+) -> None:
+    run_dir = _accepted_run(tmp_path)
+    plan_path = run_dir / "analysis_plan.json"
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    plan["cohort"]["selection_mode"] = "predicate_filtered"
+    plan_path.write_text(json.dumps(plan), encoding="utf-8")
+
+    receipt = evaluate_e1_scientific_acceptance(
+        run_dir=run_dir,
+        contract=e1_scientific_acceptance_contract(),
+    )
+
+    assert "e1_primary_cohort_selection_mode_mismatch" in _reason_codes(receipt)
+
+
+def test_e1_scientific_acceptance_rejects_changed_primary_denominator(
+    tmp_path: Path,
+) -> None:
+    run_dir = _accepted_run(tmp_path)
+    source = pd.read_parquet(run_dir / "cohort.parquet")
+    source.loc[len(source)] = [6, 0, None, 0]
+    source.to_parquet(run_dir / "cohort.parquet", index=False)
+
+    receipt = evaluate_e1_scientific_acceptance(
+        run_dir=run_dir,
+        contract=e1_scientific_acceptance_contract(),
+    )
+
+    assert "e1_primary_denominator_changed" in _reason_codes(receipt)
+
+
+def test_e1_scientific_acceptance_rejects_same_size_changed_stay_population(
+    tmp_path: Path,
+) -> None:
+    run_dir = _accepted_run(tmp_path)
+    source = pd.read_parquet(run_dir / "cohort.parquet")
+    source.loc[0, "stay_id"] = 999
+    source.to_parquet(run_dir / "cohort.parquet", index=False)
+
+    receipt = evaluate_e1_scientific_acceptance(
+        run_dir=run_dir,
+        contract=e1_scientific_acceptance_contract(),
+    )
+
+    assert "e1_primary_denominator_changed" in _reason_codes(receipt)
 
 
 def test_e1_scientific_acceptance_receipt_is_written_beside_run(

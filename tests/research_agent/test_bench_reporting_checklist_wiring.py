@@ -29,7 +29,13 @@ def _item(kind: str):
     )
 
 
-def _run_and_capture(monkeypatch, tmp_path, kind: str):
+def _run_and_capture(
+    monkeypatch,
+    tmp_path,
+    kind: str,
+    *,
+    scientific_contract: dict[str, object] | None = None,
+):
     import easyicu.research_agent as rapkg
     import tools.run_research_agent_bench as bench
 
@@ -47,8 +53,10 @@ def _run_and_capture(monkeypatch, tmp_path, kind: str):
     # Avoid the heavy scorecard read; we only care about construction kwargs.
     monkeypatch.setattr(bench, "_score_arm", lambda **k: {})
 
+    item = _item(kind)
+    item.scientific_acceptance_contract = scientific_contract
     bench._run_one_arm(
-        item=_item(kind),
+        item=item,
         cohort=SimpleNamespace(columns=["age", "death", "hr_first"]),
         workdir=tmp_path,
         disable_icu_context=True,
@@ -71,6 +79,17 @@ def test_clustering_kind_forces_internal_phenotype_checklist(monkeypatch, tmp_pa
 def test_association_kind_forces_strobe(monkeypatch, tmp_path):
     captured = _run_and_capture(monkeypatch, tmp_path, "descriptive_association")
     assert captured.get("reporting_checklist_names") == ["strobe"]
+
+
+def test_scientific_contract_binds_primary_cohort_mode(monkeypatch, tmp_path):
+    captured = _run_and_capture(
+        monkeypatch,
+        tmp_path,
+        "descriptive_association",
+        scientific_contract={"primary_cohort_selection_mode": "all_input_rows"},
+    )
+
+    assert captured["required_primary_cohort_selection_mode"] == "all_input_rows"
 
 
 def test_explicit_pipeline_option_overrides_kind_default(monkeypatch, tmp_path):

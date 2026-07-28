@@ -122,6 +122,12 @@ CANONICAL9_MIMIC_IV_PLAN: tuple[Canonical9MaterializationSpec, ...] = (
                 "Use clinical display labels such as Sepsis-3 absent/present, "
                 "never Category 0/1."
             ),
+            (
+                "Set AnalysisPlan.cohort.selection_mode to all_input_rows with "
+                "empty inclusion and exclusion predicates for the primary E1 "
+                "population; completeness, timing, and readmission restrictions "
+                "belong only in explicit sensitivity estimands."
+            ),
             display_label_instruction(),
         ),
         task_protocol_version=(

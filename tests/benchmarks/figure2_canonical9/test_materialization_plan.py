@@ -131,6 +131,13 @@ def test_e1_materialized_item_receives_only_its_case_protocol_overlay(tmp_path):
     assert any(
         "functional-form sensitivity" in item for item in e1_row["expected_outputs"]
     )
+    assert e1_row["scientific_acceptance_contract"][
+        "primary_cohort_selection_mode"
+    ] == "all_input_rows"
+    assert any(
+        "cohort.selection_mode to all_input_rows" in item
+        for item in e1_row["semantic_guardrails"]
+    )
     assert e2_row["protocol_version"] == "easyicu_evaluation_protocol_suite/v2"
     assert not any(
         "24-hour landmark" in item for item in e2_row["semantic_guardrails"]
