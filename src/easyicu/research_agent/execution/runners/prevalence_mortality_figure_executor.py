@@ -30,6 +30,7 @@ from ...schema import AnalysisStep
 
 __all__ = [
     "PREVALENCE_MORTALITY_FIGURE_INPUTS",
+    "binary_level_labels",
     "prevalence_mortality_figure_executor_code",
     "prevalence_mortality_figure_executor_owns_step",
     "run_prevalence_mortality_figure",
@@ -89,7 +90,33 @@ def prevalence_mortality_figure_executor_owns_step(step: AnalysisStep) -> bool:
     )
 
 
-def prevalence_mortality_figure_executor_code(step: AnalysisStep) -> str:
+def binary_level_labels(
+    display_labels: Mapping[str, str] | None,
+) -> tuple[str, str]:
+    """Resolve one unambiguous Planner-owned ``column=0/1`` label pair."""
+
+    pairs: dict[str, dict[int, str]] = {}
+    for raw_key, raw_label in (display_labels or {}).items():
+        match = re.fullmatch(r"\s*(.+?)\s*=\s*([01])\s*", str(raw_key))
+        label = " ".join(str(raw_label or "").split())
+        if match is None or not label:
+            continue
+        pairs.setdefault(match.group(1).strip(), {})[int(match.group(2))] = label
+    complete = [
+        (levels[0], levels[1])
+        for levels in pairs.values()
+        if set(levels) == {0, 1} and levels[0] != levels[1]
+    ]
+    if len(complete) == 1:
+        return complete[0]
+    return ("Level 0", "Level 1")
+
+
+def prevalence_mortality_figure_executor_code(
+    step: AnalysisStep,
+    *,
+    display_labels: Mapping[str, str] | None = None,
+) -> str:
     """Return the small sandbox entrypoint for the exact declared figure."""
 
     if not prevalence_mortality_figure_executor_owns_step(step):
@@ -107,6 +134,7 @@ def prevalence_mortality_figure_executor_code(step: AnalysisStep) -> str:
             run_dir=Path(os.environ["EASYICU_RUN_DIR"]),
             resolved_inputs=Path(os.environ["EASYICU_RESOLVED_INPUTS_JSON"]),
             step_id={step.step_id!r},
+            category_labels={binary_level_labels(display_labels)!r},
         )
         """).strip()
 
@@ -324,8 +352,17 @@ def run_prevalence_mortality_figure(
     run_dir: Path,
     resolved_inputs: Path | Mapping[str, Any],
     step_id: str,
+    category_labels: tuple[str, str] = ("Level 0", "Level 1"),
 ) -> Mapping[str, Any]:
     """Render the verified table pair and write a source-backed figure bundle."""
+
+    if (
+        len(category_labels) != 2
+        or any(not str(label or "").strip() for label in category_labels)
+        or str(category_labels[0]).strip() == str(category_labels[1]).strip()
+    ):
+        raise ValueError("category_labels must contain two distinct non-empty labels")
+    category_labels = tuple(str(label).strip() for label in category_labels)
 
     payload = (
         dict(resolved_inputs)
@@ -361,8 +398,24 @@ def run_prevalence_mortality_figure(
     out_dir.mkdir(parents=True, exist_ok=True)
     cohort_source = out_dir / f"{_FIGURE_PRODUCT}_cohort_summary_source_data.csv"
     outcome_source = out_dir / f"{_FIGURE_PRODUCT}_outcome_incidence_source_data.csv"
-    cohort.to_csv(cohort_source, index=False)
-    outcome.to_csv(outcome_source, index=False)
+    cohort_source_frame = cohort.copy()
+    cohort_source_frame["display_label"] = cohort_source_frame[
+        "exposure_level"
+    ].map({0.0: category_labels[0], 1.0: category_labels[1]})
+    outcome_source_frame = outcome.copy()
+    outcome_source_frame["display_label"] = outcome_source_frame[
+        "exposure_level"
+    ].astype(str).map(
+        {
+            "0": category_labels[0],
+            "0.0": category_labels[0],
+            "1": category_labels[1],
+            "1.0": category_labels[1],
+            "overall": "Overall",
+        }
+    )
+    cohort_source_frame.to_csv(cohort_source, index=False)
+    outcome_source_frame.to_csv(outcome_source, index=False)
 
     import matplotlib
 
@@ -386,7 +439,7 @@ def run_prevalence_mortality_figure(
         height=0.58,
     )
     ax_a.set_yticks(positions)
-    ax_a.set_yticklabels(["Category 0", "Category 1"])
+    ax_a.set_yticklabels(category_labels)
     ax_a.invert_yaxis()
     ax_a.set_xlim(0, 100)
     ax_a.set_xlabel("Analysis cohort (%)")
@@ -424,7 +477,7 @@ def run_prevalence_mortality_figure(
         markersize=4.2,
     )
     ax_b.set_yticks(positions)
-    ax_b.set_yticklabels(["Category 0", "Category 1"])
+    ax_b.set_yticklabels(category_labels)
     ax_b.invert_yaxis()
     upper = min(100.0, max(5.0, float(mortality_high.max()) * 1.35))
     ax_b.set_xlim(0, upper)
@@ -529,6 +582,7 @@ def run_prevalence_mortality_figure(
             outcome_binding.get("sha256"),
         ],
         "source_rows_consumed": int(len(cohort) + len(outcome)),
+        "category_labels": list(category_labels),
         "locked_denominator": locked_n,
         "source_data_files": [cohort_source.name, outcome_source.name],
         "figure_files": figure_files,

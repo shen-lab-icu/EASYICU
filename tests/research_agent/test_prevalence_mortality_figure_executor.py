@@ -9,6 +9,7 @@ import pytest
 
 from easyicu.research_agent.execution.runners.prevalence_mortality_figure_executor import (
     PREVALENCE_MORTALITY_FIGURE_INPUTS,
+    binary_level_labels,
     prevalence_mortality_figure_executor_owns_step,
     run_prevalence_mortality_figure,
 )
@@ -178,6 +179,33 @@ def test_exact_two_table_contract_selects_standard_executor() -> None:
     assert selection.analysis_kind == "prevalence_mortality_figure"
     assert selection.consumed_input_keys == PREVALENCE_MORTALITY_FIGURE_INPUTS
     assert "run_prevalence_mortality_figure" in selection.code
+    assert "category_labels=('Level 0', 'Level 1')" in selection.code
+
+
+def test_planner_owned_binary_level_labels_are_compiled_into_renderer() -> None:
+    step = _step()
+    labels = {
+        "sep3_sofa2_max=0": "Sepsis-3 absent",
+        "sep3_sofa2_max=1": "Sepsis-3 present",
+    }
+
+    selection = select_standard_executor(
+        step,
+        plan=AnalysisPlan(
+            research_question="Test",
+            steps=[step],
+            display_labels=labels,
+        ),
+    )
+
+    assert binary_level_labels(labels) == (
+        "Sepsis-3 absent",
+        "Sepsis-3 present",
+    )
+    assert selection is not None
+    assert "category_labels=('Sepsis-3 absent', 'Sepsis-3 present')" in (
+        selection.code
+    )
 
 
 def test_owner_rejects_reordered_or_widened_contract() -> None:
@@ -208,6 +236,7 @@ def test_runner_renders_reconciled_source_backed_bundle(tmp_path: Path) -> None:
         run_dir=run_dir,
         resolved_inputs=manifest,
         step_id=_step().step_id,
+        category_labels=("Sepsis-3 absent", "Sepsis-3 present"),
     )
 
     assert summary["status"] == "ok"
@@ -217,12 +246,29 @@ def test_runner_renders_reconciled_source_backed_bundle(tmp_path: Path) -> None:
     for suffix in ("png", "svg", "pdf", "tiff"):
         assert (out_dir / f"prevalence_mortality.{suffix}").is_file()
     assert (out_dir / "prevalence_mortality.figure_contract.json").is_file()
-    assert pd.read_csv(
+    cohort_source = pd.read_csv(
         out_dir / "prevalence_mortality_cohort_summary_source_data.csv"
-    ).equals(_cohort_summary())
-    assert pd.read_csv(
+    )
+    outcome_source = pd.read_csv(
         out_dir / "prevalence_mortality_outcome_incidence_source_data.csv"
-    ).equals(_outcome_incidence())
+    )
+    assert cohort_source.drop(columns=["display_label"]).equals(_cohort_summary())
+    assert outcome_source.drop(columns=["display_label"]).equals(
+        _outcome_incidence()
+    )
+    assert cohort_source.loc[
+        cohort_source["exposure_level"].eq(1.0),
+        "display_label",
+    ].tolist() == ["Sepsis-3 present"]
+    assert outcome_source["display_label"].tolist() == [
+        "Overall",
+        "Sepsis-3 absent",
+        "Sepsis-3 present",
+    ]
+    assert summary["category_labels"] == [
+        "Sepsis-3 absent",
+        "Sepsis-3 present",
+    ]
 
 
 def test_runner_rejects_cross_table_count_mismatch(tmp_path: Path) -> None:
