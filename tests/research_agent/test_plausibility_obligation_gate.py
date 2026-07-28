@@ -280,6 +280,32 @@ def test_each_called_scope_column_can_share_one_generic_validator() -> None:
     assert _reasons_for_columns(both, "marker", "second_marker") == set()
 
 
+def test_named_explicit_column_loop_can_share_one_generic_validator() -> None:
+    """The real E1 shape binds the closed host-expected list before looping."""
+
+    looped = DECLARED.replace(
+        'validate_allowed_numeric(frame["marker"], "marker", manifest)',
+        'PLAUSIBILITY_COLUMNS = ["marker", "second_marker"]\n'
+        "for column in PLAUSIBILITY_COLUMNS:\n"
+        "    validate_allowed_numeric(frame[column], column, manifest)",
+    )
+
+    assert _reasons_for_columns(looped, "marker", "second_marker") == set()
+
+
+def test_named_column_loop_cannot_certify_an_omitted_scope_column() -> None:
+    looped = DECLARED.replace(
+        'validate_allowed_numeric(frame["marker"], "marker", manifest)',
+        'PLAUSIBILITY_COLUMNS = ["marker"]\n'
+        "for column in PLAUSIBILITY_COLUMNS:\n"
+        "    validate_allowed_numeric(frame[column], column, manifest)",
+    )
+
+    assert _reasons_for_columns(looped, "marker", "second_marker") == {
+        "plausibility_scope_column_not_attributable"
+    }
+
+
 def test_module_loop_over_sealed_contracts_covers_each_runtime_column() -> None:
     direct_loop = (
         HEADER

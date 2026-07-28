@@ -1418,9 +1418,7 @@ def _comparison_scope_coverage(
                         and isinstance(inner.ctx, ast.Load)
                     }
                     if loop_names.intersection(call_names):
-                        covered.update(
-                            _expected_column_literals(current.iter, expected)
-                        )
+                        covered.update(_upstream_literals(current.iter))
                         if _reads_the_raw_contract_mapping(
                             current.iter,
                             assignments,
