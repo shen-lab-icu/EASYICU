@@ -4820,7 +4820,9 @@ def _run_ehrflowbench_jsonl(
                 if batch_binding is not None
                 else None
             ),
-            resume_existing=bool(reuse_existing and batch_binding is None),
+            resume_existing=bool(
+                (reuse_existing or resume_run_id) and batch_binding is None
+            ),
         )
     formal_canary_task_id: Optional[str] = None
     if batch_binding is not None:
