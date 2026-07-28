@@ -10,9 +10,11 @@ from __future__ import annotations
 
 import textwrap
 
+from ...authority.plausibility import FlagOnlyPlausibilityScope
 from ...authority.table_one_binding import table_one_execution_spec
 from ...icu_rules import companion_count_column_for_measured
 from ...schema import AnalysisStep, TABLE_ONE_CLOSED_OUTPUTS
+from .plausibility_receipt import render_standard_plausibility_receipt_code
 
 __all__ = ["table_one_executor_code", "table_one_executor_owns_step"]
 
@@ -56,11 +58,17 @@ def table_one_executor_owns_step(step: AnalysisStep) -> bool:
     )
 
 
-def table_one_executor_code(step: AnalysisStep) -> str:
+def table_one_executor_code(
+    step: AnalysisStep,
+    *,
+    plausibility_scope: FlagOnlyPlausibilityScope | None = None,
+) -> str:
     """Return sandbox code for the exact Planner-owned Table 1 declaration."""
 
     if not table_one_executor_owns_step(step):
         raise ValueError("The step is not owned by the grouped Table 1 executor")
+    if plausibility_scope is not None:
+        plausibility_scope.require_step(step.step_id)
     specification_model = table_one_execution_spec(step)
     assert specification_model is not None
     specification = specification_model.model_dump(mode="python")
@@ -84,7 +92,21 @@ def table_one_executor_code(step: AnalysisStep) -> str:
         is not None
         and count_column in declared_inputs
     )
-    return textwrap.dedent(f"""
+    plausibility_code = (
+        render_standard_plausibility_receipt_code(
+            plausibility_scope,
+            frame_name="frame",
+        )
+        if plausibility_scope is not None
+        else ""
+    )
+    plausibility_summary_entry = (
+        '"plausibility_audit": plausibility_audit,'
+        if plausibility_scope is not None
+        and plausibility_scope.expected_columns
+        else ""
+    )
+    rendered = textwrap.dedent(f"""
         import hashlib
         import json
         import os
@@ -189,6 +211,8 @@ def table_one_executor_code(step: AnalysisStep) -> str:
         else:
             frame, cohort_path = load_typed_cohort(typed_cohort_input)
 
+        __EASYICU_STANDARD_PLAUSIBILITY_RECEIPT__
+
         table_one = build_grouped_table_one(frame, table_one_spec)
         table_path = out_dir / "table_one.csv"
         table_one.to_csv(table_path, index=False)
@@ -277,6 +301,7 @@ def table_one_executor_code(step: AnalysisStep) -> str:
         ]
 
         summary = {{
+            {plausibility_summary_entry}
             "step_id": {step.step_id!r},
             "status": "ok",
             "analysis_family": "grouped_table_one",
@@ -314,4 +339,8 @@ def table_one_executor_code(step: AnalysisStep) -> str:
             encoding="utf-8",
         )
         print(json.dumps({{"grouped_table_one": "ok", "cohort_n": len(frame)}}))
-        """).strip()
+        """)
+    return rendered.replace(
+        "__EASYICU_STANDARD_PLAUSIBILITY_RECEIPT__",
+        plausibility_code,
+    ).strip()

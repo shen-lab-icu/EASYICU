@@ -990,7 +990,37 @@ def test_stability_standard_executor_supersedes_stale_resume_capsule():
     assert "trajectory_stability_executor_owns_step(" in selector_source
     assert "trajectory_stability_executor_code(" in selector_source
     assert "preflight_standard_code = standard_executor.code" in assignment
+    assert "plausibility_scope=plausibility_authority.scope" in assignment
     assert "selected_resume_capsule" not in assignment
+
+
+def test_standard_executor_failure_is_attributed_to_its_actual_owner():
+    from easyicu.research_agent.execution.standard_executor_diagnostics import (
+        standard_executor_failure_finding,
+    )
+
+    finding = standard_executor_failure_finding(
+        step_record={
+            "deterministic_standard_analysis": "grouped_table_one",
+            "deterministic_standard_selection_reason": "table_one_spec_preflight",
+        },
+        step_id="02_table_one",
+        reason="preexecution_concept_gate_failed",
+        failure_phase="preexecution_concept_gate",
+    )
+
+    assert finding.validator == "deterministic_standard_executor"
+    assert "grouped_table_one" in finding.message
+    assert "trajectory" not in finding.message.casefold()
+    assert finding.detail == {
+        "step_id": "02_table_one",
+        "issue_code": "deterministic_standard_executor_failed_closed",
+        "failure_phase": "preexecution_concept_gate",
+        "analysis_kind": "grouped_table_one",
+        "selection_reason": "table_one_spec_preflight",
+        "reason": "preexecution_concept_gate_failed",
+        "executor_errors": None,
+    }
 
 
 @pytest.mark.parametrize(

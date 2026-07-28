@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from ...authority.plausibility import FlagOnlyPlausibilityScope
 from ...schema import AnalysisPlan, AnalysisStep
 from .cohort_summary_executor import (
     cohort_summary_executor_code,
@@ -51,10 +52,20 @@ def select_standard_executor(
     step: AnalysisStep,
     *,
     plan: AnalysisPlan,
+    plausibility_scope: FlagOnlyPlausibilityScope | None = None,
 ) -> StandardExecutorSelection | None:
     """Select by exact typed contract, never by prose or benchmark identity."""
 
+    if plausibility_scope is not None:
+        plausibility_scope.require_step(step.step_id)
+    receipt_required = bool(
+        plausibility_scope is not None
+        and plausibility_scope.expected_columns
+    )
+
     if cohort_summary_executor_owns_step(step):
+        if receipt_required:
+            return None
         typed_cohort_inputs = tuple(
             str(value or "").strip()
             for value in step.inputs
@@ -69,6 +80,8 @@ def select_standard_executor(
             consumed_input_keys=typed_cohort_inputs,
         )
     if prevalence_outcome_figure_executor_owns_step(step):
+        if receipt_required:
+            return None
         return StandardExecutorSelection(
             analysis_kind="prevalence_outcome_figure",
             selection_reason="prevalence_outcome_figure_contract_preflight",
@@ -77,6 +90,8 @@ def select_standard_executor(
             consumed_input_keys=(PREVALENCE_OUTCOME_FIGURE_INPUT,),
         )
     if missingness_measurement_figure_executor_owns_step(step):
+        if receipt_required:
+            return None
         return StandardExecutorSelection(
             analysis_kind="missingness_measurement_figure",
             selection_reason="missingness_measurement_figure_contract_preflight",
@@ -97,10 +112,15 @@ def select_standard_executor(
             analysis_kind="grouped_table_one",
             selection_reason="table_one_spec_preflight",
             progress_message="Using planner-specified grouped Table 1 executor",
-            code=table_one_executor_code(step),
+            code=table_one_executor_code(
+                step,
+                plausibility_scope=plausibility_scope,
+            ),
             consumed_input_keys=typed_cohort_inputs,
         )
     if missingness_audit_executor_owns_step(step):
+        if receipt_required:
+            return None
         source_availability = source_availability_audit_executor_owns_step(step)
         compact_measurement = is_compact_missingness_measurement_contract(
             step.method,
@@ -133,6 +153,8 @@ def select_standard_executor(
             ),
         )
     if trajectory_stability_executor_owns_step(step, plan=plan):
+        if receipt_required:
+            return None
         return StandardExecutorSelection(
             analysis_kind="trajectory_cluster_stability",
             selection_reason="trajectory_stability_spec_preflight",

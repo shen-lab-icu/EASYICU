@@ -362,6 +362,7 @@ from ..trajectory.plan_contract import (
     trajectory_plan_dag_findings,
 )
 from .runners.selection import select_standard_executor
+from .standard_executor_diagnostics import standard_executor_failure_finding
 from ..repair_registry import (
     InvariantStatus,
     RepairClass,
@@ -6696,7 +6697,11 @@ def run_execute_phase(
         # to reuse; a prior deterministic ``contract_failed`` attempt may reuse
         # only its exact evidence-bound code and scientific signature. Reused
         # code still runs through every current execution audit and repair gate.
-        standard_executor = select_standard_executor(step, plan=plan)
+        standard_executor = select_standard_executor(
+            step,
+            plan=plan,
+            plausibility_scope=plausibility_authority.scope,
+        )
         preflight_standard_code = None
         if standard_executor is not None:
             worker_progress.deterministic_standard_executor_used = True
@@ -7267,18 +7272,11 @@ def run_execute_phase(
                 return step_record
 
             if worker_progress.deterministic_standard_executor_used:
-                terminal_finding = ValidationFinding(
-                    validator="trajectory_stability_executor",
-                    severity="error",
-                    message=(
-                        "The trusted trajectory stability adapter failed the "
-                        "pre-execution deterministic concept gate; execution was "
-                        "blocked without coder repair."
-                    ),
-                    detail={
-                        "step_id": step.step_id,
-                        "reason": "preexecution_concept_gate_failed",
-                    },
+                terminal_finding = standard_executor_failure_finding(
+                    step_record=step_record,
+                    step_id=step.step_id,
+                    reason="preexecution_concept_gate_failed",
+                    failure_phase="preexecution_concept_gate",
                 )
                 terminal_findings = [terminal_finding, *usage_findings]
                 step_record.update(
@@ -10943,23 +10941,16 @@ def run_execute_phase(
             terminal_summary = (
                 step_summary if step_summary else standard_executor_terminal_summary
             )
-            terminal_finding = ValidationFinding(
-                validator="trajectory_stability_executor",
-                severity="error",
-                message=(
-                    "The planner-specified trajectory stability computation failed "
-                    "closed; its diagnostic outputs were preserved and no coder, "
-                    "fallback method, seed change, or cluster-count change was used."
+            terminal_finding = standard_executor_failure_finding(
+                step_record=step_record,
+                step_id=step.step_id,
+                reason=standard_executor_terminal_reason,
+                failure_phase="execution_or_output_validation",
+                executor_errors=(
+                    terminal_summary.get("errors")
+                    if isinstance(terminal_summary, Mapping)
+                    else None
                 ),
-                detail={
-                    "step_id": step.step_id,
-                    "reason": standard_executor_terminal_reason,
-                    "executor_errors": (
-                        terminal_summary.get("errors")
-                        if isinstance(terminal_summary, Mapping)
-                        else None
-                    ),
-                },
             )
             terminal_findings = [
                 terminal_finding,
@@ -10990,7 +10981,11 @@ def run_execute_phase(
                 _flush_partial_manifest()
             emit_progress(
                 "runner",
-                f"Trajectory stability failed closed for {step.step_id}.",
+                (
+                    "Deterministic standard executor "
+                    f"{step_record.get('deterministic_standard_analysis')!r} "
+                    f"failed closed for {step.step_id}."
+                ),
                 status="error",
                 run_id=run_id,
                 step_id=step.step_id,
