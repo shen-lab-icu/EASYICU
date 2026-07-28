@@ -277,6 +277,15 @@ class _Scopes:
     pass.  Ways of binding a name that carry no readable expression -- a loop
     target, an ``except`` alias, an import, tuple unpacking, ``*args`` -- are
     ``opaque`` and are never trusted, for the same reason.
+
+    One binding form is an exception to the must-rule, and a real generated
+    script proved it: ``with open(...) as handle`` scopes ``handle`` to that
+    block.  Scripts routinely reuse the name -- one ``with`` reads a host input,
+    a later one writes the summary -- and the two never coexist, so requiring
+    every ``handle`` binding to be the summary made a compliant write
+    invisible.  A use of such a name is therefore resolved to the innermost
+    ``with`` that binds it (:meth:`governing_context`), which is exactly the
+    extent the language gives it.
     """
 
     def __init__(self, tree: ast.Module) -> None:
@@ -284,7 +293,11 @@ class _Scopes:
         self.scope_of: dict[int, ast.AST] = {id(tree): tree}
         self.parent: dict[int, Optional[ast.AST]] = {}
         self.bindings: dict[int, dict[str, list[tuple]]] = {}
+        self.parent_of: dict[int, ast.AST] = {}
         self._build(tree, None)
+        for parent in ast.walk(tree):
+            for child in ast.iter_child_nodes(parent):
+                self.parent_of[id(child)] = parent
         for name in _declared_elsewhere(tree):
             for scope_id, names in self.bindings.items():
                 names.setdefault(name, []).append(("opaque", tree))
@@ -380,6 +393,27 @@ class _Scopes:
             return False
         found = self.owner(node, node.id)
         return found is not None and (found[0], node.id) in trusted
+
+    def governing_context(self, node: ast.AST) -> Optional[ast.AST]:
+        """The ``with`` expression whose ``as`` name a use at ``node`` sees.
+
+        ``None`` when no enclosing ``with`` binds it, in which case the ordinary
+        must-rule over the scope's bindings decides.
+        """
+
+        if not isinstance(node, ast.Name):
+            return None
+        current: Optional[ast.AST] = self.parent_of.get(id(node))
+        while current is not None:
+            if isinstance(current, (ast.With, ast.AsyncWith)):
+                for item in current.items:
+                    if (
+                        isinstance(item.optional_vars, ast.Name)
+                        and item.optional_vars.id == node.id
+                    ):
+                        return item.context_expr
+            current = self.parent_of.get(id(current))
+        return None
 
 
 def _parameter_arguments(
@@ -642,6 +676,13 @@ class _Destinations:
 
     def _expression_is_a_handle(self, node: ast.AST, trusted: Set[tuple]) -> bool:
         if isinstance(node, ast.Name):
+            # A `with ... as` name means whatever the innermost enclosing
+            # `with` opened, and nothing else -- reusing one name across two
+            # blocks is ordinary Python, and reading it as a mixed binding is
+            # what made a real compliant write invisible.
+            governing = self.scopes.governing_context(node)
+            if governing is not None:
+                return _opens_the_canonical_summary(governing, self.denotes_the_summary)
             return self.scopes.resolves_into(node, trusted)
         return _opens_the_canonical_summary(node, self.denotes_the_summary)
 

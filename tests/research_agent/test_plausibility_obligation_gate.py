@@ -671,6 +671,48 @@ write_json(SUMMARY_PATH, {"plausibility_audit": plausibility_audit})
     assert _reasons(code) == set()
 
 
+def test_one_handle_name_reused_across_two_with_blocks_is_read_per_block():
+    """Copied from the script the first real canary blocked.
+
+    The step opens a host input with `with open(...) as handle` near the top
+    and the summary with `with open(summary_path, "w") as handle` at the
+    bottom. Both bind `handle` in module scope, so a rule that demands every
+    binding of a name be the summary makes a compliant write invisible -- a
+    `with ... as` name means whatever its own block opened, and the two never
+    coexist. This shape is why the canary was worth running: the unit fixtures
+    were green while the only real script the gate had ever seen was being
+    wrongly blocked.
+    """
+
+    code = (
+        HEADER
+        + """
+plausibility_audit = {}
+
+with open("resolved.json", "r", encoding="utf-8") as handle:
+    manifest = json.load(handle)
+"""
+        + HELPER_HEAD
+        + RECORD_THE_COUNTS
+        + """
+
+summary_path = STEP_OUT_DIR / "step_summary.json"
+step_summary = {"plausibility_audit": plausibility_audit}
+with open(summary_path, "w", encoding="utf-8") as handle:
+    json.dump(step_summary, handle, indent=2)
+"""
+    )
+    assert _reasons(code) == set()
+
+    # The exemption is per block, not per name: a handle on a scratch file
+    # still cannot stand in for the artifact the host opens.
+    scratch = code.replace(
+        'summary_path = STEP_OUT_DIR / "step_summary.json"',
+        'summary_path = Path("/tmp") / "step_summary.json"',
+    )
+    assert _reasons(scratch) == {"out_of_range_record_not_in_declared_output"}
+
+
 def test_the_gate_reads_the_output_directory_the_host_actually_sets():
     """The env aliases are the host's own, not a guess, so they must not drift.
 
