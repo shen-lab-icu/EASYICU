@@ -2,10 +2,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+from pathlib import Path
 
 import pandas as pd
 import pytest
 
+from easyicu.research_agent.authority.plausibility import (
+    FlagOnlyPlausibilityScope,
+)
 from easyicu.research_agent.contracts.table_one import table_one_output_findings
 from easyicu.research_agent.audits import StepSummaryIntegrityValidator
 from easyicu.research_agent.authority.typed_binding import (
@@ -19,6 +24,12 @@ from easyicu.research_agent.execution.runners.selection import (
     select_standard_executor,
 )
 from easyicu.research_agent.gates.preflight import audit_mechanical_code_contracts
+from easyicu.research_agent.gates.plausibility_obligation import (
+    flag_only_plausibility_obligation_findings,
+)
+from easyicu.research_agent.gates.plausibility_receipt import (
+    plausibility_audit_receipt_findings,
+)
 from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
 
@@ -92,6 +103,7 @@ def _bind_typed_cohort(
     input_key: str = "artifact:analysis_cohort",
     bound_frame: pd.DataFrame | None = None,
     raw_frame: pd.DataFrame | None = None,
+    raw_input_contracts: dict[str, object] | None = None,
 ):
     run_dir = tmp_path / "run"
     run_dir.mkdir()
@@ -118,6 +130,8 @@ def _bind_typed_cohort(
             }
         }
     }
+    if raw_input_contracts is not None:
+        manifest["raw_input_contracts"] = raw_input_contracts
     manifest_path = run_dir / "resolved_inputs.json"
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     out_dir = tmp_path / "outputs"
@@ -126,6 +140,48 @@ def _bind_typed_cohort(
     monkeypatch.setenv("COHORT_PARQUET", str(raw_path))
     monkeypatch.setenv("STEP_OUT_DIR", str(out_dir))
     return bound_path, out_dir
+
+
+def _age_plausibility_contracts() -> dict[str, object]:
+    payload: dict[str, object] = {
+        "schema_version": "easyicu.resolved_raw_input_contracts/1",
+        "authority_scope": (
+            "host_verified_physical_representation_and_domain_constraints"
+        ),
+        "scientific_ownership": "Planner retains scientific decisions",
+        "contracts": {
+            "age": {
+                "column": "age",
+                "analysis_plausibility_range": {
+                    "minimum": 0.0,
+                    "maximum": 100.0,
+                },
+                "plausibility_policy": {
+                    "range_policy": "flag_only",
+                    "out_of_range_action": "retain_and_flag",
+                },
+            }
+        },
+    }
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    payload["contracts_sha256"] = hashlib.sha256(encoded).hexdigest()
+    return payload
+
+
+def _age_plausibility_scope(step: AnalysisStep) -> FlagOnlyPlausibilityScope:
+    contracts = _age_plausibility_contracts()
+    return FlagOnlyPlausibilityScope(
+        step_id=step.step_id,
+        expected_columns=("age",),
+        source_contracts_sha256=str(contracts["contracts_sha256"]),
+        authority_kind="resolved_raw_input_contracts",
+    )
 
 
 def test_table_one_executor_owns_only_the_closed_table_contract():
@@ -251,6 +307,125 @@ def test_table_one_executor_code_passes_preflight_and_executes_exact_spec(
             }
         ],
     }
+
+
+def test_table_one_executor_retains_rows_and_emits_exact_plausibility_receipt(
+    tmp_path,
+    monkeypatch,
+):
+    step = _step()
+    contracts = _age_plausibility_contracts()
+    scope = _age_plausibility_scope(step)
+    frame = _frame()
+    frame.loc[0, "age"] = -1.0
+    frame.loc[5, "age"] = 101.0
+    _, out_dir = _bind_typed_cohort(
+        tmp_path,
+        monkeypatch,
+        bound_frame=frame,
+        raw_input_contracts=contracts,
+    )
+
+    selection = select_standard_executor(
+        step,
+        plan=AnalysisPlan(research_question="Test", steps=[step]),
+        plausibility_scope=scope,
+    )
+    assert selection is not None
+    code = selection.code
+    assert (
+        flag_only_plausibility_obligation_findings(
+            None,
+            script_text=code,
+            step=step,
+            scope=scope,
+        )
+        == []
+    )
+
+    exec(compile(code, "<table-one-executor>", "exec"), {})
+
+    summary = json.loads((out_dir / "step_summary.json").read_text("utf-8"))
+    assert summary["cohort_n"] == len(frame)
+    assert summary["source_row_count_reconciliation"][
+        "table_one_filtering_performed"
+    ] is False
+    assert summary["plausibility_audit"] == {
+        "age": {
+            "policy": "retain_and_flag",
+            "below_minimum_n": 1,
+            "above_maximum_n": 1,
+            "out_of_range_n": 2,
+        }
+    }
+    assert (
+        plausibility_audit_receipt_findings(
+            step_summary=summary,
+            step=step,
+            script_text=code,
+            scope=scope,
+        )
+        == []
+    )
+
+
+def test_standard_executor_abstains_when_it_cannot_emit_required_receipt():
+    step = AnalysisStep(
+        step_id="01_summary",
+        planned_analysis_role="auxiliary",
+        intent="Describe the locked cohort.",
+        inputs=["artifact:analysis_cohort", "age"],
+        expected_outputs=["table:cohort_summary"],
+        method="descriptive",
+    )
+    scope = FlagOnlyPlausibilityScope(
+        step_id=step.step_id,
+        expected_columns=("age",),
+        source_contracts_sha256="0" * 64,
+        authority_kind="resolved_raw_input_contracts",
+    )
+
+    assert (
+        select_standard_executor(
+            step,
+            plan=AnalysisPlan(research_question="Test", steps=[step]),
+            plausibility_scope=scope,
+        )
+        is None
+    )
+
+
+def test_table_one_plausibility_receipt_rejects_contract_byte_drift(
+    tmp_path,
+    monkeypatch,
+):
+    step = _step()
+    contracts = _age_plausibility_contracts()
+    scope = _age_plausibility_scope(step)
+    _bind_typed_cohort(
+        tmp_path,
+        monkeypatch,
+        raw_input_contracts=contracts,
+    )
+    manifest_path = Path(os.environ["EASYICU_RESOLVED_INPUTS_JSON"])
+    manifest = json.loads(manifest_path.read_text("utf-8"))
+    manifest["raw_input_contracts"]["contracts"]["age"][
+        "analysis_plausibility_range"
+    ]["maximum"] = 90.0
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="do not match the step authority"):
+        exec(
+            compile(
+                table_one_executor_code(
+                    step,
+                    plausibility_scope=scope,
+                ),
+                "<table-one-executor>",
+                "exec",
+            ),
+            {},
+        )
 
 
 def test_table_one_executor_emits_optional_denominator_audits(
