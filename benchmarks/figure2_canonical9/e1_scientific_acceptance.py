@@ -42,6 +42,14 @@ _SENSITIVITY_ROWS = (
     "non_readmission_icu_stays",
     "flexible_age_charlson",
 )
+# The three measurement tables E1 must show, whoever computes them.  The
+# component-completeness table is not decoration: exposure ascertainment varies
+# sharply across stays, and without it the reported association is unreadable.
+_REQUIRED_MEASUREMENT_PRODUCTS = (
+    "table:missingness_measurement_audit",
+    "table:measurement_process_audit",
+    "table:exposure_component_completeness_audit",
+)
 _DISPLAY_LABELS = {
     "sep3_sofa2_max=0": "Sepsis-3 absent",
     "sep3_sofa2_max=1": "Sepsis-3 present",
@@ -56,6 +64,10 @@ def e1_scientific_acceptance_contract() -> dict[str, Any]:
         "task_id": TASK_ID,
         "table_one_product": "table:table_one",
         "missingness_product": "table:missingness_measurement_audit",
+        # Scientific completeness, owned here rather than by any executor.
+        # "The runner can emit two of these" and "E1 is complete with two of
+        # these" are different claims; only the second one is this module's.
+        "required_measurement_products": list(_REQUIRED_MEASUREMENT_PRODUCTS),
         "primary_model_product": "table:adjusted_association_estimates",
         "sensitivity_product": SENSITIVITY_PRODUCT,
         "sensitivity_columns": list(_SENSITIVITY_COLUMNS),
@@ -87,6 +99,28 @@ def sensitivity_output_instruction() -> str:
         "non-readmission ICU stays; the flexible row must use non-linear age "
         "and Charlson terms. Every model row must report n_stays, n_deaths, "
         "odds_ratio, ci_low, and ci_high."
+    )
+
+
+def measurement_products_instruction() -> str:
+    """Return the three measurement tables E1 must declare, and why.
+
+    Acceptance requires these products, so the Planner has to be told about them
+    here: a gate that demands something the plan was never asked for is not a
+    standard, it is a trap.  The instruction names the science, not a step
+    layout -- how many steps carry them, and which executor computes them, stay
+    the Planner's decision.
+    """
+
+    products = ", ".join(_REQUIRED_MEASUREMENT_PRODUCTS)
+    return (
+        f"Declare all three measurement products [{products}]. The audit must "
+        "report per-concept missingness, the observation process (how often "
+        "and when each concept was measured), and the completeness of the "
+        "individual exposure components per stay. Exposure ascertainment "
+        "varies substantially across stays, so component completeness is "
+        "required evidence for reading the reported association, not an "
+        "optional extra."
     )
 
 
@@ -185,11 +219,10 @@ def _step_summaries(
     return summaries
 
 
-def _summary_for_product(
+def _producers_for_product(
     summaries: Sequence[tuple[str, Path, dict[str, Any]]],
     product: str,
-    issues: list[dict[str, Any]],
-) -> tuple[str, Path, dict[str, Any], Path] | None:
+) -> list[tuple[str, Path, dict[str, Any], Path]]:
     matches: list[tuple[str, Path, dict[str, Any], Path]] = []
     for step_id, summary_path, summary in summaries:
         output_files = summary.get("output_files")
@@ -202,6 +235,49 @@ def _summary_for_product(
         )
         if artifact is not None:
             matches.append((step_id, summary_path, summary, artifact))
+    return matches
+
+
+def _validate_measurement_product_completeness(
+    *,
+    summaries: Sequence[tuple[str, Path, dict[str, Any]]],
+    contract: Mapping[str, Any],
+    issues: list[dict[str, Any]],
+) -> None:
+    """Require every measurement product E1's science depends on.
+
+    This is deliberately separate from what any executor happens to be able to
+    compute.  A deterministic runner owns the *capability* question -- can these
+    tables be produced -- and it answers yes for one, two or three products
+    alike.  Whether E1 is scientifically complete with fewer than three is not
+    its call: the component-completeness table is what shows the exposure was
+    ascertained at very different intensity across stays, which is the bias the
+    headline association has to be read against.  A plan that quietly drops it
+    still runs, and must still fail acceptance here.
+    """
+
+    required = contract.get("required_measurement_products")
+    if not isinstance(required, (list, tuple)):
+        return
+    for product in required:
+        product = str(product)
+        if len(_producers_for_product(summaries, product)) != 1:
+            issues.append(
+                _issue(
+                    "e1_required_measurement_product_absent",
+                    "E1 requires this measurement product regardless of which "
+                    "executor produces it.",
+                    product=product,
+                )
+            )
+
+
+def _summary_for_product(
+    summaries: Sequence[tuple[str, Path, dict[str, Any]]],
+    product: str,
+    issues: list[dict[str, Any]],
+) -> tuple[str, Path, dict[str, Any], Path] | None:
+    matches = _producers_for_product(summaries, product)
     if len(matches) != 1:
         issues.append(
             _issue(
@@ -790,6 +866,11 @@ def evaluate_e1_scientific_acceptance(
     )
 
     _validate_table_one(match=table_one, manifest=manifest, issues=issues)
+    _validate_measurement_product_completeness(
+        summaries=summaries,
+        contract=contract,
+        issues=issues,
+    )
     _validate_missingness(
         match=missingness,
         manifest=manifest,
@@ -939,6 +1020,7 @@ __all__ = [
     "SENSITIVITY_PRODUCT",
     "TASK_ID",
     "display_label_instruction",
+    "measurement_products_instruction",
     "e1_scientific_acceptance_contract",
     "evaluate_e1_scientific_acceptance",
     "sensitivity_output_instruction",
