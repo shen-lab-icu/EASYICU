@@ -77,3 +77,6 @@ deterministic gate. There is no soft margin. Therefore:
   "see {evidence:<id>}".
 - Sentences without an evidence id will be removed by the post-processor.
 - Do not invent confidence intervals, p-values, or hazard ratios.
+- Never write `p=0`. If the evidence digest marks a p-value as
+  `source_underflow=true`, report its supplied conservative inequality
+  (for example `p < 1e-300`) rather than the raw floating-point zero.

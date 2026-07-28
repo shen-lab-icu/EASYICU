@@ -24,6 +24,7 @@ from ..authority.runtime_artifacts import (
     current_step_records,
 )
 from ..scalar_utils import _first_present_scalar
+from .p_values import prepare_p_values_for_writer, render_claim_value_for_writer
 
 __all__ = [
     "_resolve_writer_aux_path",
@@ -487,6 +488,7 @@ def _render_writer_evidence_digest(
         )
         if not has_panel_primary:
             digest_row.update(_summarise_primary_association_table(primary_path))
+        digest_row = prepare_p_values_for_writer(digest_row)
         lines.append(
             "  "
             + json.dumps(digest_row, ensure_ascii=False, sort_keys=True, default=str)
@@ -681,7 +683,12 @@ def _render_writer_evidence_digest_v2(
             secondary_lines.append(f"- {step_id}")
             for c in secondary_claims:
                 secondary_lines.append(
-                    f"  {c.source_field}={c.value} (canonical={c.canonical})"
+                    f"  {c.source_field}="
+                    + render_claim_value_for_writer(
+                        source_field=c.source_field,
+                        value=c.value,
+                        canonical=c.canonical,
+                    )
                 )
             if truncated:
                 secondary_lines.append(
@@ -720,7 +727,13 @@ def _render_writer_evidence_digest_v2(
                 truncated = True
             secondary_lines.append(f"- {step_id}")
             for key, value in uncovered_pairs:
-                secondary_lines.append(f"  {key}={value}")
+                secondary_lines.append(
+                    f"  {key}="
+                    + render_claim_value_for_writer(
+                        source_field=key,
+                        value=value,
+                    )
+                )
             if truncated:
                 secondary_lines.append(
                     f"  ... ({uncovered_pairs_total - cap} more leaves omitted; pass evidence= or raise the per-step cap to see)"
