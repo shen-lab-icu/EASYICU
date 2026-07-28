@@ -212,6 +212,7 @@ def resolve_registered_plan_authority(
     """Resolve one current plan to its immutable EvidenceStore record."""
 
     selected_digest = sha256_of_file(Path(plan_path))
+    selected_public_payload = plan.model_dump(mode="json")
     candidates = []
     for record in evidence.records():
         payload = record.model_dump(mode="json")
@@ -227,7 +228,11 @@ def resolve_registered_plan_authority(
             )
         except (OSError, TypeError, ValueError):
             continue
-        if registered_plan != plan:
+        # Pydantic equality includes PrivateAttr state. Execution may attach
+        # host-only bindings (for example Table 1 level tokens) after the
+        # public plan was serialized; those bindings are deliberately absent
+        # from EvidenceStore and are not a scientific plan change.
+        if registered_plan.model_dump(mode="json") != selected_public_payload:
             continue
         candidates.append((rank, record))
     if not candidates:
