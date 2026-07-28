@@ -718,20 +718,29 @@ def run_write_phase(
             # evidence id so the manuscript can cite
             # ``{evidence:literature_prisma}`` without pulling the
             # whole citation table into the binder.
+            # The artifact is always written; what changed is that it stops
+            # claiming a search happened when none did.  A run with no retrieval
+            # source enabled used to publish "identified 4 ... included 4",
+            # which reads as a systematic search that found four papers rather
+            # than four preset references passing through untouched.
+            prisma_path = run_dir / "literature_prisma.json"
+            prisma_md_path = run_dir / "literature_prisma.md"
+            provenance = literature.search_provenance
+            prisma_path.write_text(
+                json.dumps(
+                    {
+                        "research_question": literature.research_question,
+                        "prisma": literature.prisma,
+                        "search_provenance": (
+                            provenance.model_dump() if provenance is not None else None
+                        ),
+                    },
+                    indent=2,
+                    default=str,
+                ),
+                encoding="utf-8",
+            )
             if literature.prisma is not None:
-                prisma_path = run_dir / "literature_prisma.json"
-                prisma_md_path = run_dir / "literature_prisma.md"
-                prisma_path.write_text(
-                    json.dumps(
-                        {
-                            "research_question": literature.research_question,
-                            "prisma": literature.prisma,
-                        },
-                        indent=2,
-                        default=str,
-                    ),
-                    encoding="utf-8",
-                )
                 p = literature.prisma
                 prisma_md = (
                     "# PRISMA 2020 flow (O21)\n\n"
@@ -741,27 +750,41 @@ def run_write_phase(
                     f"- Records eligible: **{p.get('eligible', 0)}**\n"
                     f"- Records included in review: **{p.get('included', 0)}**\n"
                 )
-                prisma_md_path.write_text(prisma_md, encoding="utf-8")
-                if evidence.get("literature_prisma") is None:
-                    evidence.register_file(
-                        kind="statistic",
-                        description=(
-                            "PRISMA 2020 flow counts for the literature search (O21)."
-                        ),
-                        source_path=prisma_path,
-                        evidence_id="literature_prisma",
-                        producer="literature",
-                        generation_mode="system",
-                    )
-                if evidence.get("literature_prisma_summary") is None:
-                    evidence.register_file(
-                        kind="log",
-                        description="Human-readable PRISMA flow summary (O21).",
-                        source_path=prisma_md_path,
-                        evidence_id="literature_prisma_summary",
-                        producer="literature",
-                        generation_mode="system",
-                    )
+            else:
+                sources = ", ".join(provenance.sources_enabled) if provenance else ""
+                prisma_md = (
+                    "# Literature provenance (O21)\n\n"
+                    "**No PRISMA flow is reported: no literature search was "
+                    "conducted for this run.**\n\n"
+                    f"- Retrieval sources enabled: **{sources or 'none'}**\n"
+                    "- Curated references carried through: "
+                    f"**{provenance.curated_seed_count if provenance else 0}**\n\n"
+                    "A PRISMA flow describes screening and selection. Reporting "
+                    "one for a preset reference list would overstate what was "
+                    "done.\n"
+                )
+            prisma_md_path.write_text(prisma_md, encoding="utf-8")
+            if evidence.get("literature_prisma") is None:
+                evidence.register_file(
+                    kind="statistic",
+                    description=(
+                        "Literature search provenance, with PRISMA 2020 flow "
+                        "counts when a retrieval source actually ran (O21)."
+                    ),
+                    source_path=prisma_path,
+                    evidence_id="literature_prisma",
+                    producer="literature",
+                    generation_mode="system",
+                )
+            if evidence.get("literature_prisma_summary") is None:
+                evidence.register_file(
+                    kind="log",
+                    description="Human-readable literature provenance summary (O21).",
+                    source_path=prisma_md_path,
+                    evidence_id="literature_prisma_summary",
+                    producer="literature",
+                    generation_mode="system",
+                )
         except Exception as exc:
             findings.append(
                 ValidationFinding(
