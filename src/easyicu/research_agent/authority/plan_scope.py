@@ -27,9 +27,29 @@ __all__ = [
     "_step_scientific_signature",
     "completed_step_record_matches_plan",
     "legacy_host_checkpoint_may_inherit_plan_scope",
+    "measurement_companion_input_closure_evidence_id",
     "verified_plan_scientific_scope_count",
     "verified_plan_evidence_rank",
 ]
+
+_MEASUREMENT_COMPANION_INPUT_CLOSURE_ID_RE = re.compile(
+    r"analysis_plan_input_closure_revision_(\d+)_([0-9a-f]{8})"
+)
+
+
+def measurement_companion_input_closure_evidence_id(
+    *,
+    revision: int,
+    sha256: str,
+) -> str:
+    """Return the immutable id for one host-owned plan input closure."""
+
+    if isinstance(revision, bool) or int(revision) < 0:
+        raise ValueError("analysis plan revision must be a non-negative integer")
+    digest = str(sha256 or "").strip().lower()
+    if re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+        raise ValueError("analysis plan input closure requires a SHA-256 digest")
+    return f"analysis_plan_input_closure_revision_{int(revision)}_{digest[:8]}"
 
 
 def legacy_host_checkpoint_may_inherit_plan_scope(
@@ -109,15 +129,26 @@ def verified_plan_evidence_rank(record: Mapping[str, Any]) -> Optional[int]:
     evidence_id = str(record.get("evidence_id") or "").strip()
     if evidence_id == "analysis_plan":
         return -1
+    metadata = record.get("metadata")
+    closure_authority = (
+        record.get("producer") == "runtime_supervisor"
+        and record.get("generation_mode") == "system"
+        and isinstance(metadata, Mapping)
+        and metadata.get("reason") == "measurement_companion_input_closure"
+    )
     if evidence_id == "analysis_plan_input_closure":
-        metadata = record.get("metadata")
+        return 0 if closure_authority else None
+    closure_match = _MEASUREMENT_COMPANION_INPUT_CLOSURE_ID_RE.fullmatch(evidence_id)
+    if closure_match is not None:
+        revision = int(closure_match.group(1))
+        digest = str(record.get("sha256") or "").strip().lower()
         if (
-            record.get("producer") == "runtime_supervisor"
-            and record.get("generation_mode") == "system"
-            and isinstance(metadata, Mapping)
-            and metadata.get("reason") == "measurement_companion_input_closure"
+            closure_authority
+            and metadata.get("source_plan_revision") == revision
+            and metadata.get("closure_sha256") == digest
+            and closure_match.group(2) == digest[:8]
         ):
-            return 0
+            return revision
         return None
     match = re.fullmatch(r"analysis_plan_revision_(\d+)(?:_[0-9a-f]{8})?", evidence_id)
     return int(match.group(1)) if match is not None else None

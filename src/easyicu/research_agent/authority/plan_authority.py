@@ -14,7 +14,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 from ..plan_utils import (
-    _augment_measurement_companion_inputs,
     _augment_report_typed_product_inputs,
     _cap_plan_preserving_figure_steps,
     _preserve_figure_steps_after_replan,
@@ -28,6 +27,7 @@ from ..authority.runtime_artifacts import current_successful_step_records
 from ..schema import AnalysisPlan, AnalysisStep, ResearchContext, ValidationFinding
 from ..trajectory.plan_contract import augment_trajectory_plan_products
 from .table_one_binding import bind_table_one_execution_spec
+from .plan_input_closure import close_measurement_companion_inputs
 from .plan_scope import _plan_scientific_scope_signature, _plan_signature
 from .planned_role import verified_planned_analysis_role
 
@@ -332,7 +332,7 @@ def normalize_replan_candidate(
         context=context,
     )
     findings.extend(trajectory_findings)
-    revised, companion_findings = _augment_measurement_companion_inputs(
+    revised, companion_findings = close_measurement_companion_inputs(
         plan=revised,
         context=context,
     )

@@ -211,6 +211,10 @@ from ..authority.plan_authority import (
     _preserve_locked_robustness_specs_after_replan,
     normalize_replan_candidate,
 )
+from ..authority.plan_input_closure import (
+    close_measurement_companion_inputs,
+    register_measurement_companion_input_closure,
+)
 from ..authority.plan_scope import (
     _normalise_scientific_text,
     _plan_scientific_scope_signature,
@@ -315,7 +319,6 @@ from ..repairs.reasons import (
     typed_repair_ticket,
 )
 from ..plan_utils import (
-    _augment_measurement_companion_inputs,
     _augment_report_typed_product_inputs,
     _cap_plan_preserving_figure_steps,
     _clustering_contract_applies,
@@ -3814,28 +3817,18 @@ def run_execute_phase(
     findings = plan_result.findings
     plan = plan_result.plan
     plan_path = plan_result.plan_path
-    plan, companion_input_findings = _augment_measurement_companion_inputs(
+    plan, companion_input_findings = close_measurement_companion_inputs(
         plan=plan,
         context=context,
     )
     if companion_input_findings:
         findings.extend(companion_input_findings)
-        plan_path = run_dir / "analysis_plan_input_closure.json"
-        plan_path.write_text(plan.model_dump_json(indent=2), encoding="utf-8")
-        if evidence.get("analysis_plan_input_closure") is None:
-            evidence.register_file(
-                kind="log",
-                description=(
-                    "Analysis plan with structural measurement-provenance "
-                    "input closure."
-                ),
-                source_path=plan_path,
-                evidence_id="analysis_plan_input_closure",
-                producer="runtime_supervisor",
-                generation_mode="system",
-                prompt_pack_version=plan_result.prompt_version,
-                metadata={"reason": "measurement_companion_input_closure"},
-            )
+        plan_path = register_measurement_companion_input_closure(
+            run_dir=run_dir,
+            evidence=evidence,
+            plan=plan,
+            prompt_pack_version=plan_result.prompt_version,
+        ).plan_path
         plan_result.plan_path = plan_path
     stop_after_step_id = _resolve_stop_after_step_selector(plan, stop_after_step_id)
     resume_controller = ResumeController(
