@@ -8412,15 +8412,6 @@ def run_execute_phase(
                 "fallback": "fallback script",
                 "deterministic_standard": "standard executor script",
             }.get(current_generation_mode, "repaired script")
-            emit_progress(
-                "runner",
-                f"Running {run_label} for {step.step_id}.",
-                run_id=run_id,
-                step_id=step.step_id,
-                current_step=step_current,
-                total_steps=total_steps,
-                repair_attempts=worker_progress.repair_attempts,
-            )
             execution_runner = runner
             execution_timeout_seconds = pipeline._timeout_seconds
             if worker_progress.deterministic_standard_executor_used:
@@ -8439,6 +8430,23 @@ def run_execute_phase(
                     **run_input_authority_state.runner_bindings(),
                     timeout_seconds=execution_timeout_seconds,
                 )
+            execution_timeout_seconds = float(
+                getattr(
+                    execution_runner,
+                    "timeout_seconds",
+                    execution_timeout_seconds,
+                )
+            )
+            emit_progress(
+                "runner",
+                f"Running {run_label} for {step.step_id}.",
+                run_id=run_id,
+                step_id=step.step_id,
+                current_step=step_current,
+                total_steps=total_steps,
+                repair_attempts=worker_progress.repair_attempts,
+                phase_timeout_seconds=execution_timeout_seconds,
+            )
             run_input_authority_state.require_trajectory_integrity(
                 step_id=step.step_id,
             )

@@ -200,7 +200,10 @@ def exclusive_run_execution(function: Callable[P, R]) -> Callable[P, R]:
                 workdir=Path(pipeline.workdir),
                 run_id=run_id,
             ):
-                return function(*args, **kwargs)
+                from .run_heartbeat import run_heartbeat_scope
+
+                with run_heartbeat_scope(run_id=run_id):
+                    return function(*args, **kwargs)
         finally:
             _ACTIVE_RUN_ID.reset(token)
 
