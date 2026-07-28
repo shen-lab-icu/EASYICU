@@ -8,6 +8,18 @@ import pandas as pd
 import pytest
 
 
+def _completed_score(item_key: str) -> dict[str, object]:
+    return {
+        "item_key": item_key,
+        "aware": {
+            "execution_complete": True,
+            "step_scientific_requirements_complete": True,
+            "failed_step_ids": [],
+            "missing_step_ids": [],
+        },
+    }
+
+
 def test_strict_jsonl_decoder_preserves_valid_nested_payload() -> None:
     import tools.run_research_agent_bench as bench
 
@@ -142,7 +154,7 @@ def test_valid_row_status_field_cannot_impersonate_decoder_failure(
 
     def fake_run_one(**kwargs):
         seen.update(kwargs)
-        return {"item_key": "valid-status-field"}
+        return _completed_score("valid-status-field")
 
     monkeypatch.setattr(bench, "_run_one_item_from_cohort", fake_run_one)
     monkeypatch.setattr(bench, "_aggregate", lambda _scores: {"aware": {}})
@@ -188,7 +200,7 @@ def test_longitudinal_jsonl_can_run_without_invented_target_outcome(
 
     def fake_run_one(**kwargs):
         seen.update(kwargs)
-        return {"item_key": "sofa2-trajectory"}
+        return _completed_score("sofa2-trajectory")
 
     monkeypatch.setattr(bench, "_run_one_item_from_cohort", fake_run_one)
     monkeypatch.setattr(bench, "_aggregate", lambda _scores: {"aware": {}})
@@ -207,3 +219,82 @@ def test_longitudinal_jsonl_can_run_without_invented_target_outcome(
     )
     assert seen["item"].target_outcome is None
     assert seen["item"].kind == "longitudinal_trajectory_analysis"
+
+
+def test_explicit_resume_reopens_existing_hard_stop_ledger(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    import tools.run_research_agent_bench as bench
+    from easyicu.research_agent.authority.provider_hard_stop import (
+        ProviderHardStopLedger,
+        load_provider_hard_stop_ledger,
+    )
+
+    cohort = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1], "death": [0]}).to_parquet(
+        cohort,
+        index=False,
+    )
+    jsonl = tmp_path / "items.jsonl"
+    jsonl.write_text(
+        json.dumps(
+            {
+                "key": "resume-item",
+                "question": "Resume the declared analysis.",
+                "cohort_path": str(cohort),
+                "target_outcome": "death",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    out_root = tmp_path / "out"
+    out_root.mkdir()
+    options = bench._benchmark_pipeline_options(
+        max_total_steps=None,
+        disable_replanning=False,
+        max_code_repair_attempts=None,
+    )
+    limits = bench._provider_hard_stop_limits(options)
+    assert limits is not None
+    ledger = ProviderHardStopLedger(
+        path=(out_root / "ehrflowbench_progress.json").resolve(),
+        task_ids=("resume-item",),
+        limits=limits,
+    )
+    ledger.start_task("resume-item").finish(error="RuntimeError: interrupted")
+
+    seen = {}
+
+    def fake_run_one(**kwargs):
+        seen.update(kwargs)
+        return _completed_score("resume-item")
+
+    monkeypatch.setattr(bench, "_run_one_item_from_cohort", fake_run_one)
+    monkeypatch.setattr(bench, "_aggregate", lambda _scores: {"aware": {}})
+    monkeypatch.setattr(bench, "_render_markdown", lambda **_kwargs: "ok")
+
+    assert (
+        bench._run_ehrflowbench_jsonl(
+            jsonl_path=jsonl,
+            out_root=out_root,
+            seed=7,
+            arms=["aware"],
+            provider="openai",
+            model="model",
+            pipeline_options=options,
+            resume_run_id="run_existing",
+            resume_from_step_id="02_table_one",
+        )
+        == 0
+    )
+    assert seen["resume_run_id"] == "run_existing"
+    assert seen["resume_from_step_id"] == "02_table_one"
+    resumed = load_provider_hard_stop_ledger(
+        out_root / "ehrflowbench_progress.json"
+    )
+    task = resumed["tasks"][0]
+    assert task["status"] == "completed"
+    assert task["resume_count"] == 1
+    assert task["terminal_attempts"][0]["status"] == "failed"
