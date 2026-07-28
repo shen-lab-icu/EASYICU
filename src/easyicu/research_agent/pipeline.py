@@ -146,11 +146,8 @@ from .authority.table_one_binding import (
     restore_table_one_private_checkpoint,
     write_table_one_private_checkpoint,
 )
-from .authority.plan_scope import (
-    _serializable_plan_scientific_scope_signature,
-    completed_step_record_matches_plan,
-    verified_plan_scientific_scope_count,
-    verified_plan_evidence_rank,
+from .authority.resume_plan import (
+    load_compatible_resume_plan as _load_compatible_resume_plan,
 )
 from .authority import pipeline_cache as _pipeline_cache
 from .planning.analysis_blueprint import (
@@ -187,14 +184,11 @@ from .concept_dict_audit import (
     write_concept_dict_fingerprint,
 )
 from .cohort.schema import (
-    COHORT_LOCK_FILENAME,
     CohortAuthorityError,
-    _load_locked_cohort_definition,
     ensure_cohort_definition,
     materialize_locked_analysis_cohort,
     write_locked_cohort_definition,
 )
-from .planning.cohort_contract import cohort_definition_sha
 from .intake.materialized_metadata import (
     MaterializedCohortAuthorityRef,
     MaterializedMetadataError,
@@ -260,7 +254,6 @@ from .authority.evidence_store import (
     _coerce_enforcement_mode,
     sha256_of_file,
 )
-from .authority.evidence_snapshot import load_current_evidence_snapshot
 from .learning.experience import (
     ExperienceBank,
     ExperienceBankCorruptError,
@@ -520,106 +513,6 @@ def _defer_typed_plan_dag_findings_until_probe(
             )
         )
     return deferred
-
-
-def _resume_plan_candidate_paths(
-    *,
-    run_dir: Path,
-    resume_state: Optional[Dict[str, Any]],
-) -> List[Path]:
-    """Return digest-verified immutable plan evidence, newest first.
-
-    Live ``analysis_plan*.json`` files are mutable runtime conveniences and can
-    be re-serialized under a newer schema during resume. They are never plan
-    authority. The evidence copies retain the planner/replanner bytes and are
-    usable only after path containment and SHA-256 verification.
-    """
-
-    del resume_state  # Evidence authority supersedes a mutable manifest path.
-    records = list(load_current_evidence_snapshot(run_dir).records)
-
-    ranked: List[tuple[int, int, Path]] = []
-    for index, record in enumerate(records):
-        if not isinstance(record, dict):
-            continue
-        revision = verified_plan_evidence_rank(record)
-        if revision is None:
-            continue
-        verified_path = verified_run_evidence_path(run_dir, record)
-        if verified_path is not None:
-            ranked.append((revision, index, verified_path))
-
-    candidates = [path for _revision, _index, path in sorted(ranked, reverse=True)]
-
-    unique: List[Path] = []
-    seen: set[Path] = set()
-    for candidate in candidates:
-        resolved = candidate.resolve()
-        if resolved in seen:
-            continue
-        seen.add(resolved)
-        unique.append(candidate)
-    return unique
-
-
-def _load_compatible_resume_plan(
-    *,
-    run_dir: Path,
-    resume_state: Optional[Dict[str, Any]],
-) -> tuple[Optional[AnalysisPlan], Optional[Path]]:
-    """Load the newest saved plan compatible with completed resume steps."""
-    locked_cohort_sha256: Optional[str] = None
-    if (run_dir / COHORT_LOCK_FILENAME).exists():
-        locked_cohort_sha256 = cohort_definition_sha(
-            _load_locked_cohort_definition(run_dir)
-        )
-    completed_records = [
-        record
-        for record in current_successful_step_records(
-            (resume_state or {}).get("per_step_records") or []
-        )
-        if record.get("step_id") and record.get("step_id") != "00_probe"
-    ]
-    completed_step_ids = {str(record.get("step_id")) for record in completed_records}
-    candidates = _resume_plan_candidate_paths(
-        run_dir=run_dir,
-        resume_state=resume_state,
-    )
-    plan_scope_count = verified_plan_scientific_scope_count(candidates)
-    for candidate in candidates:
-        try:
-            plan = AnalysisPlan.model_validate(
-                json.loads(candidate.read_text(encoding="utf-8"))
-            )
-        except Exception:
-            continue
-        if locked_cohort_sha256 is not None and (
-            plan.cohort is None
-            or cohort_definition_sha(plan.cohort) != locked_cohort_sha256
-        ):
-            # Plan revisions are allowed to change unfinished steps, never the
-            # already sealed cohort authority.  Skip an incomplete/drifted
-            # revision and try the next digest-verified ancestor.
-            continue
-        step_by_id = {step.step_id: step for step in plan.steps}
-        if not plan.steps or not completed_step_ids <= set(step_by_id):
-            continue
-        compatible = True
-        expected_plan_scope = _serializable_plan_scientific_scope_signature(plan)
-        for record in completed_records:
-            step_id = str(record.get("step_id") or "")
-            if not completed_step_record_matches_plan(
-                record,
-                step=step_by_id[step_id],
-                expected_plan_scope=expected_plan_scope,
-                plan_scope_count=plan_scope_count,
-                completed_records=completed_records,
-            ):
-                compatible = False
-                break
-        if compatible:
-            return plan, candidate
-    return None, None
 
 
 class LegacyResumePlanMigrationError(RuntimeError):
@@ -2845,6 +2738,9 @@ class ResearchAgentPipeline:
             plan, _prior_plan_path = _load_compatible_resume_plan(
                 run_dir=run_dir,
                 resume_state=resume_state,
+                context=context,
+                evidence=evidence,
+                prompt_pack_version=PROMPT_PACK_VERSION,
             )
             if plan is not None and plan.steps:
                 restore_table_one_private_checkpoint(
