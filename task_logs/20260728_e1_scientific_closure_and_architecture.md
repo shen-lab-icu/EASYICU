@@ -217,3 +217,341 @@ still holds and only their instance went stale:
 
 `tests/test_owner_coverage_replay.py`'s receipt-gated fixture moved for the same
 reason, and gained a test asserting the E1 Step 02 shape is now owned.
+
+---
+
+## Round K — Codex's three corrections, all of them real
+
+Two of them overturned conclusions I had already reported.
+
+### K0. The 12-step plan was never missing
+
+I said I could not locate it. It is at
+`/Volumes/外置硬盘/easyicu_data/canonical9_runs/batch_20260728_luna_miiv_dev_8e038d7_e1_fresh6b/e1_sepsis3_prevalence_mortality/aware/run_20260728T131514_c54ead/`.
+Both `analysis_plan.json` (22,602 B) and the executed
+`analysis_plan_revision_3.json` (25,590 B) hold **12 steps**. The 10-step plan I
+scanned belongs to a different run. Every conclusion I drew from it about E1 has
+to be re-derived, and one of them was wrong (K3).
+
+### K1. `invalid_plan` was a false statement about a run that happened
+
+Reproduced verbatim before changing anything:
+
+```
+not scannable [invalid_plan]: analysis_plan.json does not validate as an AnalysisPlan.
+  No coverage is reported: a plan the pipeline would reject is
+  not a plan whose ownership means anything.
+robustness_specs.1.cohort_override.inclusion.0
+  Value error, unknown concept_id: icu_readmission
+```
+
+`icu_readmission` is not a packaged dictionary concept. It is a column of the
+materialised cohort, and `tools/run_research_agent_bench.py:1366` calls
+`register_cohort_concept_ids(cohort_columns)` **before** the pipeline plans, for
+exactly this reason. The run's own authority
+(`cohort_authority.sha256-5bb2a148…json`, reached through the capsule's
+`materialized_cohort_authority_ref`) lists **104 columns** and contains it. The
+pipeline accepted this plan and ran it.
+
+So the tool answered a question it did not hold — in the strict direction this
+time. Same defect as J1's optimism, mirrored. Now:
+
+* `missing_validation_context`, and the message never says "would reject".
+* The classification is **proved, not pattern-matched**: the unknown ids are
+  extracted, registered, and the plan re-validated. Only if that succeeds is the
+  failure attributed to the missing registry. A plan broken any other way stays
+  `invalid_plan` (test).
+* Registration goes through a new `cohort_concept_id_scope` context manager in
+  the owner module (`planning/cohort_contract.py`), which restores the exact
+  prior set. `clear_cohort_concept_ids` empties it wholesale, so asking a
+  hypothetical previously meant destroying someone else's registration.
+
+### K2. Restoring the real context, bound by digest
+
+`--run-dir` loads:
+
+| fact | source | binding |
+|---|---|---|
+| cohort column registry | `cohort_authority.sha256-*.json` | capsule `materialized_cohort_authority_ref` **file + sha256**, re-hashed and compared; authority's `cohort_sha256` must equal the capsule's |
+| typed product bindings | `resolved_inputs/<step_id>.json` → `inputs` | complete by construction: `_write_resolved_inputs_manifest` raises unless the binding keys equal the declared typed inputs |
+| receipt obligations | same file → `raw_input_contracts` | compiled by the **production** `compile_flag_only_plausibility_scope`; a step with no recorded contracts is omitted, not given an empty obligation |
+
+Refused: a tampered authority, an authority describing a different cohort, a
+capsule with no reference. Picking whichever `cohort_authority.*.json` happens
+to be in the directory would let the tool validate a plan against a cohort the
+run never used.
+
+### K3. "The missingness figure only declares one table" was wrong
+
+Step 7 of the real plan declares **both**:
+
+```
+07. 05_missingness_measurement_process_audit_figure
+    inputs=['table:missingness_measurement_audit', 'table:measurement_process_audit']
+```
+
+That claim came from the 10-step plan. Withdrawn.
+
+### The real 12-step owner matrix
+
+```
+ 1. 01_define_analysis_cohort                        -- coder --
+ 2. 02_cohort_definition_summary                     owned    descriptive_cohort_summary
+ 3. 03_table_one_by_sepsis3                          owned    grouped_table_one
+ 4. 04_prevalence_mortality_distribution             -- coder --
+ 5. 04_prevalence_mortality_distribution_figure      -- coder --
+ 6. 05_missingness_measurement_process_audit         owned    declared_missingness_audit_products
+ 7. 05_missingness_measurement_process_audit_figure  UNKNOWN  (parent binding)
+ 8. 06_primary_adjusted_association                  -- coder --
+ 9. 06_primary_adjusted_association_figure           UNKNOWN  (parent binding)
+10. 07_e1_scientific_sensitivity_table               -- coder --
+11. 08_robustness_sensitivity                        -- coder --
+12. 08_robustness_sensitivity_figure                 UNKNOWN  (parent binding)
+
+3 owned / 3 unknown_runtime_binding / 6 coder
+```
+
+Codex's replay gave 3 / 4 / 5. The one difference is step 5: it *has* a recorded
+binding, so the decline is a real verdict rather than an unknown. Reading the
+selector's own trace, it is a **capability gap, not a matching rule**:
+`exposure_outcome_distribution_figure` requires
+`table:cohort_summary` **and** `table:exposure_outcome_distribution` (it needs
+the locked denominator); the plan's figure step declares only the latter. Not
+fixed here — whether the protocol should require both inputs or the renderer
+should gain a single-table variant is a design decision, not a patch.
+
+### K4. The regression was a false green
+
+I reported "exit code 0" for a run that was `15 failed / 2051 passed`. Cause:
+`pytest ... | tail` returns **`tail`'s** status. Two `pgrep -f "pytest
+tests/research_agent"` watchers also matched their own command lines and would
+have waited forever; killed (pids 17078, 18484).
+
+Replaced with `scratchpad/regress.sh`: each leg writes pytest's **own** exit
+code to `<leg>.rc` and its complete FAILED set to `<leg>.failed`, and the two
+legs are the same selection against a clean baseline worktree
+(`/private/tmp/easyicu-k-base` @ `0df6d26`) and the working tree.
+
+Separately, the 15 failures were checked and none are mine:
+`test_flag_only_plausibility_repair.py` (9) fails on
+`ImportError: cannot import name '_records_out_of_range_evidence'` — the symbol
+is absent from `audits/validators.py` at `8e038d7`, i.e. **committed-RED before
+this session**; the trajectory-contract failures are bench exit-5 behaviour. My
+five commits touch neither file.
+
+### Overfitting check (Codex's separate note)
+
+`git diff 8e038d7..HEAD` over `src/` and `tools/`: the case tokens
+(`sepsis|sep3|sofa2|miiv|mimic|e1_`) appear in three files, and **my diffs added
+one occurrence** — a docstring line in `planning/method_literature.py` naming
+what the module does *not* supply. No case-specific branches were introduced.
+That does not rebut the broader point: every shape being fixed still comes from
+E1, so E1 is a development sample now, not a held-out test.
+
+### K5. "All digest-bound" was not yet true
+
+Only the cohort authority was verified. Bindings were found by listing
+`resolved_inputs/*.json`, and the executed plan was a stderr note comparing
+**file names**. Both now go through the manifest:
+
+* **Plan authority.** `manifest.current_plan_authority` names the revision;
+  its bytes are re-hashed against the declared sha256, and the EvidenceStore
+  record for the same `evidence_id` must repeat both path and digest (exactly
+  one record; zero or many is a refusal). Scanning any other file with that
+  context is `plan_not_authority` — a **digest** check, which matters because
+  the run root's `analysis_plan.json` and the executed
+  `analysis_plan_revision_3.json` really are different bytes (22,602 vs 25,590).
+  With `--run-dir` the plan argument is now optional: the run knows which
+  revision it ran.
+* **Bindings.** Each comes from `per_step_records[].resolved_inputs_path` at
+  `resolved_inputs_sha256`. Fail closed on: digest mismatch, a path without a
+  digest (half a receipt), a duplicate `step_id`, a capsule whose own `step_id`
+  disagrees with the record filing it, a path escaping the run directory, and a
+  capsule in `resolved_inputs/` that **no manifest record claims** (a stale
+  attempt has no authority). A step with neither path nor digest is absent, not
+  empty — `05_..._figure` in the real run is exactly that.
+
+11 new fail-closed tests; the real matrix is unchanged at 3 / 3 / 6.
+
+### K6. The scoped registry was not concurrency-safe
+
+Snapshot-and-restore on a process-global set: A snapshots, B snapshots (now
+including A's ids), A restores (dropping its own), B restores — and A's
+hypothetical is in the process permanently. Now guarded by a re-entrant lock, so
+one scoped question runs at a time; nesting in a thread still works.
+
+**Mutation-verified.** With the scope's lock replaced by `if True:`, the
+interleaved-threads test fails with a thread losing its *own* id inside its own
+scope — real corruption, not a hypothetical. Restored, both tests green.
+
+The lock is the honest fix for shared mutable state, not the good one. The
+better long-term shape is an explicit immutable registry passed down; the
+docstring says so rather than implying the global is now safe to use in
+parallel.
+
+### K7. Labelled as replay, not preflight
+
+The tool is a **post-run replay**. Its report and module docstring now say so,
+and name what a real preflight would need: prospective bindings compiled from
+the producing step's Planner-declared typed product contract, and no `unknown`
+left at the end. Not built here.
+
+### K8. The read side of the registry, and a test that proved nothing
+
+Codex: `concept_id_exists()` read the global set unguarded, so a thread that
+never enters a scope could still observe another thread's temporary ids — a
+hypothetical asked in one place becoming a real answer in another. The read now
+takes the same `RLock`.
+
+**The first test for it was worthless.** Two threads racing, one scoping and one
+polling: it passed *with the read lock removed*. The scope enters and exits in
+microseconds, so the bare reader never sampled inside it and the assertion never
+had anything to assert. Rewritten to hold the window open deliberately — the
+scope signals, sleeps a fixed interval, exits; the reader is released into that
+interval. Mutation now behaves correctly:
+
+```
+read lock removed  -> FAILED: a thread outside the scope observed a temporary
+                      concept id: ['scoped_only']
+read lock restored -> 56 passed
+```
+
+The scoped thread never waits on the reader, because with the lock working the
+reader is blocked on *it* — waiting would deadlock instead of failing.
+
+**Recorded as debt, not fixed:** the lock closes the scoped-replay race only.
+`register_cohort_concept_ids` is a permanent process-wide registration, so two
+real runs in one process still accumulate each other's cohort columns and each
+would validate a plan naming a column only the other materialised. There is one
+set to mix into; a lock cannot unmix it. The fix is an explicit immutable
+registry threaded through planning validation. Written into the module beside
+the global.
+
+### K9. Case detail removed from a shared gate module
+
+`audits/step_summary_integrity.py` carried "the 2026-07-28 E1 run ... 94,458
+rows" in a docstring. Nothing read it, but a shared gate should not narrate one
+benchmark item. Rewritten to the shape of the defect with no case identity and
+no counts.
+
+A sweep found five other `E1` references in `src/`. Three are **provenance for a
+measured constant** (`providers/prompt_budget.py`'s bytes/token calibration,
+`orchestration/config.py`'s replan default) — naming the run a number was
+measured on is traceability and stays. Two are one-line incident pointers with
+no data (`cohort/repair.py`, `missingness_measurement_figure_executor.py`); left
+as-is rather than sweeping other people's comments in an unrelated change.
+
+Verified: **no E1 result value appears anywhere in `src/`.**
+`33,997` / `OR 1.608` / `94,458` / the per-group counts return nothing.
+
+## K10 — regression comparison, both legs, real exit codes
+
+Never judged by a pipeline's status. Each leg wrote pytest's own `$?` and its
+complete `FAILED` set.
+
+| leg | pytest exit | failed | passed | skipped | wall |
+|---|---|---|---|---|---|
+| baseline `0df6d26` (clean worktree) | 1 | 33 | 7718 | 17 | 49:32 |
+| changed (working tree) | 1 | 33 | 7754 | 16 | 43:25 |
+
+`comm -13` and `comm -23` are **both empty**: zero new failures, zero fixed. The
+33 are pre-existing on the clean tree. The background harness reported the
+*script's* exit 0; the legs' own codes are both 1.
+
+`+36 passed` = 26 mine (21 replay + 5 concurrency) + 7 from two **gitignored**
+test files (`.gitignore:134-135`, `test_case_b_bootstrap.py`,
+`test_pilot_exit_status_capture.py`) that exist only on this machine and run in
+no clean checkout or CI + 3 that skip in a bare worktree. `-1 skipped` is two
+dirty-tree guards in that same gitignored file, minus one. Every extra test
+passed, so the asymmetry does not touch the verdict.
+
+Baseline cached at `~/.cache/easyicu-regress/baseline-0df6d26.failed` with a
+`.meta` recording the sha, flags, counts and invalidation rule. Later small
+patches run the changed leg only.
+
+## K11 — typed-contract gap map (read-only, zero Provider)
+
+Authority: `analysis_plan_revision_3__analysis_plan_revision_3.json`, reached
+through `manifest.current_plan_authority` + the matching EvidenceStore record,
+both digests re-hashed. The run reached **7 of 12 steps**, stopping after
+`06_primary_adjusted_association`.
+
+Current replay: **3 owned / 3 unknown / 6 coder.**
+
+| # | step | typed contract for the science | pre-run schema | today | target |
+|---|---|---|---|---|---|
+| 1 | `01_define_analysis_cohort` | full `CohortSpec` | yes | coder | `deterministic_owned` |
+| 2 | `02_cohort_definition_summary` | inputs + host receipt | yes | owned | owned |
+| 3 | `03_table_one_by_sepsis3` | `easyicu.table_one/1` — the reference standard | yes | owned | owned |
+| 4 | `04_prevalence_mortality_distribution` | **none** — in `inputs` order + intent prose | no | coder | **`unsupported_contract`** |
+| 5 | `04_..._figure` | consumption typed; parent untyped | no | coder | **`unsupported_contract`** |
+| 6 | `05_missingness_measurement_process_audit` | declared inputs + outputs | yes | owned | owned |
+| 7 | `05_..._figure` | both inputs from the owned #6 at a fixed schema | yes | unknown | `deterministic_owned` — **string only** |
+| 8 | `06_primary_adjusted_association` | partial: no covariates, form, reference level, CI method, clustering, missingness | partial | coder | **`unsupported_contract`** |
+| 9 | `06_..._figure` | no forest renderer exists | no | unknown | **`unsupported_contract`** |
+| 10 | `07_e1_scientific_sensitivity_table` | **prose only**; `flexible_age_charlson` has no typed home | no | coder | **`unsupported_contract`** |
+| 11 | `08_robustness_sensitivity` | 2 cohort axes typed; refit model + output columns not | partial | coder | **`unsupported_contract`** |
+| 12 | `08_..._figure` | no robustness renderer exists | no | unknown | **`unsupported_contract`** |
+
+**Binding rule for the next phase.** Covariates, model form and sensitivity
+design must never be inferred from intent prose, from input-column set
+arithmetic (`inputs` minus exposure/outcome/`_measured`/`_n`), or from an
+analysis id. Design the typed spec first, then implement the owner. An executor
+that picks its own covariates has taken a scientific decision that belongs to
+the Agent.
+
+### The step-7 finding, proved not read
+
+Every `owns_step` clause passes except the figure product **name**:
+
+```
+capability.admits_step       : True     <- inputs match the renderer exactly
+role / method / no specs     : True
+declared figure product      : missingness_event_timing
+renderer product allowlist   : data_quality, missingness_measurement,
+                               missingness_measurement_audit
+product in allowlist         : False    <- the only failing clause
+renamed to an allow-listed spelling -> owns_step = True
+```
+
+`figure_product` is used only as that guard and as a filename stem
+(`{product}.png`, `.figure_contract.json`, `_source_data.csv`, `figure_id`,
+`out_dir / figure_product`). It never selects a panel, variable or transform.
+
+Two consequences. (a) The allowlist has no semantic content — selection must
+bind on the typed input contract and output kind, which are already checked.
+(b) It was **accidentally doing path sanitisation**: three fixed strings cannot
+traverse a directory, a Planner-chosen name can. So the fix is a deletion **plus
+an explicit safe-`figure:<id>` validator**, not a deletion.
+
+### What the fix will and will not show on this run
+
+| supplied | matrix | step 7 |
+|---|---|---|
+| as shipped | 3 owned / 0 cond / 3 unknown / 6 coder | `unknown_runtime_binding` |
+| allowlist off | 3 owned / **1 cond** / 2 unknown / 6 coder | `conditional_receipt` |
+| allowlist off + step 7's real obligation | **4 owned / 0 cond / 2 unknown / 6 coder** | `owned` |
+
+The middle row exists because this run died at step 06 and never recorded
+contracts for step 7, so the tool refuses to invent an obligation and probes
+with a deliberately harsher non-empty one. That the real obligation is empty is
+measured, not assumed: the figure step that *did* run compiled to
+`expected_columns=()`, because a rendering step reads typed products, not raw
+concept columns. **Replayed against this run the honest report is
+`3 owned / 1 conditional_receipt / 2 unknown / 6 coder`**; it reads `4 owned`
+once any run reaches step 7, or once bindings can be compiled prospectively.
+This gap will not be closed by fabricating an obligation.
+
+### Coverage inventory
+
+Deterministic owners that exist: table one, cohort summary, missingness audit,
+source availability audit, trajectory stability, 4 figure renderers. **None**
+for cohort definition, association models, scientific sensitivity, robustness
+sensitivity, forest plots, robustness plots. `deterministic_robustness.py` is
+2,478 lines but its `__all__` is `[replay_locked_memberships,
+robustness_sensitivity_preflight_code]` — it validates Coder output, it does not
+own the step.
+
+Of the 6 steps that fall to the Coder, **none is open-ended science**;
+`allowed_coder` is the right verdict for zero of the 12. They reach the Coder
+because nobody typed their contract.
