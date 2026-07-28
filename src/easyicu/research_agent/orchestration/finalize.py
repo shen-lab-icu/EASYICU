@@ -40,6 +40,7 @@ from ..providers.cost import CostMeter
 from ..providers.factory import provider_authorization_manifest
 from ..authority.evidence_store import EvidenceStore
 from ..authority.execution_identity import execution_identity_for_pipeline
+from ..authority.plan_input_closure import resolve_registered_plan_authority
 from ..methods.multiple_testing import build_multiple_testing_report
 from ..methods.sensitivity import compute_e_value
 from ..replication.report import _literature_provenance_note
@@ -861,6 +862,12 @@ def finalise_success(
     # final current snapshots before both durable manifests are serialized.
     execute_result.flush_partial_manifest()
     step_attempt_history = list(execute_result.step_attempt_history)
+    current_plan_authority = resolve_registered_plan_authority(
+        run_dir=run_dir,
+        evidence=evidence,
+        plan=plan,
+        plan_path=plan_result.plan_path,
+    )
     step_attempt_history_ref = None
     if step_attempt_history:
         history_record = evidence.register_text(
@@ -891,7 +898,8 @@ def finalise_success(
         started_at=plan_result.started_at,
         finished_at=datetime.now(timezone.utc),
         context_path=str(plan_result.context_path.relative_to(run_dir)),
-        plan_path=str(plan_result.plan_path.relative_to(run_dir)),
+        plan_path=current_plan_authority.relative_path,
+        current_plan_authority=current_plan_authority.to_dict(),
         evidence=evidence.records(),
         findings=findings,
         per_step_records=per_step_records,

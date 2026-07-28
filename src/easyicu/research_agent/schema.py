@@ -1631,6 +1631,13 @@ class AnalysisManifest(BaseModel):
     finished_at: Optional[datetime] = None
     context_path: str
     plan_path: Optional[str] = None
+    current_plan_authority: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Exact immutable EvidenceStore plan selected for execution, including "
+            "revision, evidence id, relative path, and SHA-256."
+        ),
+    )
     evidence: List[EvidenceRecord] = Field(default_factory=list)
     findings: List[ValidationFinding] = Field(default_factory=list)
     per_step_records: List[Dict[str, Any]] = Field(

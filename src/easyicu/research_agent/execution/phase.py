@@ -214,6 +214,7 @@ from ..authority.plan_authority import (
 from ..authority.plan_input_closure import (
     close_measurement_companion_inputs,
     register_measurement_companion_input_closure,
+    resolve_registered_plan_authority,
 )
 from ..authority.plan_scope import (
     _normalise_scientific_text,
@@ -3828,7 +3829,7 @@ def run_execute_phase(
             evidence=evidence,
             plan=plan,
             prompt_pack_version=plan_result.prompt_version,
-        ).plan_path
+        ).evidence_path
         plan_result.plan_path = plan_path
     stop_after_step_id = _resolve_stop_after_step_selector(plan, stop_after_step_id)
     resume_controller = ResumeController(
@@ -4109,13 +4110,20 @@ def run_execute_phase(
             snapshot = dict(record)
             if snapshot not in step_attempt_history:
                 step_attempt_history.append(snapshot)
+        current_plan_authority = resolve_registered_plan_authority(
+            run_dir=run_dir,
+            evidence=evidence,
+            plan=plan,
+            plan_path=plan_path,
+        )
         payload: Dict[str, Any] = {
             "schema_version": "easyicu.research_manifest_partial/1",
             "run_id": run_id,
             "research_question": context.research_question,
             "started_at": plan_result.started_at.isoformat(),
             "context_path": str(plan_result.context_path.relative_to(run_dir)),
-            "plan_path": str(plan_path.relative_to(run_dir)),
+            "plan_path": current_plan_authority.relative_path,
+            "current_plan_authority": current_plan_authority.to_dict(),
             "evidence": [r.model_dump(mode="json") for r in evidence.records()],
             "findings": [f.model_dump(mode="json") for f in findings],
             "per_step_records": per_step_records,
