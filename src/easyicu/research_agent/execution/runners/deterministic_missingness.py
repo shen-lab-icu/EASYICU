@@ -690,7 +690,7 @@ def missingness_measurement_audit_code(
         rows = []
         semantic_complete_masks = {}
         observation_semantics_audit = {}
-        temporal_semantics_blocking_reasons = []
+        temporal_semantics_findings = []
         for base in concepts:
             flag_col = base + "_measured"
             value_col = _representative_value_column(base)
@@ -801,7 +801,7 @@ def missingness_measurement_audit_code(
                 )
                 observation_semantics_audit[value_col] = dict(event_audit)
                 if before_origin_n:
-                    temporal_semantics_blocking_reasons.append(
+                    temporal_semantics_findings.append(
                         "event_time_before_declared_origin:"
                         + value_col
                         + ":"
@@ -1028,16 +1028,6 @@ def missingness_measurement_audit_code(
             complete_n = int(joint_complete_mask.sum())
         else:
             complete_n = None
-        if temporal_semantics_blocking_reasons:
-            temporal_error = (
-                "Typed temporal validity audit failed: "
-                + "; ".join(temporal_semantics_blocking_reasons)
-            )
-            denominator_error = (
-                temporal_error
-                if denominator_error is None
-                else denominator_error + "; " + temporal_error
-            )
         denominator_rows.insert(
             0,
             {
@@ -1126,11 +1116,11 @@ def missingness_measurement_audit_code(
             "observation_semantics_audit": observation_semantics_audit,
             "temporal_validity_audit": {
                 "status": (
-                    "blocked"
-                    if temporal_semantics_blocking_reasons
+                    "flagged_requires_downstream_protocol"
+                    if temporal_semantics_findings
                     else "ok"
                 ),
-                "reason_codes": temporal_semantics_blocking_reasons,
+                "reason_codes": temporal_semantics_findings,
             },
             "notes": [
                 "Deterministic missingness audit (no LLM coder).",

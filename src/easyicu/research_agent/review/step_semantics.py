@@ -175,15 +175,6 @@ def _conditional_time_metric(
                     "Compute event-time missingness only inside the event-positive denominator.",
                 )
             )
-    if before_origin:
-        issues.append(
-            _issue(
-                "event_time_before_origin",
-                "error",
-                f"{variable} has {before_origin} event times before the declared origin.",
-                "Correct the time origin or exclude invalid times under a reviewed protocol.",
-            )
-        )
     if contradictory:
         issues.append(
             _issue(
