@@ -191,215 +191,466 @@ def _function_definitions(tree: ast.AST) -> list[ast.AST]:
     ]
 
 
-def _parameter_bindings(function: ast.AST, calls: Sequence[ast.Call]) -> dict:
-    """What every call to ``function`` passes for each of its parameters.
+def _parameter_names(function: ast.AST) -> Set[str]:
+    arguments = function.args
+    return {
+        argument.arg
+        for argument in (
+            *arguments.posonlyargs,
+            *arguments.args,
+            *arguments.kwonlyargs,
+        )
+    }
 
-    Generated scripts routinely funnel the write through a helper that takes the
-    output directory (or the summary mapping) as a parameter -- the corpus has
-    ``def write_summary(summary, out_dir)`` writing
+
+#: The node kinds that open a new lexical scope.  Comprehensions are included
+#: so their targets bind inside them rather than leaking a name outwards.
+_SCOPE_NODES = (
+    ast.Module,
+    ast.FunctionDef,
+    ast.AsyncFunctionDef,
+    ast.Lambda,
+    ast.ClassDef,
+    ast.ListComp,
+    ast.SetComp,
+    ast.DictComp,
+    ast.GeneratorExp,
+)
+
+
+def _stored_names(node: ast.AST) -> Set[str]:
+    """The names an assignment target rebinds.
+
+    A subscript target does not rebind its root -- ``summary["k"] = v`` leaves
+    ``summary`` bound to the same object -- and the ``Load`` context of the
+    root is what says so.
+    """
+
+    return {
+        inner.id
+        for inner in ast.walk(node)
+        if isinstance(inner, ast.Name) and isinstance(inner.ctx, (ast.Store, ast.Del))
+    }
+
+
+def _declared_elsewhere(tree: ast.AST) -> Set[str]:
+    """Names some scope declares ``global`` or ``nonlocal``.
+
+    Such a name is written in one scope and read in another, so no per-scope
+    binding list is the whole story for it.  Rather than model that, the
+    destination checks refuse the name everywhere: generated analysis scripts
+    do not route an output path through a module-level rebind, and one that
+    did would cost a repair instead of buying a pass.
+    """
+
+    names: Set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Global, ast.Nonlocal)):
+            names.update(node.names)
+    return names
+
+
+class _Scopes:
+    """Where each name is written, and which of those writes a use can see.
+
+    Every destination question in this module is a name-level one -- is *this*
+    name the directory the host handed the step, is *that* one the canonical
+    summary -- and the first draft answered it from a single flat set per
+    script.  A flat set cannot say that a name means one thing here and
+    another there, so one trusted binding anywhere marked the name trusted
+    everywhere, in both directions::
+
+        out_dir = STEP_OUT_DIR
+        out_dir = Path("/tmp")
+        write_json(out_dir / "step_summary.json", real_audit)
+
+    and, across two functions, an ``out_dir`` parameter that every caller
+    feeds the host directory lending its name to an unrelated local in the
+    next function down.  Either way the real counts went to a scratch file
+    while the artifact the host opens carried whatever the script chose to put
+    there.
+
+    Bindings are therefore collected per lexical scope, and a name is trusted
+    only when *every* binding of it in its own scope is trusted.  Mixed is not
+    trusted: a name that can be two different files cannot be proven to be the
+    right one, and refusing it costs a provider repair rather than buying a
+    pass.  Ways of binding a name that carry no readable expression -- a loop
+    target, an ``except`` alias, an import, tuple unpacking, ``*args`` -- are
+    ``opaque`` and are never trusted, for the same reason.
+    """
+
+    def __init__(self, tree: ast.Module) -> None:
+        self.module = tree
+        self.scope_of: dict[int, ast.AST] = {id(tree): tree}
+        self.parent: dict[int, Optional[ast.AST]] = {}
+        self.bindings: dict[int, dict[str, list[tuple]]] = {}
+        self._build(tree, None)
+        for name in _declared_elsewhere(tree):
+            for scope_id, names in self.bindings.items():
+                names.setdefault(name, []).append(("opaque", tree))
+            self.bindings[id(tree)].setdefault(name, []).append(("opaque", tree))
+
+    def _bind(self, scope: ast.AST, name: str, binding: tuple) -> None:
+        self.bindings.setdefault(id(scope), {}).setdefault(name, []).append(binding)
+
+    def _build(self, scope: ast.AST, parent: Optional[ast.AST]) -> None:
+        self.parent[id(scope)] = parent
+        self.bindings.setdefault(id(scope), {})
+        if isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            arguments = scope.args
+            for argument in (
+                *arguments.posonlyargs,
+                *arguments.args,
+                *arguments.kwonlyargs,
+            ):
+                self._bind(scope, argument.arg, ("param", scope))
+            for collected in (arguments.vararg, arguments.kwarg):
+                if collected is not None:
+                    self._bind(scope, collected.arg, ("opaque", scope))
+        pending = list(ast.iter_child_nodes(scope))
+        while pending:
+            node = pending.pop()
+            self.scope_of[id(node)] = scope
+            if isinstance(node, _SCOPE_NODES):
+                if isinstance(
+                    node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+                ):
+                    self._bind(scope, node.name, ("opaque", node))
+                self._build(node, scope)
+                continue
+            self._record(scope, node)
+            pending.extend(ast.iter_child_nodes(node))
+
+    def _record(self, scope: ast.AST, node: ast.AST) -> None:
+        if isinstance(node, ast.Assign):
+            if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+                self._bind(scope, node.targets[0].id, ("value", node.value))
+                return
+            for target in node.targets:
+                for name in _stored_names(target):
+                    self._bind(scope, name, ("opaque", node))
+        elif isinstance(node, ast.AnnAssign):
+            if isinstance(node.target, ast.Name) and node.value is not None:
+                self._bind(scope, node.target.id, ("value", node.value))
+            else:
+                for name in _stored_names(node.target):
+                    self._bind(scope, name, ("opaque", node))
+        elif isinstance(node, ast.NamedExpr) and isinstance(node.target, ast.Name):
+            self._bind(scope, node.target.id, ("value", node.value))
+        elif isinstance(node, (ast.With, ast.AsyncWith)):
+            for item in node.items:
+                if item.optional_vars is None:
+                    continue
+                if isinstance(item.optional_vars, ast.Name):
+                    self._bind(
+                        scope, item.optional_vars.id, ("open", item.context_expr)
+                    )
+                else:
+                    for name in _stored_names(item.optional_vars):
+                        self._bind(scope, name, ("opaque", node))
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                self._bind(
+                    scope, (alias.asname or alias.name).split(".")[0], ("opaque", node)
+                )
+        elif isinstance(node, ast.ExceptHandler):
+            if node.name:
+                self._bind(scope, node.name, ("opaque", node))
+        elif isinstance(
+            node, (ast.AugAssign, ast.For, ast.AsyncFor, ast.comprehension)
+        ):
+            for name in _stored_names(node.target):
+                self._bind(scope, name, ("opaque", node))
+
+    def owner(self, node: ast.AST, name: str) -> Optional[tuple[int, list[tuple]]]:
+        """The scope a use of ``name`` at ``node`` reads, and its bindings."""
+
+        scope = self.scope_of.get(id(node))
+        while scope is not None:
+            bindings = self.bindings.get(id(scope), {}).get(name)
+            if bindings:
+                return id(scope), bindings
+            scope = self.parent.get(id(scope))
+        return None
+
+    def resolves_into(self, node: ast.AST, trusted: Set[tuple]) -> bool:
+        """Whether a bare name at ``node`` resolves to a trusted binding."""
+
+        if not isinstance(node, ast.Name):
+            return False
+        found = self.owner(node, node.id)
+        return found is not None and (found[0], node.id) in trusted
+
+
+def _parameter_arguments(
+    tree: ast.AST,
+) -> dict[tuple[int, str], list[Optional[ast.AST]]]:
+    """What every call site passes for each parameter of each function.
+
+    Generated scripts routinely funnel the write through a helper that takes
+    the output directory (or the summary mapping) as a parameter -- the corpus
+    has ``def write_summary(summary, out_dir)`` writing
     ``out_dir / "step_summary.json"`` inside.  A recogniser that only follows
     assignments cannot read that, and in a fail-closed gate a legal spelling it
     cannot read is a wrong block, not a missed one.
 
     A parameter therefore inherits what its call sites give it, but only when
-    *every* call gives it the same kind of thing: a ``None`` here means one call
-    did not bind it, which is enough to disqualify the name.  Returns ``{}``
-    when the call sites cannot be read positionally at all.
+    *every* call gives it the same kind of thing.  A ``None`` in the list means
+    one call did not bind it; an absent entry means the call sites cannot be
+    read positionally at all, or that nothing calls the function.
     """
 
-    positional = [*function.args.posonlyargs, *function.args.args]
-    parameters = {argument.arg for argument in (*positional, *function.args.kwonlyargs)}
-    index_of = {argument.arg: index for index, argument in enumerate(positional)}
-    bound: dict = {name: [] for name in parameters}
-    called = False
-    for call in calls:
-        callee = call.func
-        name = (
-            callee.id
-            if isinstance(callee, ast.Name)
-            else callee.attr if isinstance(callee, ast.Attribute) else None
-        )
-        if name != function.name:
-            continue
-        if any(isinstance(argument, ast.Starred) for argument in call.args) or any(
-            keyword.arg is None for keyword in call.keywords
-        ):
-            # `f(*args)` / `f(**kwargs)` -- positions are unknowable.
-            return {}
-        called = True
-        for parameter in parameters:
-            index = index_of.get(parameter)
-            value = (
-                call.args[index]
-                if index is not None and index < len(call.args)
-                else None
-            )
-            for keyword in call.keywords:
-                if keyword.arg == parameter:
-                    value = keyword.value
-            bound[parameter].append(value)
-    return bound if called else {}
-
-
-def _host_output_directory_names(tree: ast.AST) -> Set[str]:
-    """Local names bound to the host's own step-output directory."""
-
-    assignments = _single_name_assignments(tree)
-    functions = _function_definitions(tree)
     calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
-    names: Set[str] = set()
-    for _ in range(len(assignments) + len(functions) + 1):
-        grew = False
-        for node in assignments:
-            target = node.targets[0]
-            assert isinstance(target, ast.Name)
-            if target.id in names:
+    arguments: dict[tuple[int, str], list[Optional[ast.AST]]] = {}
+    for function in _function_definitions(tree):
+        assert isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef))
+        positional = [*function.args.posonlyargs, *function.args.args]
+        parameters = {
+            argument.arg for argument in (*positional, *function.args.kwonlyargs)
+        }
+        index_of = {argument.arg: index for index, argument in enumerate(positional)}
+        bound: dict[str, list[Optional[ast.AST]]] = {name: [] for name in parameters}
+        called = True
+        for call in calls:
+            callee = call.func
+            name = (
+                callee.id
+                if isinstance(callee, ast.Name)
+                else callee.attr if isinstance(callee, ast.Attribute) else None
+            )
+            if name != function.name:
                 continue
-            value = _strip_path_wrappers(node.value)
-            if _reads_the_host_output_directory(value) or (
-                isinstance(value, ast.Name) and value.id in names
+            if any(isinstance(argument, ast.Starred) for argument in call.args) or any(
+                keyword.arg is None for keyword in call.keywords
             ):
-                names.add(target.id)
-                grew = True
-        for function in functions:
-            for parameter, values in _parameter_bindings(function, calls).items():
-                if parameter in names or not values:
-                    continue
-                if all(
-                    value is not None and _is_the_host_output_directory(value, names)
-                    for value in values
-                ):
-                    names.add(parameter)
-                    grew = True
-        if not grew:
-            break
-    return names
+                # `f(*args)` / `f(**kwargs)` -- positions are unknowable.
+                bound = {}
+                called = False
+                break
+            for parameter in parameters:
+                index = index_of.get(parameter)
+                value = (
+                    call.args[index]
+                    if index is not None and index < len(call.args)
+                    else None
+                )
+                for keyword in call.keywords:
+                    if keyword.arg == parameter:
+                        value = keyword.value
+                bound[parameter].append(value)
+        if not called:
+            continue
+        for parameter, values in bound.items():
+            if values:
+                arguments[(id(function), parameter)] = values
+    return arguments
 
 
-def _is_the_host_output_directory(node: ast.AST, directories: Set[str]) -> bool:
-    node = _strip_path_wrappers(node)
-    if isinstance(node, ast.Name):
-        return node.id in directories
-    return _reads_the_host_output_directory(node)
+class _Destinations:
+    """Which names denote the host's output directory and canonical summary.
 
-
-def _literal_string_names(tree: ast.AST) -> dict[str, Set[str]]:
-    """Local names bound to string literals, for a filename kept in a variable."""
-
-    assignments = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Assign)
-        and len(node.targets) == 1
-        and isinstance(node.targets[0], ast.Name)
-    ]
-    literals: dict[str, Set[str]] = {}
-    for _ in range(len(assignments) + 1):
-        grew = False
-        for node in assignments:
-            target = node.targets[0]
-            assert isinstance(target, ast.Name)
-            value = node.value
-            if isinstance(value, ast.Constant) and isinstance(value.value, str):
-                found = {value.value}
-            elif isinstance(value, ast.Name):
-                found = set(literals.get(value.id, ()))
-            else:
-                continue
-            if found - literals.get(target.id, set()):
-                literals.setdefault(target.id, set()).update(found)
-                grew = True
-        if not grew:
-            break
-    return literals
-
-
-def _names_the_canonical_summary(node: ast.AST, literals: dict[str, Set[str]]) -> bool:
-    """Whether an expression is exactly the canonical summary filename.
-
-    Exactly, not by last component: ``out_dir / "audit/step_summary.json"``
-    puts the file somewhere the host does not look, and a check that took the
-    basename could not tell the two apart.
+    Four name sets, each resolved by the same must-rule over the scope tree:
+    the directory the host handed the step, the canonical filename when it is
+    kept in a variable, the summary path itself, and an open handle on it.
+    Every one of them was a flat script-wide set before, and every one of them
+    had the same hole.
     """
 
-    node = _strip_path_wrappers(node)
-    if isinstance(node, ast.Constant) and isinstance(node.value, str):
-        return node.value == CANONICAL_STEP_SUMMARY_FILENAME
-    if isinstance(node, ast.Name):
-        return CANONICAL_STEP_SUMMARY_FILENAME in literals.get(node.id, ())
-    return False
+    def __init__(self, tree: ast.Module) -> None:
+        self.scopes = _Scopes(tree)
+        self.arguments = _parameter_arguments(tree)
+        self.literals = self._resolve_literals()
+        self.directories = self._resolve(self._binding_is_the_directory)
+        self.summaries = self._resolve(self._binding_denotes_the_summary)
+        self.handles = self._resolve(self._binding_is_a_handle)
 
+    # -- the fixpoint ---------------------------------------------------------
 
-def _denotes_the_canonical_summary(
-    node: ast.AST,
-    *,
-    directories: Set[str],
-    literals: dict[str, Set[str]],
-    summaries: Set[str],
-) -> bool:
-    """Whether an expression names the summary artifact the host itself opens.
+    def _resolve(self, predicate) -> Set[tuple]:
+        """Every ``(scope, name)`` whose *every* binding satisfies ``predicate``."""
 
-    That is ``<host output directory>/step_summary.json`` and nothing else:
-    the directory must be the one the host handed the step, and the filename
-    must be its direct child.  Anything the check cannot read this way is
-    refused, so a spelling it does not know costs a repair rather than buying
-    a pass -- which is why every spelling in the real corpus is locked by test.
-    """
+        total = sum(len(names) for names in self.scopes.bindings.values())
+        trusted: Set[tuple] = set()
+        for _ in range(total + 1):
+            grew = False
+            for scope_id, names in self.scopes.bindings.items():
+                for name, bindings in names.items():
+                    key = (scope_id, name)
+                    if key in trusted or not bindings:
+                        continue
+                    if all(predicate(name, binding, trusted) for binding in bindings):
+                        trusted.add(key)
+                        grew = True
+            if not grew:
+                break
+        return trusted
 
-    node = _strip_path_wrappers(node)
-    if isinstance(node, ast.Name):
-        return node.id in summaries
-    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
-        return _is_the_host_output_directory(
-            node.left, directories
-        ) and _names_the_canonical_summary(node.right, literals)
-    if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+    def _from_call_sites(self, function: ast.AST, name: str, reads) -> bool:
+        values = self.arguments.get((id(function), name))
+        return bool(values) and all(
+            value is not None and reads(value) for value in values
+        )
+
+    # -- the host's output directory -----------------------------------------
+
+    def _binding_is_the_directory(self, name, binding, trusted) -> bool:
+        kind, payload = binding
+        if kind == "value":
+            return self._expression_is_the_directory(payload, trusted)
+        if kind == "param":
+            return self._from_call_sites(
+                payload,
+                name,
+                lambda node: self._expression_is_the_directory(node, trusted),
+            )
         return False
-    callee = node.func
-    if callee.attr == "joinpath" and len(node.args) == 1:
-        return _is_the_host_output_directory(
-            callee.value, directories
-        ) and _names_the_canonical_summary(node.args[0], literals)
-    if callee.attr == "join" and len(node.args) == 2:
-        return _is_the_host_output_directory(
-            node.args[0], directories
-        ) and _names_the_canonical_summary(node.args[1], literals)
-    return False
 
+    def _expression_is_the_directory(self, node: ast.AST, trusted: Set[tuple]) -> bool:
+        node = _strip_path_wrappers(node)
+        if isinstance(node, ast.Name):
+            return self.scopes.resolves_into(node, trusted)
+        return _reads_the_host_output_directory(node)
 
-def _canonical_summary_names(
-    tree: ast.AST,
-    directories: Set[str],
-    literals: dict[str, Set[str]],
-) -> Set[str]:
-    """Local names bound to the canonical summary path."""
+    def is_the_output_directory(self, node: ast.AST) -> bool:
+        return self._expression_is_the_directory(node, self.directories)
 
-    assignments = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Assign)
-        and len(node.targets) == 1
-        and isinstance(node.targets[0], ast.Name)
-    ]
-    summaries: Set[str] = set()
-    for _ in range(len(assignments) + 1):
-        grew = False
-        for node in assignments:
-            target = node.targets[0]
-            assert isinstance(target, ast.Name)
-            if target.id in summaries:
-                continue
-            if _denotes_the_canonical_summary(
-                node.value,
-                directories=directories,
-                literals=literals,
-                summaries=summaries,
-            ):
-                summaries.add(target.id)
-                grew = True
-        if not grew:
-            break
-    return summaries
+    # -- the canonical filename ----------------------------------------------
+
+    def _resolve_literals(self) -> dict[tuple, Set[str]]:
+        """Every ``(scope, name)`` bound only to string literals, and to which.
+
+        Absent means the name has a binding this cannot read, so it is not
+        provably the canonical filename -- the same must-rule as the rest.
+        """
+
+        total = sum(len(names) for names in self.scopes.bindings.values())
+        literals: dict[tuple, Set[str]] = {}
+        for _ in range(total + 1):
+            grew = False
+            for scope_id, names in self.scopes.bindings.items():
+                for name, bindings in names.items():
+                    key = (scope_id, name)
+                    if key in literals or not bindings:
+                        continue
+                    found: Set[str] = set()
+                    for kind, payload in bindings:
+                        if kind != "value":
+                            found = set()
+                            break
+                        if isinstance(payload, ast.Constant) and isinstance(
+                            payload.value, str
+                        ):
+                            found.add(payload.value)
+                            continue
+                        seen = None
+                        if isinstance(payload, ast.Name):
+                            inner = self.scopes.owner(payload, payload.id)
+                            if inner is not None:
+                                seen = literals.get((inner[0], payload.id))
+                        if seen is None:
+                            found = set()
+                            break
+                        found |= seen
+                    if found:
+                        literals[key] = found
+                        grew = True
+            if not grew:
+                break
+        return literals
+
+    def names_the_canonical_summary(self, node: ast.AST) -> bool:
+        """Whether an expression can only be the canonical summary filename.
+
+        Exactly, not by last component: ``out_dir / "audit/step_summary.json"``
+        puts the file somewhere the host does not look, and a check that took
+        the basename could not tell the two apart.
+        """
+
+        node = _strip_path_wrappers(node)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return node.value == CANONICAL_STEP_SUMMARY_FILENAME
+        if not isinstance(node, ast.Name):
+            return False
+        found = self.scopes.owner(node, node.id)
+        if found is None:
+            return False
+        return self.literals.get((found[0], node.id)) == {
+            CANONICAL_STEP_SUMMARY_FILENAME
+        }
+
+    # -- the canonical summary path ------------------------------------------
+
+    def _binding_denotes_the_summary(self, name, binding, trusted) -> bool:
+        kind, payload = binding
+        if kind == "value":
+            return self._expression_denotes_the_summary(payload, trusted)
+        if kind == "param":
+            return self._from_call_sites(
+                payload,
+                name,
+                lambda node: self._expression_denotes_the_summary(node, trusted),
+            )
+        return False
+
+    def _expression_denotes_the_summary(
+        self, node: ast.AST, trusted: Set[tuple]
+    ) -> bool:
+        """Whether an expression names the summary artifact the host opens.
+
+        That is ``<host output directory>/step_summary.json`` and nothing
+        else: the directory must be the one the host handed the step, and the
+        filename must be its direct child.  Anything this cannot read is
+        refused, so a spelling it does not know costs a repair rather than
+        buying a pass -- which is why every spelling in the real corpus is
+        locked by test.
+        """
+
+        node = _strip_path_wrappers(node)
+        if isinstance(node, ast.Name):
+            return self.scopes.resolves_into(node, trusted)
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+            return self.is_the_output_directory(
+                node.left
+            ) and self.names_the_canonical_summary(node.right)
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            return False
+        callee = node.func
+        if callee.attr == "joinpath" and len(node.args) == 1:
+            return self.is_the_output_directory(
+                callee.value
+            ) and self.names_the_canonical_summary(node.args[0])
+        if callee.attr == "join" and len(node.args) == 2:
+            return self.is_the_output_directory(
+                node.args[0]
+            ) and self.names_the_canonical_summary(node.args[1])
+        return False
+
+    def denotes_the_summary(self, node: ast.AST) -> bool:
+        return self._expression_denotes_the_summary(node, self.summaries)
+
+    # -- an open handle on it -------------------------------------------------
+
+    def _binding_is_a_handle(self, name, binding, trusted) -> bool:
+        kind, payload = binding
+        if kind in {"value", "open"}:
+            return self._expression_is_a_handle(payload, trusted)
+        if kind == "param":
+            return self._from_call_sites(
+                payload, name, lambda node: self._expression_is_a_handle(node, trusted)
+            )
+        return False
+
+    def _expression_is_a_handle(self, node: ast.AST, trusted: Set[tuple]) -> bool:
+        if isinstance(node, ast.Name):
+            return self.scopes.resolves_into(node, trusted)
+        return _opens_the_canonical_summary(node, self.denotes_the_summary)
+
+    def addresses_the_summary(self, node: ast.AST) -> bool:
+        """The file itself, or a handle already open on it."""
+
+        return self.denotes_the_summary(node) or self._expression_is_a_handle(
+            node, self.handles
+        )
 
 
 def _accessed_key(node: ast.AST) -> Optional[tuple[ast.AST, object]]:
@@ -580,25 +831,38 @@ def _opens_the_canonical_summary(node: ast.AST, denotes) -> bool:
     return any(denotes(candidate) for candidate in candidates)
 
 
-def _canonical_summary_handles(tree: ast.AST, denotes) -> Set[str]:
-    """Names bound to an open handle on the canonical summary."""
+#: Constructors that produce an empty container regardless of how they are
+#: spelled.  ``defaultdict(dict)`` takes an argument and is still empty.
+_EMPTY_CONSTRUCTORS = frozenset({"dict", "list", "set", "tuple", "DataFrame", "Series"})
+_EMPTY_FACTORIES = frozenset({"defaultdict", "OrderedDict", "Counter"})
 
-    handles: Set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.With, ast.AsyncWith)):
-            for item in node.items:
-                if isinstance(
-                    item.optional_vars, ast.Name
-                ) and _opens_the_canonical_summary(item.context_expr, denotes):
-                    handles.add(item.optional_vars.id)
-        elif (
-            isinstance(node, ast.Assign)
-            and len(node.targets) == 1
-            and isinstance(node.targets[0], ast.Name)
-            and _opens_the_canonical_summary(node.value, denotes)
-        ):
-            handles.add(node.targets[0].id)
-    return handles
+
+def _initialises_an_accumulator(node: ast.AST) -> bool:
+    """Whether a binding seeds an empty accumulator rather than replacing one.
+
+    ``audit = {}`` before ``audit[column] = ...`` is the shape nearly every
+    compliant script writes, and ``n_below = 0`` before the conditional count
+    is the same idea one level down.  Neither says the name cannot carry the
+    computed record.  A *populated* literal does.
+    """
+
+    if isinstance(node, ast.Constant):
+        return node.value in (None, 0, 0.0, "", False)
+    if isinstance(node, ast.Dict):
+        return not node.keys
+    if isinstance(node, (ast.List, ast.Set, ast.Tuple)):
+        return not node.elts
+    if isinstance(node, ast.Call):
+        callee = node.func
+        name = (
+            callee.id
+            if isinstance(callee, ast.Name)
+            else callee.attr if isinstance(callee, ast.Attribute) else None
+        )
+        if name in _EMPTY_FACTORIES:
+            return True
+        return name in _EMPTY_CONSTRUCTORS and not node.args
+    return False
 
 
 def _writer_functions(tree: ast.AST) -> Set[str]:
@@ -691,23 +955,25 @@ class _FlagFlow:
             for parent in ast.walk(tree)
             for child in ast.iter_child_nodes(parent)
         }
-        self.carriers: Set[str] = set()
+        #: Names, per lexical scope, the computed record *can* reach.
+        self.carriers: Set[tuple] = set()
         self.returning_functions: Set[str] = set()
         #: How this script reaches the one artifact the host opens afterwards.
         #: A delivery is a write *to that file*; see `receipt_deliveries`.
-        self.output_directories = _host_output_directory_names(tree)
-        self.literals = _literal_string_names(tree)
-        self.summary_paths = _canonical_summary_names(
-            tree, self.output_directories, self.literals
-        )
-        self.handles = _canonical_summary_handles(tree, self.denotes_the_summary)
+        #: Scope-aware and binding-complete: a name that is the host's output
+        #: directory in one place and something else in another is neither.
+        self.destinations = _Destinations(tree)
+        self.scopes = self.destinations.scopes
         self.writer_functions = _writer_functions(tree)
         self._resolve()
+        #: Names no later binding replaces with something that cannot carry.
+        self.certified: Set[tuple] = self._resolve_certified()
+        self.certainly_returning: Set[str] = self._resolve_certainly_returning()
         #: Names holding a mapping that carries the record under the receipt
         #: key.  Reaching the file is not enough on its own: the host reads one
         #: key of it, so a count filed anywhere else in the same summary is a
         #: count the host never sees.
-        self.receipt_carriers: Set[str] = self._resolve_receipt_carriers()
+        self.receipt_carriers: Set[tuple] = self._resolve_receipt_carriers()
         #: The mask and count themselves, without the containers they are
         #: later filed into. A guard on `mask.any()` or on `n_out > 0` is a
         #: rejection; a guard on the summary dict that happens to hold the
@@ -716,23 +982,48 @@ class _FlagFlow:
         #: plausibility rejection.
         self.direct_values: Set[str] = self._resolve_direct_values()
 
-    def _carries(self, node: ast.AST) -> bool:
+    def _reaches(self, node: ast.AST, names: Set[tuple], functions: Set[str]) -> bool:
         for inner in ast.walk(node):
             if id(inner) in self.compared:
                 return True
             if (
                 isinstance(inner, ast.Name)
                 and isinstance(inner.ctx, ast.Load)
-                and inner.id in self.carriers
+                and self.scopes.resolves_into(inner, names)
             ):
                 return True
             if (
                 isinstance(inner, ast.Call)
                 and isinstance(inner.func, ast.Name)
-                and inner.func.id in self.returning_functions
+                and inner.func.id in functions
             ):
                 return True
         return False
+
+    def _carries(self, node: ast.AST) -> bool:
+        """Whether the computed record *can* reach here."""
+
+        return self._reaches(node, self.carriers, self.returning_functions)
+
+    def _certainly_carries(self, node: ast.AST) -> bool:
+        """Whether it can reach here and nothing later replaces it."""
+
+        return self._reaches(node, self.certified, self.certainly_returning)
+
+    def _scoped(self, node: ast.AST, name: str) -> Optional[tuple]:
+        """Which scope's ``name`` a write at ``node`` touches.
+
+        Resolved outward, not taken from the enclosing scope: filling a
+        module-level accumulator from inside a helper -- ``plausibility_audit
+        [column] = ...`` in the per-column function, which is the shape the
+        real corpus writes -- is a write to the *module's* name.  A subscript
+        does not create a local one.
+        """
+
+        found = self.scopes.owner(node, name)
+        if found is not None:
+            return (found[0], name)
+        return (id(self.scopes.module), name)
 
     def _resolve(self) -> None:
         assignments = [
@@ -754,8 +1045,9 @@ class _FlagFlow:
                 if value is None or not self._carries(value):
                     continue
                 for name in self._assigned_names(node):
-                    if name not in self.carriers:
-                        self.carriers.add(name)
+                    key = self._scoped(node, name)
+                    if key is not None and key not in self.carriers:
+                        self.carriers.add(key)
                         grew = True
             for function in functions:
                 if function.name in self.returning_functions:
@@ -771,8 +1063,81 @@ class _FlagFlow:
             if not grew:
                 break
 
-    def _resolve_direct_values(self) -> Set[str]:
-        direct: Set[str] = set()
+    def _resolve_certified(self) -> Set[tuple]:
+        """Carriers no other binding of the same name replaces.
+
+        ``carriers`` answers "can the computed record reach this name" -- a
+        *may* question, and the right one for finding the computation.
+        Certifying a delivery is the opposite question, and the same set
+        answers it wrongly::
+
+            plausibility_audit = {...computed...}
+            plausibility_audit = {"marker": {"out_of_range_n": 0}}
+
+        leaves the name in ``carriers`` for good, so writing the second value
+        to the real artifact reads as a delivery of the first -- the same
+        false green as the scratch-directory one, moved from the path to the
+        payload.  A whole-name rebinding to something that cannot carry
+        therefore disqualifies the name; seeding an empty accumulator does
+        not, because it replaces nothing.
+
+        Each binding is judged against the converged ``carriers`` set, not
+        against this one, so a name rebound from itself (``audit =
+        dict(audit)``) does not disqualify itself.
+        """
+
+        certified: Set[tuple] = set()
+        for key in self.carriers:
+            scope_id, name = key
+            bindings = self.scopes.bindings.get(scope_id, {}).get(name)
+            if bindings is None:
+                # Bound only by a subscript write into an object it never
+                # rebinds, so there is nothing that could have replaced it.
+                certified.add(key)
+                continue
+            if all(self._binding_survives(name, binding) for binding in bindings):
+                certified.add(key)
+        return certified
+
+    def _binding_survives(self, name: str, binding: tuple) -> bool:
+        kind, payload = binding
+        if kind == "value":
+            return self._carries(payload) or _initialises_an_accumulator(payload)
+        if kind == "param":
+            values = self.destinations.arguments.get((id(payload), name))
+            return bool(values) and all(
+                value is not None
+                and (self._carries(value) or _initialises_an_accumulator(value))
+                for value in values
+            )
+        return False
+
+    def _resolve_certainly_returning(self) -> Set[str]:
+        functions = [
+            node
+            for node in ast.walk(self.tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        ]
+        certain: Set[str] = set()
+        for _ in range(len(functions) + 1):
+            grew = False
+            for function in functions:
+                if function.name in certain:
+                    continue
+                if any(
+                    isinstance(inner, ast.Return)
+                    and inner.value is not None
+                    and self._reaches(inner.value, self.certified, certain)
+                    for inner in ast.walk(function)
+                ):
+                    certain.add(function.name)
+                    grew = True
+            if not grew:
+                break
+        return certain
+
+    def _resolve_direct_values(self) -> Set[tuple]:
+        direct: Set[tuple] = set()
         assignments = [
             node
             for node in ast.walk(self.tree)
@@ -784,19 +1149,19 @@ class _FlagFlow:
         for _ in range(len(assignments) + 1):
             grew = False
             for node in assignments:
-                target = node.targets[0].id
-                if target in direct:
+                key = self._scoped(node, node.targets[0].id)
+                if key is None or key in direct:
                     continue
                 if any(
                     id(inner) in self.compared
                     or (
                         isinstance(inner, ast.Name)
                         and isinstance(inner.ctx, ast.Load)
-                        and inner.id in direct
+                        and self.scopes.resolves_into(inner, direct)
                     )
                     for inner in ast.walk(node.value)
                 ):
-                    direct.add(target)
+                    direct.add(key)
                     grew = True
             if not grew:
                 break
@@ -810,7 +1175,7 @@ class _FlagFlow:
             or (
                 isinstance(inner, ast.Name)
                 and isinstance(inner.ctx, ast.Load)
-                and inner.id in self.direct_values
+                and self.scopes.resolves_into(inner, self.direct_values)
             )
             for inner in ast.walk(node)
         )
@@ -875,19 +1240,12 @@ class _FlagFlow:
     def denotes_the_summary(self, node: ast.AST) -> bool:
         """Whether an expression names the summary artifact the host opens."""
 
-        return _denotes_the_canonical_summary(
-            node,
-            directories=self.output_directories,
-            literals=self.literals,
-            summaries=self.summary_paths,
-        )
+        return self.destinations.denotes_the_summary(node)
 
     def _addresses_the_summary(self, node: ast.AST) -> bool:
-        return self.denotes_the_summary(node) or (
-            isinstance(node, ast.Name) and node.id in self.handles
-        )
+        return self.destinations.addresses_the_summary(node)
 
-    def _resolve_receipt_carriers(self) -> Set[str]:
+    def _resolve_receipt_carriers(self) -> Set[tuple]:
         """Names holding a mapping whose receipt key is the out-of-range record.
 
         Seeded by the two ways a script files something under a literal key --
@@ -896,9 +1254,16 @@ class _FlagFlow:
         *proven* to return such a mapping.  It deliberately does not propagate
         through nesting: ``{"quality": summary}`` moves the receipt one level
         down, where the host does not look for it.
+
+        This is the set that certifies a delivery, so it is built from
+        ``certified`` rather than ``carriers`` and is keyed by scope.  Both
+        matter: a script that files the real record under one function's
+        ``payload`` and hands a literal to another function's ``payload``
+        satisfied the flat spelling of this set with two writes that never
+        met.
         """
 
-        names: Set[str] = set()
+        names: Set[tuple] = set()
         for node in ast.walk(self.tree):
             if isinstance(node, ast.Assign):
                 for target in node.targets:
@@ -906,11 +1271,12 @@ class _FlagFlow:
                         isinstance(target, ast.Subscript)
                         and isinstance(target.slice, ast.Constant)
                         and target.slice.value == RECEIPT_SUMMARY_KEY
-                        and self._carries(node.value)
+                        and self._certainly_carries(node.value)
                     ):
                         root = _subscript_root(target)
-                        if root is not None:
-                            names.add(root)
+                        key = None if root is None else self._scoped(node, root)
+                        if key is not None:
+                            names.add(key)
             elif (
                 isinstance(node, ast.Call)
                 and isinstance(node.func, ast.Attribute)
@@ -918,11 +1284,12 @@ class _FlagFlow:
                 and len(node.args) == 2
                 and isinstance(node.args[0], ast.Constant)
                 and node.args[0].value == RECEIPT_SUMMARY_KEY
-                and self._carries(node.args[1])
+                and self._certainly_carries(node.args[1])
             ):
                 root = _subscript_root(node.func.value)
-                if root is not None:
-                    names.add(root)
+                key = None if root is None else self._scoped(node, root)
+                if key is not None:
+                    names.add(key)
             elif (
                 isinstance(node, ast.Call)
                 and isinstance(node.func, ast.Attribute)
@@ -932,19 +1299,20 @@ class _FlagFlow:
                 )
             ):
                 root = _subscript_root(node.func.value)
-                if root is not None:
-                    names.add(root)
+                key = None if root is None else self._scoped(node, root)
+                if key is not None:
+                    names.add(key)
 
         assignments = _single_name_assignments(self.tree)
         functions = _function_definitions(self.tree)
-        calls = [node for node in ast.walk(self.tree) if isinstance(node, ast.Call)]
         returning: Set[str] = set()
         for _ in range(len(assignments) + len(functions) + 1):
             grew = False
             for node in assignments:
                 target = node.targets[0]
                 assert isinstance(target, ast.Name)
-                if target.id in names:
+                key = self._scoped(node, target.id)
+                if key is None or key in names:
                     continue
                 value = node.value
                 if self._is_receipt_mapping(value, names) or (
@@ -952,21 +1320,25 @@ class _FlagFlow:
                     and isinstance(value.func, ast.Name)
                     and value.func.id in returning
                 ):
-                    names.add(target.id)
+                    names.add(key)
                     grew = True
             for function in functions:
                 # A helper the script hands the summary to carries it inside,
                 # the same way one it hands the output directory to does.  Only
                 # when every call site agrees: one call that does not bind the
-                # parameter is enough to leave it unproven.
-                for parameter, values in _parameter_bindings(function, calls).items():
-                    if parameter in names or not values:
+                # parameter is enough to leave it unproven -- and the parameter
+                # is the one belonging to *this* function, not every parameter
+                # of that name in the script.
+                for parameter in _parameter_names(function):
+                    key = (id(function), parameter)
+                    values = self.destinations.arguments.get(key)
+                    if key in names or not values:
                         continue
                     if all(
                         value is not None and self._is_receipt_mapping(value, names)
                         for value in values
                     ):
-                        names.add(parameter)
+                        names.add(key)
                         grew = True
                 if function.name in returning:
                     continue
@@ -982,21 +1354,21 @@ class _FlagFlow:
                 break
         return names
 
-    def _is_receipt_mapping(self, node: ast.AST, names: Set[str]) -> bool:
+    def _is_receipt_mapping(self, node: ast.AST, names: Set[tuple]) -> bool:
         """Whether an expression *is* a mapping carrying the record at its key."""
 
         for value in _branch_values(node):
-            if isinstance(value, ast.Name) and value.id in names:
+            if self.scopes.resolves_into(value, names):
                 return True
             if isinstance(value, ast.Dict):
                 for key, item in zip(value.keys, value.values):
                     if key is None:  # `{**summary}`
-                        if isinstance(item, ast.Name) and item.id in names:
+                        if self.scopes.resolves_into(item, names):
                             return True
                     elif (
                         isinstance(key, ast.Constant)
                         and key.value == RECEIPT_SUMMARY_KEY
-                        and self._carries(item)
+                        and self._certainly_carries(item)
                     ):
                         return True
             if (
@@ -1006,12 +1378,9 @@ class _FlagFlow:
             ):
                 for keyword in value.keywords:
                     if keyword.arg is None:
-                        if (
-                            isinstance(keyword.value, ast.Name)
-                            and keyword.value.id in names
-                        ):
+                        if self.scopes.resolves_into(keyword.value, names):
                             return True
-                    elif keyword.arg == RECEIPT_SUMMARY_KEY and self._carries(
+                    elif keyword.arg == RECEIPT_SUMMARY_KEY and self._certainly_carries(
                         keyword.value
                     ):
                         return True
