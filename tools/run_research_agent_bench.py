@@ -807,6 +807,14 @@ def _figure2_canary_passed(score: Mapping[str, Any]) -> bool:
     aware = score.get("aware")
     if not isinstance(aware, Mapping):
         return False
+    requires_scientific_closure = "e1_scientific_closure" in str(
+        score.get("protocol_version") or ""
+    )
+    scientific_acceptance = aware.get("scientific_acceptance")
+    scientific_acceptance_ok = (
+        isinstance(scientific_acceptance, Mapping)
+        and scientific_acceptance.get("status") == "accepted"
+    )
     evaluation = aware.get("figure2_evaluation_attempt")
     paper_tristate: Optional[str] = None
     if isinstance(evaluation, Mapping):
@@ -836,6 +844,7 @@ def _figure2_canary_passed(score: Mapping[str, Any]) -> bool:
         and isinstance(evaluation, Mapping)
         and evaluation.get("status") == "valid"
         and paper_tristate == "gate_reportable"
+        and (not requires_scientific_closure or scientific_acceptance_ok)
     )
 
 
@@ -1064,11 +1073,17 @@ def _arm_execution_succeeded(arm: Any) -> bool:
 
     if not isinstance(arm, Mapping):
         return False
+    scientific_acceptance = arm.get("scientific_acceptance")
+    scientific_acceptance_ok = (
+        not isinstance(scientific_acceptance, Mapping)
+        or scientific_acceptance.get("status") == "accepted"
+    )
     return bool(
         arm.get("execution_complete")
         and arm.get("step_scientific_requirements_complete")
         and not arm.get("failed_step_ids")
         and not arm.get("missing_step_ids")
+        and scientific_acceptance_ok
     )
 
 
@@ -1098,6 +1113,20 @@ def _score_execution_failures(score: Any) -> List[str]:
             detail.append(f"missing steps {missing}")
         if not arm.get("step_scientific_requirements_complete") and not detail:
             detail.append("step scientific requirements incomplete")
+        scientific_acceptance = arm.get("scientific_acceptance")
+        if (
+            isinstance(scientific_acceptance, Mapping)
+            and scientific_acceptance.get("status") != "accepted"
+        ):
+            reason_codes = [
+                str(issue.get("reason_code"))
+                for issue in scientific_acceptance.get("issues") or []
+                if isinstance(issue, Mapping) and issue.get("reason_code")
+            ]
+            detail.append(
+                "scientific acceptance rejected"
+                + (f" ({', '.join(reason_codes[:5])})" if reason_codes else "")
+            )
         if not detail:
             detail.append("execution_complete is false")
         completed = arm.get("completed_step_count")
@@ -1215,6 +1244,22 @@ def _score_arm(*, run_dir: Path, item, label: str) -> Dict[str, Any]:
         result["figure2_evaluation_attempt"] = _figure2_evaluation_attempt(
             run_dir=run_dir,
             item=item,
+        )
+    scientific_contract = getattr(item, "scientific_acceptance_contract", None)
+    if isinstance(scientific_contract, Mapping):
+        from benchmarks.figure2_canonical9.e1_scientific_acceptance import (
+            write_e1_scientific_acceptance_receipt,
+        )
+
+        scientific_receipt, scientific_receipt_path = (
+            write_e1_scientific_acceptance_receipt(
+                run_dir=run_dir,
+                contract=scientific_contract,
+            )
+        )
+        result["scientific_acceptance"] = scientific_receipt
+        result["scientific_acceptance_receipt"] = str(
+            scientific_receipt_path
         )
     return result
 
@@ -4618,6 +4663,11 @@ def _external_item_from_row(
         interpretation_note=(str(row.get("interpretation_note") or "").strip() or None),
         protocol_version=(str(row.get("protocol_version") or "").strip() or None),
         rubric_version=(str(row.get("rubric_version") or "").strip() or None),
+        scientific_acceptance_contract=(
+            dict(row.get("scientific_acceptance_contract") or {})
+            if isinstance(row.get("scientific_acceptance_contract"), Mapping)
+            else None
+        ),
         protocol_adapter=protocol_adapter,
         cohort_size=int(cohort_size),
         cohort_columns=[str(column) for column in cohort_columns],

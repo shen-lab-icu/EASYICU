@@ -277,6 +277,14 @@ def _build_jsonl_row(
         "candidate_variables": list(spec.feature_concepts),
         "notes": spec.notes,
     }
+    if task.task_id == "e1_sepsis3_prevalence_mortality":
+        from benchmarks.figure2_canonical9.e1_scientific_acceptance import (
+            e1_scientific_acceptance_contract,
+        )
+
+        row["scientific_acceptance_contract"] = (
+            e1_scientific_acceptance_contract()
+        )
     if trajectory_path is not None and trajectory_verified is not None:
         trajectory_ref = trajectory_verified.reference
         row.update(
