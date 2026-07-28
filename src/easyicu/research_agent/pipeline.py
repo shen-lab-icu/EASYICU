@@ -438,6 +438,11 @@ from .authority.run_lock import (
     current_locked_run_id,
     exclusive_run_execution,
 )
+from .authority.run_heartbeat import (
+    bind_active_run_heartbeat,
+    record_active_run_progress,
+    run_heartbeat_scope,
+)
 from .audits.validators import (
     ClinicalConstraintValidator,
     ConceptUsageAuditor,
@@ -3899,15 +3904,25 @@ class ResearchAgentPipeline:
         audit_logger: Optional[AuditLogger] = None
 
         def _emit_progress(stage: str, message: str, **extra: Any) -> None:
+            progress_status = str(extra.get("status", "running"))
+            progress_step_id = (
+                str(extra.get("step_id")) if extra.get("step_id") else None
+            )
+            record_active_run_progress(
+                stage=stage,
+                message=message,
+                status=progress_status,
+                step_id=progress_step_id,
+                phase_timeout_seconds=extra.get("phase_timeout_seconds"),
+                run_id=(str(extra.get("run_id")) if extra.get("run_id") else None),
+            )
             if audit_logger is not None:
                 try:
                     audit_logger.emit(
                         phase=stage,
                         event=message,
-                        status=str(extra.get("status", "running")),
-                        step_id=(
-                            str(extra.get("step_id")) if extra.get("step_id") else None
-                        ),
+                        status=progress_status,
+                        step_id=progress_step_id,
                         detail={
                             k: v
                             for k, v in extra.items()
@@ -4087,6 +4102,10 @@ class ResearchAgentPipeline:
         else:
             run_dir = self.workdir / run_id
             run_dir.mkdir(parents=True, exist_ok=True)
+        bind_active_run_heartbeat(
+            run_dir,
+            task_timeout_seconds=self._heartbeat_wall_clock_remaining(),
+        )
 
         if not resume_input_verified and spec_obj is not None:
             experiment_spec_path = dump_experiment_spec(
@@ -4702,10 +4721,15 @@ class ResearchAgentPipeline:
         # which is exactly why resume has to take one of its own.
         workflow = pending_state["workflow"]
         try:
-            with acquire_run_execution_lock(
-                workdir=Path(self.workdir), run_id=pending.run_id
-            ):
-                outcome = workflow.resume(payload)
+            with run_heartbeat_scope(run_id=pending.run_id):
+                bind_active_run_heartbeat(
+                    Path(pending.run_dir),
+                    task_timeout_seconds=self._heartbeat_wall_clock_remaining(),
+                )
+                with acquire_run_execution_lock(
+                    workdir=Path(self.workdir), run_id=pending.run_id
+                ):
+                    outcome = workflow.resume(payload)
             return self._pipeline_result_or_pending(
                 outcome,
                 workflow=workflow,
@@ -5206,6 +5230,13 @@ class ResearchAgentPipeline:
     @staticmethod
     def _iter_mock_clients(llm: Any):
         yield from _pipeline_cache.iter_mock_clients(llm)
+
+    def _heartbeat_wall_clock_remaining(self) -> Optional[float]:
+        """Return the live task window rather than restarting it on resume."""
+
+        if self._provider_hard_stop is not None:
+            return self._provider_hard_stop.assert_active()
+        return self._config.max_wall_clock_seconds_per_task
 
     def _cache_flag_payload(self) -> Dict[str, Any]:
         """Return the bag of pipeline-level flags that participate in
