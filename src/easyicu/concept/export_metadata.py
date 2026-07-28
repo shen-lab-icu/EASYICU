@@ -55,6 +55,34 @@ def _metadata_definition_for_export(concept_id: str, module: str, dictionary: An
     return ConceptDefinition.from_name_and_payload(concept_id, payload)
 
 
+def _catalog_declares_event_semantics(concept_id: str) -> bool:
+    """Return whether the public catalog declares a binary event output.
+
+    Derived record concepts can retain ``rec_cncpt`` in the extraction
+    dictionary because they carry event times while their materialized value
+    column is still a Boolean status.  The catalog owns that public value
+    domain; export metadata must not independently reinterpret the storage
+    dtype or downgrade it to an untyped numeric value.
+    """
+
+    from easyicu.concept.catalog import CONCEPT_DICTIONARY
+
+    _name_en, _name_zh, unit = CONCEPT_DICTIONARY.get(
+        concept_id, (concept_id, concept_id, "")
+    )
+    return str(unit).strip().lower() == "boolean"
+
+
+def _definition_has_event_semantics(concept_id: str, definition: Any) -> bool:
+    return (
+        definition.class_name == "lgl_cncpt"
+        or (
+            definition.class_name != "fct_cncpt"
+            and _catalog_declares_event_semantics(concept_id)
+        )
+    )
+
+
 def _export_identity_and_time_coordinates(
     columns: Sequence[str], database: str
 ) -> tuple[str, tuple[Any, ...], set[str]]:
@@ -313,7 +341,9 @@ def build_export_file_metadata_binding(
         if concept in unresolved_columns:
             definition = _metadata_definition_for_export(concept, module, dictionary)
             physical_is_bool = pd.api.types.is_bool_dtype(frame[concept])
-            concept_is_logical = definition.class_name == "lgl_cncpt"
+            concept_is_logical = _definition_has_event_semantics(
+                concept, definition
+            )
             categorical_boolean = (
                 physical_is_bool and definition.class_name == "fct_cncpt"
             )
@@ -346,7 +376,9 @@ def build_export_file_metadata_binding(
                 concept=concept,
                 column=column,
                 series=frame[column],
-                logical_concept=definition.class_name == "lgl_cncpt",
+                logical_concept=_definition_has_event_semantics(
+                    concept, definition
+                ),
             )
             if projected is None:
                 continue

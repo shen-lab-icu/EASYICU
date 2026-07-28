@@ -33,6 +33,12 @@ from easyicu.concept.export_metadata import (
     build_export_file_metadata_binding,
     missing_primary_metadata_concepts,
 )
+from easyicu.concept_output_sources import (
+    ConceptLoadPlan,
+    ConceptLoadPlanError,
+    compile_concept_load_plan,
+)
+from easyicu.outcome_availability import structural_outcome_unavailability
 from easyicu.webserver.input_validation import parse_bool
 
 # Core metadata tables per database — a folder that holds these (as parquet or
@@ -56,6 +62,10 @@ _DB_LABELS = {
 }
 
 _MODULE_MANIFESTS = ("easyicu_export_manifest.json", "_manifest.json")
+_EXPORT_METADATA_FILES = {
+    "feature_definitions.csv",
+    "feature_definitions.json",
+}
 _NATIVE_EXPORT_SCHEMA_V2 = "easyicu_native_export_v2"
 DEFAULT_OBSERVATION_WINDOW_HOURS = 24 * 30
 _WORKSPACE_SAMPLE_LIMIT = 500
@@ -784,6 +794,10 @@ def _render_export_readme(
         sepsis_def.get("sofa_increase", {}) if isinstance(sepsis_def, dict) else {}
     )
     modules = [f.get("module") for f in files if f.get("module")]
+    concept_availability = manifest.get("concept_availability") or {}
+    structurally_unavailable_count = int(
+        concept_availability.get("structurally_unavailable_count") or 0
+    )
     unique_modules = []
     for module in modules:
         if module not in unique_modules:
@@ -829,6 +843,7 @@ def _render_export_readme(
         f"- Observation window: `{cohort.get('observation_window_hours', '')} hours`",
         f"- Modules: `{', '.join(unique_modules)}`",
         f"- Concepts selected: `{sum(int(f.get('concepts') or 0) for f in files)}`",
+        f"- Structurally unavailable for this database: `{structurally_unavailable_count}` (listed with reason codes in `_manifest.json`)",
         *definition_lines,
         "",
         "## Reproducibility files",
@@ -955,6 +970,7 @@ def _feature_definition_payload(
     concept_plan: Dict[str, List[str]],
     files: List[Dict[str, Any]],
     api_module: Any,
+    unavailable_concepts: Optional[Sequence[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Build a metadata-only definition manifest for selected concepts."""
     from easyicu.concept.catalog import (
@@ -983,6 +999,11 @@ def _feature_definition_payload(
         if module and file_name:
             file_by_module.setdefault(module, []).append(file_name)
 
+    unavailable_by_concept = {
+        str(item.get("concept_id")): dict(item)
+        for item in (unavailable_concepts or ())
+        if item.get("concept_id")
+    }
     records: List[Dict[str, Any]] = []
     for module, concept_ids in concept_plan.items():
         group_en, group_zh = CONCEPT_GROUP_NAMES.get(module, (module, module))
@@ -992,6 +1013,7 @@ def _feature_definition_payload(
             )
             desc_en, desc_zh = CONCEPT_DESCRIPTIONS.get(concept_id, ("", ""))
             derived_output_source = COMPOSITE_CONCEPT_OUTPUT_SOURCES.get(concept_id)
+            unavailable = unavailable_by_concept.get(concept_id)
             records.append(
                 {
                     "database": database,
@@ -1004,6 +1026,18 @@ def _feature_definition_payload(
                     "module_name_zh": group_zh,
                     "description_en": desc_en,
                     "description_zh": desc_zh,
+                    "availability": (
+                        unavailable
+                        if unavailable is not None
+                        else {
+                            "concept_id": concept_id,
+                            "module": module,
+                            "database": database,
+                            "status": "selected_for_export",
+                            "reason_code": None,
+                            "supported_databases": [],
+                        }
+                    ),
                     "source": {
                         "data_source_ref": data_source_ref,
                         "export_ref": export_ref,
@@ -1207,6 +1241,39 @@ def _missing_primary_metadata_concepts(
         concept_plan=concept_plan,
         file_bindings=file_bindings,
     )
+
+
+def _classify_structurally_unavailable_concepts(
+    *,
+    concepts: Sequence[str],
+    concept_plan: Dict[str, List[str]],
+    database: str,
+) -> tuple[List[Dict[str, Any]], List[str]]:
+    """Separate owner-confirmed cross-database gaps from unexplained outputs."""
+
+    module_by_concept = {
+        concept: module
+        for module, module_concepts in concept_plan.items()
+        for concept in module_concepts
+    }
+    unavailable: List[Dict[str, Any]] = []
+    unexplained: List[str] = []
+    for concept in concepts:
+        receipt = structural_outcome_unavailability(concept, database)
+        if receipt is None:
+            unexplained.append(concept)
+            continue
+        unavailable.append(
+            {
+                "concept_id": receipt.concept_id,
+                "module": module_by_concept.get(receipt.concept_id),
+                "database": receipt.database,
+                "status": "structurally_unavailable",
+                "reason_code": receipt.reason_code,
+                "supported_databases": list(receipt.supported_databases),
+            }
+        )
+    return unavailable, unexplained
 
 
 def _coerce_int(
@@ -1774,6 +1841,38 @@ def _module_uses_sepsis_kwargs(concepts: List[str]) -> bool:
     return any(str(concept) in sepsis_concepts for concept in concepts)
 
 
+def _materialize_concept_load_plan(frame: Any, plan: ConceptLoadPlan) -> Any:
+    """Project loader source columns back onto the requested public outputs."""
+
+    if not plan.materializations or frame is None or not hasattr(frame, "columns"):
+        return frame
+
+    projected = frame
+    copied = False
+    for binding in plan.materializations:
+        output = binding.output_concept
+        source = binding.source_concept
+        if output in projected.columns or source not in projected.columns:
+            continue
+        if not copied:
+            projected = projected.copy()
+            copied = True
+        projected[output] = projected[source]
+
+    removable_sources = {
+        binding.source_concept
+        for binding in plan.materializations
+        if binding.source_concept not in plan.output_concepts
+        and binding.output_concept in projected.columns
+        and binding.source_concept in projected.columns
+    }
+    if removable_sources:
+        if not copied:
+            projected = projected.copy()
+        projected = projected.drop(columns=sorted(removable_sources))
+    return projected
+
+
 def make_export_runner(
     data_path: str,
     database: str,
@@ -1930,14 +2029,25 @@ def make_export_runner(
                 if getattr(job, "cancel_requested", False):
                     break
                 module_concepts = concept_plan[mod]
+                try:
+                    load_plan = compile_concept_load_plan(module_concepts)
+                except ConceptLoadPlanError as exc:
+                    raise ExportCohortError(
+                        "concept_output_load_plan_invalid",
+                        {
+                            "module": mod,
+                            "reason": exc.reason_code,
+                            "position": exc.position,
+                        },
+                    ) from exc
                 use_sofa2 = any(
                     c.startswith("sofa2") or c == "sep3_sofa2" for c in module_concepts
                 )
                 module_kwargs = dict(load_kwargs)
-                if _module_uses_sepsis_kwargs(module_concepts):
+                if _module_uses_sepsis_kwargs(list(load_plan.source_concepts)):
                     module_kwargs.update(sepsis_load_kwargs)
                 df = api.load_concepts(
-                    module_concepts,
+                    list(load_plan.source_concepts),
                     patient_ids=patient_ids,
                     database=database,
                     data_path=str(data_path),
@@ -1946,6 +2056,13 @@ def make_export_runner(
                     verbose=False,
                     **module_kwargs,
                 )
+                if isinstance(df, dict):
+                    df = {
+                        key: _materialize_concept_load_plan(sub, load_plan)
+                        for key, sub in df.items()
+                    }
+                else:
+                    df = _materialize_concept_load_plan(df, load_plan)
                 written: List[Dict[str, Any]] = []
                 if isinstance(df, dict):
                     for key, sub in df.items():
@@ -2020,10 +2137,17 @@ def make_export_runner(
             concept_plan={module: concept_plan[module] for module in sel},
             file_bindings=metadata_file_bindings,
         )
-        if missing_primary_metadata:
+        unavailable_concepts, unexplained_missing = (
+            _classify_structurally_unavailable_concepts(
+                concepts=missing_primary_metadata,
+                concept_plan={module: concept_plan[module] for module in sel},
+                database=database,
+            )
+        )
+        if unexplained_missing:
             raise ExportCohortError(
                 "column_metadata_primary_binding_missing",
-                {"concepts": missing_primary_metadata},
+                {"concepts": unexplained_missing},
             )
 
         if include_feature_definitions:
@@ -2034,6 +2158,7 @@ def make_export_runner(
                 concept_plan={module: concept_plan[module] for module in sel},
                 files=files,
                 api_module=api,
+                unavailable_concepts=unavailable_concepts,
             )
             definition_files = _write_feature_definition_files(out, definition_payload)
 
@@ -2063,6 +2188,10 @@ def make_export_runner(
                     "explicit" if concepts is not None else "all_in_selected_modules"
                 ),
                 "modules": {module: concept_plan[module] for module in sel},
+            },
+            "concept_availability": {
+                "structurally_unavailable_count": len(unavailable_concepts),
+                "structurally_unavailable": unavailable_concepts,
             },
             "generated": time.strftime("%Y-%m-%dT%H:%M:%S"),
             "files": files,
@@ -2635,7 +2764,12 @@ def _export_file_inventory(
     }
     out: List[Dict[str, Any]] = []
     for f in sorted(path.iterdir(), key=lambda p: p.name):
-        if f.name.startswith(".") or f.name in _MODULE_MANIFESTS or not f.is_file():
+        if (
+            f.name.startswith(".")
+            or f.name in _MODULE_MANIFESTS
+            or f.name in _EXPORT_METADATA_FILES
+            or not f.is_file()
+        ):
             continue
         if f.suffix.lower() not in {".csv", ".parquet", ".xlsx"}:
             continue
@@ -2717,6 +2851,7 @@ def _read_export_projection(
     *,
     columns: Optional[List[str]],
     stay_ids: Optional[set[str]],
+    entity_column: str = "stay_id",
 ) -> Any:
     """Read projected export columns, pushing a bounded stay filter when set."""
     import pandas as pd
@@ -2728,8 +2863,12 @@ def _read_export_projection(
         if columns is not None
         else list(available)
     )
-    if stay_ids is not None and "stay_id" in available and "stay_id" not in selected:
-        selected.insert(0, "stay_id")
+    if (
+        stay_ids is not None
+        and entity_column in available
+        and entity_column not in selected
+    ):
+        selected.insert(0, entity_column)
     if not selected:
         return pd.DataFrame()
     if stay_ids is not None and not stay_ids:
@@ -2744,11 +2883,11 @@ def _read_export_projection(
             dataset = ds.dataset(path, format="parquet")
             filter_expression = None
             if stay_ids is not None:
-                if "stay_id" not in dataset.schema.names:
+                if entity_column not in dataset.schema.names:
                     return pd.DataFrame(columns=selected)
-                field_type = dataset.schema.field("stay_id").type
+                field_type = dataset.schema.field(entity_column).type
                 values = pc.cast(pa.array(sorted(stay_ids)), field_type)
-                filter_expression = ds.field("stay_id").isin(values)
+                filter_expression = ds.field(entity_column).isin(values)
             return dataset.to_table(
                 columns=selected,
                 filter=filter_expression,
@@ -2759,6 +2898,7 @@ def _read_export_projection(
                 selected,
                 stay_ids=stay_ids,
                 source="parquet",
+                entity_column=entity_column,
             )
     if suffix == ".csv":
         return _read_export_frame_duckdb(
@@ -2766,11 +2906,29 @@ def _read_export_projection(
             selected,
             stay_ids=stay_ids,
             source="csv",
+            entity_column=entity_column,
         )
     frame = pd.read_excel(path, usecols=selected)
-    if stay_ids is not None and "stay_id" in frame.columns:
-        frame = frame[frame["stay_id"].map(_norm_id).isin(stay_ids)].copy()
+    if stay_ids is not None and entity_column in frame.columns:
+        frame = frame[frame[entity_column].map(_norm_id).isin(stay_ids)].copy()
     return frame
+
+
+def read_export_projection(
+    path: Path,
+    *,
+    columns: Optional[List[str]] = None,
+    stay_ids: Optional[set[str]] = None,
+    entity_column: str = "stay_id",
+) -> Any:
+    """Public, projected export reader for bounded webserver owners."""
+
+    return _read_export_projection(
+        path,
+        columns=columns,
+        stay_ids=stay_ids,
+        entity_column=entity_column,
+    )
 
 
 def _read_export_frame_duckdb(
@@ -2779,6 +2937,7 @@ def _read_export_frame_duckdb(
     *,
     stay_ids: Optional[set[str]],
     source: str,
+    entity_column: str = "stay_id",
 ) -> Any:
     import duckdb
 
@@ -2791,7 +2950,8 @@ def _read_export_frame_duckdb(
     query = f"SELECT {projection} FROM {reader}"
     params: List[Any] = [str(path)]
     if stay_ids is not None:
-        query += ' WHERE CAST("stay_id" AS VARCHAR) IN (SELECT UNNEST(?))'
+        escaped_entity = entity_column.replace('"', '""')
+        query += f' WHERE CAST("{escaped_entity}" AS VARCHAR) IN (SELECT UNNEST(?))'
         params.append(sorted(stay_ids))
     connection = duckdb.connect(database=":memory:")
     try:

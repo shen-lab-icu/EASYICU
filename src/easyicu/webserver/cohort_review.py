@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
 
 from easyicu.webserver import dataio
+from easyicu.webserver import entity_ids as entity_id_contract
 from easyicu.webserver import sources as source_store
 
 _READ_MODULES = (
@@ -552,22 +553,38 @@ def _read_module_frame(path: Path, desc: Dict[str, Any], module: str) -> Any:
         and file_path.suffix.lower() != ".parquet"
     ):
         return None
+    available_columns = file_meta.get("columns") or []
+    entity_column = entity_id_contract.resolve_entity_id_column(available_columns)
+    if not entity_column:
+        return None
     columns = [
         c for c in _MODULE_COLUMNS[module] if c in (file_meta.get("columns") or [])
     ]
-    if "stay_id" not in columns:
-        return None
-    return _read_selected_columns(file_path, columns)
+    columns = [entity_column] + [c for c in columns if c != entity_column]
+    frame = _read_selected_columns(file_path, columns)
+    return entity_id_contract.canonicalize_entity_frame(frame, entity_column)
 
 
 def _fallback_entity_frame(path: Path, desc: Dict[str, Any]) -> Any:
     file_meta = next(
-        (f for f in desc.get("files") or [] if "stay_id" in (f.get("columns") or [])),
+        (
+            f
+            for f in desc.get("files") or []
+            if entity_id_contract.resolve_entity_id_column(f.get("columns") or [])
+        ),
         None,
     )
     if not file_meta:
         return None
-    return _read_selected_columns(path / str(file_meta.get("file") or ""), ["stay_id"])
+    entity_column = entity_id_contract.resolve_entity_id_column(
+        file_meta.get("columns") or []
+    )
+    if not entity_column:
+        return None
+    frame = _read_selected_columns(
+        path / str(file_meta.get("file") or ""), [entity_column]
+    )
+    return entity_id_contract.canonicalize_entity_frame(frame, entity_column)
 
 
 def _read_selected_columns(path: Path, columns: List[str]) -> Any:
@@ -673,16 +690,29 @@ def _covered_entities(path: Path, item: Dict[str, Any], cohort_size: Any) -> int
         try:
             import pandas as pd
 
-            frame = pd.read_parquet(file_path, columns=["stay_id"])
-            if "stay_id" not in frame.columns:
+            entity_column = entity_id_contract.resolve_entity_id_column(
+                item.get("columns") or []
+            )
+            if not entity_column:
                 return None
+            frame = pd.read_parquet(file_path, columns=[entity_column])
+            frame = entity_id_contract.canonicalize_entity_frame(
+                frame, entity_column
+            )
             return min(int(frame["stay_id"].dropna().nunique()), cohort_size)
         except Exception:
             return None
-    ids = dataio._read_stay_ids(file_path)
-    if ids is None:
+    entity_column = entity_id_contract.resolve_entity_id_column(
+        item.get("columns") or []
+    )
+    if not entity_column:
         return None
-    return min(len(ids), cohort_size)
+    try:
+        frame = _read_selected_columns(file_path, [entity_column])
+        frame = entity_id_contract.canonicalize_entity_frame(frame, entity_column)
+        return min(int(frame["stay_id"].dropna().nunique()), cohort_size)
+    except Exception:
+        return None
 
 
 def _requested_feature_ids(body: Dict[str, Any]) -> Tuple[str, ...] | None:
@@ -906,7 +936,12 @@ def _selected_feature_profiles(
                     }
                 )
             continue
-        columns = ["stay_id"] + [
+        entity_column = entity_id_contract.resolve_entity_id_column(
+            item.get("columns") or []
+        )
+        if not entity_column:
+            continue
+        columns = [entity_column] + [
             str(feature["column"])
             for feature in features
             if str(feature["column"]) in (item.get("columns") or [])
@@ -914,8 +949,12 @@ def _selected_feature_profiles(
         if len(columns) <= 1:
             continue
         try:
+            feature_frame = _read_selected_columns(file_path, columns)
+            feature_frame = entity_id_contract.canonicalize_entity_frame(
+                feature_frame, entity_column
+            )
             frame = _filter_by_entity(
-                _read_selected_columns(file_path, columns), entity_set
+                feature_frame, entity_set
             )
         except Exception as exc:
             for feature in features:

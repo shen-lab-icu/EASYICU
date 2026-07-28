@@ -118,8 +118,8 @@ def test_native_shell_language_icon_is_stateful() -> None:
     assert "window.setLang(val);" in settings_js
     assert "window.EU_LANG = val;" not in settings_js
     assert "window.EU_API.saveSetting('data_mode', m)" in i18n_js
-    assert "js/i18n.js?v=20260712-ux-fixes" in index_html
-    assert "js/api.js?v=20260712-ux-fixes" in index_html
+    assert "js/i18n.js?v=20260728-demo-mode1" in index_html
+    assert "js/api.js?v=20260727-patient-demo2" in index_html
 
 
 def test_native_mobile_page_guide_fab_does_not_cover_bottom_nav() -> None:
@@ -172,7 +172,7 @@ def test_native_assistant_labels_disambiguate_page_guide_guided_copilot_and_agen
     assert "Open Copilot" not in help_js
 
     assert "css/dock.css?v=20260625-stage99" in index_html
-    assert "js/app.js?v=20260712-ux-fixes" in index_html
+    assert "js/app.js?v=20260728-demo-mode1" in index_html
     assert "js/copilot-dock.js?v=20260712-ux-fixes" in index_html
     assert "js/screens-extraction.js?v=20260712-ux-fixes" in index_html
     assert "js/screens-agent.js?v=20260712-ux-fixes" in index_html
@@ -315,7 +315,7 @@ def test_native_tutorial_screen_uses_active_language_without_mixed_copy() -> Non
     assert ">No tokens, no setup, no patient data. The demo generates" not in help_js
     assert "How a study moves through EasyICU</h2>" not in help_js
 
-    assert "js/app.js?v=20260712-ux-fixes" in index_html
+    assert "js/app.js?v=20260728-demo-mode1" in index_html
     assert "js/screens-help.js?v=20260712-ux-fixes" in index_html
 
 
@@ -383,7 +383,7 @@ def test_native_page_guide_uses_backend_page_guide_contract() -> None:
     assert "sendCopilotMessage" not in dock_js
     assert "runCopilotAction" not in dock_js
     assert "Page guide backend unavailable, using local fallback" in dock_js
-    assert "js/api.js?v=20260712-ux-fixes" in index_html
+    assert "js/api.js?v=20260727-patient-demo2" in index_html
     assert "js/copilot-dock.js?v=20260712-ux-fixes" in index_html
 
 
@@ -534,7 +534,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
 
     assert "css/guided.css?v=20260712-ux-fixes" in index_html
     assert "css/guided-idea-plan.css?v=20260627-ideas-feasibility-plan" in index_html
-    assert "js/api.js?v=20260712-ux-fixes" in index_html
+    assert "js/api.js?v=20260727-patient-demo2" in index_html
     assert (
         "js/screens-guided-projects.js?v=20260626-guided-projects-split" in index_html
     )
@@ -973,7 +973,7 @@ def test_native_route_qa_allows_only_explicit_truncation_and_scroll_regions() ->
 
     assert "insideHorizontalScrollRegion" in route_qa
     assert (
-        ".table-scroll, .risk-table-wrap, .dict-table, .xdb-density-detail-table"
+        ".table-scroll, .risk-table-wrap, .dict-table"
         in route_qa
     )
     assert "intentionallyEllipsized" in route_qa
@@ -1408,7 +1408,7 @@ def test_native_idea_mining_is_first_class_route_and_backend_wired() -> None:
     assert "css/ideas.css?v=20260630-gate-first-ideas" in index_html
     assert "css/shell.css?v=20260626-owner" in index_html
     assert "js/icons.js?v=20260625-stage84" in index_html
-    assert "js/app.js?v=20260712-ux-fixes" in index_html
+    assert "js/app.js?v=20260728-demo-mode1" in index_html
     assert "css/ideas-review.css?v=20260702-idea-review-handoff" in index_html
     assert "css/ideas-connectors.css?v=20260702-zotero-simple" in index_html
     assert "js/screens-ideas-zotero.js?v=20260702-zotero-origin" in index_html
@@ -1901,10 +1901,12 @@ def test_native_extraction_include_feature_definitions_bool_parsing() -> None:
     assert _body_bool({}, "include_feature_definitions", True) is True
 
 
-def test_native_crossdb_restores_distribution_visuals() -> None:
+def test_native_crossdb_uses_progressive_setup_and_one_chart_results() -> None:
     api_js = _static_js("api.js")
     viz_js = _static_js("screens-viz.js")
     setup_js = _static_js("screens-viz-crossdb-setup.js")
+    charts_js = _static_js("screens-viz-crossdb-charts.js")
+    results_js = _static_js("screens-viz-crossdb-results.js")
     continuity_js = _static_js("screens-viz-crossdb-job-continuity.js")
     progress_js = _static_js("screens-viz-crossdb-progress.js")
     screens_css = _static_css("screens.css")
@@ -1927,134 +1929,75 @@ def test_native_crossdb_restores_distribution_visuals() -> None:
     assert "/api/jobs/crossdb-raw-distribution" in api_js
     assert "scanCrossdbRawRoot" in api_js
     assert "/api/crossdb-review/raw-root-scan" in api_js
-    assert "Multi-database feature value-distribution grid" in viz_js
-    assert "crossRealFeatureDensityByModule" in viz_js
-    assert "crossFeatureDensityPanel" in viz_js
     assert "loadDemoCrossdb" in viz_js
     assert "loadCrossdbDemoDistribution" in viz_js
     assert "legacy_simulated_multidb_feature_frames" in viz_js
     assert "feature_scope: 'all_catalog'" in viz_js
-    assert "window.EU_CROSSDB_RAW.coreFeatures()" in viz_js
     assert "window.EU_CROSSDB_RAW.buildRequest" in viz_js
-    assert "12 curated core concepts" in setup_js
-    assert "max_features: 90" not in viz_js
-    assert "records_per_feature: 96" in viz_js
-    assert "demoCurvePoints" not in viz_js
-    assert "crossFeatureCurve" in viz_js
-    assert "one subplot per feature" in viz_js
-    assert "{ label: 'SICdb', key: 'sic', selected: true }" in setup_js
-    assert "all supported catalog concepts" in setup_js
-    assert "全部受支持的标准概念" in viz_js
-    assert "Feature distribution by shared concept" not in viz_js
-    assert "Module coverage distribution by export" not in viz_js
-    assert "xdb-density-panel" in viz_js
-    assert "data-density-module-select" in viz_js
-    assert "Module to display" in viz_js
-    assert "showing every catalog module" in viz_js
-    assert "data-density-module-filter" in viz_js
-    assert "data-density-module" in viz_js
-    assert "data-density-feature-key" in viz_js
-    assert "xdb-density-detail" in viz_js
-    assert "startCrossdbRawDistributionJob" in viz_js
-    assert "new window.EventSource('/api/jobs/' + encodeURIComponent(meta.job_id) + '/events')" in continuity_js
-    assert "new EventSource('/api/jobs/' + r.job_id + '/events')" not in viz_js
-    assert "data-crossdb-cancel" in progress_js
-    assert "data-crossdb-root-browse" in setup_js
-    assert "data-crossdb-root-scan" in setup_js
-    assert "Check folders" in setup_js
-    assert "检查文件夹" in setup_js
-    assert "Detected database folders" in setup_js
-    assert "Missing selected database folders" in setup_js
-    assert "Unrecognized folders" in setup_js
-    assert "function selectionStatus(" in setup_js
-    assert "missingSelectedKeys.length === 0" in setup_js
-    selection_binding = setup_js.split("const grid =", 1)[1].split(
-        "root.querySelectorAll('[data-crossdb-run-raw]')", 1
-    )[0]
-    assert "if (window.EU_DATA === 'real')" in selection_binding
-    assert "invalidateScan" not in selection_binding
-    assert "Check the ICU data root first" in viz_js
-    assert "Choose local ICU data root" in setup_js
-    assert "选择本地 ICU 数据根目录" in setup_js
-    assert (
-        "Local folder picker API is not ready. Paste a raw ICU data root path instead."
-        in setup_js
-    )
-    assert "api.cancelJob(state.jobId, 'user_requested')" in progress_js
-    assert "progress.requestCancel" in setup_js
-    assert "Cancellation requested. EasyICU will stop after the current bounded read returns." in progress_js
-    assert (
-        "Choose a local ICU data root before loading real Cross-DB densities." in viz_js
-    )
-    assert "加载真实跨库密度前，请先选择本地 ICU 数据根目录。" in viz_js
-    assert "rawRootDraft: ''" in setup_js
-    assert "sampleMode: 'quick'" in setup_js
-    assert "function sampleProfiles(" in setup_js
-    assert "Quick preview" in setup_js
-    assert "快速预览" in setup_js
-    assert "maxPatients: 200" in setup_js
-    assert "sampleSize: 600" in setup_js
-    assert "data-crossdb-sample-mode" in setup_js
-    assert "Sampling budget before plotting" in setup_js
-    assert "绘图前抽样预算" in setup_js
     assert "max_patients: sampleProfile.maxPatients" in viz_js
     assert "sample_size: sampleProfile.sampleSize" in viz_js
-    assert "Queued local raw Cross-DB density job" in viz_js
-    assert "本地原始跨库密度任务已排队。" in viz_js
-    assert "跨库基准" in viz_js
-    assert "'Not configured': '未配置'" in viz_js
-    assert "原始 ICU 数据根目录" in viz_js
-    assert "加载真实密度对比" in viz_js
-    assert "正在从本地数据库加载真实特征密度" in viz_js
-    assert "选择要对比的数据库" in viz_js
-    assert "多数据库特征取值分布网格" in viz_js
-    assert "兼容性核验" in viz_js
-    assert "opts.rawRoot" in viz_js
-    assert "easyicu_crossdb_data_root" not in viz_js
-    assert "easyicu_raw_data_root" not in viz_js
-    assert "window.EU_DATA === 'real' && !crossRawJobId" not in viz_js
-    assert "loadRealWorkspace(done);" not in viz_js
+
+    # Setup is progressive: choose prepared exports or raw folders, then reveal
+    # only the controls owned by the selected path.
+    assert "sourceMethod: 'registered'" in setup_js
+    assert "data-crossdb-source-method" in setup_js
+    assert "data-crossdb-source-path" in setup_js
+    assert 'class="crossdb-advanced mt-14"' in setup_js
+    assert "Advanced settings (optional)" in setup_js
+    assert "Start complete comparison" in setup_js
+    assert "data-crossdb-root-scan" in setup_js
+    assert "data-crossdb-select-detected" in setup_js
+    assert "missingSelectedKeys.length === 0" in setup_js
+    assert "data-crossdb-sample-mode" in setup_js
+    assert "maxPatients: 200" in setup_js
+    assert "sampleSize: 600" in setup_js
     assert "data-crossdb-run-raw" in setup_js
     assert "data-crossdb-run-demo" in setup_js
-    assert "querySelectorAll('[data-run]')" not in setup_js
-    assert "--xdb-grid-cols" in viz_js
-    assert "xdb-density-svg" in viz_js
-    assert "xdb-density-line" in viz_js
-    assert "js/screens-viz-crossdb-setup.js?v=20260710-setup-owner" in index_html
-    assert "js/screens-viz.js?v=20260712-ux-fixes" in index_html
-    assert "css/crossdb.css?v=20260710-setup-owner" in index_html
+
+    # Results are a separate owner: four sections, complete catalog filtering,
+    # one selected feature chart, and no repeated mini-plot grid.
+    assert "window.EU_CROSSDB_RESULTS = {" in results_js
+    assert "data-crossdb-result-tab" in results_js
+    assert "data-crossdb-result-panel=\"overview\"" in results_js
+    assert "data-crossdb-result-panel=\"coverage\"" in results_js
+    assert "data-crossdb-result-panel=\"distributions\"" in results_js
+    assert "data-crossdb-result-panel=\"quality\"" in results_js
+    assert "data-crossdb-scope=\"all\"" in results_js
+    assert "data-crossdb-feature-query" in results_js
+    assert "class=\"xdb-main-chart\"" in charts_js
+    assert "window.EU_CROSSDB_CHARTS = {" in charts_js
+    assert "const chartOwner = window.EU_CROSSDB_CHARTS" in results_js
+    assert "xdb-density-features" not in results_js
+    assert "crossRealFeatureDensityByModule" not in viz_js
+    assert "crossFeatureDensityPanel" not in viz_js
+    assert "const crossResults = window.EU_CROSSDB_RESULTS" in viz_js
+    assert "crossResults.bind(root" in viz_js
+
+    # Existing raw-job privacy/cancellation fences stay intact.
+    assert "new window.EventSource('/api/jobs/' + encodeURIComponent(meta.job_id) + '/events')" in continuity_js
+    assert "data-crossdb-cancel" in progress_js
+    assert "api.cancelJob(state.jobId, 'user_requested')" in progress_js
+    assert "progress.requestCancel" in setup_js
     assert "crossdb-run-strip" in setup_js
     assert ".crossdb-run-strip" in crossdb_css
     assert "padding-right: 168px" in crossdb_css
     assert "scroll-margin-bottom: 84px" in crossdb_css
-    for name, css in unrelated_route_css.items():
-        assert ".crossdb-run-strip" not in css, f"Cross-DB action CSS leaked into {name}"
-    # Legacy Figure-3 Cross-DB layout restored: curated canonical-concept density grid
-    # (one subplot per concept) instead of dumping all ~247 catalog features, plus
-    # the per-database record-count cards from paper_figures._render_paper_crossdb_panel.
-    assert "CROSS_DENSITY_CANON" in viz_js
-    assert "crossDensityScope" in viz_js
-    assert "function crossDbRecordCards(" in viz_js
-    assert "data-density-scope" in viz_js
-    assert "xdb-rec-card" in viz_js
-    assert ".xdb-rec-card" in crossdb_css
-    assert ".xdb-density-scope" in crossdb_css
-    assert ".xdb-dist-panel" in crossdb_css
-    assert ".xdb-dist-row" in crossdb_css
-    assert ".xdb-density-panel" in crossdb_css
-    assert ".xdb-density-selectrow" in crossdb_css
-    assert ".xdb-density-controls" in crossdb_css
-    assert ".xdb-density-detail" in crossdb_css
-    assert "grid-template-columns:repeat(var(--xdb-grid-cols, 3)" in crossdb_css
-    assert ".xdb-density-feature" in crossdb_css
-    assert ".xdb-density-feature.selected" in crossdb_css
-    assert ".xdb-density-svg" in crossdb_css
-    assert ".xdb-density-line" in crossdb_css
-    assert ".xdb-dist-panel" not in screens_css
-    assert ".xdb-dist-row" not in screens_css
-    assert ".xdb-density-panel" not in screens_css
-    assert ".xdb-density-selectrow" not in screens_css
 
+    assert "js/screens-viz-crossdb-setup.js?v=20260728-one-click-raw2" in index_html
+    assert "js/screens-viz-crossdb-charts.js?v=20260728-shared-echarts1" in index_html
+    assert "js/screens-viz-crossdb-results.js?v=20260728-shared-echarts1" in index_html
+    assert "js/screens-viz.js?v=20260728-one-click-raw1" in index_html
+    assert "css/crossdb.css?v=20260728-one-click-raw1" in index_html
+    for selector in (
+        ".crossdb-method-grid",
+        ".xdb-result-tabs",
+        ".xdb-feature-workspace",
+        ".xdb-main-chart",
+    ):
+        assert selector in crossdb_css
+        assert selector not in screens_css
+        for name, css in unrelated_route_css.items():
+            assert selector not in css, f"Cross-DB CSS leaked into {name}"
 
 def test_native_cohort_snapshot_renders_real_clinical_profile() -> None:
     """The real cohort snapshot must show interpretable clinical dimensions.
@@ -2091,7 +2034,7 @@ def test_native_cohort_snapshot_renders_real_clinical_profile() -> None:
     assert ".cprof-grid" in cohort_css
     assert ".cxh" not in cohort_css
     # Cache-bust bumped so the restored charts ship to existing clients.
-    assert "js/screens-viz.js?v=20260712-ux-fixes" in index_html
+    assert "js/screens-viz.js?v=20260728-one-click-raw1" in index_html
 
 
 def test_native_cohort_groups_render_comparison_bar_chart() -> None:
@@ -2114,32 +2057,88 @@ def test_native_patient_time_series_uses_module_grouped_single_feature_charts() 
     """Single-patient Time Series should show module-grouped per-feature charts,
     not a same-module multi-signal overlay."""
     viz_js = _static_js("screens-viz.js")
+    patient_charts_js = _static_js("screens-viz-patient-charts.js")
     patient_series_js = _static_js("screens-viz-patient-series.js")
     patient_css = _static_css("patient.css")
+    patient_series_css = _static_css("patient-series.css")
+    index_html = _static_html("index.html")
 
     assert "patientVitalTimeline" not in viz_js
     assert "patientVitalTimeline(readyLanes" not in viz_js
     assert "function renderModulePanels(" in patient_series_js
     assert "data-patient-series-module" in patient_series_js
-    assert "Time series by module" in patient_series_js
-    assert "按模块分组的时间序列" in patient_series_js
+    assert "Time series and feature catalog by module" in patient_series_js
+    assert "按模块分组的时间序列与特征目录" in patient_series_js
+    assert "window.EU_PATIENT_CHARTS" in patient_charts_js
+    assert "window.echarts.init" in patient_charts_js
+    assert "renderer: 'svg'" in patient_charts_js
+    assert "renderMode: 'richText'" in patient_charts_js
+    assert "smooth: false" in patient_charts_js
+    assert "window.echarts.init" not in patient_series_js
+    assert "window.echarts.init" not in viz_js
+    assert ".pt-echart" in patient_series_css
+    for unrelated_css in ("crossdb.css", "cohort.css", "redesign.css", "screens.css"):
+        assert ".pt-echart" not in _static_css(unrelated_css)
+    assert (
+        index_html.index("vendor/echarts/echarts.common.min.js?v=6.1.0")
+        < index_html.index("js/screens-viz-echarts.js?v=20260728-shared-echarts1")
+        < index_html.index("js/screens-viz-patient-charts.js?v=20260728-shared-echarts1")
+        < index_html.index("js/screens-viz-patient-series.js?v=20260727-patient-demo2")
+    )
     assert ".pt-module-card" in patient_css
+    assert ".pt-matrix-details .table-scroll" in patient_css
+    for unrelated_css in ("crossdb.css", "cohort.css", "patient-series.css"):
+        assert ".pt-matrix-details .table-scroll" not in _static_css(unrelated_css)
     assert "pt-matrix-details" in viz_js
     assert "Exact value audit matrices" in viz_js
     assert "精确值审计矩阵" in viz_js
     assert "Data-table companion audit" in viz_js
 
 
+def test_native_patient_feature_catalog_has_a_dedicated_owner() -> None:
+    """Catalog-to-trajectory merging belongs to one Patient Review owner."""
+    owner_js = _static_js("screens-viz-patient-features.js")
+    viz_js = _static_js("screens-viz.js")
+    series_js = _static_js("screens-viz-patient-series.js")
+    index_html = _static_html("index.html")
+
+    assert "window.EU_PATIENT_FEATURES" in owner_js
+    assert "function signalKey(" in owner_js
+    assert "function catalogLanes(" in owner_js
+    assert "demoCatalog.demoCatalogModules()" in owner_js
+    assert "demoCatalog.catalogFeatureMeta(feature)" in owner_js
+    assert "function signalAvailability(signal)" in owner_js
+    assert "return numericCount >= 2 ? 'numeric_trajectory' : 'observed_categorical'" in owner_js
+    assert "trajectory: availability === 'numeric_trajectory'" in owner_js
+    assert "numeric_trajectory_count: numericTrajectoryCount" in owner_js
+    assert "signals.length ? 'observed' : 'metadata_only'" in owner_js
+    assert "const uncatalogued = []" in owner_js
+    assert "catalogLanes.concat(uncatalogued)" in owner_js
+
+    assert "signalKey: ptSignalKey" in viz_js
+    assert "catalogLanes: patientCatalogLanes" in viz_js
+    assert "function ptSignalKey(" not in viz_js
+    assert "function patientCatalogLanes(" not in viz_js
+    assert "window.EU_PATIENT_FEATURES" not in series_js
+
+    feature_owner = index_html.index(
+        "js/screens-viz-patient-features.js?v=20260727-patient-demo2"
+    )
+    assert index_html.index("js/screens-viz-demo.js?") < feature_owner
+    assert feature_owner < index_html.index("js/screens-viz-patient-series.js?")
+    assert feature_owner < index_html.index("js/screens-viz.js?")
+
+
 def test_native_crossdb_availability_matrix_is_a_heatmap() -> None:
     """The Cross-DB module availability matrix must colour cells by coverage,
     restoring the legacy availability heatmap instead of plain text cells."""
-    viz_js = _static_js("screens-viz.js")
+    results_js = _static_js("screens-viz-crossdb-results.js")
     crossdb_css = _static_css("crossdb.css")
 
-    assert "function crossAvailCell(" in viz_js
-    assert "(row.values || []).map(v => crossAvailCell(v))" in viz_js
+    assert "function availabilityCell(" in results_js
+    assert "(row.values || []).map(value => availabilityCell(value, config))" in results_js
     assert ".xdb-avail-cell" in crossdb_css
-    assert "'Present': '存在'" in viz_js
+    assert "h.t('Present', '存在')" in results_js
 
 
 def test_native_dictionary_and_states_reference_controls_are_stateful() -> None:
@@ -2211,8 +2210,8 @@ def test_native_dictionary_distinguishes_mapping_audit_from_export_coverage() ->
     assert ".dict-catalog-note" in deepdive_css
     assert ".cov-badge.derived" in deepdive_css
     assert ".cov-badge.unaudited" in deepdive_css
-    assert "data-catalog.js?v=20260625-stage93" in index_html
-    assert "api.js?v=20260712-ux-fixes" in index_html
+    assert "data-catalog.js?v=20260727-patient-demo2" in index_html
+    assert "api.js?v=20260727-patient-demo2" in index_html
     assert "screens-dict.js?v=20260712-ux-fixes" in index_html
     assert "deepdive.css?v=20260625-stage85" in index_html
 
@@ -2458,7 +2457,7 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert ".gdf-memory" in guided_css
     assert ".gdf-card" in guided_css
     assert ".gd-handoff-ready" in guided_css
-    assert "api.js?v=20260712-ux-fixes" in index_html
+    assert "api.js?v=20260727-patient-demo2" in index_html
     assert "screens-guided-projects.js?v=20260626-guided-projects-split" in index_html
     assert (
         "screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
@@ -2506,6 +2505,8 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     patient_tables_js = _static_js("screens-viz-patient-tables.js")
     patient_series_js = _static_js("screens-viz-patient-series.js")
     patient_overview_js = _static_js("screens-viz-patient-overview.js")
+    demo_drilldown_js = _static_js("screens-viz-demo-drilldown.js")
+    demo_sources_js = _static_js("screens-viz-patient-demo-sources.js")
     api_js = _static_js("api.js")
     i18n_js = _static_js("i18n.js")
     pages_css = _static_css("pages.css")
@@ -2513,6 +2514,7 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     patient_navigation_css = _static_css("patient-navigation.css")
     patient_tables_css = _static_css("patient-tables.css")
     patient_series_css = _static_css("patient-series.css")
+    official_demo_sources_css = _static_css("official-demo-sources.css")
     index_html = _static_html("index.html")
 
     assert 'data-datamode="real"' in viz_js
@@ -2620,13 +2622,13 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert "patientEligibilityFlow" in viz_js
     assert "Eligibility flow (ICU stays)" in viz_js
     assert "入组筛选流程（ICU 住院）" in viz_js
-    assert "Sepsis-3 cohort" in viz_js
-    assert "Sepsis-3 脓毒症队列" in viz_js
-    assert "suspected infection + SOFA signal" in viz_js
-    assert "疑似感染 + SOFA 信号" in viz_js
+    assert "Sepsis-3 cohort" in demo_drilldown_js
+    assert "Sepsis-3 脓毒症队列" in demo_drilldown_js
+    assert "suspected infection + SOFA signal" in demo_drilldown_js
+    assert "疑似感染 + SOFA 信号" in demo_drilldown_js
     assert "Review window available" not in viz_js
     assert "可用审阅时间窗" not in viz_js
-    assert "cohort_attrition_metadata_only" in viz_js
+    assert "cohort_attrition_metadata_only" in demo_drilldown_js
     assert "patient-flow-diagram" in viz_js
     assert "patient-flow-node" in viz_js
     assert "patient-flow-side-link" in viz_js
@@ -2656,9 +2658,17 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert "css/patient-navigation.css?v=20260710-bounded-pages" in index_html
     assert "css/patient-tables.css?v=20260710-lazy-pages" in index_html
     assert "css/patient.css?v=20260710-owner-split" in index_html
-    assert "css/patient-series.css?v=20260630-patient-old-series2" in index_html
-    assert "js/screens-viz-demo.js?v=20260630-patient-demo-audit" in index_html
-    assert "js/screens-viz-patient-series.js?v=20260707-logic" in index_html
+    assert "css/patient-series.css?v=20260727-patient-demo2" in index_html
+    assert "js/screens-viz-demo.js?v=20260727-patient-demo2" in index_html
+    assert "js/screens-viz-demo-drilldown.js?v=20260727-owner-split" in index_html
+    assert "js/screens-viz-patient-features.js?v=20260727-patient-demo2" in index_html
+    assert "js/screens-viz-patient-charts.js?v=20260728-shared-echarts1" in index_html
+    assert "js/screens-viz-patient-series.js?v=20260727-patient-demo2" in index_html
+    assert (
+        "js/screens-viz-patient-demo-sources.js?v=20260728-shared-source1"
+        in index_html
+    )
+    assert "css/official-demo-sources.css?v=20260728-shared-source1" in index_html
     assert (
         "js/screens-viz-patient-navigation.js?v=20260710-bounded-pages"
         in index_html
@@ -2671,16 +2681,17 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert index_html.index("js/screens-viz-patient-tables.js?") < index_html.index(
         "js/screens-viz.js?"
     )
-    assert "js/screens-viz.js?v=20260712-ux-fixes" in index_html
+    assert "js/screens-viz.js?v=20260728-one-click-raw1" in index_html
     assert "bounded browser review', '浏览器有界审阅" in viz_js
-    assert "function buildDemoPatientDrilldown" in viz_js
-    assert "function demoTablePreviewRowContext" in viz_js
-    assert "const timepointsPerEntity = 12" in viz_js
-    assert "const previewLimit = timeIndexed ? 24 : 8" in viz_js
-    assert "entityRef: `demo_ent_${entityIndex + 1}`" in viz_js
-    assert "charttime: demoCharttimeAt(timeIndex)" in viz_js
-    assert "row_cap: previewRows.length" in viz_js
-    assert "DEMO_ENTITY_COUNT * demoPointCount" in viz_js
+    assert "function buildPatientDrilldown" in demo_drilldown_js
+    assert "function demoTablePreviewRowContext" in demo_drilldown_js
+    assert "const timepointsPerEntity = 12" in demo_drilldown_js
+    assert "const previewLimit = timeIndexed ? 24 : 8" in demo_drilldown_js
+    assert "entityRef: `demo_ent_${entityIndex + 1}`" in demo_drilldown_js
+    assert "charttime: demoCharttimeAt(timeIndex)" in demo_drilldown_js
+    assert "row_cap: previewRows.length" in demo_drilldown_js
+    assert "function buildPatientDrilldown" not in viz_js
+    assert "function demoTablePreviewRowContext" not in viz_js
     assert "Seeded observations" in viz_js
     # Patient time-series stays per-feature, but is grouped by the backend module
     # lanes instead of a fixed vitals-only shortlist.
@@ -2690,16 +2701,46 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert "data-patient-series-mode" in viz_js
     assert "function renderModulePanels(" in patient_series_js
     assert "function renderTimeSeriesWorkspace(" in patient_series_js
+    assert "function numericSamples(sig)" in patient_series_js
+    assert "times: samples.times" in patient_series_js
     assert "data-patient-series-module" in patient_series_js
     assert "Clinical trajectory review" in patient_series_js
     assert "临床轨迹审阅" in patient_series_js
-    assert "Multi-patient comparison" in patient_series_js
-    assert "多患者对比" in patient_series_js
-    assert "Time series by module" in patient_series_js
-    assert "按模块分组的时间序列" in patient_series_js
-    assert (
-        "Low threshold" in patient_series_js and "High threshold" in patient_series_js
-    )
+    assert "Cross-patient comparison" in patient_series_js
+    assert "跨患者对比" in patient_series_js
+    assert "Module overview" in patient_series_js
+    assert "模块总览" in patient_series_js
+    assert "Trajectory gallery" in patient_series_js
+    assert "轨迹画廊" in patient_series_js
+    assert "Time series and feature catalog by module" in patient_series_js
+    assert "按模块分组的时间序列与特征目录" in patient_series_js
+    assert "Clinical reference guide" in patient_series_js
+    assert "临床参考线" in patient_series_js
+    assert "Low threshold" not in patient_series_js
+    assert "High threshold" not in patient_series_js
+    assert "window.EU_OFFICIAL_DEMO_SOURCES = owner" in demo_sources_js
+    assert "window.EU_PATIENT_DEMO_SOURCES = owner" in demo_sources_js
+    assert "loadOfficialDemoSources" in api_js
+    assert "startOfficialDemoSourcePrepare" in api_js
+    assert "data-official-demo-sources" in demo_sources_js
+    assert "data-demo-source-prepare" in demo_sources_js
+    assert "const isActive = isPrepared && status.active" in demo_sources_js
+    assert "data-demo-source-open-after-prepare" in demo_sources_js
+    assert "config.openPrepared(sourceId)" in demo_sources_js
+    assert "download_rate_bps" in demo_sources_js
+    assert "eta_seconds" in demo_sources_js
+    assert "official-demo-progress" in demo_sources_js
+    assert ".official-demo-progress{" in official_demo_sources_css
+    assert ".official-demo-progress" not in patient_series_css
+    assert "source.status.active" in viz_js
+    assert "demoSourceOwner.rememberOpened(sourceId)" in viz_js
+    assert "function activeMetadata(registrySources, activePath)" in demo_sources_js
+    assert "data-patient-official-demo" in viz_js
+    assert "data-gen" in demo_sources_js
+    assert "window.EU_OFFICIAL_DEMO_SOURCES = owner" not in viz_js
+    assert ".official-demo-sources" in official_demo_sources_css
+    for unrelated_css in ("patient.css", "patient-series.css", "cohort.css", "crossdb.css"):
+        assert ".official-demo-sources" not in _static_css(unrelated_css)
     assert ".pt-series-workbench" in patient_series_css
     assert ".pt-series-modebar" in patient_series_css
     assert ".pt-single-grid" in patient_series_css
@@ -2713,9 +2754,12 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert ".pt-matrix-details" not in _static_css("cohort.css")
     assert ".pt-module-card" not in pages_css
     assert ".pt-module-card" not in _static_css("cohort.css")
-    assert "payload_scope: 'catalog_shaped_seeded_demo_no_real_patient_rows'" in viz_js
-    assert "Catalog-shaped demo review workspace ready" in viz_js
-    assert "seeded entities" in viz_js
+    assert (
+        "payload_scope: 'clinically_constrained_synthetic_demo_no_real_patient_rows'"
+        in demo_drilldown_js
+    )
+    assert "Clinically constrained synthetic fallback ready" in viz_js
+    assert "synthetic entities" in viz_js
     assert "10 stays · 19 modules · 0 errors" not in viz_js
     assert "Fast demo profile" not in viz_js
     assert (
@@ -2834,18 +2878,21 @@ def test_native_cohort_real_page_is_backend_backed_and_bilingual() -> None:
 
 def test_native_cohort_comparison_radios_are_stateful_controls() -> None:
     viz_js = _static_js("screens-viz.js")
+    cohort_charts_js = _static_js("screens-viz-cohort-charts.js")
     cohort_css = _static_css("cohort.css")
+    cohort_charts_css = _static_css("cohort-charts.css")
     redesign_css = _static_css("redesign.css")
     index_html = _static_html("index.html")
 
     assert "css/cohort.css?v=20260707-design" in index_html
-    assert "js/screens-viz.js?v=20260712-ux-fixes" in index_html
+    assert "js/screens-viz.js?v=20260728-one-click-raw1" in index_html
     assert "let cohortView = 'idle';" in viz_js
     assert "let cohortFeatureScope = 'recommended';" in viz_js
     assert 'data-cohort-config-required="true"' in viz_js
-    assert "Cohort Statistics no longer opens with preloaded seeded results" in viz_js
-    assert "Run demo cohort review" in viz_js
-    assert "data-cohort-use-real" in viz_js
+    assert "Choose one cohort data source" in viz_js
+    assert "data-cohort-demo-fallback" in viz_js
+    assert "{ scope: 'cohort', fallbackAttribute: 'data-cohort-demo-fallback' }" in viz_js
+    assert "demoSourceOwner.rememberOpened(sourceId)" in viz_js
     assert "cohortView = ok ? 'loaded' : 'idle';" in viz_js
     assert "function cohortMissingExportMessage" in viz_js
     assert (
@@ -2952,33 +2999,68 @@ def test_native_cohort_comparison_radios_are_stateful_controls() -> None:
     assert "SOFA-1 to SOFA-2 movement" in viz_js
     assert "Worst-ICU severity transition matrix" in viz_js
     assert "function cohortSofaHeatmap" in viz_js
+    assert "window.EU_COHORT_CHARTS = {" in cohort_charts_js
+    assert "type: 'heatmap'" in cohort_charts_js
+    assert "step: 'end'" in cohort_charts_js
     assert "cohortSofaMatrixMode" in viz_js
     assert "data-cohort-sofa-matrix-mode" in viz_js
     assert "SOFA_MATRIX_GRANULARITIES" in viz_js
     assert "cohortSofaMatrixGranularity = 'medium'" in viz_js
     assert "data-cohort-sofa-granularity" in viz_js
     assert "exact_score_matrix" in viz_js
-    assert "--sofa-min-width" in viz_js
+    assert "cohortCharts.heatmapSlot" in viz_js
     assert "Rows are SOFA-1 score bands; columns are SOFA-2 score bands." in viz_js
     assert "Rows are SOFA-1 severity bands; columns are SOFA-2 bands." in viz_js
     assert "reclass.status === 'ready'" in viz_js
     assert "Demo threshold uses SOFA ≥ 6" in viz_js
     assert "Age Groups' overview" not in viz_js
     assert ".surv-toolbar" in cohort_css
-    assert ".km-chart" in cohort_css
+    assert ".cohort-echart" in cohort_charts_css
     assert ".risk-table" in cohort_css
-    assert ".sofa-heatmap" in cohort_css
-    assert ".sofa-heat-cell" in cohort_css
+    assert ".cohort-heat-legend" in cohort_charts_css
     assert ".sofa-matrix-toggle" in cohort_css
     assert ".sofa-matrix-controls" in cohort_css
-    assert "--sofa-cell-min" in cohort_css
-    assert "--sofa-min-width" in cohort_css
     assert ".surv-toolbar" not in redesign_css
-    assert ".km-chart" not in redesign_css
-    assert ".sofa-heatmap" not in redesign_css
+    assert ".cohort-echart" not in redesign_css
+    assert ".cohort-echart" not in cohort_css
     assert ".sofa-matrix-controls" not in redesign_css
     for key in ["outcome", "age", "sex", "los", "sepsis", "custom"]:
         assert f"{key}:" in viz_js
+
+
+def test_visual_routes_share_source_choice_with_single_and_multi_source_contracts() -> None:
+    """Patient/Cohort select one source; Cross-DB selects an official pair."""
+    viz_js = _static_js("screens-viz.js")
+    demo_sources_js = _static_js("screens-viz-patient-demo-sources.js")
+    crossdb_setup_js = _static_js("screens-viz-crossdb-setup.js")
+    crossdb_source_js = _static_js("screens-viz-crossdb-source.js")
+    shared_css = _static_css("official-demo-sources.css")
+    crossdb_css = _static_css("crossdb.css")
+    index_html = _static_html("index.html")
+
+    assert "function sourceModeSelector(realMode)" in viz_js
+    assert "Previously exported data" in viz_js
+    assert "Demo data" in viz_js
+    assert "{ scope: 'cohort', fallbackAttribute: 'data-cohort-demo-fallback' }" in viz_js
+    assert "window.EU_OFFICIAL_DEMO_SOURCES = owner" in demo_sources_js
+    assert "function registeredSources(registryRows)" in demo_sources_js
+    assert "function rememberPair(registryRows)" in demo_sources_js
+    assert "kind: 'official_demo_pair'" in demo_sources_js
+    assert "sourceModeHtml(realMode)" not in crossdb_setup_js
+    assert "sourceMethod: 'registered'" in crossdb_setup_js
+    assert "data-crossdb-demo-source-choice" in crossdb_source_js
+    assert "compactOfficialPair" in crossdb_source_js
+    assert "Start consistency check" in crossdb_source_js
+    assert "data-crossdb-synthetic-fallback" in crossdb_source_js
+    assert "UI rehearsal only" in crossdb_source_js
+    assert "officialPaths()" in viz_js
+    assert "runOfficial()" in viz_js
+    assert "owner.rememberPair(registrySources())" in viz_js
+    assert ".official-demo-sources" in shared_css
+    assert ".crossdb-offline-fallback" in crossdb_css
+    assert "css/official-demo-sources.css?v=20260728-shared-source1" in index_html
+    assert "js/screens-viz-crossdb-setup.js?v=20260728-one-click-raw2" in index_html
+    assert "js/screens-viz-crossdb-source.js?v=20260728-clarity2" in index_html
 
 
 def test_native_webapp_foreground_interrupt_returns_shell_status(monkeypatch) -> None:
@@ -3025,11 +3107,10 @@ def test_native_home_landing_styles_are_owned_by_home_css() -> None:
 
 
 def test_native_viz_demo_layer_is_split_into_owner_file() -> None:
-    """The demo/fixture data layer + catalog accessors are owned by
-    screens-viz-demo.js, not inlined in the screens-viz.js monolith
-    (first owner-file carve-out, 2026-06-26). Main file rebinds them."""
+    """Demo data generation and Patient drilldown assembly have separate owners."""
     viz_js = _static_js("screens-viz.js")
     demo_js = _static_js("screens-viz-demo.js")
+    demo_drilldown_js = _static_js("screens-viz-demo-drilldown.js")
     index_html = _static_html("index.html")
 
     # demo generators + catalog accessors are DEFINED in the demo file
@@ -3039,7 +3120,7 @@ def test_native_viz_demo_layer_is_split_into_owner_file() -> None:
     assert "function catalogModuleLabel(" in demo_js
     assert "function catalogFeatureMeta(" in demo_js
     assert "window.VIZ_DEMO = {" in demo_js
-    assert "const DEMO_CHART_HOURS = [0.2, 1, 2, 3.4" in demo_js
+    assert "const DEMO_CHART_HOURS = [-1, 0.5, 2, 4, 7, 11" in demo_js
     assert "DEMO_ENTITY_COUNT, DEMO_DURATION_HOURS, DEMO_CHART_HOURS" in demo_js
 
     # they are NOT re-defined in the main file (no duplicate definitions)
@@ -3047,15 +3128,29 @@ def test_native_viz_demo_layer_is_split_into_owner_file() -> None:
     assert "function catalogModuleLabel(" not in viz_js
     assert "const DEMO_ENTITY_COUNT" not in viz_js
 
-    # main file rebinds the exports so call sites stay unchanged
+    # Patient drilldown assembly is defined only in its dependency-neutral owner.
+    assert "function buildPatientDrilldown(" in demo_drilldown_js
+    assert "function demoTablePreviewRowContext(" in demo_drilldown_js
+    assert "window.VIZ_DEMO_DRILLDOWN = { buildPatientDrilldown };" in demo_drilldown_js
+    assert "} = window.VIZ_DEMO;" in demo_drilldown_js
+    assert "function buildPatientDrilldown(" not in viz_js
+    assert "function buildDemoPatientDrilldown(" not in viz_js
+    assert "function demoTablePreviewRowContext(" not in viz_js
+
+    # main file rebinds the two owner contracts so existing call sites stay unchanged
     assert "} = window.VIZ_DEMO;" in viz_js
+    assert (
+        "const { buildPatientDrilldown: buildDemoPatientDrilldown } = "
+        "window.VIZ_DEMO_DRILLDOWN;"
+    ) in viz_js
     assert "demoCatalogModules" in viz_js  # still called
 
-    # demo file loads BEFORE the main file in index.html
+    # Generator -> drilldown owner -> main shell load order is explicit.
     demo_pos = index_html.find("screens-viz-demo.js")
+    drilldown_pos = index_html.find("screens-viz-demo-drilldown.js")
     main_pos = index_html.find("screens-viz.js?")
-    assert demo_pos != -1 and main_pos != -1
-    assert demo_pos < main_pos, "screens-viz-demo.js must load before screens-viz.js"
+    assert demo_pos != -1 and drilldown_pos != -1 and main_pos != -1
+    assert demo_pos < drilldown_pos < main_pos
 
 
 def test_dock_bridge_forwards_data_mode_to_guided() -> None:
@@ -3080,6 +3175,7 @@ def test_guided_handoff_banner_surfaces_full_study_design() -> None:
     study design (outcome / window / comparator / export destination), not just the
     question, so a handed-off study is visible on the target page instead of dropped."""
     app_js = _static_js("app.js")
+    i18n_js = _static_js("i18n.js")
     assert "p.outcome_hint" in app_js
     assert "p.time_window_hint" in app_js
     assert "p.comparator_hint" in app_js
@@ -3145,16 +3241,60 @@ def test_agent_run_status_labels_cover_success_statuses() -> None:
     assert "changed since sign-off" in agent_js
 
 
-def test_crossdb_density_plot_has_x_axis_ticks() -> None:
-    """[3] The cross-DB density detail plot must expose x-axis ticks + value/unit
-    labels so a reader can tell where distributions diverge, and state the per-DB
-    area normalization."""
-    viz_js = _static_js("screens-viz.js")
+def test_crossdb_selected_density_plot_has_readable_axis_and_legend() -> None:
+    """The single selected-feature chart exposes x-axis values, units, and a
+    source legend so readers can identify where aggregate distributions diverge."""
+    charts_js = _static_js("screens-viz-crossdb-charts.js")
     crossdb_css = _static_css("crossdb.css")
-    assert "xdb-density-tick" in viz_js
-    assert "xdb-density-xaxis" in viz_js
-    assert "area-normalized per DB" in viz_js
-    assert ".xdb-density-xaxis" in crossdb_css
+    assert "type: 'line'" in charts_js
+    assert "Relative density" in charts_js
+    assert "legend: chartCore.legend" in charts_js
+    assert "smooth: false" in charts_js
+    assert "data-crossdb-echart" in charts_js
+    assert ".xdb-echart" in crossdb_css
+    assert ".xdb-main-grid" in crossdb_css
+    assert ".xdb-main-legend" in crossdb_css
+
+
+def test_review_routes_share_echarts_theme_without_cross_route_owner_leaks() -> None:
+    index_html = _static_html("index.html")
+    shared_js = _static_js("screens-viz-echarts.js")
+    patient_js = _static_js("screens-viz-patient-charts.js")
+    cohort_js = _static_js("screens-viz-cohort-charts.js")
+    crossdb_js = _static_js("screens-viz-crossdb-charts.js")
+    cohort_css = _static_css("cohort.css")
+    cohort_charts_css = _static_css("cohort-charts.css")
+    patient_css = _static_css("patient-series.css")
+    crossdb_css = _static_css("crossdb.css")
+
+    vendor = index_html.index("vendor/echarts/echarts.common.min.js?v=6.1.0")
+    shared = index_html.index("js/screens-viz-echarts.js?v=20260728-shared-echarts1")
+    patient = index_html.index("js/screens-viz-patient-charts.js?v=20260728-shared-echarts1")
+    cohort = index_html.index("js/screens-viz-cohort-charts.js?v=20260728-shared-echarts1")
+    crossdb = index_html.index("js/screens-viz-crossdb-charts.js?v=20260728-shared-echarts1")
+    assert vendor < shared < patient < cohort < crossdb
+
+    assert "window.EU_ECHARTS = {" in shared_js
+    assert "renderer: 'svg'" in shared_js
+    assert "renderMode: 'richText'" in shared_js
+    assert "new ResizeObserver(() => chart.resize())" in shared_js
+    assert "owner: 'patient'" in patient_js
+    assert "owner: 'cohort'" in cohort_js
+    assert "owner: 'crossdb'" in crossdb_js
+    assert "window.echarts.init" not in cohort_js
+    assert "window.echarts.init" not in crossdb_js
+
+    assert ".pt-echart" in patient_css
+    assert ".pt-echart" not in cohort_charts_css
+    assert ".pt-echart" not in crossdb_css
+    assert ".cohort-echart" in cohort_charts_css
+    assert ".cohort-echart" not in patient_css
+    assert ".cohort-echart" not in crossdb_css
+    assert ".xdb-echart" in crossdb_css
+    assert ".xdb-echart" not in patient_css
+    assert ".xdb-echart" not in cohort_charts_css
+    for stale_patient_selector in (".pvt-", ".pcat", ".pcc-", ".pcs-"):
+        assert stale_patient_selector not in cohort_css
 
 
 def test_km_panel_surfaces_effect_size() -> None:
@@ -3300,11 +3440,14 @@ def test_destination_names_consistent_across_sidebar_crumb_and_page() -> None:
 
     # canonical zh names in the shell crumb table
     assert "'Patient Review': ['Patient Review', '患者审阅']" in app_js
-    assert "'Cross-DB Benchmark': ['Cross-DB Benchmark', '跨库基准']" in app_js
+    assert (
+        "'Cross-database comparison': ['Cross-database comparison', '跨库对比']"
+        in app_js
+    )
     # the retired aliases must not resurface anywhere user-facing
     for src in (viz_js, help_js, dock_js, series_js):
         assert "患者明细" not in src
-        assert "跨库对比" not in src
+        assert "跨库基准" not in src
     # the patient idle page head identifies itself as the destination, not as a
     # generic "Quick visualization" tool
     assert "${t('Patient Review', '患者审阅')}" in viz_js
@@ -3318,7 +3461,7 @@ def test_destination_names_consistent_across_sidebar_crumb_and_page() -> None:
 
 def test_cohort_and_crossdb_consume_guided_handoff() -> None:
     """A study configured in Guided Copilot must not silently vanish when the
-    conversation lands the user on Cohort Statistics or Cross-DB Benchmark."""
+    conversation lands the user on Cohort Statistics or Cross-database comparison."""
     viz_js = _static_js("screens-viz.js")
     setup_js = _static_js("screens-viz-crossdb-setup.js")
     assert "window.EU_GUIDED_HANDOFF.take('cohort')" in viz_js
@@ -3344,14 +3487,15 @@ def test_topbar_actions_only_appear_once_workspace_is_loaded() -> None:
 def test_result_charts_carry_reading_captions() -> None:
     """Every result-bearing chart explains what it means and what to do next:
     KM curve, SOFA transition matrix, group comparison bars, Cross-DB density
-    grid, and the per-database record cards."""
+    view, and the per-database record cards."""
     viz_js = _static_js("screens-viz.js")
+    crossdb_results_js = _static_js("screens-viz-crossdb-results.js")
     assert viz_js.count('class="viz-cap"') >= 5
     assert "曲线每下降一格代表一次事件" in viz_js  # KM
     assert "对角线上的格子是 SOFA-1 与 SOFA-2 评分一致的患者" in viz_js  # SOFA matrix
     assert "仅为描述性对比，未做统计检验" in viz_js  # group bars
-    assert "曲线重叠 = 概念在各库间口径一致" in viz_js  # density grid
-    assert "不是结局结果" in viz_js  # record cards
+    assert "曲线重叠表示聚合测量分布较一致" in crossdb_results_js
+    assert "不是结局结果" in crossdb_results_js
     app_css = _static_css("app.css")
     assert ".viz-cap{" in app_css
 
@@ -3360,29 +3504,49 @@ def test_demo_mode_is_unmistakable_and_single_source_of_truth() -> None:
     """Demo state must be loud (amber topbar segment + explicit tooltip) and the
     global toggle is the source of truth on Guided entry (sync-up, demo→real)."""
     app_js = _static_js("app.js")
+    i18n_js = _static_js("i18n.js")
     app_css = _static_css("app.css")
     guided_js = _static_js("screens-guided.js")
     assert "demo-active" in app_js
     assert ".mode-seg.demo-active" in app_css
-    assert "所有数字都是种子示例" in app_js
+    assert "官方公开去标识 Demo 数据集" in app_js
+    assert "明确标注的种子示例" in app_js
+    assert "所有数字都是种子示例" not in app_js
+    assert "window.EU_DATA_MODE_CONTEXT = null;" in i18n_js
+    assert "window.setDataModeContext = function" in i18n_js
+    assert "window.getDataMode = function" in i18n_js
+    assert "window.setDataModeContext(null);" in i18n_js
+    assert "const dataMode = displayedDataMode();" in app_js
+    assert "t('Official demo', '官方演示')" in app_js
     assert (
         "if (window.EU_DATA === 'real' && dataMode !== 'real') dataMode = 'real';"
         in guided_js
     )
     # demo mode no longer ships fake decorative sliders on the patient setup card
     viz_js = _static_js("screens-viz.js")
+    demo_sources_js = _static_js("screens-viz-patient-demo-sources.js")
     assert "数据时长（小时）" not in viz_js
-    assert "一键加载演示工作区" in viz_js
+    assert "选择官方去标识化 ICU 演示数据" in viz_js
+    assert "官方公开 ICU 演示数据" in demo_sources_js
+    assert "加载合成兜底" in demo_sources_js
+    assert "processing_mode: 'real'" in demo_sources_js
+    assert "const realMode = dataMode === 'real';" in viz_js
+    assert "localStorage.setItem('easyicu_home_data', 'real')" not in viz_js[
+        viz_js.index("openPrepared: sourceId =>") : viz_js.index(
+            "root.querySelectorAll('.radio[data-datamode]')"
+        )
+    ]
 
 
 def test_dead_end_screens_gained_onward_paths() -> None:
     """Cross-DB, the agent run-history empty state, the export picker wall and
     the Data Dictionary all offer an explicit next step instead of dead-ending."""
     viz_js = _static_js("screens-viz.js")
+    crossdb_results_js = _static_js("screens-viz-crossdb-results.js")
     agent_js = _static_js("screens-agent.js")
     dict_js = _static_js("screens-dict.js")
     # crossdb loaded nextbar links back to cohort as well as forward to agent
-    assert "返回队列统计" in viz_js
+    assert "返回队列统计" in crossdb_results_js
     # agent 'no runs yet' offers plan refinement in Idea Mining
     assert "回想法挖掘细化" in agent_js
     # example projects are chip-labelled per item in demo mode

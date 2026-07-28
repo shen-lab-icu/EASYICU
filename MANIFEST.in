@@ -26,6 +26,7 @@ recursive-include src/easyicu/research_agent/runner_image *
 # Include data files
 recursive-include src/easyicu/data *.json
 recursive-include src/easyicu/webserver/static *.html *.css *.js
+recursive-include src/easyicu/webserver/static/vendor *
 
 # Exclude unwanted files
 global-exclude __pycache__

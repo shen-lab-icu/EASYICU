@@ -28,6 +28,7 @@ from easyicu.webserver import catalog as catalog_module
 from easyicu.webserver import guided_sessions
 from easyicu.webserver import provider_adapter
 from easyicu.webserver import provider_gate
+from easyicu.webserver.patient_drilldown import _time_axis_payload
 from easyicu.webserver import settings as settings_store
 from easyicu.webserver import sources as source_store
 from easyicu.webserver.dataio import (
@@ -42,6 +43,20 @@ SIGNOFF_CONFIRMATIONS = [
     "claims_remain_locked",
     "no_patient_rows_persisted",
 ]
+
+
+def test_patient_review_numeric_charttime_keeps_icu_hour_semantics() -> None:
+    assert _time_axis_payload("charttime", [-1.0, 0.5, 4.0]) == {
+        "kind": "relative_hours",
+        "label_en": "ICU hour",
+        "label_zh": "ICU 入科后小时",
+        "unit": "hour",
+        "source_column": "charttime",
+    }
+    assert _time_axis_payload(
+        "charttime",
+        ["2026-01-01 00:00", "2026-01-01 01:00"],
+    )["kind"] == "datetime"
 
 AGENT_PREFLIGHT_ARTIFACTS = {
     "run_context.json",
@@ -1595,19 +1610,18 @@ def test_idea_mining_large_module_uses_metadata_only_feature_stats(
         "easyicu.web_idea_bounded_sample_feasibility/1"
     )
     assert sample_body["claim_level"] == "feasibility_sample_not_reportable"
-    sample_stats = {
-        row["concept_id"]: row
-        for row in sample_body["feature_statistics"]
-    }
+    sample_stats = {row["concept_id"]: row for row in sample_body["feature_statistics"]}
     assert sample_stats["peep"]["status"] == "ready"
     assert sample_stats["peep"]["coverage_basis"] == "bounded_file_head_sample"
     assert sample_stats["peep"]["sample_limit_records"] == 500
     assert sample_stats["peep"]["sample_records"] == 3
     assert sample_stats["peep"]["records_declared"] == 2_000_000
     assert sample_stats["peep"]["coverage_pct"] == 100.0
-    assert sample_stats["mech_vent"]["metric_kind"] == "event_rate"
+    assert sample_stats["mech_vent"]["metric_kind"] == "coverage"
     assert sample_stats["mech_vent"]["records"] == 2
-    assert sample_stats["mech_vent"]["event_rate_pct"] == pytest.approx(66.7)
+    assert sample_stats["mech_vent"]["coverage_pct"] == pytest.approx(66.7)
+    assert sample_stats["mech_vent"]["numeric_summary"]["available"] is False
+    assert "event_rate_pct" not in sample_stats["mech_vent"]
     assert sample_body["privacy"]["patient_rows_returned"] is False
     loaded = client.post("/api/ideas/run", json={"run_id": body["run_id"]})
     assert loaded.status_code == 200
@@ -2140,13 +2154,20 @@ def test_patient_review_drilldown_uses_active_source_with_bounded_table_previews
         "spo2",
         "temp",
     }
-    # Each lane signal must carry charttime aligned with its values so the
-    # front-end renders the real ICU-admission-hour axis (not a 0..N index).
+    # Each lane signal must carry source-recorded charttime aligned with its
+    # values so the front end does not silently render a 0..N index.
     vitals_hr = next(
         row for row in lanes["vitals"]["signals"] if row["feature"] == "hr"
     )
     assert vitals_hr["values"] == [90.0, 95.0]
     assert vitals_hr["times"] == ["2026-01-01 00:00", "2026-01-01 01:00"]
+    assert vitals_hr["time_axis"] == {
+        "kind": "datetime",
+        "label_en": "Recorded time",
+        "label_zh": "源记录时间",
+        "unit": "",
+        "source_column": "charttime",
+    }
     assert len(vitals_hr["times"]) == len(vitals_hr["values"])
     assert lanes["scores"]["signals"][0]["feature"] == "sofa2"
     assert not any(
@@ -2302,12 +2323,14 @@ def test_patient_review_multi_entity_traces_keep_times_aligned_after_numeric_fil
     assert response.status_code == 200
     comparison = response.json()["trajectory_review"]["multi_entity_comparison"]
     assert comparison["feature"] == "hr"
+    assert comparison["time_axis"]["kind"] == "datetime"
     traces = {row["label"]: row for row in comparison["traces"]}
     assert traces["Entity 1"]["values"] == [90.0, 95.0]
     assert traces["Entity 1"]["times"] == [
         "2026-01-01 00:00",
         "2026-01-01 01:00",
     ]
+    assert traces["Entity 1"]["time_axis"]["kind"] == "datetime"
     assert traces["Entity 2"]["values"] == [82.0, 84.0]
     assert traces["Entity 2"]["times"] == [
         "2026-01-01 01:00",
@@ -2829,6 +2852,34 @@ def test_cohort_review_summary_uses_active_source_without_row_payload(
     serialized = json.dumps(payload)
     for marker in ["subject_id", "hadm_id", "tableRows", "stay_id", '"series"']:
         assert marker not in serialized
+
+
+def test_cohort_review_canonicalizes_eicu_patientunitstayid(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(source_store, "_CONFIG_DIR", tmp_path / "cfg")
+    monkeypatch.setattr(source_store, "_CONFIG_PATH", tmp_path / "cfg" / "sources.json")
+    monkeypatch.setattr(source_store, "_autodiscovered_paths", lambda: [])
+    export_dir = _write_csv_export(tmp_path / "eicu", database="eicu_demo")
+    for csv_path in export_dir.glob("*.csv"):
+        frame = pd.read_csv(csv_path)
+        if "stay_id" in frame.columns:
+            frame = frame.rename(columns={"stay_id": "patientunitstayid"})
+            frame.to_csv(csv_path, index=False)
+    source_store.register_source(
+        str(export_dir), label="eICU official demo fixture", active=True, crossdb=True
+    )
+    cohort_review._SUMMARY_CACHE.clear()
+
+    response = TestClient(app).post("/api/cohort-review/summary", json={})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["source"]["database"] == "eicu_demo"
+    assert payload["summary"]["cohort_size"] == 3
+    assert payload["summary"]["mortality_pct"] == 33.3
+    assert payload["privacy"]["raw_rows_returned"] is False
 
 
 def test_cohort_review_icu_death_event_rate_does_not_require_km_time(
@@ -3837,6 +3888,62 @@ def test_export_runner_writes_digest_bound_column_metadata_sidecar(
         assert set(package.concept_index) == {"age"}
 
 
+def test_export_runner_loads_composite_source_and_publishes_public_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import easyicu.api as api_module
+    from easyicu.concept.metadata_projection import ConceptColumnRole
+    from easyicu.concept.metadata_sidecar import read_content_addressed_sidecar
+
+    loaded: list[dict[str, object]] = []
+    _patch_export_api(monkeypatch, loaded)
+
+    def exact_sep3_export(concepts, **kwargs):
+        loaded.append({"concepts": list(concepts), "kwargs": kwargs})
+        ids = (kwargs.get("patient_ids") or {}).get("stay_id", [])
+        return pd.DataFrame(
+            {
+                "stay_id": ids,
+                "charttime": [0.0] * len(ids),
+                "sep3": [index % 2 == 0 for index in range(len(ids))],
+            }
+        )
+
+    monkeypatch.setattr(api_module, "load_concepts", exact_sep3_export)
+    monkeypatch.setattr(
+        api_module, "get_all_patient_ids", lambda *_, **__: ([1, 2], "stay_id")
+    )
+    out = tmp_path / "out"
+    runner = dataio.make_export_runner(
+        data_path=str(tmp_path),
+        database="miiv",
+        modules=["sepsis3_sofa1"],
+        export_format="csv",
+        out_dir=str(out),
+        include_feature_definitions=False,
+    )
+
+    result = runner(_ExportJob())
+    exported = pd.read_csv(out / "sepsis3_sofa1.csv")
+    manifest = json.loads((out / "_manifest.json").read_text(encoding="utf-8"))
+    descriptor = manifest["column_metadata"]
+    sidecar = read_content_addressed_sidecar(
+        out / descriptor["file"],
+        expected_sha256=descriptor["sha256"],
+        expected_size=descriptor["size"],
+    )
+
+    assert result["file_count"] == 1
+    assert loaded[-1]["concepts"] == ["sep3"]
+    assert "sep3_sofa1" in exported.columns
+    assert "sep3" not in exported.columns
+    assert manifest["files"][0]["concept_ids"] == ["sep3_sofa1"]
+    binding = sidecar.files[0].columns["sep3_sofa1"]
+    assert binding.metadata.source_concept == "sep3_sofa1"
+    assert binding.metadata.role is ConceptColumnRole.EVENT_STATUS
+
+
 def test_export_runner_does_not_publish_v2_without_selected_primary_bindings(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -3870,6 +3977,60 @@ def test_export_runner_does_not_publish_v2_without_selected_primary_bindings(
     assert exc_info.value.detail["error"] == "column_metadata_primary_binding_missing"
     assert exc_info.value.detail["concepts"] == ["age"]
     assert not (out / "_manifest.json").exists()
+
+
+def test_export_runner_records_owner_confirmed_structural_unavailability(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import easyicu.api as api_module
+
+    loaded: list[dict[str, object]] = []
+    _patch_export_api(monkeypatch, loaded)
+
+    def no_mimic_ventilator_days(concepts, **kwargs):
+        loaded.append({"concepts": list(concepts), "kwargs": kwargs})
+        ids = (kwargs.get("patient_ids") or {}).get("stay_id", [])
+        return pd.DataFrame({"stay_id": ids})
+
+    monkeypatch.setattr(api_module, "load_concepts", no_mimic_ventilator_days)
+    monkeypatch.setattr(
+        api_module, "get_all_patient_ids", lambda *_, **__: ([1, 2], "stay_id")
+    )
+    out = tmp_path / "out"
+    runner = dataio.make_export_runner(
+        data_path=str(tmp_path),
+        database="miiv",
+        modules=["outcome"],
+        concepts={"outcome": ["vent_free_days_28"]},
+        export_format="csv",
+        out_dir=str(out),
+        include_feature_definitions=True,
+    )
+
+    result = runner(_ExportJob())
+    manifest = json.loads((out / "_manifest.json").read_text(encoding="utf-8"))
+    definitions = json.loads(
+        (out / "feature_definitions.json").read_text(encoding="utf-8")
+    )
+
+    assert result["file_count"] == 1
+    assert manifest["concept_availability"] == {
+        "structurally_unavailable_count": 1,
+        "structurally_unavailable": [
+            {
+                "concept_id": "vent_free_days_28",
+                "module": "outcome",
+                "database": "miiv",
+                "status": "structurally_unavailable",
+                "reason_code": "outcome_concept_structurally_unavailable",
+                "supported_databases": ["eicu", "eicu_demo"],
+            }
+        ],
+    }
+    assert definitions["records"][0]["availability"]["status"] == (
+        "structurally_unavailable"
+    )
 
 
 def test_export_runner_rejects_unknown_selected_concepts(

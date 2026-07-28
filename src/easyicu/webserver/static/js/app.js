@@ -91,7 +91,7 @@
     { id: 'extraction', label: ['Data Extraction', '数据抽取'], sub: ['choose cohort + modules', '选择队列 + 模块'], ico: 'extract' },
     { id: 'patient', label: ['Patient Review', '患者审阅'], sub: ['tables · trends · patients', '表格 · 趋势 · 患者'], ico: 'patient' },
     { id: 'cohort', label: ['Cohort Statistics', '队列统计'], sub: ['groups + coverage', '分组 + 覆盖率'], ico: 'cohort' },
-    { id: 'crossdb', label: ['Cross-DB Benchmark', '跨库基准'], sub: ['multi-database checks', '多数据库检查'], ico: 'benchmark' },
+    { id: 'crossdb', label: ['Cross-database comparison', '跨库对比'], sub: ['coverage + distributions', '覆盖率 + 分布'], ico: 'benchmark' },
   ];
   let classicOpen = true;
 
@@ -109,11 +109,11 @@
     'Idea Mining': ['Idea Mining', '想法挖掘'],
     'Data Workspace': ['Data Workspace', '数据工作台'],
     /* One destination, one name: these zh labels must match the sidebar CLASSIC
-       labels and each screen's own page title. Sidebar-vs-crumb drift (患者明细 /
-       跨库对比) made the same screen read as three different places. */
+       labels and each screen's own page title. Retired aliases include 患者明细
+       and 跨库基准. */
     'Patient Review': ['Patient Review', '患者审阅'],
     'Cohort Statistics': ['Cohort Statistics', '队列统计'],
-    'Cross-DB Benchmark': ['Cross-DB Benchmark', '跨库基准'],
+    'Cross-database comparison': ['Cross-database comparison', '跨库对比'],
     Settings: ['Settings', '设置'],
     'Workspace States': ['Workspace States', '工作区状态'],
   };
@@ -122,6 +122,11 @@
     if (!scr) return '';
     return typeof scr.actionHtml === 'function' ? scr.actionHtml() : (scr.actionHtml || '');
   };
+  const displayedDataMode = () => (
+    window.getDataMode
+      ? window.getDataMode()
+      : (window.EU_DATA === 'real' ? 'real' : 'demo')
+  );
 
   function syncShellAccessibility(root, fullScreen) {
     if (fullScreen && root.firstElementChild) {
@@ -133,7 +138,7 @@
       if (current) control.setAttribute('aria-current', 'page');
       else control.removeAttribute('aria-current');
     });
-    const dataMode = window.EU_DATA === 'real' ? 'real' : 'demo';
+    const dataMode = displayedDataMode();
     root.querySelectorAll('[data-datamode], [data-hd]').forEach((control) => {
       const value = control.dataset.datamode || control.dataset.hd;
       control.setAttribute('aria-pressed', String(value === dataMode));
@@ -216,6 +221,11 @@
 
   function topbar() {
     const scr = screenOf(route);
+    const dataMode = displayedDataMode();
+    const demoMode = dataMode === 'demo';
+    const officialDemo = demoMode
+      && window.EU_DATA_MODE_CONTEXT
+      && window.EU_DATA_MODE_CONTEXT.kind === 'official_demo';
     const crumbs = (scr.crumbs || []).map((c, i, arr) => {
       const label = crumbLabel(c);
       if (i === arr.length - 1) return `<span class="cur" aria-current="page">${label}</span>`;
@@ -230,9 +240,9 @@
       <div class="crumbs">${crumbs}</div>
       <div class="spacer"></div>
       ${scr.status || ''}
-      <div class="mode-seg ${window.EU_DATA !== 'real' ? 'demo-active' : ''}" role="group" aria-label="Data mode" title="${window.EU_DATA !== 'real' ? t('Demo mode: every number on screen is a seeded example, not your data. Switch to Real to load a local export.', '演示模式：屏幕上的所有数字都是种子示例，不是你的数据。切换到真实模式可加载本地导出。') : t('Real mode: screens compute from your local EasyICU export. Nothing is uploaded.', '真实模式：各页面从你本地的 EasyICU 导出计算，不上传任何数据。')}">
-        <button type="button" class="${window.EU_DATA !== 'real' ? 'on' : ''}" data-datamode="demo" aria-pressed="${window.EU_DATA !== 'real'}">${icon('flask', 12)} ${window.EU_DATA !== 'real' ? t('Demo data', '演示数据') : t('Demo', '演示')}</button>
-        <button type="button" class="${window.EU_DATA === 'real' ? 'on' : ''}" data-datamode="real" aria-pressed="${window.EU_DATA === 'real'}">${icon('db', 12)} ${t('Real', '真实')}</button>
+      <div class="mode-seg ${demoMode ? 'demo-active' : ''}" role="group" aria-label="Data mode" title="${demoMode ? t('Demo mode uses official public deidentified demo datasets or clearly labelled seeded examples. It is never your local data; switch to Real to load a local export.', '演示模式使用官方公开去标识 Demo 数据集，或明确标注的种子示例；都不是你的本地数据。切换到真实模式可加载本地导出。') : t('Real mode: screens compute from your local EasyICU export. Nothing is uploaded.', '真实模式：各页面从你本地的 EasyICU 导出计算，不上传任何数据。')}">
+        <button type="button" class="${demoMode ? 'on' : ''}" data-datamode="demo" aria-pressed="${demoMode}">${icon('flask', 12)} ${officialDemo ? t('Official demo', '官方演示') : (demoMode ? t('Demo data', '演示数据') : t('Demo', '演示'))}</button>
+        <button type="button" class="${!demoMode ? 'on' : ''}" data-datamode="real" aria-pressed="${!demoMode}">${icon('db', 12)} ${t('Real', '真实')}</button>
       </div>
       <div class="lang-seg" role="group" aria-label="Language">
         <button type="button" class="${window.EU_LANG !== 'zh' ? 'on' : ''}" data-lang="en" aria-pressed="${window.EU_LANG !== 'zh'}">EN</button>

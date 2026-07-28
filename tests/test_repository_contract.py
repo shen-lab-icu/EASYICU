@@ -59,13 +59,20 @@ def test_native_webserver_static_assets_are_packaged() -> None:
         "static/index.html",
         "static/css/*.css",
         "static/js/*.js",
+        "static/vendor/echarts/*",
     ]
     assert "recursive-include src/easyicu/webserver/static *.html *.css *.js" in manifest
+    assert "recursive-include src/easyicu/webserver/static/vendor *" in manifest
 
     required_assets = [
         "src/easyicu/webserver/static/index.html",
         "src/easyicu/webserver/static/js/app.js",
+        "src/easyicu/webserver/static/js/screens-viz-demo-drilldown.js",
+        "src/easyicu/webserver/static/js/screens-viz-patient-features.js",
         "src/easyicu/webserver/static/css/app.css",
+        "src/easyicu/webserver/static/vendor/echarts/echarts.common.min.js",
+        "src/easyicu/webserver/static/vendor/echarts/LICENSE",
+        "src/easyicu/webserver/static/vendor/echarts/NOTICE",
     ]
     missing = [path for path in required_assets if not (REPO_ROOT / path).exists()]
     assert not missing, f"Native FastAPI static assets are missing from source tree: {missing}"

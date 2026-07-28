@@ -34,8 +34,10 @@
     },
   ];
   const SAMPLE_MODES = new Set(SAMPLE_SPECS.map(row => row.id));
+  const FEATURE_SCOPES = new Set(['core', 'all']);
   const state = {
     view: 'idle',
+    sourceMethod: 'registered',
     rawRootDraft: '',
     rawRootScan: null,
     rawRootScanPath: '',
@@ -43,6 +45,7 @@
     scanRequestSeq: 0,
     operationSeq: 0,
     sampleMode: 'quick',
+    featureScope: 'all',
     registeredLoading: false,
   };
 
@@ -142,6 +145,15 @@
     return state.sampleMode;
   }
 
+  function featureScope() {
+    return state.featureScope;
+  }
+
+  function setFeatureScope(value) {
+    state.featureScope = FEATURE_SCOPES.has(value) ? value : 'core';
+    return state.featureScope;
+  }
+
   function view() {
     return state.view;
   }
@@ -158,6 +170,15 @@
   function setRegisteredLoading(value) {
     state.registeredLoading = value === true;
     return state.registeredLoading;
+  }
+
+  function sourceMethod() {
+    return state.sourceMethod;
+  }
+
+  function setSourceMethod(value) {
+    state.sourceMethod = value === 'raw' ? 'raw' : 'registered';
+    return state.sourceMethod;
   }
 
   function beginOperation() {
@@ -221,6 +242,31 @@
     return config && typeof config.getError === 'function' ? config.getError() : null;
   }
 
+  function userError(value, config) {
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+    const h = helpersOf(config);
+    const messages = {
+      raw_database_concept_load_failed: h.t(
+        'A selected database could not load one catalog feature. EasyICU stopped instead of reporting a false absence. Check the source files or use prepared exports.',
+        '某个已选数据库无法读取一项目录特征。EasyICU 已停止，避免把读取失败误报为数据缺失；请检查源文件或改用已准备导出。'
+      ),
+      raw_distribution_load_failed: h.t(
+        'The bounded raw-database comparison could not be completed. Check the source folders and retry.',
+        '有界原始库对比未能完成。请检查源目录后重试。'
+      ),
+      loaded_fewer_than_requested_raw_databases: h.t(
+        'Not every selected database produced readable aggregate data. Open Advanced settings to review the database selection.',
+        '并非所有已选数据库都产生了可读聚合数据。请打开“高级设置”检查数据库选择。'
+      ),
+      requested_raw_databases_not_found: h.t(
+        'One or more selected database folders were not recognized. Open Advanced settings to review detected databases.',
+        '一个或多个已选数据库目录未被识别。请打开“高级设置”检查已识别数据库。'
+      ),
+    };
+    return messages[raw] || raw;
+  }
+
   function repaint(config, focusSelector) {
     if (config && typeof config.repaint === 'function') config.repaint();
     if (focusSelector && typeof document !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
@@ -263,6 +309,15 @@
       state.rawRootScanning = false;
       state.rawRootScan = result || null;
       state.rawRootScanPath = root;
+      const detected = result && result.ok
+        ? (result.detected || []).map(row => row && row.key).filter(Boolean)
+        : [];
+      // The default means "all databases found in this parent folder", not
+      // "require six hard-coded folders". Preserve explicit advanced choices.
+      if (detected.length >= 2 && selectedKeys().length === DATABASES.length) {
+        setSelectedKeys(detected);
+        notifySourceChanged(root, state.sampleMode, state.featureScope);
+      }
       setError(config, result && result.ok === false
         ? result.hint || result.error || 'Could not check that raw ICU data root.'
         : null);
@@ -285,6 +340,7 @@
     if (!root || !keys.length || (state.rawRootDraft && state.rawRootDraft !== root)) return false;
     state.rawRootDraft = root;
     setSampleMode(meta && meta.sample_mode);
+    setFeatureScope(meta && meta.feature_scope === 'all_catalog' ? 'all' : 'core');
     setSelectedKeys(keys);
     return true;
   }
@@ -301,8 +357,10 @@
       rawRoot: state.rawRootDraft,
       selectedKeys: selectedKeys(),
       sourceIdentity: sourceIdentity(),
+      sourceMethod: state.sourceMethod,
       sampleMode: state.sampleMode,
       sampleProfile: { ...profile },
+      featureScope: state.featureScope,
       registeredLoading: state.registeredLoading,
       scanCurrent: scanCurrent(state.rawRootDraft),
       scanReady: scanReady(state.rawRootDraft),
@@ -314,10 +372,13 @@
     if (continuity && typeof continuity.disconnect === 'function') continuity.disconnect(options || {});
   }
 
-  function notifySourceChanged(nextRoot, nextMode) {
+  function notifySourceChanged(nextRoot, nextMode, nextFeatureScope) {
     const continuity = window.EU_CROSSDB_JOB_CONTINUITY;
     if (continuity && typeof continuity.onSourceChanged === 'function') {
-      continuity.onSourceChanged(pathValue(nextRoot), sourceIdentity(), nextMode || state.sampleMode);
+      const apiScope = window.EU_CROSSDB_RAW && typeof window.EU_CROSSDB_RAW.apiFeatureScope === 'function'
+        ? window.EU_CROSSDB_RAW.apiFeatureScope(nextFeatureScope || state.featureScope)
+        : (nextFeatureScope === 'all' || state.featureScope === 'all' ? 'all_catalog' : 'curated_core');
+      continuity.onSourceChanged(pathValue(nextRoot), sourceIdentity(), nextMode || state.sampleMode, apiScope);
     }
   }
 
@@ -458,9 +519,17 @@
     const h = helpersOf(config);
     const count = selectedKeys().length;
     const root = state.rawRootDraft;
-    const canRun = count >= 2 && scanReady(root);
+    const canLaunch = Boolean(root && count >= 2 && !state.rawRootScanning);
     const currentProfile = sampleProfile(config);
     const profiles = sampleProfiles(config);
+    const catalogTotals = config && config.catalogTotals || {};
+    const catalogModuleCount = Number(catalogTotals.modules) || 19;
+    const catalogFeatureCount = Number(catalogTotals.features) || 281;
+    const fullScope = state.featureScope === 'all';
+    const rawSelection = selectionStatus(root);
+    const detectedCount = rawSelection.current && rawSelection.current.ok
+      ? rawSelection.detectedKeys.size
+      : 0;
     const sourceChoice = window.EU_CROSSDB_SOURCE_CHOICE;
     const registryHtml = config && typeof config.registryHtml === 'function' ? config.registryHtml() : '';
     const sourceChoiceHtml = sourceChoice && typeof sourceChoice.render === 'function'
@@ -468,78 +537,106 @@
       : '';
     const error = getError(config);
     return `
-      ${error ? `<div class="note warn" role="alert" aria-live="assertive"><div class="ico">${h.icon('alert', 14)}</div><div class="body"><div class="d mono" style="font-size:11px;margin:0;">${h.esc(error)}</div></div></div>` : ''}
-      ${sourceChoiceHtml || `<div class="note info">
-        <div class="ico">${h.icon('benchmark', 16)}</div>
-        <div class="body"><span class="t">${h.term('Real raw database mode')}</span> <span class="d" style="display:inline;">— ${h.t('Choose a local ICU data root, then start with 12 curated cross-database concepts under a hard sampling budget. No rows leave this machine.', '选择本地 ICU 数据根目录，再在硬性抽样上限下先对比 12 个精选跨库概念。不会有行级数据离开本机。')}</span></div>
-      </div>`}
-      <div class="card pad mt-16">
-        <div class="row between gap-12" style="align-items:flex-start;">
+      <div class="card pad">
+        <div class="eyebrow">${h.t('Step 1 · Source method', '第 1 步 · 来源方式')}</div>
+        <div class="panel-title">${h.t('How should EasyICU build this comparison?', '选择跨库对比的数据来源')}</div>
+        <div class="panel-sub mt-4">${h.t('Choose one path. Controls for the other path stay hidden.', '一次只选择一种路径，未选择路径的控件不会展开。')}</div>
+        <div class="crossdb-method-grid mt-14" role="group" aria-label="${h.esc(h.t('Cross-database source method', '跨库数据来源方式'))}">
+          <button class="crossdb-method-card ${state.sourceMethod === 'registered' ? 'selected' : ''}" type="button" data-crossdb-source-method="registered" aria-pressed="${state.sourceMethod === 'registered' ? 'true' : 'false'}">
+            <span class="crossdb-method-icon">${h.icon('table', 16)}</span>
+            <span><b>${h.t('Prepared EasyICU exports', '已准备的 EasyICU 导出')}</b><small>${h.t('Compare two or more bounded aggregate exports.', '比较两个或更多有界聚合导出。')}</small></span>
+            <span class="pill ${state.sourceMethod === 'registered' ? 'ok' : 'dashed'}">${state.sourceMethod === 'registered' ? h.t('Selected', '已选择') : h.t('Choose', '选择')}</span>
+          </button>
+          <button class="crossdb-method-card ${state.sourceMethod === 'raw' ? 'selected' : ''}" type="button" data-crossdb-source-method="raw" aria-pressed="${state.sourceMethod === 'raw' ? 'true' : 'false'}">
+            <span class="crossdb-method-icon">${h.icon('folder', 16)}</span>
+            <span><b>${h.t('Raw ICU database folder', '原始 ICU 数据库目录')}</b><small>${h.t('Check a local parent folder, then run bounded sampling.', '检查本地父目录后执行有界抽样。')}</small></span>
+            <span class="pill ${state.sourceMethod === 'raw' ? 'ok' : 'dashed'}">${state.sourceMethod === 'raw' ? h.t('Selected', '已选择') : h.t('Choose', '选择')}</span>
+          </button>
+        </div>
+      </div>
+      ${error ? `<div class="note warn" role="alert" aria-live="assertive"><div class="ico">${h.icon('alert', 14)}</div><div class="body"><div class="t">${h.t('Comparison needs attention', '对比需要处理')}</div><div class="d">${h.esc(userError(error, config))}</div></div></div>` : ''}
+      ${state.sourceMethod === 'registered' ? `
+      <section class="crossdb-path-panel" data-crossdb-source-path="registered">
+        <div class="crossdb-step-head">
+          <span class="crossdb-step-number">2</span>
+          <div><b>${h.t('Select at least two exports', '选择至少两个导出')}</b><small>${h.t('Only aggregate summaries are compared; raw tables are not scanned.', '仅比较聚合摘要，不扫描原始数据库表。')}</small></div>
+        </div>
+        ${sourceChoiceHtml || `<div class="note info"><div class="body"><div class="d">${h.t('No registered export source owner is available.', '当前没有可用的已注册导出来源。')}</div></div></div>`}
+      </section>` : `
+      <section class="crossdb-path-panel crossdb-raw-primary" data-crossdb-source-path="raw">
+        <div class="crossdb-raw-head">
+          <span class="crossdb-method-icon">${h.icon('benchmark', 16)}</span>
           <div>
-            <div class="panel-title">${h.term('Raw ICU data root')}</div>
-            <div class="panel-sub mt-4">${h.t('Folder that contains database subfolders such as mimiciv, eicu, aumc, hirid, mimiciii, or sic.', '包含数据库子文件夹的目录，例如 mimiciv、eicu、aumc、hirid、mimiciii 或 sic。')}</div>
+            <div class="panel-title">${fullScope ? h.t('Complete raw-database comparison', '完整原始库对比') : h.t('Quick raw-database comparison', '快速原始库对比')}</div>
+            <div class="panel-sub mt-4">${h.t('Choose one parent folder. EasyICU detects its databases, checks the folder, and starts the comparison in one action.', '只需选择一个父目录；EasyICU 会自动识别数据库、检查目录并直接开始对比。')}</div>
           </div>
           <span class="pill ok"><span class="dot"></span>${h.term('local only')}</span>
         </div>
         <div class="path-field editable mt-14">
           <span class="pf-ico">${h.icon('folder', 14)}</span>
-          <input class="pf-input" data-crossdb-root type="text" spellcheck="false" autocomplete="off" value="${h.esc(root)}" placeholder="${h.esc(h.t('Paste a local ICU database root folder', '粘贴本地 ICU 数据库根目录'))}" aria-label="${h.esc(h.t('ICU data root', 'ICU 数据根目录'))}" />
+          <input class="pf-input" data-crossdb-root type="text" spellcheck="false" autocomplete="off" value="${h.esc(root)}" placeholder="${h.esc(h.t('Choose the parent folder containing your ICU databases', '选择包含 ICU 数据库的父目录'))}" aria-label="${h.esc(h.t('ICU data root', 'ICU 数据根目录'))}" />
           <button class="btn sm" type="button" data-crossdb-root-browse>${h.icon('folder', 12)} ${h.t('Browse...', '浏览...')}</button>
-          <button class="btn sm" type="button" data-crossdb-root-scan ${state.rawRootScanning ? 'aria-disabled="true" aria-busy="true"' : ''}>${state.rawRootScanning ? '<span class="spin accent"></span>' : h.icon('search', 12)} ${state.rawRootScanning ? h.t('Checking…', '检查中…') : h.t('Check folders', '检查文件夹')}</button>
         </div>
-        ${renderScanPanel(config)}
-      </div>
-      <div class="card pad mt-16">
-        <div class="row between gap-12" style="align-items:flex-start;">
-          <div>
-            <div class="panel-title">${h.t('Sampling budget before plotting', '绘图前抽样预算')}</div>
-            <div class="panel-sub mt-4">${h.t('Raw Cross-DB density uses bounded local sampling so six databases do not trigger an unbounded full-table scan.', '原始跨库密度使用有界本地抽样，避免六个数据库触发无界全表扫描。')}</div>
-          </div>
-          <span class="pill ok">${h.esc(sampleSummary(currentProfile, config))}</span>
+        <div class="crossdb-raw-summary mt-12">
+          <span class="pill ${detectedCount >= 2 ? 'ok' : ''}">${state.rawRootScanning ? `<span class="spin accent"></span> ${h.t('Detecting databases…', '正在识别数据库…')}` : detectedCount >= 2 ? `${h.icon('check', 12)} ${h.fmtInt(detectedCount)} ${h.t('databases detected', '个数据库已识别')}` : `${h.icon('search', 12)} ${h.t('Databases are detected automatically at run time', '运行时自动识别数据库')}`}</span>
+          <span class="pill ${fullScope ? 'ok' : ''}">${fullScope ? `${h.fmtInt(catalogModuleCount)} ${h.t('modules', '个模块')} · ${h.fmtInt(catalogFeatureCount)} ${h.t('catalog features', '个目录特征')}` : `4 ${h.t('modules', '个模块')} · 12 ${h.t('core features', '个核心特征')}`}</span>
+          <span class="pill">${h.esc(sampleSummary(currentProfile, config))}</span>
         </div>
-        <div class="db-grid mt-14" style="grid-template-columns:repeat(3,minmax(0,1fr));">
-          ${profiles.map(profile => `
-            <button class="db-card ${profile.id === currentProfile.id ? 'sel' : ''}" type="button" data-crossdb-sample-mode="${h.esc(profile.id)}" aria-pressed="${profile.id === currentProfile.id ? 'true' : 'false'}" style="text-align:left;">
-              <div style="min-width:0;">
-                <div style="font-weight:650;font-size:12.5px;">${h.esc(profile.label)}</div>
-                <div class="mono" style="font-size:10.5px;color:var(--ink-4);">≤${h.fmtInt(profile.maxPatients)} ${h.t('entities/database', '实体/数据库')} · ≤${h.fmtInt(profile.sampleSize)} ${h.t('values/feature', '值/特征')}</div>
-                <div style="font-size:11px;color:var(--ink-3);margin-top:4px;">${h.esc(profile.note)}</div>
-              </div>
-              <span class="db-mk pill ${profile.id === currentProfile.id ? 'ok' : 'dashed'}" style="flex:none;height:20px;">${profile.id === currentProfile.id ? `<span class="dot"></span>${h.t('selected', '已选择')}` : h.t('choose', '选择')}</span>
-            </button>`).join('')}
+        <div class="gate-strip crossdb-run-strip mt-14">
+          <span>${h.t('Only bounded aggregate distributions are produced; no patient rows leave this computer.', '只生成有界聚合分布，不会把患者行传出本机。')}</span>
+          <div class="grow"></div>
+          <button class="btn primary" data-crossdb-run-raw ${canLaunch ? '' : 'aria-disabled="true"'}>${h.icon('play', 13)} ${state.rawRootScanning ? h.t('Checking folder…', '正在检查目录…') : fullScope ? h.t('Start complete comparison', '开始完整对比') : h.t('Start quick comparison', '开始快速对比')}</button>
         </div>
-      </div>
-      <div class="sec-stack"><div class="lbl">${h.term('Databases')} · <span id="dbcount">${count}</span> ${h.term('selected')}</div></div>
-      <div class="db-grid" id="dbgrid">
-        ${DATABASES.map((row, index) => {
-          const status = databaseStatus(row.key, row.selected, config);
-          return `<button class="db-card ${row.selected ? 'sel' : ''}" type="button" data-db="${index}" aria-pressed="${row.selected ? 'true' : 'false'}">
-            <div class="row gap-8" style="min-width:0;">
-              <span class="${row.selected ? '' : 'ink-4'}" style="flex:none;color:${row.selected ? 'var(--accent-ink)' : 'var(--ink-4)'};">${h.icon('db', 15)}</span>
-              <div style="min-width:0;">
-                <div style="font-weight:600;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${row.label}</div>
-                <div class="mono" style="font-size:10.5px;color:var(--ink-4);">${h.esc(status.sub)}</div>
+        <details class="crossdb-advanced mt-14">
+          <summary>
+            <span>${h.icon('sliders', 13)} ${h.t('Advanced settings (optional)', '高级设置（可选）')}</span>
+            <small>${h.t('Feature scope, sampling budget, and database selection', '特征范围、抽样预算和数据库选择')}</small>
+          </summary>
+          <div class="crossdb-advanced-body">
+            <div class="row between gap-12" style="align-items:center;">
+              <div><b>${h.t('Folder detection', '目录识别')}</b><small>${h.t('Review aliases or re-check after changing files.', '查看识别结果，或在目录文件变化后重新检查。')}</small></div>
+              <button class="btn sm" type="button" data-crossdb-root-scan ${state.rawRootScanning ? 'aria-disabled="true" aria-busy="true"' : ''}>${state.rawRootScanning ? '<span class="spin accent"></span>' : h.icon('search', 12)} ${state.rawRootScanning ? h.t('Checking…', '检查中…') : h.t('Check again', '重新检查')}</button>
+            </div>
+            ${renderScanPanel(config)}
+            <div class="crossdb-advanced-section">
+              <b>${h.t('Feature scope', '特征范围')}</b>
+              <div class="db-grid mt-10" style="grid-template-columns:repeat(2,minmax(0,1fr));">
+                <button class="db-card ${fullScope ? '' : 'sel'}" type="button" data-crossdb-feature-scope="core" aria-pressed="${fullScope ? 'false' : 'true'}">
+                  <div><b>${h.t('Quick core', '快速核心')}</b><small>4 / ${h.fmtInt(catalogModuleCount)} ${h.t('modules', '模块')} · 12 / ${h.fmtInt(catalogFeatureCount)} ${h.t('features', '特征')}</small></div>
+                  <span class="db-mk pill ${fullScope ? 'dashed' : 'ok'}">${fullScope ? h.t('choose', '选择') : h.t('selected', '已选择')}</span>
+                </button>
+                <button class="db-card ${fullScope ? 'sel' : ''}" type="button" data-crossdb-feature-scope="all" aria-pressed="${fullScope ? 'true' : 'false'}">
+                  <div><b>${h.t('Complete catalog', '完整目录')}</b><small>${h.fmtInt(catalogModuleCount)} ${h.t('modules', '模块')} · ${h.fmtInt(catalogFeatureCount)} ${h.t('features', '特征')}</small></div>
+                  <span class="db-mk pill ${fullScope ? 'ok' : 'dashed'}">${fullScope ? h.t('selected', '已选择') : h.t('choose', '选择')}</span>
+                </button>
               </div>
             </div>
-            <span class="db-mk pill ${status.cls}" style="flex:none;height:20px;">${status.cls === 'ok' ? '<span class="dot"></span>' : ''}${h.esc(status.label)}</span>
-          </button>`;
-        }).join('')}
-      </div>
-      <div class="gate-strip crossdb-run-strip mt-20">
-        <span class="pill"><span style="color:var(--ink-3);">${h.icon('benchmark', 12)}</span> <span id="runhint">${count} / 6 · ${canRun ? h.term('folder check ready') : h.term('check folders · need ≥ 2 detected')}</span></span>
-        <span class="pill">${h.term('12 curated core concepts')}</span>
-        <span class="pill">${h.esc(sampleSummary(currentProfile, config))}</span>
-        <div class="grow"></div>
-        <button class="btn primary" data-crossdb-run-raw ${canRun ? '' : 'aria-disabled="true"'}>${h.icon('play', 13)} ${h.term('Load real density benchmark')}</button>
-      </div>`;
+            <div class="crossdb-advanced-section">
+              <b>${h.t('Sampling budget', '抽样预算')}</b>
+              <div class="db-grid mt-10" style="grid-template-columns:repeat(3,minmax(0,1fr));">
+                ${profiles.map(profile => `<button class="db-card ${profile.id === currentProfile.id ? 'sel' : ''}" type="button" data-crossdb-sample-mode="${h.esc(profile.id)}" aria-pressed="${profile.id === currentProfile.id ? 'true' : 'false'}"><div><b>${h.esc(profile.label)}</b><small>≤${h.fmtInt(profile.maxPatients)} ${h.t('entities/db', '实体/库')} · ≤${h.fmtInt(profile.sampleSize)} ${h.t('values/feature', '值/特征')}</small></div><span class="db-mk pill ${profile.id === currentProfile.id ? 'ok' : 'dashed'}">${profile.id === currentProfile.id ? h.t('selected', '已选择') : h.t('choose', '选择')}</span></button>`).join('')}
+              </div>
+            </div>
+            <div class="crossdb-advanced-section">
+              <b>${h.term('Databases')} · <span id="dbcount">${count}</span> ${h.term('selected')}</b>
+              <div class="db-grid mt-10" id="dbgrid">
+                ${DATABASES.map((row, index) => {
+                  const status = databaseStatus(row.key, row.selected, config);
+                  return `<button class="db-card ${row.selected ? 'sel' : ''}" type="button" data-db="${index}" aria-pressed="${row.selected ? 'true' : 'false'}"><div><b>${h.esc(row.label)}</b><small>${h.esc(status.sub)}</small></div><span class="db-mk pill ${status.cls}">${h.esc(status.label)}</span></button>`;
+                }).join('')}
+              </div>
+            </div>
+          </div>
+        </details>
+      </section>`}`;
   }
 
-  function renderDemo(config) {
+  function renderSyntheticDemo(config) {
     const h = helpersOf(config);
     const count = selectedKeys().length;
     return `<div class="note info">
       <div class="ico">${h.icon('benchmark', 16)}</div>
-      <div class="body"><span class="t">${h.term('Select databases to compare')}</span> <span class="d" style="display:inline;">— ${h.t('Pick two or more standardized ICU sources, then run the benchmark. Each uses an independent seeded feature frame in Demo Mode.', '选择两个或更多标准化 ICU 来源后运行对比。演示模式下，每个数据库使用独立的种子特征帧。')}</span></div>
+      <div class="body"><span class="t">${h.term('Select databases to compare')}</span> <span class="d" style="display:inline;">— ${h.t('Pick two or more standardized ICU sources, then start the comparison. Each uses an independent seeded feature frame in Demo Mode.', '选择两个或更多标准化 ICU 来源后运行对比。演示模式下，每个数据库使用独立的种子特征帧。')}</span></div>
     </div>
     <div class="sec-stack"><div class="lbl">${h.term('Available databases')} · <span id="dbcount">${count}</span> ${h.term('selected')}</div></div>
     <div class="db-grid" id="dbgrid">
@@ -557,8 +654,19 @@
     <div class="gate-strip mt-20">
       <span class="pill"><span style="color:var(--ink-3);">${h.icon('benchmark', 12)}</span> <span id="runhint">${count} / 6 · ${h.t('need ≥ 2', '至少需要 2 个')}</span></span>
       <div class="grow"></div>
-      <button class="btn primary" data-crossdb-run-demo ${count < 2 ? 'aria-disabled="true"' : ''}>${h.icon('play', 13)} ${h.term('Run benchmark')}</button>
+      <button class="btn primary" data-crossdb-run-demo ${count < 2 ? 'aria-disabled="true"' : ''}>${h.icon('play', 13)} ${h.t('Start comparison', '开始对比')}</button>
     </div>`;
+  }
+
+  function renderDemo(config) {
+    const h = helpersOf(config);
+    const sourceChoice = window.EU_CROSSDB_SOURCE_CHOICE;
+    const syntheticHtml = renderSyntheticDemo(config);
+    const error = getError(config);
+    const body = sourceChoice && typeof sourceChoice.renderDemo === 'function'
+      ? sourceChoice.renderDemo({ syntheticHtml })
+      : `<div class="card pad">${syntheticHtml}</div>`;
+    return `${error ? `<div class="note warn" role="alert" aria-live="assertive"><div class="ico">${h.icon('alert', 14)}</div><div class="body"><div class="t">${h.t('Comparison needs attention', '对比需要处理')}</div><div class="d">${h.esc(userError(error, config))}</div></div></div>` : ''}${body}`;
   }
 
   function renderLoading(config) {
@@ -600,19 +708,17 @@
     const header = config && typeof config.header === 'function' ? config.header() : '';
     const workspace = window.EU_CROSSDB_WORKSPACE;
     if (state.view === 'loading') return note + header + renderLoading(config);
-    if (window.EU_DATA === 'real') {
-      if (workspace && config && typeof config.renderLoaded === 'function') {
-        return note + header + config.renderLoaded(workspace);
-      }
-      return note + header + renderReal(config);
+    if (workspace && config && typeof config.renderLoaded === 'function') {
+      return note + header + config.renderLoaded(workspace);
     }
+    const displayMode = window.getDataMode
+      ? window.getDataMode()
+      : (window.EU_DATA === 'real' ? 'real' : 'demo');
+    if (displayMode === 'real') return note + header + renderReal(config);
     if (state.view === 'loaded') {
-      if (workspace && config && typeof config.renderLoaded === 'function') {
-        return note + header + config.renderLoaded(workspace);
-      }
       return note + header + `<div class="note warn">
         <div class="ico">${h.icon('alert', 14)}</div>
-        <div class="body"><span class="t">${h.term('Demo benchmark was not loaded')}</span> <span class="d" style="display:inline;">— ${h.t('Run the benchmark again so the backend can build the seeded distribution payload.', '请重新运行对比，让后端生成种子分布载荷。')}</span></div>
+        <div class="body"><span class="t">${h.t('Demo comparison was not loaded', '演示对比未加载')}</span> <span class="d" style="display:inline;">— ${h.t('Run the comparison again so the backend can build the seeded distribution payload.', '请重新运行对比，让后端生成种子分布载荷。')}</span></div>
       </div>`;
     }
     return note + header + renderDemo(config);
@@ -626,11 +732,50 @@
     return `<button class="btn" data-viz-reset>${h.icon('sliders', 13)} ${h.term('Change selection')}</button><button class="btn" data-crossdb-export>${h.icon('download', 13)} ${h.term('Export JSON')}</button>${rawLoaded ? '' : `<button class="btn primary" data-crossdb-rerun>${h.icon('refresh', 13)} ${h.term('Re-run')}</button>`}`;
   }
 
+  function startRawRun(rootValue, config) {
+    if (!scanReady(rootValue) || state.view === 'loading') return false;
+    const operationId = beginOperation();
+    state.registeredLoading = false;
+    state.view = 'loading';
+    const runSnapshot = { ...snapshot(config), operationId };
+    repaint(config);
+    if (config && typeof config.runRaw === 'function') {
+      config.runRaw(ok => {
+        if (!operationCurrent(operationId)) return;
+        state.view = ok ? 'loaded' : 'idle';
+        repaint(config);
+      }, { operationId, rawRoot: rootValue, setup: runSnapshot });
+      return true;
+    }
+    state.view = 'idle';
+    setError(config, helpersOf(config).t(
+      'Raw Cross-DB comparison is unavailable in this browser session.',
+      '当前浏览器会话无法启动原始跨库对比。'
+    ));
+    repaint(config);
+    return false;
+  }
+
   function bind(root, config) {
     if (!root) return;
     if (config && typeof config.bindRegistry === 'function') config.bindRegistry(root, 'crossdb');
     const sourceChoice = window.EU_CROSSDB_SOURCE_CHOICE;
     if (sourceChoice && typeof sourceChoice.wire === 'function') sourceChoice.wire(root);
+
+    root.querySelectorAll('[data-crossdb-source-method]').forEach(button => button.addEventListener('click', event => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (state.view === 'loading') return;
+      const next = setSourceMethod(button.dataset.crossdbSourceMethod);
+      setError(config, null);
+      repaint(config, `[data-crossdb-source-method="${next}"]`);
+    }));
+
+    root.querySelectorAll('.radio[data-datamode]').forEach(button => button.addEventListener('keydown', event => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      if (window.setDataMode) window.setDataMode(button.dataset.datamode);
+    }));
 
     root.querySelectorAll('[data-crossdb-sample-mode]').forEach(button => button.addEventListener('click', event => {
       event.preventDefault();
@@ -639,6 +784,15 @@
       notifySourceChanged(state.rawRootDraft, nextMode);
       setSampleMode(nextMode);
       repaint(config, `[data-crossdb-sample-mode="${nextMode}"]`);
+    }));
+
+    root.querySelectorAll('[data-crossdb-feature-scope]').forEach(button => button.addEventListener('click', event => {
+      event.preventDefault();
+      event.stopPropagation();
+      const nextScope = button.dataset.crossdbFeatureScope === 'all' ? 'all' : 'core';
+      notifySourceChanged(state.rawRootDraft, state.sampleMode, nextScope);
+      setFeatureScope(nextScope);
+      repaint(config, `[data-crossdb-feature-scope="${nextScope}"]`);
     }));
 
     const grid = root.querySelector('#dbgrid');
@@ -690,22 +844,25 @@
       const rootValue = pathValue(input && input.value || state.rawRootDraft);
       state.rawRootDraft = rootValue;
       if (!scanReady(rootValue)) {
-        scan(rootValue, config, '[data-crossdb-run-raw]');
+        button.setAttribute('aria-disabled', 'true');
+        scan(rootValue, config, '[data-crossdb-run-raw]').then(ready => {
+          if (ready) {
+            setError(config, null);
+            startRawRun(rootValue, config);
+            return;
+          }
+          if (!getError(config)) {
+            setError(config, helpersOf(config).t(
+              'The comparison did not start because fewer than two selected database folders were recognized. Open Advanced settings to review the detected databases.',
+              '未能开始对比：识别到的已选数据库少于两个。请打开“高级设置”检查数据库识别结果。'
+            ));
+            repaint(config, '[data-crossdb-run-raw]');
+          }
+        });
         return;
       }
       button.setAttribute('aria-disabled', 'true');
-      const operationId = beginOperation();
-      state.registeredLoading = false;
-      state.view = 'loading';
-      const runSnapshot = { ...snapshot(config), operationId };
-      repaint(config);
-      if (config && typeof config.runRaw === 'function') {
-        config.runRaw(ok => {
-          if (!operationCurrent(operationId)) return;
-          state.view = ok ? 'loaded' : 'idle';
-          repaint(config);
-        }, { operationId, rawRoot: rootValue, setup: runSnapshot });
-      }
+      startRawRun(rootValue, config);
     }));
 
     root.querySelectorAll('[data-crossdb-run-demo]').forEach(button => button.addEventListener('click', event => {
@@ -733,7 +890,12 @@
       button.setAttribute('aria-disabled', 'true');
       if (window.EU_DATA === 'real') {
         const sourceHost = window.EU_CROSSDB_SOURCE_HOST;
-        if (sourceHost && typeof sourceHost.runRegistered === 'function') sourceHost.runRegistered();
+        const context = window.EU_DATA_MODE_CONTEXT;
+        if (context && context.kind === 'official_demo_pair' && sourceHost && typeof sourceHost.runOfficial === 'function') {
+          sourceHost.runOfficial();
+        } else if (sourceHost && typeof sourceHost.runRegistered === 'function') {
+          sourceHost.runRegistered();
+        }
         return;
       }
       const operationId = beginOperation();
@@ -754,6 +916,14 @@
         const next = pathValue(input.value);
         notifySourceChanged(next, state.sampleMode);
         changeRawRoot(next);
+        root.querySelectorAll('[data-crossdb-run-raw]').forEach(button => {
+          const enabled = Boolean(next)
+            && selectedKeys().length >= 2
+            && !state.rawRootScanning
+            && state.view !== 'loading';
+          if (enabled) button.removeAttribute('aria-disabled');
+          else button.setAttribute('aria-disabled', 'true');
+        });
       });
       input.addEventListener('change', () => {
         const next = pathValue(input.value);
@@ -867,6 +1037,7 @@
     changeRawRoot,
     databaseRows,
     disconnectJob,
+    featureScope,
     identityKeys,
     invalidateOperations,
     invalidateScan,
@@ -893,10 +1064,13 @@
     selectionStatus,
     setRawRoot,
     setRegisteredLoading,
+    setFeatureScope,
     setSampleMode,
     setSelectedKeys,
+    setSourceMethod,
     setView,
     snapshot,
+    sourceMethod,
     sourceIdentity,
     toggleDatabase,
     view,

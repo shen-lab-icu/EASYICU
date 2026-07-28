@@ -19,6 +19,12 @@ from easyicu.webserver.host_security import AllowedHostsMiddleware
 from easyicu.webserver.routes.agent import artifact_router as agent_artifact_router
 from easyicu.webserver.routes.agent import control_router as agent_control_router
 from easyicu.webserver.routes.copilot import router as copilot_router
+from easyicu.webserver.routes.demo_sources import (
+    catalog_router as demo_source_catalog_router,
+)
+from easyicu.webserver.routes.demo_sources import (
+    submission_router as demo_source_submission_router,
+)
 from easyicu.webserver.routes.extraction import router as extraction_router
 from easyicu.webserver.routes.guided import router as guided_router
 from easyicu.webserver.routes.ideas import router as ideas_router
@@ -159,7 +165,9 @@ app.include_router(reviews_router)
 app.include_router(extraction_router)
 app.include_router(workspaces_router)
 app.include_router(study_contexts_router)
+app.include_router(demo_source_catalog_router)
 app.include_router(job_submission_router)
+app.include_router(demo_source_submission_router)
 app.include_router(agent_control_router)
 app.include_router(guided_router)
 app.include_router(copilot_router)

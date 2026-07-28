@@ -235,6 +235,12 @@
   function startExtractionJob(body) {
     return postJSON('/api/jobs/extract', body || {});
   }
+  function loadOfficialDemoSources() {
+    return getJSON('/api/demo-sources');
+  }
+  function startOfficialDemoSourcePrepare(sourceId) {
+    return postJSON('/api/jobs/demo-source-prepare', { source_id: sourceId });
+  }
   function loadWorkspaceSummary(path) {
     return postJSON('/api/workspace/summary', { path: path });
   }
@@ -252,6 +258,9 @@
   }
   function loadPatientReviewTablePreview(body) {
     return postJSON('/api/patient-review/table-preview', body || {});
+  }
+  function loadPatientReviewFeature(body) {
+    return postJSON('/api/patient-review/feature', body || {});
   }
   function loadCohortReviewSummary(body) {
     return postJSON('/api/cohort-review/summary', body || {});
@@ -472,12 +481,15 @@
   window.EU_API.loadExtractionFilterOptions = loadExtractionFilterOptions;
   window.EU_API.previewExtractionFilters = previewExtractionFilters;
   window.EU_API.startExtractionJob = startExtractionJob;
+  window.EU_API.loadOfficialDemoSources = loadOfficialDemoSources;
+  window.EU_API.startOfficialDemoSourcePrepare = startOfficialDemoSourcePrepare;
   window.EU_API.loadWorkspaceSummary = loadWorkspaceSummary;
   window.EU_API.loadPatientReviewSources = loadPatientReviewSources;
   window.EU_API.loadPatientReviewDrilldown = loadPatientReviewDrilldown;
   window.EU_API.loadPatientReviewEntities = loadPatientReviewEntities;
   window.EU_API.loadPatientReviewEntity = loadPatientReviewEntity;
   window.EU_API.loadPatientReviewTablePreview = loadPatientReviewTablePreview;
+  window.EU_API.loadPatientReviewFeature = loadPatientReviewFeature;
   window.EU_API.loadCohortReviewSummary = loadCohortReviewSummary;
   window.EU_API.loadCrossdbReviewSummary = loadCrossdbReviewSummary;
   window.EU_API.loadCrossdbRawDistribution = loadCrossdbRawDistribution;

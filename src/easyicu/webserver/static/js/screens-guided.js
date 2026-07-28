@@ -5016,7 +5016,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
               handleText(stripTags(b.lastUser));
             } else {
               const routeLabel = b.route && b.route !== 'entry'
-                ? (({extraction:'Data Extraction',patient:'Patient Review',cohort:'Cohort Statistics',crossdb:'Cross-DB Benchmark',agent:'Agent Projects'}[b.route]) || 'the workspace')
+                ? (({extraction:'Data Extraction',patient:'Patient Review',cohort:'Cohort Statistics',crossdb:'Cross-database comparison',agent:'Agent Projects'}[b.route]) || 'the workspace')
                 : '';
               pushBot(
                 `Continuing from the dock${routeLabel ? ` — you were on <strong>${routeLabel}</strong>` : ''}. Want to turn that into a full study?`,

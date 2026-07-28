@@ -32,7 +32,7 @@ def test_crossdb_source_choice_owner_is_explicitly_wired() -> None:
     setup = _read("js/screens-viz-crossdb-setup.js")
     owner = _read("js/screens-viz-crossdb-source.js")
 
-    owner_src = "js/screens-viz-crossdb-source.js?v=20260710-source-choice"
+    owner_src = "js/screens-viz-crossdb-source.js?v=20260728-clarity2"
     assert owner_src in index
     assert index.index("js/screens-viz.js?") < index.index(owner_src)
     assert index.index(owner_src) < index.index("js/screens-viz-study-context.js?")
@@ -48,19 +48,17 @@ def test_crossdb_source_choice_owner_is_explicitly_wired() -> None:
     assert 'type="button" data-src-cross=' in viz
     assert 'aria-pressed="${on ? \'true\' : \'false\'}"' in viz
     assert "const cur = explicitRegistryCrossdbPaths();" in viz
-    assert "let registeredOpen = false" in owner
-    assert "registeredOpen ? 'open' : ''" in owner
-    assert "registeredOption.addEventListener('toggle'" in owner
+    assert "function registeredPaths()" in owner
+    assert "registeredPaths().length < 2" in owner
 
     for marker in (
         "window.EU_CROSSDB_SOURCE_CHOICE",
         "data-crossdb-source-choice",
-        "data-crossdb-registered-option",
         "data-crossdb-run-registered",
         "data-crossdb-registered-loading",
-        "Registered EasyICU exports",
-        "Run registered exports",
-        "Add and select at least two EasyICU exports below.",
+        "selected exports",
+        "Start consistency check",
+        "Add and select at least two EasyICU exports.",
     ):
         assert marker in owner
 
@@ -119,4 +117,9 @@ def test_crossdb_registered_action_executes_owner_contract() -> None:
         capture_output=True,
         text=True,
     )
-    assert json.loads(result.stdout) == {"ready_sources": 2, "run_count": 1}
+    assert json.loads(result.stdout) == {
+        "official_pair_ready": True,
+        "official_run_count": 1,
+        "ready_sources": 2,
+        "run_count": 1,
+    }
