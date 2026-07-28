@@ -27,6 +27,7 @@ from ...figures.publication import (
     save_publication_figure,
 )
 from ...schema import AnalysisStep
+from .planner_display_labels import planner_binary_level_labels
 
 __all__ = [
     "PREVALENCE_MORTALITY_FIGURE_INPUTS",
@@ -95,21 +96,10 @@ def binary_level_labels(
 ) -> tuple[str, str]:
     """Resolve one unambiguous Planner-owned ``column=0/1`` label pair."""
 
-    pairs: dict[str, dict[int, str]] = {}
-    for raw_key, raw_label in (display_labels or {}).items():
-        match = re.fullmatch(r"\s*(.+?)\s*=\s*([01])\s*", str(raw_key))
-        label = " ".join(str(raw_label or "").split())
-        if match is None or not label:
-            continue
-        pairs.setdefault(match.group(1).strip(), {})[int(match.group(2))] = label
-    complete = [
-        (levels[0], levels[1])
-        for levels in pairs.values()
-        if set(levels) == {0, 1} and levels[0] != levels[1]
-    ]
-    if len(complete) == 1:
-        return complete[0]
-    return ("Level 0", "Level 1")
+    resolved = planner_binary_level_labels(display_labels)
+    if resolved is None:
+        return ("Level 0", "Level 1")
+    return (resolved[1], resolved[2])
 
 
 def prevalence_mortality_figure_executor_code(
