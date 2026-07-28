@@ -204,6 +204,10 @@
   padding:12px 14px 14px;
 }
 .pt-matrix-details .card.pad{ margin-top:10px; }
+.pt-matrix-details .table-scroll{
+  overflow-x:auto;
+  -webkit-overflow-scrolling:touch;
+}
 .pt-matrix-audit{
   background:color-mix(in srgb, var(--surface) 92%, var(--accent-soft));
 }

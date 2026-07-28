@@ -173,6 +173,22 @@ def _refuse_untimed_deaths(
     )
 
 
+def _preserve_callback_dur_var_unit(
+    before: pd.DataFrame,
+    after: pd.DataFrame,
+) -> pd.DataFrame:
+    """Carry an unchanged duration contract across a callback projection."""
+
+    if "dur_var" not in before.columns or "dur_var" not in after.columns:
+        return after
+    from ..table.duration import get_dur_var_unit, set_dur_var_unit
+
+    previous_unit = get_dur_var_unit(before)
+    if previous_unit and not get_dur_var_unit(after):
+        set_dur_var_unit(after, previous_unit)
+    return after
+
+
 def _apply_callback(
     frame: pd.DataFrame,
     source: ConceptSource,
@@ -914,10 +930,15 @@ def _apply_callback(
             if not nested:
                 continue
             nested_source = replace(source, callback=nested)
+            previous_frame = frame_result
             frame_result = _apply_callback(
                 frame_result, nested_source, concept_name, unit_column,
                 resolver=resolver, patient_ids=patient_ids, data_source=data_source,
                 interval=interval,
+            )
+            frame_result = _preserve_callback_dur_var_unit(
+                previous_frame,
+                frame_result,
             )
         return frame_result
     

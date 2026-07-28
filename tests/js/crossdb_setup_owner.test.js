@@ -12,6 +12,7 @@ vm.runInNewContext(source, vm.createContext(context), { filename: process.argv[2
 
 const setup = context.EU_CROSSDB_SETUP;
 assert(setup, 'Cross-DB setup owner must publish window.EU_CROSSDB_SETUP');
+assert.equal(setup.sourceMethod(), 'registered');
 
 function esc(value) {
   return String(value == null ? '' : value).replace(/[&<>"']/g, character => ({
@@ -99,7 +100,13 @@ function fakeButton() {
     setError(value) { errorMessage = value; },
   };
 
+  assert.equal(setup.featureScope(), 'all', 'raw comparison defaults to the complete catalog');
   setup.setSelectedKeys(['miiv', 'eicu']);
+  const defaultSetupHtml = setup.renderReal(config);
+  assert.match(defaultSetupHtml, /data-crossdb-source-path="registered"/);
+  assert.doesNotMatch(defaultSetupHtml, /data-crossdb-run-raw/);
+  setup.setSourceMethod('raw');
+  assert.equal(setup.sourceMethod(), 'raw');
   setup.changeRawRoot('/scan-a');
   const staleScan = setup.scan('/scan-a', config);
   assert.equal(typeof resolveStaleScan, 'function');
@@ -116,13 +123,13 @@ function fakeButton() {
 
   setup.setSelectedKeys(['miiv', 'eicu', 'sic']);
   assert.equal(setup.snapshot(config).scanReady, false, 'a newly selected missing database must fail closed');
-  assert.match(rawRunTag(setup.renderReal(config)), /aria-disabled="true"/);
+  assert.doesNotMatch(rawRunTag(setup.renderReal(config)), /aria-disabled/, 'the primary action re-checks the folder instead of requiring a separate scan click');
   setup.setSelectedKeys(['miiv', 'eicu']);
   assert.equal(setup.snapshot(config).scanReady, true);
   assert.equal(scanCalls.length, 2, 'selection changes must re-use the root scan instead of re-scanning');
 
   const escapedHtml = setup.renderReal(config);
-  assert.doesNotMatch(escapedHtml, /<img|<script|<svg|<b>|<i>/i);
+  assert.doesNotMatch(escapedHtml, /<img src=x|<script>alert|<svg onload|<i>miiv<\/i>/i);
   assert.match(escapedHtml, /&lt;img/);
   assert.match(escapedHtml, /&lt;script&gt;/);
   assert.match(escapedHtml, /&lt;svg/);
@@ -140,12 +147,30 @@ function fakeButton() {
     raw_root: '/scan-b',
     source_identity: 'eicu,miiv',
     sample_mode: 'standard',
+    feature_scope: 'all_catalog',
   }), true);
   assert.equal(setup.matchesSource({ raw_root: '/scan-b', source_identity: 'eicu,miiv' }), true);
   const standard = setup.snapshot(config);
   assert.equal(standard.sampleMode, 'standard');
   assert.equal(standard.sampleProfile.maxPatients, 300);
   assert.equal(standard.sampleProfile.sampleSize, 1500);
+  assert.equal(standard.featureScope, 'all');
+
+  const featureScopeButton = fakeButton();
+  featureScopeButton.dataset.crossdbFeatureScope = 'core';
+  setup.bind({
+    querySelector() { return null; },
+    querySelectorAll(selector) {
+      return selector === '[data-crossdb-feature-scope]' ? [featureScopeButton] : [];
+    },
+  }, {
+    helpers: helpers(),
+    repaint() { repaintCount += 1; },
+  });
+  featureScopeButton.click();
+  assert.equal(setup.featureScope(), 'core');
+  assert.match(setup.renderReal(config), /data-crossdb-feature-scope="all"/);
+  setup.setFeatureScope('all');
 
   const rawRunButton = fakeButton();
   const rawRunRoot = {
@@ -171,7 +196,60 @@ function fakeButton() {
   rawRunButton.click();
   assert.equal(rawRunSnapshot.rawRoot, '/scan-b');
   assert.deepEqual(Array.from(rawRunSnapshot.selectedKeys), ['miiv', 'eicu']);
+  assert.equal(rawRunSnapshot.featureScope, 'all');
   assert.equal(setup.view(), 'loaded', 'a successful raw completion must keep the owner loaded');
+
+  setup.setView('idle');
+  setup.changeRawRoot('/scan-c');
+  setup.setSelectedKeys(['miiv', 'eicu', 'aumc', 'hirid', 'mimic', 'sic']);
+  let oneClickSnapshot = null;
+  const oneClickButton = fakeButton();
+  setup.bind({
+    querySelector(selector) {
+      if (selector === '[data-crossdb-root]') return { value: '/scan-c' };
+      return null;
+    },
+    querySelectorAll(selector) {
+      return selector === '[data-crossdb-run-raw]' ? [oneClickButton] : [];
+    },
+  }, {
+    ...config,
+    runRaw(done, options) {
+      oneClickSnapshot = options.setup;
+      done(true);
+    },
+  });
+  oneClickButton.click();
+  await new Promise(resolve => setImmediate(resolve));
+  assert(oneClickSnapshot, 'one primary click must scan and start the raw comparison');
+  assert.deepEqual(Array.from(oneClickSnapshot.selectedKeys), ['miiv', 'eicu']);
+  assert.equal(oneClickSnapshot.featureScope, 'all');
+
+  setup.setView('idle');
+  setup.changeRawRoot('');
+  setup.setSelectedKeys(['miiv', 'eicu']);
+  const typedRootButton = fakeButton();
+  typedRootButton.setAttribute('aria-disabled', 'true');
+  const typedRootInput = {
+    value: '',
+    handlers: {},
+    addEventListener(type, handler) { this.handlers[type] = handler; },
+  };
+  setup.bind({
+    querySelector() { return null; },
+    querySelectorAll(selector) {
+      if (selector === '[data-crossdb-root]') return [typedRootInput];
+      if (selector === '[data-crossdb-run-raw]') return [typedRootButton];
+      return [];
+    },
+  }, config);
+  typedRootInput.value = '/typed-root';
+  typedRootInput.handlers.input();
+  assert.equal(
+    typedRootButton.getAttribute('aria-disabled'),
+    null,
+    'typing a valid root must enable the primary action without requiring blur',
+  );
 
   let rawActive = true;
   let rawCancelCount = 0;
@@ -255,12 +333,16 @@ function fakeButton() {
 
   process.stdout.write(JSON.stringify({
     bounded_profile: true,
+    explicit_feature_scope: true,
     identity_resume_fail_closed: true,
     missing_api_visible: true,
+    one_click_full_default: true,
+    typed_root_enables_primary: true,
     raw_completion_loaded: true,
     raw_registry_guard: true,
     raw_reset_cancel: true,
     operation_reset_fence: true,
+    progressive_source_choice: true,
     scan_reused: true,
     selection_revalidated: true,
     server_text_escaped: true,

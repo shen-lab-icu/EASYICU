@@ -39,4 +39,4 @@ def test_demo_cohort_profile_has_clinical_domains() -> None:
 
     assert ".cprof-spark-grid" in cohort_css
     assert "css/cohort.css?v=20260707-design" in index_html
-    assert "js/screens-viz.js?v=20260712-ux-fixes" in index_html
+    assert "js/screens-viz.js?v=20260728-one-click-raw1" in index_html

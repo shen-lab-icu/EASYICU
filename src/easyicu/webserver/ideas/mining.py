@@ -3861,6 +3861,17 @@ def _extra_aliases(concept_id: str, label: str) -> set[str]:
         aliases.update({"blood pressure", "hypotension", "shock"})
     if concept_id == "lact":
         aliases.update({"lactate", "乳酸"})
+    if concept_id == "mech_vent":
+        aliases.update(
+            {
+                "mechanical ventilation",
+                "mechanically ventilated",
+                "invasive ventilation",
+                "noninvasive ventilation",
+                "non-invasive ventilation",
+                "机械通气",
+            }
+        )
     if concept_id == "death":
         aliases.update({"mortality", "death", "survival", "死亡", "病死率"})
     if concept_id == "sep3_sofa2":

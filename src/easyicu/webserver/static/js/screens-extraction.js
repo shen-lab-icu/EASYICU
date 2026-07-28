@@ -215,7 +215,7 @@
           const routeNames = {
             guided: t('Guided Copilot', '研究引导'), ideas: t('Idea Mining', '想法挖掘'),
             extraction: t('Data Extraction', '数据抽取'), patient: t('Patient Review', '患者审阅'),
-            cohort: t('Cohort Statistics', '队列统计'), crossdb: t('Cross-DB Benchmark', '跨库基准'),
+            cohort: t('Cohort Statistics', '队列统计'), crossdb: t('Cross-database comparison', '跨库对比'),
             agent: t('Agent Projects', '研究项目'),
           };
           const rawTime = usingContext ? Date.parse(activeContext.updated_at || '') : Number(legacyStudy.ts || 0);

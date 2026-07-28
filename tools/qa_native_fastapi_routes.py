@@ -61,7 +61,7 @@ QA_JS = r"""
     };
   }
   function insideHorizontalScrollRegion(el) {
-    const host = el.closest('.table-scroll, .risk-table-wrap, .dict-table, .xdb-density-detail-table');
+    const host = el.closest('.table-scroll, .risk-table-wrap, .dict-table');
     if (!host || host === el) return false;
     const hs = getComputedStyle(host);
     return /(auto|scroll)/.test(`${hs.overflowX} ${hs.overflow}`);
@@ -75,7 +75,7 @@ QA_JS = r"""
   function isExplicitHorizontalScroller(el, clipsX, clipsY) {
     if (!clipsX || clipsY) return false;
     const cls = typeof el.className === 'string' ? el.className : '';
-    return /(table-scroll|risk-table-wrap|xdb-density-detail-table)/.test(cls) && /(auto|scroll)/.test(`${getComputedStyle(el).overflowX} ${getComputedStyle(el).overflow}`);
+    return /(table-scroll|risk-table-wrap)/.test(cls) && /(auto|scroll)/.test(`${getComputedStyle(el).overflowX} ${getComputedStyle(el).overflow}`);
   }
   while (walker.nextNode()) {
     const el = walker.currentNode;

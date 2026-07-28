@@ -208,6 +208,65 @@ def test_p0_2_producers_declare_their_unit():
     assert pd.api.types.is_timedelta64_dtype(tagged_dt["dur_var"])
 
 
+def test_p0_2_hirid_vent_declares_hour_duration_after_conversion():
+    """HiRID ventilation converts padded minutes to hours and must label them."""
+
+    from easyicu.utils.callback_utils import hirid_vent
+
+    frame = pd.DataFrame(
+        {
+            "patientid": [1, 1],
+            "datetime": [0.0, 2.0],
+            "mech_vent": [1, 1],
+        }
+    )
+    result = hirid_vent(
+        frame,
+        concept_name="mech_vent",
+        val_col="mech_vent",
+        index_col="datetime",
+        expand_to_hourly=False,
+    )
+
+    assert get_dur_var_unit(result) == UNIT_HOURS
+    assert result["dur_var"].tolist() == pytest.approx([2.0, 4.0])
+
+
+def test_p0_2_source_projection_preserves_and_normalizes_duration_unit():
+    """A projected medication source must not lose its duration declaration."""
+
+    from easyicu.concept import _normalize_source_dur_var_hours
+
+    source = pd.DataFrame({"dur_var": [120.0], "dex": [1.0]})
+    set_dur_var_unit(source, UNIT_MINUTES)
+    projected = source.loc[:, ["dur_var", "dex"]].copy()
+    projected.attrs.clear()  # model pandas concat/projection metadata loss
+
+    normalized = _normalize_source_dur_var_hours(
+        projected,
+        concept_name="dex",
+        source_frame=source,
+    )
+
+    assert normalized["dur_var"].iloc[0] == pytest.approx(2.0)
+    assert get_dur_var_unit(normalized) == UNIT_HOURS
+
+
+def test_p0_2_callback_chain_preserves_unchanged_duration_contract():
+    """A value-only nested callback must not erase an existing duration unit."""
+
+    from easyicu.concept.callback_apply import _preserve_callback_dur_var_unit
+
+    before = pd.DataFrame({"dur_var": [10.0], "dex": [1.0]})
+    set_dur_var_unit(before, UNIT_MINUTES)
+    after = before.copy()
+    after.attrs.clear()
+
+    carried = _preserve_callback_dur_var_unit(before, after)
+
+    assert get_dur_var_unit(carried) == UNIT_MINUTES
+
+
 def test_p0_2_expansion_is_capped_instead_of_exhausting_memory():
     """An implausible duration fails loudly rather than allocating forever."""
 

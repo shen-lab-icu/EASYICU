@@ -115,7 +115,8 @@ easyicu = ["data/*.json", "data/research_know_how/*.json"]
 "easyicu.webserver" = [
   "static/index.html",
   "static/css/*.css",
-  "static/js/*.js"
+  "static/js/*.js",
+  "static/vendor/echarts/*"
 ]
 "easyicu.research_agent.providers.prompts" = ["v1/*.txt"]
 # The DockerRunner docstring tells users to build the sandbox image from

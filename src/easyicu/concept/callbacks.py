@@ -5467,6 +5467,60 @@ def _callback_vaso60(
         )
 
     id_columns, index_column, _ = _assert_shared_schema({rate_name: rate_tbl, dur_name: dur_tbl})
+
+    def _reload_component_with_identifiers(
+        name: str,
+        table: ICUTable,
+    ) -> ICUTable:
+        """Recover a cache-corrupted component without crossing patient rows.
+
+        Nested SOFA loads can encounter a stale aggregate-cache entry whose
+        identifier metadata is intact even though the physical ID column was
+        projected away.  Joining that frame to duration windows would either
+        fail with an opaque ``KeyError`` or, worse, require a cross-patient
+        fallback.  Bypass the concept cache once and require the reloaded
+        component to satisfy its declared identifier contract.
+        """
+
+        missing = [column for column in id_columns if column not in table.data.columns]
+        if not missing:
+            return table
+        if ctx is None or ctx.resolver is None or ctx.data_source is None:
+            raise ValueError(
+                f"vaso60 component '{name}' is missing identifier columns {missing}"
+            )
+
+        loaded = ctx.resolver.load_concepts(
+            [name],
+            ctx.data_source,
+            merge=False,
+            aggregate=False,
+            patient_ids=ctx.patient_ids,
+            verbose=False,
+            interval=ctx.interval,
+            align_to_admission=True,
+            r_compatible=False,
+            concept_workers=1,
+            _skip_concept_cache=True,
+            _allow_missing_concept=True,
+        )
+        refreshed = loaded.get(name) if isinstance(loaded, dict) else loaded
+        if not isinstance(refreshed, ICUTable):
+            raise ValueError(
+                f"vaso60 component '{name}' could not be reloaded with identifiers"
+            )
+        still_missing = [
+            column for column in id_columns if column not in refreshed.data.columns
+        ]
+        if still_missing:
+            raise ValueError(
+                f"vaso60 component '{name}' is missing identifier columns "
+                f"{still_missing} after an uncached reload"
+            )
+        return refreshed
+
+    rate_tbl = _reload_component_with_identifiers(rate_name, rate_tbl)
+    dur_tbl = _reload_component_with_identifiers(dur_name, dur_tbl)
     if index_column is None:
         raise ValueError("vaso60 requires time-indexed component tables.")
 

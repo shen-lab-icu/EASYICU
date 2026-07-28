@@ -5,6 +5,7 @@
   const STORAGE_KEY = 'easyicu_crossdb_raw_job_v1';
   const JOB_KIND = 'crossdb-raw-distribution';
   const SAMPLE_MODES = new Set(['quick', 'standard', 'deeper']);
+  const FEATURE_SCOPES = new Set(['curated_core', 'all_catalog']);
   const JOB_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
   const SOURCE_ID_RE = /^[a-z0-9_-]+(?:,[a-z0-9_-]+)*$/;
   let stream = null;
@@ -32,16 +33,19 @@
     const rawRoot = String(value.raw_root || '').trim();
     const sourceIdentity = String(value.source_identity || '').trim();
     const sampleMode = String(value.sample_mode || '').trim();
+    const featureScope = String(value.feature_scope || 'curated_core').trim();
     if (!JOB_ID_RE.test(jobId) || kind !== JOB_KIND) return null;
     if (!rawRoot || rawRoot.length > 4096 || /[\u0000-\u001f]/.test(rawRoot)) return null;
     if (!sourceIdentity || sourceIdentity.length > 256 || !SOURCE_ID_RE.test(sourceIdentity)) return null;
     if (!SAMPLE_MODES.has(sampleMode)) return null;
+    if (!FEATURE_SCOPES.has(featureScope)) return null;
     return {
       job_id: jobId,
       kind: JOB_KIND,
       raw_root: rawRoot,
       source_identity: sourceIdentity,
       sample_mode: sampleMode,
+      feature_scope: featureScope,
     };
   }
 
@@ -94,7 +98,11 @@
 
   function stillCurrent(meta) {
     const stored = readStored();
-    return !!(stored && stored.job_id === meta.job_id && stored.raw_root === meta.raw_root && stored.source_identity === meta.source_identity);
+    return !!(stored
+      && stored.job_id === meta.job_id
+      && stored.raw_root === meta.raw_root
+      && stored.source_identity === meta.source_identity
+      && stored.feature_scope === meta.feature_scope);
   }
 
   function latestProgress(events) {
@@ -125,7 +133,9 @@
     const callback = completion;
     completion = null;
     if (callback) callback(status === 'done' && applied !== false);
-    if (applied === false) removeStored();
+    // A terminal snapshot is not a reconnect pointer. Keeping it caused the
+    // same failed job to repaint its error on every later page load.
+    removeStored();
     return applied !== false;
   }
 
@@ -275,15 +285,17 @@
     return openStream(meta);
   }
 
-  function onSourceChanged(rawRoot, sourceIdentity, sampleMode) {
+  function onSourceChanged(rawRoot, sourceIdentity, sampleMode, featureScope) {
     const meta = readStored();
     if (!meta) return;
     const nextRoot = String(rawRoot || '').trim();
     const nextIdentity = String(sourceIdentity || '').trim();
     const nextSampleMode = String(sampleMode || '').trim();
+    const nextFeatureScope = String(featureScope || '').trim();
     if (nextRoot !== meta.raw_root
         || (nextIdentity && nextIdentity !== meta.source_identity)
-        || (nextSampleMode && nextSampleMode !== meta.sample_mode)) {
+        || (nextSampleMode && nextSampleMode !== meta.sample_mode)
+        || (nextFeatureScope && nextFeatureScope !== meta.feature_scope)) {
       disconnect({ forget: true });
     }
   }

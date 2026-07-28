@@ -3134,6 +3134,14 @@ def eicu_rate_kg_callback(ml_to_mcg: float) -> Callable:
         # R ricu's expand_intervals creates the interval data, then locf fills gaps
         # This ensures continuous time series from min to max hour
         def fill_gaps_locf(group):
+            # pandas >=3 excludes grouping columns when include_groups=False.
+            # Reattach the physical eICU stay key before either return path;
+            # otherwise a one-point patient silently loses patientunitstayid.
+            patient_id = (
+                group.name if not isinstance(group.name, tuple) else group.name[0]
+            )
+            group = group.copy()
+            group[id_col] = patient_id
             if len(group) < 2:
                 return group
             
@@ -3144,10 +3152,10 @@ def eicu_rate_kg_callback(ml_to_mcg: float) -> Callable:
             # Create complete hourly grid
             all_hours = list(range(min_hour, max_hour + 1))
             all_minutes = [h * 60 for h in all_hours]
-            
+
             # Create grid dataframe - get id from group.name (set by groupby)
             grid = pd.DataFrame({
-                id_col: group.name if not isinstance(group.name, tuple) else group.name[0],
+                id_col: patient_id,
                 time_col: all_minutes
             })
             
@@ -5127,6 +5135,9 @@ def hirid_vent(
     if id_col is None:
         # No ID column, add default duration (in minutes)
         df[dur_var] = padding_hours * 60
+        from ..table.duration import UNIT_MINUTES, set_dur_var_unit
+
+        set_dur_var_unit(df, UNIT_MINUTES)
         return df
     
     # Detect time column
@@ -5140,6 +5151,9 @@ def hirid_vent(
     if not actual_index_col or actual_index_col not in df.columns:
         # No time column, add default duration (in minutes)
         df[dur_var] = padding_hours * 60
+        from ..table.duration import UNIT_MINUTES, set_dur_var_unit
+
+        set_dur_var_unit(df, UNIT_MINUTES)
         return df
     
     # Sort by patient and time
@@ -5193,6 +5207,9 @@ def hirid_vent(
     # The index is already in hours; dur_var must be in the same unit for
     # correct endtime computation (start_hours + dur_hours) in _load_single_concept
     df[dur_var] = df[dur_var] / 60.0
+    from ..table.duration import UNIT_HOURS, set_dur_var_unit
+
+    set_dur_var_unit(df, UNIT_HOURS)
     
     # Round datetime to integer hours (R ricu behavior)
     if actual_index_col in df.columns and not np.issubdtype(df[actual_index_col].dtype, np.datetime64):
@@ -5209,6 +5226,8 @@ def hirid_vent(
             value_col=val_col,
             concept_name=concept_name,
         )
+        if dur_var in df.columns:
+            set_dur_var_unit(df, UNIT_HOURS)
     
     return df
 

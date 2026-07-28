@@ -2,7 +2,7 @@
    A high-fidelity, clickable catalogue of the app's global states —
    loading / empty / no-data / error / blocked / success — shown in a real
    workspace frame, switchable across Demo + Real Data modes and three
-   representative contexts (Patient Review, Cross-DB Benchmark, Agent run).
+   representative contexts (Patient Review, Cross-database comparison, Agent run).
    Pure design reference: every "result" is clearly a demo/seeded example. */
 (function () {
   const S = (window.SCREENS = window.SCREENS || {});
@@ -53,12 +53,12 @@
       },
     },
     crossdb: {
-      label: 'Cross-DB Benchmark', icon: 'benchmark', noun: 'benchmark', unit: 'databases',
-      crumb: 'Data Visualization · Cross-DB Benchmark',
+      label: 'Cross-database comparison', icon: 'benchmark', noun: 'comparison', unit: 'databases',
+      crumb: 'Data Visualization · Cross-database comparison',
       load: { demo: 'Loading seeded frames for 6 databases', real: 'Connecting to selected ICU databases' },
       empty: {
         t: 'Select at least 2 databases',
-        d: { demo: 'Cross-DB Benchmark compares one cohort definition across databases. Add a second source to begin.',
+        d: { demo: 'Cross-database comparison checks coverage and aggregate distributions across databases. Add a second source to begin.',
              real: 'Connect two or more local database roots to compare standardized concepts side by side.' },
         cta: { demo: 'Load demo databases', real: 'Connect databases' },
         chips: ['MIMIC-IV', 'eICU-CRD', 'AUMC', 'HiRID', 'SICdb'],

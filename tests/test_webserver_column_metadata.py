@@ -50,6 +50,35 @@ def test_exact_logical_or_boolean_outputs_are_event_status() -> None:
     )
 
 
+def test_categorical_factor_output_preserves_declared_levels_as_values() -> None:
+    binding = _build(
+        pd.DataFrame(
+            {
+                "stay_id": [1, 2],
+                "mech_vent": ["invasive", "noninvasive"],
+            }
+        ),
+        concepts=["mech_vent"],
+    )
+
+    metadata = binding.columns["mech_vent"].metadata
+    assert metadata.role is ConceptColumnRole.VALUE
+    assert metadata.class_name == "fct_cncpt"
+    assert metadata.allowed_values is None
+
+
+def test_duration_qualified_vasopressor_rate_remains_numeric() -> None:
+    binding = _build(
+        pd.DataFrame({"stay_id": [1, 2], "norepi60": [0.05, 0.12]}),
+        concepts=["norepi60"],
+    )
+
+    metadata = binding.columns["norepi60"].metadata
+    assert metadata.role is ConceptColumnRole.VALUE
+    assert metadata.canonical_unit == "mcg/kg/min"
+    assert metadata.accepted_units == ("mcg/kg/min", "mcgkgmin")
+
+
 def test_catalog_only_boolean_output_is_event_status() -> None:
     binding = _build(
         pd.DataFrame({"stay_id": [1, 2], "mort_28d": [False, True]}),
@@ -57,6 +86,26 @@ def test_catalog_only_boolean_output_is_event_status() -> None:
     )
 
     assert binding.columns["mort_28d"].metadata.role is ConceptColumnRole.EVENT_STATUS
+
+
+def test_record_derived_catalog_boolean_keeps_event_status_semantics() -> None:
+    binding = _build(
+        pd.DataFrame(
+            {
+                "stay_id": [1, 2],
+                "sep3_sofa2": [False, True],
+                "sep3_sofa2_mean": [0.0, 0.5],
+            }
+        ),
+        concepts=["sep3_sofa2"],
+    )
+
+    event = binding.columns["sep3_sofa2"].metadata
+    fraction = binding.columns["sep3_sofa2_mean"].metadata
+    assert event.role is ConceptColumnRole.EVENT_STATUS
+    assert event.class_name == "rec_cncpt"
+    assert event.allowed_values == (0, 1)
+    assert fraction.role is ConceptColumnRole.EVENT_FRACTION
 
 
 def test_logical_companions_use_concept_semantics_not_storage_dtype() -> None:
@@ -106,6 +155,10 @@ def test_logical_companions_use_concept_semantics_not_storage_dtype() -> None:
         (
             pd.DataFrame({"stay_id": [1, 2], "lact": [False, True]}),
             "lact",
+        ),
+        (
+            pd.DataFrame({"stay_id": [1, 2], "sep3_sofa2": [0, 2]}),
+            "sep3_sofa2",
         ),
         (
             pd.DataFrame(

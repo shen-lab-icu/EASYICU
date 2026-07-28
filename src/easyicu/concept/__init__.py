@@ -72,6 +72,44 @@ def _declare_dur_var_hours(frame) -> None:
     set_dur_var_unit(frame, UNIT_HOURS)
 
 
+def _normalize_source_dur_var_hours(
+    frame,
+    *,
+    concept_name: str,
+    source_frame=None,
+):
+    """Normalize one source frame before row-binding multiple concept sources.
+
+    ``DataFrame.attrs`` is not reliably retained by column projection or
+    ``pd.concat``.  Recover the producer declaration from the pre-projection
+    frame, convert the source duration exactly once, and return a frame whose
+    numeric ``dur_var`` is explicitly in hours.
+    """
+
+    if "dur_var" not in frame.columns:
+        return frame
+
+    from ..table.duration import (
+        UNIT_HOURS,
+        get_dur_var_unit,
+        resolve_dur_var_hours,
+        set_dur_var_unit,
+    )
+
+    declared = get_dur_var_unit(frame) or get_dur_var_unit(source_frame)
+    if declared:
+        set_dur_var_unit(frame, declared)
+    if pd.api.types.is_numeric_dtype(
+        frame["dur_var"]
+    ) or pd.api.types.is_timedelta64_dtype(frame["dur_var"]):
+        frame["dur_var"] = resolve_dur_var_hours(
+            frame,
+            concept=concept_name,
+        )
+        set_dur_var_unit(frame, UNIT_HOURS)
+    return frame
+
+
 def resolve_window_aggregate(concept_name: str, agg_method):
     """套用概念级窗口聚合覆盖，返回最终的 agg_method（纯函数，便于单测）。
 
@@ -3860,6 +3898,26 @@ class ConceptResolver:
                     
                     if dur_is_end and DEBUG_MODE:
                         print(f"   dur_var '{source.dur_var}' → duration '{duration_col}' (示例: {frame[duration_col].head(1).tolist()})")
+                    if dur_is_end:
+                        from ..table.duration import UNIT_MINUTES, set_dur_var_unit
+
+                        set_dur_var_unit(frame, UNIT_MINUTES)
+                if "dur_var" in frame.columns and pd.api.types.is_numeric_dtype(
+                    frame["dur_var"]
+                ):
+                    from ..table.duration import (
+                        UNIT_MINUTES,
+                        get_dur_var_unit,
+                        set_dur_var_unit,
+                    )
+
+                    # Source-level end offsets are normalized to numeric
+                    # minutes by the loader even when the original end-time
+                    # column arrives as an object/string. Declare that exact
+                    # producer contract before value-only callbacks project
+                    # the frame.
+                    if not get_dur_var_unit(frame):
+                        set_dur_var_unit(frame, UNIT_MINUTES)
 
             value_column = source.value_var or table.value_column
             if value_column is None:
@@ -3996,6 +4054,13 @@ class ConceptResolver:
                     data_source=data_source,
                     interval=interval,
                 )
+            from ..table.duration import get_dur_var_unit
+
+            # Keep the declaration outside DataFrame.attrs as the remaining
+            # source pipeline may merge admission times or filter rows. Those
+            # pandas operations are allowed to discard attrs even though they
+            # do not alter ``dur_var``.
+            source_dur_unit = get_dur_var_unit(frame)
 
             # 🔧 FIX: After callback, if source_index_column was consumed/renamed by
             # the callback (e.g. sic_death renames OffsetOfDeath→death and adds charttime),
@@ -4334,9 +4399,19 @@ class ConceptResolver:
             frame_subset = frame.loc[:, ordered_cols]
             if frame_subset.columns.duplicated().any():
                 frame_subset = frame_subset.loc[:, ~frame_subset.columns.duplicated()]
+            if source_dur_unit and "dur_var" in frame_subset.columns:
+                from ..table.duration import set_dur_var_unit
+
+                set_dur_var_unit(frame_subset, source_dur_unit)
+            frame_subset = _normalize_source_dur_var_hours(
+                frame_subset,
+                concept_name=concept_name,
+                source_frame=frame,
+            )
             
             frames.append(frame_subset)
 
+        combined_dur_unit = None
         if not frames:
             # 返回空 DataFrame 而不是报错（某些概念可能在测试数据中没有数据）
             # 检查是否是因为缺少必要的表文件
@@ -4386,7 +4461,15 @@ class ConceptResolver:
                     else:
                         print(f"  Source {i+1}: {len(frame)}行, 无stay_id列")
             
+            from ..table.duration import combine_dur_var_units, set_dur_var_unit
+
+            combined_dur_unit = combine_dur_var_units(
+                frames,
+                column="dur_var",
+            )
             combined = pd.concat(frames, ignore_index=True)
+            if combined_dur_unit:
+                set_dur_var_unit(combined, combined_dur_unit)
             
             # DEBUG: 检查combined是否有dur_var
             if DEBUG_MODE and 'dur_var' in combined.columns:
@@ -4805,6 +4888,10 @@ class ConceptResolver:
             # Align time to ICU admission if requested (BEFORE any aggregation)
             if align_to_admission:
                 # DEBUG
+                if combined_dur_unit and "dur_var" in combined.columns:
+                    from ..table.duration import set_dur_var_unit
+
+                    set_dur_var_unit(combined, combined_dur_unit)
                 combined = self._align_time_to_admission(
                     combined,
                     data_source,
@@ -5284,6 +5371,29 @@ class ConceptResolver:
         Returns:
             DataFrame with time converted to hours since ICU admission
         """
+        from ..table.duration import (
+            UNIT_HOURS,
+            get_dur_var_unit,
+            resolve_dur_var_hours,
+            set_dur_var_unit,
+        )
+
+        dur_unit = get_dur_var_unit(data)
+
+        def _normalize_duration_to_hours(frame):
+            nonlocal dur_unit
+            if "dur_var" not in frame.columns:
+                return frame
+            if dur_unit and not get_dur_var_unit(frame):
+                set_dur_var_unit(frame, dur_unit)
+            if pd.api.types.is_numeric_dtype(
+                frame["dur_var"]
+            ) or pd.api.types.is_timedelta64_dtype(frame["dur_var"]):
+                frame["dur_var"] = resolve_dur_var_hours(frame)
+                set_dur_var_unit(frame, UNIT_HOURS)
+                dur_unit = UNIT_HOURS
+            return frame
+
         # eICU和AUMC时间列需要特殊处理
         # eICU uses offset columns (labresultoffset, observationoffset, etc.) which are
         # already in MINUTES from ICU admission. Convert to HOURS for consistency.
@@ -5306,9 +5416,11 @@ class ConceptResolver:
                         if not col.endswith('_dur'):
                             cols_to_convert.add(col)
             
-            # 自动检测其他可能的时间列 (start, stop, dur_var)
+            # 自动检测其他可能的时间列。dur_var follows its own declared
+            # unit contract and must not be divided as though it were an
+            # absolute offset.
             for col in data.columns:
-                if col in ['start', 'stop', 'dur_var']:
+                if col in ['start', 'stop']:
                     if pd.api.types.is_numeric_dtype(data[col]):
                         cols_to_convert.add(col)
             
@@ -5317,6 +5429,7 @@ class ConceptResolver:
             for col in cols_to_convert:
                 if col in data.columns and pd.api.types.is_numeric_dtype(data[col]):
                     data[col] = minutes_to_hours_series(data[col])
+            _normalize_duration_to_hours(data)
             return data
 
         if db_name == 'aumc':
@@ -5344,7 +5457,7 @@ class ConceptResolver:
                             cols_to_convert.add(col)
             
             for col in data.columns:
-                if col in ['start', 'stop', 'dur_var']:
+                if col in ['start', 'stop']:
                     if pd.api.types.is_numeric_dtype(data[col]):
                         cols_to_convert.add(col)
             
@@ -5358,6 +5471,7 @@ class ConceptResolver:
                     # 分钟转小时（单一来源转换因子）
                     data[col] = minutes_to_hours_series(data[col])
 
+            _normalize_duration_to_hours(data)
             return data
         
         if db_name == 'sic':
@@ -5385,7 +5499,7 @@ class ConceptResolver:
                 # seconds and an hours index, so win_tbl expansion (end = start +
                 # dur) blew up (e.g. vent_ind exploding to tens of millions of
                 # rows). Convert dur_var on the same seconds->hours basis.
-                if col in ['start', 'stop', 'dur_var']:
+                if col in ['start', 'stop']:
                     if pd.api.types.is_numeric_dtype(data[col]):
                         cols_to_convert.add(col)
 
@@ -5396,6 +5510,7 @@ class ConceptResolver:
                         # Values > 5000 cannot be hours (= 208 days), must be seconds
                         data[col] = data[col] / 3600.0
 
+            _normalize_duration_to_hours(data)
             return data
         
         # Early return checks (no verbose output for performance)
@@ -5557,18 +5672,7 @@ class ConceptResolver:
             # declared — hirid_vent emits minutes, ts_to_win_tbl on a numeric
             # index already emits hours, and blindly dividing both by 60 made
             # the second case 60x too short.
-            if 'dur_var' in data.columns:
-                from ..table.duration import (
-                    UNIT_HOURS,
-                    resolve_dur_var_hours,
-                    set_dur_var_unit,
-                )
-
-                if pd.api.types.is_numeric_dtype(
-                    data['dur_var']
-                ) or pd.api.types.is_timedelta64_dtype(data['dur_var']):
-                    data['dur_var'] = resolve_dur_var_hours(data)
-                    set_dur_var_unit(data, UNIT_HOURS)
+            _normalize_duration_to_hours(data)
             return data
         
         # 检查时间列是否是有效的datetime类型
@@ -5677,15 +5781,15 @@ class ConceptResolver:
             
             # 注意：不过滤负时间（入ICU前）或超过outtime的数据，匹配 R ricu 行为
             
-            # Convert dur_var from minutes to hours (dur_is_end outputs minutes)
-            if 'dur_var' in data.columns and pd.api.types.is_numeric_dtype(data['dur_var']):
-                data['dur_var'] = data['dur_var'] / 60.0
+            _normalize_duration_to_hours(data)
             
             # Drop the temporary alignment columns
             drop_cols = ['intime']
             if 'outtime' in data.columns:
                 drop_cols.append('outtime')
             data = data.drop(columns=drop_cols)
+            if dur_unit and "dur_var" in data.columns:
+                set_dur_var_unit(data, dur_unit)
             
         except Exception:
             # If alignment fails, return original data silently
