@@ -918,7 +918,8 @@ class TableOneSpec(BaseModel):
     """Planner-owned grouped baseline-table design.
 
     The host executes this declaration but never selects the grouping variable,
-    variable roles, summary family, or inferential test.
+    variable roles, summary family, or inferential test. For exactly two
+    declared groups, the host also emits comparison-minus-reference SMDs.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -932,6 +933,7 @@ class TableOneSpec(BaseModel):
     missingness_display: Literal["n_percent_by_group"] = "n_percent_by_group"
     p_values_required: Literal[True] = True
     p_value_adjustment: Literal["none_descriptive_table"] = "none_descriptive_table"
+    standardized_difference_mode: Literal["auto_binary_groups"] = "auto_binary_groups"
 
     @field_validator("group_levels")
     @classmethod
