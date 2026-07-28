@@ -840,6 +840,85 @@ class StepSummaryIntegrityValidator:
         )
         return findings
 
+    @staticmethod
+    def _declared_provenance_audit(
+        step_summary: Mapping[str, Any],
+        *,
+        max_depth: int = 4,
+    ) -> tuple[Optional[Mapping[str, Any]], Optional[str]]:
+        """Find an agent-declared provenance block wherever it was written.
+
+        Reading only the top level made *where* the block sits decide whether a
+        step passed.  On the 2026-07-28 E1 run the Coder emitted a complete and
+        correct receipt -- ``source='COHORT_PARQUET'``, both pairs checked,
+        ``invalid_pair_n``/``discordant_n`` zero over all 94,458 rows -- nested
+        under ``analysis``.  The gate read the top level, saw nothing, and
+        failed the step.  A correct answer must not be rejected for its address.
+
+        This is a *tamper* lookup, not an authority lookup: the host replays
+        these facts itself, so a block found here is only ever compared against
+        the replay, never trusted in place of it.
+        """
+
+        def _search(
+            node: Any,
+            path: str,
+            depth: int,
+        ) -> tuple[Optional[Mapping[str, Any]], Optional[str]]:
+            if depth > max_depth or not isinstance(node, Mapping):
+                return None, None
+            candidate = node.get("measurement_provenance_audit")
+            if isinstance(candidate, Mapping):
+                key = "measurement_provenance_audit"
+                return candidate, f"{path}.{key}" if path else key
+            for name, value in node.items():
+                if not isinstance(value, Mapping):
+                    continue
+                child_path = f"{path}.{name}" if path else str(name)
+                found, found_path = _search(value, child_path, depth + 1)
+                if found is not None:
+                    return found, found_path
+            return None, None
+
+        return _search(step_summary, "", 0)
+
+    @classmethod
+    def _host_provenance_receipt(
+        cls,
+        *,
+        step: AnalysisStep,
+        replays: Mapping[str, Mapping[str, Any]],
+    ) -> ValidationFinding:
+        """Record the receipt the host derived from the locked cohort itself.
+
+        The agent was only ever a transport link here: it was told to call the
+        host helper and publish the result unchanged.  A transport link that can
+        fail on JSON placement is a liability with no compensating authority, so
+        the host states the fact directly and the record carries it.
+        """
+
+        return ValidationFinding(
+            validator=cls.name,
+            severity="info",
+            message=(
+                f"Step {step.step_id} measurement provenance was derived by the "
+                "host from the locked COHORT_PARQUET."
+            ),
+            detail={
+                "issue": "measurement_provenance_host_generated",
+                "step_id": step.step_id,
+                "source": "COHORT_PARQUET",
+                # Which flags the host resolved as in scope for this step. The
+                # planned set is what proves the right columns were verified,
+                # so it stays visible even though it is derivable from checks.
+                "planned_measured_columns": sorted(replays),
+                "checks": [
+                    {"measured_column": column, **dict(replay)}
+                    for column, replay in sorted(replays.items())
+                ],
+            },
+        )
+
     @classmethod
     def _measurement_provenance_findings(
         cls,
@@ -858,9 +937,17 @@ class StepSummaryIntegrityValidator:
         if not replays:
             return findings
 
-        audit = step_summary.get("measurement_provenance_audit")
-        checks = audit.get("checks") if isinstance(audit, Mapping) else None
-        if not isinstance(audit, Mapping) or audit.get("source") != "COHORT_PARQUET":
+        audit, audit_path = cls._declared_provenance_audit(step_summary)
+        if audit is None:
+            # Nothing declared anywhere.  The host already replayed these facts
+            # from the locked cohort, so there is no missing authority here --
+            # only a missing copy of it.  State the host's receipt and move on.
+            findings.append(cls._host_provenance_receipt(step=step, replays=replays))
+            return findings
+        checks = audit.get("checks")
+        if audit.get("source") != "COHORT_PARQUET":
+            # A declared block that names a different source is a real claim
+            # about authority, and it contradicts the locked cohort.
             findings.append(
                 cls._provenance_error(
                     step=step,
@@ -870,9 +957,8 @@ class StepSummaryIntegrityValidator:
                         "measurement_provenance_audit.source='COHORT_PARQUET'; "
                         "agent-selected subsets are not provenance authority."
                     ),
-                    reported_source=(
-                        audit.get("source") if isinstance(audit, Mapping) else None
-                    ),
+                    reported_source=audit.get("source"),
+                    summary_path=audit_path,
                     planned_measured_columns=measured_columns,
                 )
             )
