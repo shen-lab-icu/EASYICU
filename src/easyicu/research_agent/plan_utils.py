@@ -57,6 +57,7 @@ from .icu_rules import (
     overadjustment_caution,
     treatment_mediator_caution,
 )
+from .planning.cohort_contract import cohort_definition_has_explicit_selection
 from .contracts.ordered_stratified import (
     is_ordered_stratified_analysis_step,
     ordered_stratified_structure_findings,
@@ -334,9 +335,7 @@ def _cohort_definition_prose(plan: AnalysisPlan) -> str:
 
 def _cohort_definition_is_empty(plan: AnalysisPlan) -> bool:
     cohort = getattr(plan, "cohort", None)
-    if cohort is None:
-        return True
-    return not (getattr(cohort, "inclusion", ()) or getattr(cohort, "exclusion", ()))
+    return not cohort_definition_has_explicit_selection(cohort)
 
 
 def _cohort_definition_contract_findings(
@@ -344,12 +343,10 @@ def _cohort_definition_contract_findings(
 ) -> List[ValidationFinding]:
     """Reject a 纳排 that lives only in free-text step intents.
 
-    The planner must express the analysis cohort's inclusion/exclusion as
-    structured predicates so the framework can materialise and enforce it
-    (``materialize_locked_analysis_cohort``). When the plan implies a cohort
-    but ``plan.cohort`` has no structured predicates, the 纳排 is unenforceable
-    and unauditable and downstream steps silently run on the full universe.
-    Surface that as an error instead of passing silently.
+    The planner must either express structured inclusion/exclusion predicates
+    or explicitly select every sealed input row. A default empty cohort is
+    ambiguous: it may be omitted 纳排 rather than an intentional full-input
+    population, so it remains an error.
     """
     if not _cohort_definition_is_empty(plan):
         return []
@@ -362,11 +359,11 @@ def _cohort_definition_contract_findings(
             message=(
                 "The plan defines an analysis cohort in prose (a cohort / "
                 "eligibility / attrition step) but plan.cohort carries no "
-                "structured inclusion/exclusion predicates. The 纳排 cannot be "
-                "materialised, enforced, or audited, and downstream steps will "
-                "run on the full universe. Express the inclusion/exclusion as "
-                "typed cohort predicates (concept_id, time_window, aggregation, "
-                "op, value)."
+                "structured inclusion/exclusion predicates and did not set "
+                "cohort.selection_mode='all_input_rows'. The population cannot "
+                "be materialised or audited. Express typed predicates "
+                "(concept_id, time_window, aggregation, op, value), or explicitly "
+                "select every sealed input row."
             ),
             detail={"cohort": "empty", "expects_cohort": True},
         )

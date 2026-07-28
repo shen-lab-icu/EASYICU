@@ -41,6 +41,7 @@ from ..planning.cohort_contract import (
     _EXTRA_COHORT_CONCEPT_IDS,
     clear_cohort_concept_ids,
     coerce_cohort_definition,
+    cohort_definition_has_explicit_selection,
     cohort_definition_sha,
     concept_id_exists,
     default_pattern_registry,
@@ -146,10 +147,10 @@ def write_locked_cohort_definition(
         definition_sha = cohort_definition_sha(definition)
         locked_sha = cohort_definition_sha(locked_definition)
         if definition_sha != locked_sha:
-            locked_is_empty = not (
-                locked_definition.inclusion or locked_definition.exclusion
+            locked_is_empty = not cohort_definition_has_explicit_selection(
+                locked_definition
             )
-            definition_is_real = bool(definition.inclusion or definition.exclusion)
+            definition_is_real = cohort_definition_has_explicit_selection(definition)
             if not (allow_empty_promotion and locked_is_empty and definition_is_real):
                 raise CohortSchemaError(
                     "cohort definition changed after plan lock; refusing to overwrite "
@@ -520,8 +521,10 @@ def analysis_cohort_authority_coordinates(
     """Recompute the science-owned coordinates bound by an analysis child."""
 
     definition = coerce_cohort_definition(getattr(plan, "cohort", None))
-    if definition is None or not (definition.inclusion or definition.exclusion):
-        raise CohortSchemaError("analysis cohort authority requires locked predicates")
+    if not cohort_definition_has_explicit_selection(definition):
+        raise CohortSchemaError(
+            "analysis cohort authority requires an explicit locked selection"
+        )
     bindings = _planner_declared_context_column_bindings(
         definition=definition,
         plan=plan,
@@ -1050,7 +1053,7 @@ def materialize_locked_analysis_cohort(
         "error": None,
     }
     definition = coerce_cohort_definition(getattr(plan, "cohort", None))
-    if definition is None or not (definition.inclusion or definition.exclusion):
+    if not cohort_definition_has_explicit_selection(definition):
         return result
     from ..intake.materialized_metadata import (
         MaterializedMetadataError,

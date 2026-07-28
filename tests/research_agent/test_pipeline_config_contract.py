@@ -50,6 +50,21 @@ def test_task_kind_round_trips_through_config_and_pipeline(ra, tmp_path: Path) -
     assert pipeline._benchmark_task_kind == "subphenotype_clustering"
 
 
+def test_primary_cohort_selection_mode_is_typed_and_bound(ra, tmp_path: Path) -> None:
+    config = ra.PipelineConfig(
+        workdir=tmp_path,
+        required_primary_cohort_selection_mode="all_input_rows",
+    )
+    pipeline = ra.ResearchAgentPipeline.from_config(config)
+
+    assert pipeline._required_primary_cohort_selection_mode == "all_input_rows"
+    with pytest.raises(ValueError, match="required_primary_cohort_selection_mode"):
+        ra.PipelineConfig(
+            workdir=tmp_path,
+            required_primary_cohort_selection_mode="guess",
+        )
+
+
 def test_legacy_flat_constructor_is_a_warning_only_adapter(ra, tmp_path: Path) -> None:
     client = ra.MockLLMClient()
 

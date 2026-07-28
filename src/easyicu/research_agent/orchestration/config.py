@@ -26,6 +26,7 @@ from types import MappingProxyType
 from typing import Any, Dict, Mapping, Optional, Sequence, Union
 
 from ..authority.secret_redaction import is_sensitive_key, string_contains_secret
+from ..planning.cohort_contract import CohortSelectionMode
 from ..providers.prompt_budget import DEFAULT_MAX_PROMPT_TOKENS
 
 
@@ -289,6 +290,9 @@ class PipelineConfig:
     # Authoritative benchmark task kind used for kind-specific reporting
     # checks. Optional for non-benchmark pipeline runs.
     task_kind: Optional[str] = None
+    # Optional caller-owned population contract. The shared pipeline enforces
+    # the generic typed mode; the caller decides which mode a task requires.
+    required_primary_cohort_selection_mode: Optional[CohortSelectionMode] = None
     enable_reviewer_round: bool = True
     enable_fairness_subgroups: bool = True
     enable_hypothesis_generator: bool = False
@@ -477,6 +481,15 @@ class PipelineConfig:
             from ..authority.provider_hard_stop import ProviderHardStopLimits
 
             ProviderHardStopLimits(**hard_stop_values)  # type: ignore[arg-type]
+        if self.required_primary_cohort_selection_mode not in {
+            None,
+            "predicate_filtered",
+            "all_input_rows",
+        }:
+            raise ValueError(
+                "required_primary_cohort_selection_mode must be "
+                "'predicate_filtered', 'all_input_rows', or None"
+            )
 
     def with_overrides(self, **overrides: Any) -> "PipelineConfig":
         """Return a new :class:`PipelineConfig` with the given fields
