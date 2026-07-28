@@ -305,6 +305,12 @@ from ..providers.mocks import MockLLMClient
 from ..providers.prompt_budget import (
     budgeted_coder_clients, budgeted_role_client, budgeted_vlm_client
 )
+from ..planning.cohort_contract import (
+    CohortSchemaError,
+    coerce_cohort_definition,
+    cohort_definition_has_explicit_selection,
+    cohort_definition_sha,
+)
 from ..planning.method_vocabulary import (
     MISSINGNESS_SOURCE_AVAILABILITY_AUDIT,
 )
@@ -864,10 +870,37 @@ def _planner_materialized_cohort_execution_receipt(
         authority_sha256 = None
         authoritative_rows = provenance.get("n_analysis_cohort")
 
-    planner_cohort = plan.model_dump(mode="json", include={"cohort"}).get("cohort")
+    # Both sides of this comparison are serializations of one locked
+    # definition, so both must come from the same owner.  ``to_dict`` omits a
+    # default ``selection_mode`` to keep legacy authority digests stable while
+    # pydantic's ``model_dump`` always emits it, so comparing those two
+    # spellings reported every predicate-filtered cohort as a mismatch.
+    # Re-hashing the recorded definition through the canonical digest owner
+    # additionally proves the stored ``cohort_sha256`` indexes the stored
+    # definition rather than merely asserting it.
+    definition = coerce_cohort_definition(getattr(plan, "cohort", None))
+    if definition is None:
+        raise MaterializedMetadataError(
+            "active plan carries no cohort definition for the execution receipt"
+        )
+    planner_cohort_sha256 = cohort_definition_sha(definition)
+    recorded_cohort = provenance.get("cohort_definition")
+    if not isinstance(recorded_cohort, Mapping):
+        raise MaterializedMetadataError(
+            "analysis cohort execution receipt has no recorded cohort definition"
+        )
+    try:
+        recorded_cohort_sha256 = cohort_definition_sha(
+            CohortDefinition.from_dict(dict(recorded_cohort))
+        )
+    except (CohortSchemaError, KeyError, TypeError, ValueError) as exc:
+        raise MaterializedMetadataError(
+            "analysis cohort execution receipt cohort definition is unreadable"
+        ) from exc
     flow = provenance.get("cohort_flow")
     if (
-        provenance.get("cohort_definition") != planner_cohort
+        recorded_cohort_sha256 != planner_cohort_sha256
+        or str(provenance.get("cohort_sha256") or "") != planner_cohort_sha256
         or not isinstance(flow, list)
         or not flow
         or any(not isinstance(row, dict) for row in flow)
@@ -899,7 +932,7 @@ def _planner_materialized_cohort_execution_receipt(
 
     return {
         "schema_version": "easyicu.primary_cohort_execution_prompt/1",
-        "cohort_definition_sha256": provenance.get("cohort_sha256"),
+        "cohort_definition_sha256": planner_cohort_sha256,
         "raw_universe": {
             "rows": n_universe,
             "sha256": sha256_of_file(universe_path),
@@ -5409,9 +5442,13 @@ def run_execute_phase(
                 analysis_cohort_path=run_input_authority_state.analysis_path,
             )
             if step_record.get("execution_cohort_role") == _RAW_UNIVERSE_EXECUTION_ROLE
-            and bool(
-                getattr(plan.cohort, "inclusion", ())
-                or getattr(plan.cohort, "exclusion", ())
+            # One owner decides whether a plan made an explicit locked
+            # selection.  An ``all_input_rows`` cohort is such a selection, and
+            # it is exactly the case where a host-verified row-conservation
+            # receipt is cheapest and most useful: it tells the producer the
+            # universe count it must still hold after materialisation.
+            and cohort_definition_has_explicit_selection(
+                coerce_cohort_definition(getattr(plan, "cohort", None))
             )
             else None
         )
