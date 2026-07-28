@@ -3018,9 +3018,12 @@ def render_report(
     parts.append("")
     parts.append(f"- Research question: {context.research_question}")
     parts.append(f"- Cohort: {context.cohort.cohort_name} ({context.cohort.database})")
-    parts.append(
-        f"- Stays: {context.cohort.n_stays:,} / Patients: {context.cohort.n_patients:,}"
+    patient_count = (
+        f"{context.cohort.n_patients:,}"
+        if context.cohort.n_patients is not None
+        else "unavailable (no patient identifier)"
     )
+    parts.append(f"- Stays: {context.cohort.n_stays:,} / Patients: {patient_count}")
     if context.target_outcome:
         parts.append(f"- Target outcome: {context.target_outcome}")
     if context.cross_database_validation:

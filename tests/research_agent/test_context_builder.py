@@ -113,6 +113,54 @@ def test_composite_wide_output_inherits_catalog_source_concept(ra, monkeypatch):
     )
 
 
+def test_builder_applies_representation_semantics_after_metadata_overlay(
+    ra,
+    monkeypatch,
+):
+    from easyicu.research_agent.research_context import builder as context_module
+
+    def fake_info(name):
+        transforms = {
+            "sofa2_resp_first_time": "window_first_time",
+            "sofa2_resp_mean": "window_numeric_mean",
+        }
+        if name not in transforms:
+            return None
+        return {
+            "name": "sofa2_resp",
+            "unit_normalization": transforms[name],
+            "temporal_resolution": "relative to icu_admission in h",
+            "clinical_caveats": [
+                "SOFA components are 0–4 ordinal levels; never average."
+            ],
+        }
+
+    monkeypatch.setattr(context_module, "_safe_get_concept_info", fake_info)
+    context = ra.build_research_context(
+        research_question="Audit materialized representations.",
+        cohort=pd.DataFrame(
+            {
+                "stay_id": [1, 2, 3],
+                "sofa2_resp_first_time": [0.0, 6.0, 12.0],
+                "sofa2_resp_mean": [0.0, 1.5, 3.0],
+            }
+        ),
+        cohort_name="synthetic",
+        database="synthetic",
+    )
+
+    time_descriptor = context.variable("sofa2_resp_first_time")
+    mean_descriptor = context.variable("sofa2_resp_mean")
+    assert time_descriptor is not None
+    assert time_descriptor.role.value == "time"
+    assert time_descriptor.is_ordinal is False
+    assert time_descriptor.ordinal_levels is None
+    assert mean_descriptor is not None
+    assert mean_descriptor.role.value == "other"
+    assert mean_descriptor.is_ordinal is False
+    assert mean_descriptor.ordinal_levels is None
+
+
 def test_build_context_basic(ra):
     df = pd.DataFrame(
         {
@@ -133,7 +181,9 @@ def test_build_context_basic(ra):
     )
     assert ctx.research_question.startswith("Does sofa2")
     assert ctx.cohort.n_stays == 4
-    assert ctx.cohort.n_patients == 4  # one row per id
+    assert ctx.cohort.n_patients is None
+    assert ctx.cohort.provenance["patient_identity_available"] is False
+    assert ctx.cohort.provenance["analysis_unit"] == "icu_stay"
     assert "stay_id" in ctx.cohort.id_columns
     assert "death" in ctx.cohort.outcome_columns
     assert ctx.target_outcome == "death"
@@ -469,8 +519,7 @@ def test_temporal_constraints_and_provenance_are_attached(ra):
     assert "resolver" in ctx.cohort.provenance
 
 
-def test_n_patients_distinct_from_n_stays(ra):
-    """If two rows share the same stay_id, n_patients < n_stays."""
+def test_stay_id_is_never_relabelled_as_patient_identity(ra):
     df = pd.DataFrame(
         {
             "stay_id": [1, 1, 2, 3, 3, 3],
@@ -485,7 +534,30 @@ def test_n_patients_distinct_from_n_stays(ra):
         database="synthetic",
     )
     assert ctx.cohort.n_stays == 6
+    assert ctx.cohort.n_patients is None
+    assert ctx.cohort.provenance["stay_id_columns"] == ["stay_id"]
+    assert ctx.cohort.provenance["patient_id_columns"] == []
+
+
+def test_explicit_patient_identifier_supports_patient_count(ra):
+    df = pd.DataFrame(
+        {
+            "subject_id": [10, 10, 20, 30],
+            "stay_id": [1, 2, 3, 4],
+            "death": [0, 0, 1, 0],
+        }
+    )
+
+    ctx = ra.build_research_context(
+        research_question="x",
+        cohort=df,
+        cohort_name="c",
+        database="synthetic",
+    )
+
+    assert ctx.cohort.n_stays == 4
     assert ctx.cohort.n_patients == 3
+    assert ctx.cohort.provenance["n_patients_source"] == "subject_id"
 
 
 def test_retrieved_context_keeps_relevant_and_outcome_variables(ra):

@@ -63,7 +63,9 @@ from .typed import (
     project_research_context_variables,
 )
 from ..concept_availability import normalize_database_name
+from .cohort_granularity import resolve_cohort_granularity
 from .observation_semantics import compile_observation_semantics
+from .representation_semantics import compile_wide_representation_semantics
 from .temporal_semantics import (
     ConceptValidationLayer,
     ICUEpisodeResolver,
@@ -586,17 +588,16 @@ def build_research_context(
         cohort_path=cohort_path_str,
     )
 
-    n_patients = (
-        _count_unique(df, episode.id_columns[:1])
-        if episode.id_columns
-        else int(len(df))
+    granularity = resolve_cohort_granularity(
+        frame=df,
+        id_columns=episode.id_columns,
     )
     n_stays = int(len(df))
 
     cohort_desc = CohortDescriptor(
         cohort_name=cohort_name,
         database=database,
-        n_patients=n_patients,
+        n_patients=granularity.n_patients,
         n_stays=n_stays,
         inclusion_criteria=list(inclusion_criteria or []),
         exclusion_criteria=list(exclusion_criteria or []),
@@ -605,6 +606,7 @@ def build_research_context(
         outcome_columns=episode.outcome_columns,
         provenance={
             **episode.provenance,
+            **granularity.provenance(),
             "inclusion_criteria": list(inclusion_criteria or []),
             "exclusion_criteria": list(exclusion_criteria or []),
             **(
@@ -653,6 +655,7 @@ def build_research_context(
             descriptors=descriptors,
             provenance=legacy_materialization_provenance,
         )
+    descriptors = compile_wide_representation_semantics(descriptors)
     descriptors = compile_observation_semantics(
         frame=df,
         descriptors=descriptors,
@@ -875,15 +878,6 @@ def _guess_outcome_columns(df: pd.DataFrame) -> List[str]:
         elif cl.startswith("outcome_"):
             out.append(c)
     return out
-
-
-def _count_unique(df: pd.DataFrame, cols: Sequence[str]) -> int:
-    if not cols:
-        return int(len(df))
-    try:
-        return int(df[list(cols)].drop_duplicates().shape[0])
-    except Exception:
-        return int(len(df))
 
 
 def _infer_outcome_semantics(
@@ -1136,18 +1130,19 @@ def build_naive_research_context(
     ):
         out_cols.append(target_outcome)
 
-    n_patients = _count_unique(df, id_cols[:1]) if id_cols else int(len(df))
+    granularity = resolve_cohort_granularity(frame=df, id_columns=id_cols)
     n_stays = int(len(df))
     cohort_desc = CohortDescriptor(
         cohort_name=cohort_name,
         database=database,
-        n_patients=n_patients,
+        n_patients=granularity.n_patients,
         n_stays=n_stays,
         inclusion_criteria=list(inclusion_criteria or []),
         exclusion_criteria=list(exclusion_criteria or []),
         id_columns=id_cols,
         time_columns=time_cols,
         outcome_columns=out_cols,
+        provenance=granularity.provenance(),
     )
 
     descriptors: List[ConceptDescriptor] = []
