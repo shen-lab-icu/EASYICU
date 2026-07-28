@@ -148,6 +148,7 @@ from ..research_context.temporal_semantics import (
     ICUEpisodeResolver,
     TemporalAlignmentEngine,
 )
+from ..review.step_semantics import summarize_step_scientific_semantics
 
 # Compatibility alias for callers/tests that imported the former local helper.
 _format_observed_domain = format_observed_domain
@@ -1761,13 +1762,24 @@ class CriticAgent:
         evidence_refs: Sequence[EvidenceRef],
         findings: Sequence[str],
     ) -> CritiqueReport:
+        scientific_summary = summarize_step_scientific_semantics(step_summary)
         concerns = [msg for msg in findings if msg]
+        concerns.extend(issue.message for issue in scientific_summary.issues)
         status: str = "pass"
         if not evidence_refs:
             status = "blocked"
             concerns.append("No evidence refs were registered for this step.")
+        elif any(
+            issue.severity == "error" for issue in scientific_summary.issues
+        ):
+            status = "blocked"
         elif concerns:
             status = "needs_revision"
+        suggested_repairs = list(
+            dict.fromkeys(issue.repair for issue in scientific_summary.issues)
+        )
+        if status != "pass":
+            suggested_repairs.extend(_suggest_repairs_for(step_summary, concerns))
         return CritiqueReport(
             status=status,  # type: ignore[arg-type]
             reviewer="CriticAgent",
@@ -1775,7 +1787,7 @@ class CriticAgent:
             unsupported_claims=[],
             missing_evidence_refs=[] if evidence_refs else [step.step_id],
             suggested_repairs=(
-                [] if status == "pass" else _suggest_repairs_for(step_summary, concerns)
+                [] if status == "pass" else list(dict.fromkeys(suggested_repairs))
             ),
             related_evidence_refs=list(evidence_refs),
         )
