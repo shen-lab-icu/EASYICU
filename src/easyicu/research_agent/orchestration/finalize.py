@@ -47,11 +47,13 @@ from ..reporting.readiness import render_report, write_readiness_artifacts
 from ..providers.prompts import PROMPT_PACK_VERSION, prompt_pack_files
 from ..authority.runtime_artifacts import (
     AuditLogger,
+    STEP_ATTEMPT_HISTORY_REF_SCHEMA,
     active_step_evidence_ids,
     build_execution_replay,
     build_workflow_graph,
     capture_code_version,
     current_evidence_records,
+    encode_step_attempt_history_jsonl,
     render_workflow_graph_mermaid,
     verified_run_evidence_path,
     write_json_artifact,
@@ -858,6 +860,31 @@ def finalise_success(
     # Flush first so the in-memory append-only attempt ledger includes the
     # final current snapshots before both durable manifests are serialized.
     execute_result.flush_partial_manifest()
+    step_attempt_history = list(execute_result.step_attempt_history)
+    step_attempt_history_ref = None
+    if step_attempt_history:
+        history_record = evidence.register_text(
+            kind="log",
+            description=(
+                "Append-only execution and deterministic-revalidation history "
+                "externalized from the finalized run manifest."
+            ),
+            text=encode_step_attempt_history_jsonl(step_attempt_history),
+            filename="step_attempt_history.jsonl",
+            evidence_id="step_attempt_history",
+            producer="pipeline",
+            generation_mode="system",
+            publish_aliases=False,
+            on_sha_change="new_id",
+        )
+        step_attempt_history_ref = {
+            "schema_version": STEP_ATTEMPT_HISTORY_REF_SCHEMA,
+            "format": "jsonl",
+            "evidence_id": history_record.evidence_id,
+            "relative_path": history_record.relative_path,
+            "sha256": history_record.sha256,
+            "record_count": len(step_attempt_history),
+        }
     manifest = AnalysisManifest(
         run_id=run_id,
         research_question=context.research_question,
@@ -868,7 +895,8 @@ def finalise_success(
         evidence=evidence.records(),
         findings=findings,
         per_step_records=per_step_records,
-        step_attempt_history=list(execute_result.step_attempt_history),
+        step_attempt_history=[],
+        step_attempt_history_ref=step_attempt_history_ref,
         cost_records=cost_records_for_manifest,
         reproducibility=reproducibility_summary,
         provider_authorization=provider_authorization_manifest(pipeline._llm),
