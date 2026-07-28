@@ -68,6 +68,8 @@ def e1_scientific_acceptance_contract() -> dict[str, Any]:
         "readmission_column": "icu_readmission",
         "positive_only_event_column": "susp_inf_max",
         "landmark_hours": 24.0,
+        "primary_cohort_selection_mode": "all_input_rows",
+        "primary_unit_id_column": "stay_id",
     }
 
 
@@ -748,6 +750,23 @@ def evaluate_e1_scientific_acceptance(
                 )
             )
 
+    cohort_definition = plan.get("cohort")
+    observed_selection_mode = (
+        cohort_definition.get("selection_mode")
+        if isinstance(cohort_definition, Mapping)
+        else None
+    )
+    expected_selection_mode = contract["primary_cohort_selection_mode"]
+    if observed_selection_mode != expected_selection_mode:
+        issues.append(
+            _issue(
+                "e1_primary_cohort_selection_mode_mismatch",
+                "The primary E1 cohort silently changed the sealed input population.",
+                expected=expected_selection_mode,
+                observed=observed_selection_mode,
+            )
+        )
+
     summaries = _step_summaries(run_dir, issues)
     table_one = _summary_for_product(
         summaries,
@@ -797,6 +816,49 @@ def evaluate_e1_scientific_acceptance(
         input_key=str(contract["analysis_cohort_input"]),
         issues=issues,
     )
+    source_cohort_path = _contained_regular_file(run_dir, Path("cohort.parquet"))
+    if source_cohort_path is None or cohort is None:
+        issues.append(
+            _issue(
+                "e1_primary_denominator_authority_missing",
+                "The sealed input or analysis cohort is unavailable for denominator verification.",
+            )
+        )
+    else:
+        unit_id_column = str(contract["primary_unit_id_column"])
+        try:
+            source_units = pd.read_parquet(
+                source_cohort_path,
+                columns=[unit_id_column],
+            )[unit_id_column].reset_index(drop=True)
+            analysis_units = cohort[unit_id_column].reset_index(drop=True)
+        except Exception as exc:
+            issues.append(
+                _issue(
+                    "e1_primary_unit_authority_invalid",
+                    "The sealed input and analysis cohort must expose the stay-level identity.",
+                    unit_id_column=unit_id_column,
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+            )
+        else:
+            exact_units_preserved = bool(
+                not source_units.isna().any()
+                and not analysis_units.isna().any()
+                and not source_units.duplicated().any()
+                and not analysis_units.duplicated().any()
+                and source_units.equals(analysis_units)
+            )
+            if not exact_units_preserved:
+                issues.append(
+                    _issue(
+                        "e1_primary_denominator_changed",
+                        "The primary E1 analysis cohort does not preserve the ordered sealed stay population.",
+                        sealed_input_rows=len(source_units),
+                        analysis_cohort_rows=len(analysis_units),
+                        unit_id_column=unit_id_column,
+                    )
+                )
     _validate_sensitivity(
         match=sensitivity,
         manifest=manifest,
