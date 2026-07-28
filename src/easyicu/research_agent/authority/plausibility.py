@@ -20,7 +20,7 @@ import json
 import math
 from pathlib import Path
 import re
-from typing import Any, Mapping, Optional
+from typing import Any, Dict, Mapping, Optional, Sequence
 
 from ..schema import AnalysisStep, ResearchContext
 from .step_capsule import (
@@ -492,6 +492,45 @@ def compile_resumed_flag_only_plausibility_scope(
     )
 
 
+def restore_revalidated_resolved_inputs_sha256(
+    *,
+    prior_record: Mapping[str, Any],
+    checkpoint_history: Sequence[Mapping[str, Any]],
+) -> Dict[str, Any]:
+    """Recover only the immutable input digest lost by an old replay projection.
+
+    A short-lived resume implementation removed ``resolved_inputs_sha256`` from
+    a successful revalidation checkpoint along with mutable convenience
+    receipts.  Recovery is allowed only for that explicit checkpoint shape and
+    only from an earlier success naming the same executed capsule and code.  The
+    caller must still pass the result through capsule verification.
+    """
+
+    restored = dict(prior_record)
+    current_digest = str(restored.get("resolved_inputs_sha256") or "").strip()
+    if current_digest or restored.get("revalidated_without_execution") is not True:
+        return restored
+    capsule_ref = restored.get("step_authority_capsule_ref")
+    step_id = str(restored.get("step_id") or "")
+    code_sha256 = str(restored.get("executed_code_sha256") or "")
+    if not isinstance(capsule_ref, Mapping) or not step_id or not code_sha256:
+        return restored
+    for candidate in reversed(checkpoint_history):
+        candidate_digest = str(
+            candidate.get("resolved_inputs_sha256") or ""
+        ).strip()
+        if (
+            _SHA256_PATTERN.fullmatch(candidate_digest) is not None
+            and str(candidate.get("status") or "").strip().lower() == "ok"
+            and str(candidate.get("step_id") or "") == step_id
+            and candidate.get("step_authority_capsule_ref") == capsule_ref
+            and str(candidate.get("executed_code_sha256") or "") == code_sha256
+        ):
+            restored["resolved_inputs_sha256"] = candidate_digest
+            break
+    return restored
+
+
 __all__ = [
     "FlagOnlyPlausibilityScope",
     "PLAUSIBILITY_SCOPE_SCHEMA",
@@ -501,4 +540,5 @@ __all__ = [
     "compile_flag_only_plausibility_scope",
     "compile_resumed_flag_only_plausibility_scope",
     "compile_step_plausibility_authority",
+    "restore_revalidated_resolved_inputs_sha256",
 ]

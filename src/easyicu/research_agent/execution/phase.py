@@ -145,6 +145,7 @@ from ..authority.plausibility import (
     StepPlausibilityAuthority,
     compile_resumed_flag_only_plausibility_scope,
     compile_step_plausibility_authority,
+    restore_revalidated_resolved_inputs_sha256,
 )
 from ..cohort.repair import extract_cohort_definition_from_prose
 from ..cohort.schema import (
@@ -3276,6 +3277,10 @@ def _selectively_revalidate_resume_successes(
         )
     )
     for prior_record in stale_successes:
+        prior_record = restore_revalidated_resolved_inputs_sha256(
+            prior_record=prior_record,
+            checkpoint_history=history,
+        )
         step_id = str(prior_record.get("step_id") or "").strip()
         invalid_upstream = sorted(
             dependencies.get(step_id, set()).intersection(invalidated)
