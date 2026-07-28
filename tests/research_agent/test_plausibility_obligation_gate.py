@@ -215,6 +215,31 @@ def test_a_script_that_records_the_count_in_a_written_output_passes():
     assert _reasons(DECLARED) == set()
 
 
+def test_empty_mapping_fallback_keeps_the_sealed_range_attributable() -> None:
+    """``range = contract.get(...) or {}`` is the real E1 repair shape."""
+
+    with_empty_fallback = DECLARED.replace(
+        'bounds = contract.get("analysis_plausibility_range")',
+        'bounds = contract.get("analysis_plausibility_range") or {}',
+    )
+
+    assert _reasons(with_empty_fallback) == set()
+
+
+def test_populated_range_fallback_cannot_replace_the_sealed_bounds() -> None:
+    with_source_literal_fallback = DECLARED.replace(
+        'bounds = contract.get("analysis_plausibility_range")',
+        (
+            'bounds = contract.get("analysis_plausibility_range") '
+            'or {"minimum": 0, "maximum": 10}'
+        ),
+    )
+
+    assert _reasons(with_source_literal_fallback) == {
+        "plausibility_check_not_attributable"
+    }
+
+
 def test_an_uncalled_helper_cannot_certify_literal_receipts() -> None:
     """A perfect-looking dead function is not evidence that a check ran."""
 

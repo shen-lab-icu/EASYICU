@@ -795,6 +795,27 @@ def _accessed_key(node: ast.AST) -> Optional[tuple[ast.AST, object]]:
     """The container and key of ``x.get(k)`` / ``x[k]``, if the key is literal."""
 
     if (
+        isinstance(node, ast.BoolOp)
+        and isinstance(node.op, ast.Or)
+        and len(node.values) == 2
+        and (
+            isinstance(node.values[1], ast.Dict)
+            and not node.values[1].keys
+            or isinstance(node.values[1], ast.Call)
+            and isinstance(node.values[1].func, ast.Name)
+            and node.values[1].func.id == "dict"
+            and not node.values[1].args
+            and not node.values[1].keywords
+        )
+    ):
+        # Generated code commonly normalises an absent optional mapping with
+        # ``contract.get("analysis_plausibility_range") or {}``.  The empty
+        # fallback cannot introduce a bound, so the accessed host key remains
+        # authoritative.  A populated or computed fallback is deliberately
+        # not unwrapped: it could replace the sealed bounds with source
+        # literals and must therefore remain unattributable.
+        return _accessed_key(node.values[0])
+    if (
         isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
         and node.func.attr == "get"

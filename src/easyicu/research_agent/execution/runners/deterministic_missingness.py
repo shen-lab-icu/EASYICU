@@ -43,8 +43,10 @@ import re
 import textwrap
 from collections.abc import Sequence
 
+from ...authority.plausibility import FlagOnlyPlausibilityScope
 from ...icu_rules import companion_count_column_for_measured
 from ...schema import AnalysisStep
+from .plausibility_receipt import render_standard_plausibility_receipt_code
 
 __all__ = [
     "is_compact_missingness_measurement_contract",
@@ -311,13 +313,34 @@ def _measurement_provenance_code(step: AnalysisStep | None) -> str:
 
 def missingness_measurement_audit_code(
     step: AnalysisStep | None = None,
+    *,
+    plausibility_scope: FlagOnlyPlausibilityScope | None = None,
 ) -> str:
     """Return a runner script that computes the per-concept missingness audit."""
 
     if step is not None and not missingness_audit_input_scope_supported(step):
         raise ValueError("missingness runner cannot consume the declared typed inputs")
+    if plausibility_scope is not None:
+        if step is None:
+            raise ValueError(
+                "a missingness plausibility scope requires an exact analysis step"
+            )
+        plausibility_scope.require_step(step.step_id)
     typed_cohort_input = (
         missingness_audit_cohort_input_key(step) if step is not None else None
+    )
+    plausibility_code = (
+        render_standard_plausibility_receipt_code(
+            plausibility_scope,
+            frame_name="df",
+        )
+        if plausibility_scope is not None
+        else ""
+    )
+    plausibility_summary_entry = (
+        '"plausibility_audit": plausibility_audit,'
+        if plausibility_scope is not None and plausibility_scope.expected_columns
+        else ""
     )
     template = textwrap.dedent(r"""
         import hashlib
@@ -421,6 +444,8 @@ def missingness_measurement_audit_code(
         else:
             df, cohort_path = load_typed_cohort(typed_cohort_input)
             df = df.copy()
+
+        __EASYICU_STANDARD_PLAUSIBILITY_RECEIPT__
         n_total = int(len(df))
 
         # --- research context: optional explicit concept list ------------------
@@ -624,6 +649,7 @@ def missingness_measurement_audit_code(
 
         def _fail(reason):
             summary = {
+                __EASYICU_PLAUSIBILITY_SUMMARY_ENTRY__
                 "step": current_step_id,
                 "status": "blocked",
                 "analysis_family": "data_quality",
@@ -928,6 +954,7 @@ def missingness_measurement_audit_code(
             if product in product_files:
                 declared_output_files[output] = product_files[product]
         summary = {
+            __EASYICU_PLAUSIBILITY_SUMMARY_ENTRY__
             "step": current_step_id,
             "status": "blocked" if denominator_error else "ok",
             "analysis_family": "data_quality",
@@ -985,7 +1012,15 @@ def missingness_measurement_audit_code(
         "__EASYICU_TYPED_COHORT_INPUT__",
         repr(typed_cohort_input),
     )
-    return template.replace(
+    template = template.replace(
         "__EASYICU_MEASUREMENT_PROVENANCE_SCOPE__",
         _measurement_provenance_code(step),
+    )
+    template = template.replace(
+        "__EASYICU_STANDARD_PLAUSIBILITY_RECEIPT__",
+        plausibility_code,
+    )
+    return template.replace(
+        "__EASYICU_PLAUSIBILITY_SUMMARY_ENTRY__",
+        plausibility_summary_entry,
     )

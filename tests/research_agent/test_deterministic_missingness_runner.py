@@ -26,6 +26,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from easyicu.research_agent.authority.plausibility import (
+    FlagOnlyPlausibilityScope,
+)
 from easyicu.research_agent.execution.runners.deterministic_missingness import (
     is_missingness_complete_case_contract,
     is_missingness_measurement_availability_contract,
@@ -35,6 +38,12 @@ from easyicu.research_agent.execution.runners.deterministic_missingness import (
 )
 from easyicu.research_agent.execution.runners.selection import select_standard_executor
 from easyicu.research_agent.gates.preflight import audit_mechanical_code_contracts
+from easyicu.research_agent.gates.plausibility_obligation import (
+    flag_only_plausibility_obligation_findings,
+)
+from easyicu.research_agent.gates.plausibility_receipt import (
+    plausibility_audit_receipt_findings,
+)
 from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
 
@@ -368,6 +377,132 @@ def test_compact_missingness_executor_consumes_declared_cohort_product():
     assert selection.analysis_kind == "missingness_measurement_audit"
     assert selection.consumed_input_keys == ("cohort:analysis_set",)
     assert audit_mechanical_code_contracts(selection.code, step) == []
+
+
+def test_compact_missingness_executor_emits_exact_plausibility_receipt(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    step = AnalysisStep(
+        step_id="04_missingness_and_measurement_audit",
+        planned_analysis_role="auxiliary",
+        intent="Audit missingness without changing the analysis cohort.",
+        inputs=["artifact:analysis_cohort", "age"],
+        expected_outputs=["table:missingness_measurement_audit"],
+        method="missingness_measurement_audit",
+    )
+    plan = AnalysisPlan(research_question="Test", steps=[step])
+    frame = pd.DataFrame({"age": [-1.0, 50.0, 101.0]})
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    cohort_path = run_dir / "cohort.parquet"
+    frame.to_parquet(cohort_path, index=False)
+    (run_dir / "research_context.json").write_text("{}", encoding="utf-8")
+    (run_dir / "analysis_plan.json").write_text(
+        plan.model_dump_json(),
+        encoding="utf-8",
+    )
+
+    raw_contracts: dict[str, object] = {
+        "schema_version": "easyicu.resolved_raw_input_contracts/1",
+        "authority_scope": (
+            "host_verified_physical_representation_and_domain_constraints"
+        ),
+        "scientific_ownership": "Planner retains scientific decisions",
+        "contracts": {
+            "age": {
+                "column": "age",
+                "analysis_plausibility_range": {
+                    "minimum": 0.0,
+                    "maximum": 100.0,
+                },
+                "plausibility_policy": {
+                    "range_policy": "flag_only",
+                    "out_of_range_action": "retain_and_flag",
+                },
+            }
+        },
+    }
+    encoded_contracts = json.dumps(
+        raw_contracts,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    contracts_sha256 = hashlib.sha256(encoded_contracts).hexdigest()
+    raw_contracts["contracts_sha256"] = contracts_sha256
+    resolved_path = run_dir / "resolved_inputs.json"
+    resolved_path.write_text(
+        json.dumps(
+            {
+                "step_id": step.step_id,
+                "inputs": {
+                    "artifact:analysis_cohort": {
+                        "relative_path": cohort_path.name,
+                        "sha256": hashlib.sha256(cohort_path.read_bytes()).hexdigest(),
+                        "product_contract": {
+                            "columns": list(frame.columns),
+                            "row_count": len(frame),
+                        },
+                    }
+                },
+                "raw_input_contracts": raw_contracts,
+            }
+        ),
+        encoding="utf-8",
+    )
+    out_dir = run_dir / "outputs"
+    monkeypatch.setenv("EASYICU_RUN_DIR", str(run_dir))
+    monkeypatch.setenv("EASYICU_STEP_ID", step.step_id)
+    monkeypatch.setenv("EASYICU_RESOLVED_INPUTS_JSON", str(resolved_path))
+    monkeypatch.setenv("COHORT_PARQUET", str(cohort_path))
+    monkeypatch.setenv("STEP_OUT_DIR", str(out_dir))
+    scope = FlagOnlyPlausibilityScope(
+        step_id=step.step_id,
+        expected_columns=("age",),
+        source_contracts_sha256=contracts_sha256,
+        authority_kind="resolved_raw_input_contracts",
+    )
+
+    selection = select_standard_executor(
+        step,
+        plan=plan,
+        plausibility_scope=scope,
+    )
+    assert selection is not None
+    assert selection.analysis_kind == "missingness_measurement_audit"
+    assert (
+        flag_only_plausibility_obligation_findings(
+            None,
+            script_text=selection.code,
+            step=step,
+            scope=scope,
+        )
+        == []
+    )
+
+    exec(compile(selection.code, "<missingness-executor>", "exec"), {})
+
+    summary = json.loads((out_dir / "step_summary.json").read_text("utf-8"))
+    assert summary["n_total"] == len(frame)
+    assert summary["plausibility_audit"] == {
+        "age": {
+            "policy": "retain_and_flag",
+            "below_minimum_n": 1,
+            "above_maximum_n": 1,
+            "out_of_range_n": 2,
+        }
+    }
+    assert (
+        plausibility_audit_receipt_findings(
+            step_summary=summary,
+            step=step,
+            script_text=selection.code,
+            scope=scope,
+        )
+        == []
+    )
 
 
 def test_compact_missingness_executor_reads_exact_bound_cohort(
