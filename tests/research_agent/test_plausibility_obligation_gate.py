@@ -671,6 +671,102 @@ write_json(SUMMARY_PATH, {"plausibility_audit": plausibility_audit})
     assert _reasons(code) == set()
 
 
+# The count the fatal fallback guards on has to be a real one, read out of the
+# declared range -- a bare `out_of_range_n = 0` is not a plausibility test and
+# the gate rightly ignores it, which would make every case below vacuous.
+COUNT_AT_MODULE_LEVEL = """
+
+marker_contract = manifest["raw_input_contracts"]["contracts"]["marker"]
+marker_range = marker_contract["analysis_plausibility_range"]
+marker_minimum = marker_range["minimum"]
+policy = marker_contract["plausibility_policy"]["out_of_range_action"]
+out_of_range_n = int((frame["marker"] < float(marker_minimum)).sum())
+"""
+
+
+@pytest.mark.parametrize(
+    "guard",
+    [
+        pytest.param(
+            """
+if policy == "retain_and_flag":
+    pass
+elif out_of_range_n != 0:
+    raise RuntimeError(f"Unsupported or fatal plausibility policy: {policy}")
+""",
+            id="elif_after_the_declared_action",
+        ),
+        pytest.param(
+            """
+if out_of_range_n > 0 and policy != "retain_and_flag":
+    raise RuntimeError(f"Unsupported or fatal plausibility policy: {policy}")
+""",
+            id="inline_and_not_the_declared_action",
+        ),
+        pytest.param(
+            """
+if policy != "retain_and_flag":
+    if out_of_range_n:
+        raise RuntimeError("Unsupported fatal plausibility policy")
+""",
+            id="nested_under_a_different_policy",
+        ),
+    ],
+)
+def test_a_fatal_fallback_for_some_other_policy_is_not_a_rejection(guard):
+    """Both real canary drafts wrote one of these, and both were blocked.
+
+    A script handed `retain_and_flag` still guards its own fatal fallback in
+    case it is ever handed something else. Under the declared policy that
+    `raise` cannot run, so reading it as a rejection is a wrong block -- and it
+    cost a real canary its entire run at step 01. Being defensive about a
+    policy the host did not declare is not a violation of the one it did.
+    """
+
+    code = (
+        HEADER
+        + """
+plausibility_audit = {}
+"""
+        + HELPER_HEAD
+        + RECORD_THE_COUNTS
+        + COUNT_AT_MODULE_LEVEL
+        + guard
+        + """
+
+write_json(SUMMARY_PATH, {"plausibility_audit": plausibility_audit})
+"""
+    )
+    assert _reasons(code) == set()
+
+
+def test_an_unguarded_fatal_stop_is_still_a_rejection():
+    """The control for the exemption: no policy guard, still blocked.
+
+    Without it the exemption could be doing nothing and the tests above would
+    pass vacuously -- which is exactly what a first draft of them did, because
+    the count they guarded on was a bare literal the gate rightly ignored.
+    """
+
+    code = (
+        HEADER
+        + """
+plausibility_audit = {}
+"""
+        + HELPER_HEAD
+        + RECORD_THE_COUNTS
+        + COUNT_AT_MODULE_LEVEL
+        + """
+if out_of_range_n != 0:
+    raise RuntimeError("out-of-range values present")
+
+
+write_json(SUMMARY_PATH, {"plausibility_audit": plausibility_audit})
+"""
+    )
+    assert "flag_only_plausibility_range_rejected" in _reasons(code)
+
+
 def test_one_handle_name_reused_across_two_with_blocks_is_read_per_block():
     """Copied from the script the first real canary blocked.
 
