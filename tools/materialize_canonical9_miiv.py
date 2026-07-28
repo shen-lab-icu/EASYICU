@@ -37,6 +37,9 @@ from benchmarks.figure2_canonical9.materialization_plan import (  # noqa: E402
     Canonical9MaterializationSpec,
     validate_canonical9_mimic_iv_plan,
 )
+from benchmarks.figure2_canonical9.task_scope import (  # noqa: E402
+    canonical_task_scope,
+)
 from easyicu.research_agent.cohort.materializer import (  # noqa: E402
     materialize_to_parquet,
 )
@@ -199,21 +202,11 @@ def _load_bridge(
 def _select_materialization_specs(
     task_ids: object,
 ) -> tuple[Canonical9MaterializationSpec, ...]:
-    requested = [
-        str(value or "").strip()
-        for value in (task_ids if isinstance(task_ids, (list, tuple)) else [])
-    ]
-    if not requested:
-        return tuple(CANONICAL9_MIMIC_IV_PLAN)
-    if any(not value for value in requested):
-        raise ValueError("--task-id values must be non-empty")
-    if len(requested) != len(set(requested)):
-        raise ValueError("--task-id values must be unique")
-    known = {spec.task_id for spec in CANONICAL9_MIMIC_IV_PLAN}
-    unknown = sorted(set(requested) - known)
-    if unknown:
-        raise ValueError(f"unknown Canonical9 task id(s): {unknown}")
-    selected = set(requested)
+    selected = set(
+        canonical_task_scope(
+            task_ids if isinstance(task_ids, (list, tuple)) else None
+        )
+    )
     return tuple(
         spec for spec in CANONICAL9_MIMIC_IV_PLAN if spec.task_id in selected
     )

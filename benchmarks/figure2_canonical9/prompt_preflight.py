@@ -51,6 +51,7 @@ from benchmarks.figure2_canonical9.protocol_prompt import (
     render_task_protocol_note,
     render_task_protocol_preferences,
 )
+from benchmarks.figure2_canonical9.task_scope import canonical_task_scope
 
 PROMPT_PREFLIGHT_SCHEMA_VERSION = "easyicu.canonical9_prompt_preflight/1"
 
@@ -81,7 +82,11 @@ def _reject_constant(value: str) -> object:
     raise PromptPreflightError(f"non-finite JSON constant {value!r}")
 
 
-def _strict_rows(path: Path) -> list[dict[str, Any]]:
+def _strict_rows(
+    path: Path,
+    *,
+    task_ids: Sequence[object] | None = None,
+) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for line_number, raw_line in enumerate(
         path.read_text(encoding="utf-8").splitlines(), start=1
@@ -103,7 +108,7 @@ def _strict_rows(path: Path) -> list[dict[str, Any]]:
             raise PromptPreflightError(f"JSONL row {line_number} is not an object")
         rows.append(row)
     observed = tuple(str(row.get("key") or "") for row in rows)
-    expected = tuple(FIGURE2_TASK_IDS)
+    expected = canonical_task_scope(task_ids)
     if observed != expected:
         raise PromptPreflightError(
             f"Canonical9 task order mismatch: observed={observed!r}, expected={expected!r}"
@@ -685,13 +690,15 @@ def run_canonical9_prompt_preflight(
     *,
     jsonl_path: Path,
     output_dir: Path,
+    task_ids: Sequence[object] | None = None,
 ) -> dict[str, object]:
     """Render, validate, and persist every Canonical9 prompt envelope."""
 
     source = _regular_absolute_file(jsonl_path, label="canonical JSONL")
     output_dir = Path(output_dir).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
-    rows = _strict_rows(source)
+    expected_task_ids = canonical_task_scope(task_ids)
+    rows = _strict_rows(source, task_ids=expected_task_ids)
     tasks: list[dict[str, object]] = []
     for row in rows:
         task = render_task_prompt_audit(row)
@@ -712,6 +719,11 @@ def run_canonical9_prompt_preflight(
         "source_jsonl": str(source),
         "source_jsonl_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
         "task_order": [task["task_id"] for task in tasks],
+        "scope": (
+            "full_canonical9"
+            if expected_task_ids == tuple(FIGURE2_TASK_IDS)
+            else "development_subset"
+        ),
         "prompt_kinds": list(_PROMPT_KINDS),
         "notes": (
             "Planner is exact pre-execution. Step/evidence-dependent prompts use "
