@@ -50,13 +50,15 @@ _VALUE_SUFFIXES = (
 def absolute_risk_context_code() -> str:
     """Return the small script consumed by the instrumented step runner."""
 
-    return textwrap.dedent("""
+    return textwrap.dedent(
+        """
         from easyicu.research_agent.execution.runners.deterministic_descriptive import (
             run_absolute_risk_context,
         )
 
         run_absolute_risk_context()
-        """).strip()
+        """
+    ).strip()
 
 
 def _read_json(path: Path) -> Dict[str, Any]:

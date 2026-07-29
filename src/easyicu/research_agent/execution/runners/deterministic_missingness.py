@@ -301,7 +301,9 @@ def is_measurement_bias_audit_contract(
         return False
     if any(not value.startswith("table:") for value in outputs):
         return False
-    return {value.split(":", 1)[1] for value in outputs} == _MEASUREMENT_BIAS_PRODUCT_IDS
+    return {
+        value.split(":", 1)[1] for value in outputs
+    } == _MEASUREMENT_BIAS_PRODUCT_IDS
 
 
 def declared_audit_products_are_emittable(
@@ -367,8 +369,10 @@ def _cohort_input_scope(step: AnalysisStep) -> tuple[bool, str | None]:
         return False, None
     input_key = next(iter(typed_inputs))
     kind, separator, product = input_key.partition(":")
-    if separator and product and (
-        kind == "cohort" or input_key == "artifact:analysis_cohort"
+    if (
+        separator
+        and product
+        and (kind == "cohort" or input_key == "artifact:analysis_cohort")
     ):
         return True, input_key
     return False, None
@@ -394,21 +398,27 @@ def missingness_audit_executor_owns_step(step: AnalysisStep) -> bool:
     # The named contracts remain, because they are what gives a recognised shape
     # its specific ``analysis_kind``.  The capability rule is what stops an
     # unnamed-but-computable shape from falling through to the coder.
-    contract_is_supported = is_missingness_measurement_availability_contract(
-        step.method,
-        step.expected_outputs,
-    ) or is_missingness_complete_case_contract(
-        step.method,
-        step.expected_outputs,
-    ) or is_compact_missingness_measurement_contract(
-        step.method,
-        step.expected_outputs,
-    ) or is_measurement_bias_audit_contract(
-        step.method,
-        step.expected_outputs,
-    ) or declared_audit_products_are_emittable(
-        step.method,
-        step.expected_outputs,
+    contract_is_supported = (
+        is_missingness_measurement_availability_contract(
+            step.method,
+            step.expected_outputs,
+        )
+        or is_missingness_complete_case_contract(
+            step.method,
+            step.expected_outputs,
+        )
+        or is_compact_missingness_measurement_contract(
+            step.method,
+            step.expected_outputs,
+        )
+        or is_measurement_bias_audit_contract(
+            step.method,
+            step.expected_outputs,
+        )
+        or declared_audit_products_are_emittable(
+            step.method,
+            step.expected_outputs,
+        )
     )
     return bool(
         contract_is_supported
@@ -494,9 +504,14 @@ def _measurement_provenance_code(step: AnalysisStep | None) -> str:
         )
         """
     ).strip()
-    return "measurement_checks = []\n" + loop_header + "\n" + textwrap.indent(
-        loop_body,
-        "    ",
+    return (
+        "measurement_checks = []\n"
+        + loop_header
+        + "\n"
+        + textwrap.indent(
+            loop_body,
+            "    ",
+        )
     )
 
 
@@ -531,7 +546,8 @@ def missingness_measurement_audit_code(
         if plausibility_scope is not None and plausibility_scope.expected_columns
         else ""
     )
-    template = textwrap.dedent(r"""
+    template = textwrap.dedent(
+        r"""
         import hashlib
         import json
         import os
@@ -1509,7 +1525,8 @@ def missingness_measurement_audit_code(
                 }
             )
         )
-        """).strip()
+        """
+    ).strip()
     template = template.replace(
         "__EASYICU_TYPED_COHORT_INPUT__",
         repr(typed_cohort_input),

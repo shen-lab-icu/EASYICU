@@ -7,6 +7,10 @@ from typing import Any, Mapping
 
 from ...authority.plausibility import FlagOnlyPlausibilityScope
 from ...schema import AnalysisPlan, AnalysisStep
+from .adjusted_association_executor import (
+    adjusted_association_executor_code,
+    adjusted_association_executor_owns_step,
+)
 from .exposure_outcome_distribution_render import (
     EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_INPUT,
     exposure_outcome_distribution_figure_code,
@@ -343,4 +347,29 @@ def select_standard_executor(
             )
         )
     _missed("trajectory_cluster_stability")
+    if adjusted_association_executor_owns_step(step):
+        # This owner renders the flag-only receipt itself, like the cohort
+        # summary and Table 1 owners, so a receipt obligation does not send the
+        # study's primary estimate to the stochastic coder.
+        typed_cohort_inputs = tuple(
+            str(value or "").strip()
+            for value in step.inputs
+            if str(value or "").strip().startswith("cohort:")
+            or str(value or "").strip() == "artifact:analysis_cohort"
+        )
+        return _selected(
+            StandardExecutorSelection(
+                analysis_kind="adjusted_association_estimates",
+                selection_reason="adjusted_association_model_contract_preflight",
+                progress_message=(
+                    "Using planner-declared adjusted-association executor"
+                ),
+                code=adjusted_association_executor_code(
+                    step,
+                    plausibility_scope=plausibility_scope,
+                ),
+                consumed_input_keys=typed_cohort_inputs,
+            )
+        )
+    _missed("adjusted_association_estimates")
     return None

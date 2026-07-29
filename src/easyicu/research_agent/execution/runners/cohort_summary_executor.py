@@ -21,7 +21,11 @@ import pandas as pd
 from ...authority.plausibility import FlagOnlyPlausibilityScope
 from ...schema import AnalysisStep
 from .plausibility_receipt import render_standard_plausibility_receipt_code
-from .typed_input_binding import load_step_cohort_frame, run_dir_from_env
+from .typed_input_binding import (
+    load_step_cohort_frame,
+    run_dir_from_env,
+    sole_typed_cohort_input as _typed_cohort_input,
+)
 
 __all__ = [
     "cohort_summary_executor_code",
@@ -29,27 +33,6 @@ __all__ = [
     "load_cohort_summary_frame",
     "run_cohort_summary_from_env",
 ]
-
-
-def _typed_cohort_input(step: AnalysisStep) -> str | None:
-    typed_inputs = {
-        str(value or "").strip()
-        for value in step.inputs
-        if ":" in str(value or "").strip()
-    }
-    if not typed_inputs:
-        return None
-    if len(typed_inputs) != 1:
-        return ""
-    input_key = next(iter(typed_inputs))
-    kind, separator, product = input_key.partition(":")
-    if (
-        separator
-        and product
-        and (kind == "cohort" or input_key == "artifact:analysis_cohort")
-    ):
-        return input_key
-    return ""
 
 
 def _declared_columns(step: AnalysisStep) -> tuple[str, ...]:

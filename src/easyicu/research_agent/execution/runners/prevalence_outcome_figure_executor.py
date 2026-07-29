@@ -104,7 +104,8 @@ def prevalence_outcome_figure_executor_code(step: AnalysisStep) -> str:
         raise ValueError("The step is not owned by the prevalence/outcome renderer")
     product = _figure_product(step.expected_outputs[0])
     assert product is not None
-    return textwrap.dedent(f"""
+    return textwrap.dedent(
+        f"""
         import os
         from pathlib import Path
 
@@ -119,7 +120,8 @@ def prevalence_outcome_figure_executor_code(step: AnalysisStep) -> str:
             step_id={step.step_id!r},
             figure_product={product!r},
         )
-        """).strip()
+        """
+    ).strip()
 
 
 def _canonical_sha256(path: Path) -> str:

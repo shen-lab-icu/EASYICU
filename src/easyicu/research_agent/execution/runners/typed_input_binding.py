@@ -57,7 +57,48 @@ __all__ = [
     "read_frame",
     "run_dir_from_env",
     "sha256_file",
+    "sole_typed_cohort_input",
 ]
+
+
+def sole_typed_cohort_input(step: Any) -> Optional[str]:
+    """Return the one typed row-membership authority a step declares.
+
+    Three return values, and the caller must keep them apart:
+
+    ``None``  no typed input at all, so ``COHORT_PARQUET`` is the row authority.
+    a key     exactly one cohort-scoped typed input; read that digest-bound
+              table rather than silently analysing another frame.
+    ``""``    more than one typed input, or one this executor family does not
+              support -- not owned, so an owner must decline the step.
+
+    This rule was written out three times (cohort summary, Table 1, and in a
+    tuple-returning variant for the missingness audit).  Adding a fourth copy
+    for the adjusted-association owner would have made "which frame did the
+    model actually read" a question with four independent answers, so the two
+    byte-identical copies now call this and the variant is noted as remaining
+    debt rather than duplicated again.
+    """
+
+    typed_inputs = {
+        str(value or "").strip()
+        for value in getattr(step, "inputs", None) or []
+        if ":" in str(value or "").strip()
+    }
+    if not typed_inputs:
+        return None
+    if len(typed_inputs) != 1:
+        return ""
+    input_key = next(iter(typed_inputs))
+    kind, separator, product = input_key.partition(":")
+    if (
+        separator
+        and product
+        and (kind == "cohort" or input_key == "artifact:analysis_cohort")
+    ):
+        return input_key
+    return ""
+
 
 #: Stable failure codes. Callers may branch on these; the messages may change.
 BINDING_REASON_CODES = frozenset(
