@@ -185,8 +185,10 @@ def test_the_real_robustness_bundle_cannot_carry_a_replay_declaration() -> None:
             {"product_id": "robustness_matrix", "output": "robustness_matrix"},
         ]
     }
-    with pytest.raises(ValueError, match="under two kinds"):
-        AnalysisStep.model_validate(payload)
+    # The plan must stay readable: this exact declaration, rejected in the
+    # schema, is what killed fresh21 at re-parse of its own sealed artifact.
+    step = AnalysisStep.model_validate(payload)
+    assert robustness_replay_spec_is_emittable(step) is False
 
 
 def test_dropping_the_duplicate_kind_makes_the_same_step_emittable() -> None:
@@ -212,6 +214,56 @@ def test_dropping_the_duplicate_kind_makes_the_same_step_emittable() -> None:
 
     step = AnalysisStep.model_validate(payload)
     assert robustness_replay_spec_is_emittable(step) is True
+
+
+# --------------------------------------------------------------------------
+# a plan the host wrote must stay a plan the host can read
+
+
+def test_the_whole_fresh21_plan_the_host_sealed_can_be_read_back() -> None:
+    """The regression for the run that died before its first step.
+
+    fresh21's Planner did carry ``robustness_replay_spec``, on a step that also
+    declared ``robustness_summary`` under two kinds.  A schema validator
+    refused that, so the plan the host had already written and registered as
+    evidence could no longer be parsed: the plan-authority resolver treats an
+    unreadable record as absent, found no candidate, and the item ended with
+    ``current analysis plan is not bound to immutable EvidenceStore
+    authority`` -- 0 steps executed, and a message pointing nowhere near the
+    cause.
+
+    Anything that decides whether the plan can be *read* must therefore stay
+    independent of whether anything can *execute* it.
+    """
+
+    document = json.loads(_FIXTURE.read_text(encoding="utf-8"))
+    payload = next(e for e in document["plans"] if e["label"] == "fresh21")["plan"]
+
+    steps = [AnalysisStep.model_validate(item) for item in payload["steps"]]
+
+    declaring = {
+        step.step_id: step
+        for step in steps
+        if step.robustness_replay_spec is not None
+        or step.measurement_audit_spec is not None
+    }
+    assert set(declaring) == {
+        "05_missingness_event_timing_audit",
+        "08_standard_robustness_sensitivity",
+    }
+    # Readable, and each answered on capability alone.
+    assert (
+        missingness_audit_executor_owns_step(
+            declaring["05_missingness_event_timing_audit"]
+        )
+        is True
+    )
+    assert (
+        robustness_replay_spec_is_emittable(
+            declaring["08_standard_robustness_sensitivity"]
+        )
+        is False
+    )
 
 
 # --------------------------------------------------------------------------

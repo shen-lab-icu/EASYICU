@@ -220,7 +220,13 @@ def test_the_fixture_records_where_it_came_from() -> None:
 
     document = json.loads(_FIXTURE.read_text(encoding="utf-8"))
 
-    assert len(document["plans"]) == 2
+    # Not a count: real plans get appended here whenever a run teaches
+    # something, and a literal would make every such addition look like a
+    # regression. What must hold of every entry is that it came from a run.
+    assert len(document["plans"]) >= 2
+    assert len({entry["label"] for entry in document["plans"]}) == len(
+        document["plans"]
+    )
     for entry in document["plans"]:
         assert entry["run_id"].startswith("run_2026")
         assert len(entry["source_sha256"]) == 64

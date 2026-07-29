@@ -1306,70 +1306,77 @@ def _one_product_per_kind(
         )
 
 
-def _spec_covers_every_declared_product(
+def _spec_names_only_products_the_step_declares(
     expected_outputs: Sequence[Any],
     *,
     spec: Any,
-    lookup: str,
-    allowed_kinds: frozenset[str],
     field: str,
-    noun: str,
 ) -> None:
-    """Refuse a spec that does not account for the step's outputs exactly.
+    """Refuse a spec entry describing work the step never promised a reader.
 
-    Both directions matter.  A declared product with no entry would be produced
-    by nobody while the step still looked owned; an entry naming a product the
-    step never declares describes work no reader was promised.
+    This is the one direction that is malformed on its own terms: it is a
+    contradiction inside the step, true or false without reference to any
+    runner, so it belongs here.  Whether a runner can *back* the declared
+    products is the opposite direction, and it is a capability question --
+    see :func:`spec_backs_every_declared_product`.
     """
 
-    declared = [str(value or "").strip() for value in expected_outputs]
-    foreign = sorted(
-        value
-        for value in declared
-        if value.partition(":")[0] not in allowed_kinds or ":" not in value
-    )
-    if foreign:
-        raise ValueError(
-            f"{field} describes {sorted(allowed_kinds)!r} products only; the "
-            f"step also declares {foreign!r}, which it cannot back"
-        )
-    declared_products = [value.split(":", 1)[1] for value in declared]
-    repeated = sorted(
-        {
-            product
-            for product in declared_products
-            if declared_products.count(product) > 1
-        }
-    )
-    if repeated:
-        # The real recorded robustness contracts declare `table:robustness_summary`
-        # AND `statistic:robustness_summary`.  The legacy path normalises those to
-        # one name and satisfies both from one CSV -- so the reader who asked for a
-        # statistic is handed a table.  A spec-carrying step must say which one it
-        # means; only new plans reach here, so nothing already executing changes.
-        raise ValueError(
-            f"{field} cannot back the same product under two kinds: {repeated!r}; "
-            f"one {noun} is one answer, so declare the kind the reader needs"
-        )
-    resolve = getattr(spec, lookup)
-    unbacked = sorted(
-        product for product in declared_products if resolve(product) is None
-    )
-    if unbacked:
-        raise ValueError(
-            f"every declared product must say which {noun} it is; {field} "
-            f"does not name {unbacked!r}"
-        )
+    declared_products = {
+        str(value or "").strip().split(":", 1)[-1] for value in expected_outputs
+    }
     undeclared = sorted(
         item.product_id
         for item in spec.products
-        if item.product_id not in set(declared_products)
+        if item.product_id not in declared_products
     )
     if undeclared:
         raise ValueError(
             f"{field} names products the step does not declare as outputs: "
             f"{undeclared!r}"
         )
+
+
+def spec_backs_every_declared_product(
+    expected_outputs: Sequence[Any],
+    *,
+    spec: Any,
+    lookup: str,
+    allowed_kinds: frozenset[str],
+) -> bool:
+    """Whether this declaration accounts for every product the step promises.
+
+    A coverage shortfall makes the step *unowned*; it does not make the plan
+    invalid.  That distinction is not cosmetic -- these rules first shipped as
+    ``AnalysisStep`` validators, and a real fresh run then wrote a plan whose
+    robustness step declared ``robustness_summary`` under two kinds.  The plan
+    was sealed as evidence, and the failure surfaced only when the host
+    re-parsed its own registered artifact: the parse raised, the plan-authority
+    resolver swallowed it as an unreadable record, and the run died before its
+    first step with "current analysis plan is not bound to immutable
+    EvidenceStore authority" -- a message naming nothing about the real cause.
+
+    A schema validator answers "is this statement well formed"; it must not
+    also answer "can anything here execute it", because the second question has
+    a safe answer (nobody claims the step, the Coder writes it) and the first
+    one does not.
+    """
+
+    declared = [str(value or "").strip() for value in expected_outputs]
+    if any(
+        ":" not in value or value.partition(":")[0] not in allowed_kinds
+        for value in declared
+    ):
+        return False
+    declared_products = [value.split(":", 1)[1] for value in declared]
+    if len(set(declared_products)) != len(declared_products):
+        # The real recorded robustness contracts declare
+        # `table:robustness_summary` AND `statistic:robustness_summary`.  The
+        # legacy path normalises those to one name and satisfies both from one
+        # CSV, so the reader who asked for a statistic is handed a table.  The
+        # host cannot tell which one a bare product name means, so it declines.
+        return False
+    resolve = getattr(spec, lookup)
+    return all(resolve(product) is not None for product in declared_products)
 
 
 class MeasurementAuditProduct(BaseModel):
@@ -1690,22 +1697,16 @@ class AnalysisStep(BaseModel):
                     f"be explicit step inputs; missing {missing_spec_inputs!r}"
                 )
         if self.measurement_audit_spec is not None:
-            _spec_covers_every_declared_product(
+            _spec_names_only_products_the_step_declares(
                 self.expected_outputs,
                 spec=self.measurement_audit_spec,
-                lookup="audit_for",
-                allowed_kinds=frozenset({"table"}),
                 field="measurement_audit_spec",
-                noun="audit",
             )
         if self.robustness_replay_spec is not None:
-            _spec_covers_every_declared_product(
+            _spec_names_only_products_the_step_declares(
                 self.expected_outputs,
                 spec=self.robustness_replay_spec,
-                lookup="output_for",
-                allowed_kinds=frozenset({"table", "statistic", "log"}),
                 field="robustness_replay_spec",
-                noun="replay output",
             )
         consumption_keys = [
             contract.input_key for contract in self.input_consumption_contracts
