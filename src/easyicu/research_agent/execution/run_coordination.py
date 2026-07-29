@@ -66,10 +66,39 @@ class RunCoordinator:
         execute_step: Callable[[AnalysisStep], Any],
         resolve_transition: Callable[[AnalysisStep, Any, bool], RunTransition],
         apply_revised_plan: Callable[[Any, set[str]], Sequence[AnalysisStep]],
+        on_step_exception: Optional[Callable[[AnalysisStep, BaseException], None]] = (
+            None
+        ),
     ) -> RunExecutionState:
         while state.remaining_steps:
             step = state.remaining_steps.pop(0)
-            record = execute_step(step)
+            try:
+                record = execute_step(step)
+            except BaseException as error:  # noqa: BLE001 - see below
+                # An escaping exception used to end the whole run: nothing
+                # wrapped this call, so it left run_sequential, the execute
+                # phase and pipeline.run, and the run finished with no sealed
+                # manifest and no diagnosis -- one repeated word in a declared
+                # input list cost a 14-minute run exactly this way. There are
+                # ~2,900 raise statements behind this call, so the class cannot
+                # be closed by enumerating them; it is closed by honouring the
+                # contract that a step returns a record.
+                #
+                # run_parallel already treats a raising step as a handled event
+                # (on_worker_error); only the sequential path did not.
+                #
+                # This is deliberately NOT a repair path. An unexpected
+                # exception means an unknown invariant broke, so the run stops
+                # here fail-closed rather than replanning around it -- the step
+                # is recorded, the reason names the exception, and the caller
+                # still seals its manifest.
+                state.executed_step_ids.add(step.step_id)
+                state.stop_reason = f"step_raised:{step.step_id}:{type(error).__name__}"
+                if on_step_exception is not None:
+                    on_step_exception(step, error)
+                if isinstance(error, (KeyboardInterrupt, SystemExit)):
+                    raise
+                break
             state.executed_step_ids.add(step.step_id)
             record_failed = isinstance(record, dict) and (
                 str(record.get("status") or "").strip().lower() != "ok"
