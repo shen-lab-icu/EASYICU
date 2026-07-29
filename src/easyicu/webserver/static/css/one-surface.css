@@ -1,146 +1,116 @@
-/* one-surface.css — owner: the single-surface layout.
+/* one-surface.css — owner: the single-surface additions.
  *
- * There is one screen: a task rail, the conversation, and a panel the
- * conversation summons. Routes no longer name pages; a route names which panel
- * is open, so deep links keep working without a navigation menu existing.
+ * The conversation already owns the three columns. This file styles only what
+ * gets mounted into its existing slots: the panel host inside .gd-aside, and
+ * the source chip and panel openers inside .gd-top. It deliberately does NOT
+ * define a layout of its own — a second grid around a screen that already has
+ * one is what made the first attempt look doubled.
  *
  * Tokens measured from the running Codex cloud app:
- *   page #FCFCFC · surface #FFFFFF · muted #F3F3F3 · ink #0D0D0D · ink-2 #8F8F8F
- *   labels 14px/500 lh20 · composer radius 28 · card radius 16
+ *   surface #FFFFFF · muted #F3F3F3 · ink #0D0D0D · ink-2 #8F8F8F
+ *   labels 14px/500 lh20 · pill radius 999 · card radius 16
  *   separation is background contrast, not borders
  *
- * Scope rule: this file owns the three columns and the panel chrome. Panel
- * *content* is still each screen's own render() under its own owner CSS —
- * that is what makes this a re-host rather than a rewrite. Do not add
- * route-specific rules here.
+ * Scope rule: panel *content* stays under each screen's own owner CSS. Do not
+ * add route-specific rules here.
  */
 
-.one {
-  --o-page: #FCFCFC;
-  --o-surface: #FFFFFF;
+:root {
   --o-muted: #F3F3F3;
   --o-muted-2: #EBEBEB;
   --o-ink: #0D0D0D;
   --o-ink-2: #8F8F8F;
-  --o-rail: 244px;
-  --o-panel: 480px;
-  display: grid;
-  grid-template-columns: var(--o-rail) minmax(0, 1fr);
-  height: 100vh;
-  background: var(--o-page);
-  overflow: hidden;
+  --o-panel-w: 460px;
+  --o-panel-w-wide: 46vw;
 }
 
-.one.has-panel { grid-template-columns: var(--o-rail) minmax(0, 1fr) var(--o-panel); }
-.one.has-panel.panel-wide { --o-panel: 52vw; }
+/* ---- mounted into .gd-top ------------------------------------------- */
 
-/* ---- task rail ------------------------------------------------------ */
+.one-topmount { display: flex; align-items: center; gap: 10px; margin-left: auto; }
 
-.one-rail {
-  background: var(--o-page);
-  overflow-y: auto;
-  padding: 10px 10px 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
+.one-quick { display: flex; align-items: center; gap: 4px; flex-wrap: nowrap; }
 
-.one-brand {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 10px 12px;
-  font: 500 14px/20px inherit;
-  color: var(--o-ink);
-}
-
-.one-new {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
+.one-chip {
   border: 0;
   background: var(--o-muted);
-  border-radius: 12px;
-  padding: 9px 12px;
-  font: 500 13px/18px inherit;
+  border-radius: 999px;
+  padding: 5px 11px;
+  font: 500 12.5px/17px inherit;
   color: var(--o-ink);
   cursor: pointer;
-  margin-bottom: 10px;
-}
-
-.one-new:hover { background: var(--o-muted-2); }
-
-.one-sec {
-  font: 500 12px/16px inherit;
-  color: var(--o-ink-2);
-  padding: 12px 10px 6px;
-}
-
-.one-task {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  width: 100%;
-  border: 0;
-  background: none;
-  border-radius: 10px;
-  padding: 8px 10px;
-  text-align: left;
-  cursor: pointer;
-  color: var(--o-ink);
-}
-
-.one-task:hover { background: var(--o-muted); }
-.one-task[aria-current="true"] { background: var(--o-muted-2); }
-.one-task .dot { width: 7px; height: 7px; border-radius: 50%; margin-top: 6px; flex: none; }
-.one-task .body { min-width: 0; flex: 1; }
-.one-task .t {
-  display: block;
-  font: 400 13px/18px inherit;
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
-.one-task .s { display: block; font-size: 11px; line-height: 15px; color: var(--o-ink-2); }
-.o-run { background: #185FA5; }
-.o-ok { background: #3B6D11; }
-.o-stop { background: #A32D2D; }
-.o-wait { background: #854F0B; }
 
-.one-railfoot { margin-top: auto; padding: 10px 4px 0; display: flex; gap: 6px; align-items: center; }
+.one-chip:hover { background: var(--o-muted-2); }
+.one-chip[aria-pressed="true"] { background: var(--o-ink); color: #fff; }
 
-/* ---- conversation column -------------------------------------------- */
-
-.one-chat {
-  background: var(--o-surface);
-  overflow-y: auto;
-  min-width: 0;
-  border-radius: 16px 16px 0 0;
-  margin: 10px 0 0;
+/* The source chip is the only thing on screen that states demo vs real.
+   It is styled to read as a status, not as a quiet preference toggle. */
+.one-source {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  background: var(--o-muted);
+  border: 0;
+  border-radius: 999px;
+  padding: 2px;
+  flex: none;
 }
 
-.one.has-panel .one-chat { border-radius: 16px 0 0 0; }
+.one-source button {
+  border: 0;
+  background: none;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font: 500 12.5px/1 inherit;
+  color: var(--o-ink-2);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
 
-/* Screens written as full-bleed pages root themselves with position: fixed,
-   which would escape this grid and cover the surface. A transform makes the
-   column a containing block for fixed descendants, so those screens lay out
-   inside it without any of them being named here or edited. */
-.one-chat, .one-panelbody { transform: translateZ(0); }
+.one-source button.on { background: #fff; color: var(--o-ink); }
+.one-source.demo-active button.on { background: #FAEEDA; color: #854F0B; }
 
-.one-chat .content,
-.one-chat > * { max-width: 100%; }
+/* ---- panel host inside .gd-aside ------------------------------------ */
 
-/* ---- summoned panel -------------------------------------------------- */
+/* The conversation keeps writing its study workspace into #gdAsideBody on its
+   own schedule, so the panel is a sibling and the workspace is hidden rather
+   than overwritten. Two owners, one element, would race. */
+.gd-aside.has-panel > .gd-aside-head,
+.gd-aside.has-panel > .gd-aside-body,
+.gd-aside.has-panel > .gd-aside-foot { display: none; }
 
-.one-panel {
-  background: var(--o-surface);
-  overflow: hidden;
+/* Size the grid TRACK, not the item — .gd-main is a grid and an item given a
+   width just overflows its own column. */
+.gd-main.threecol.has-panel {
+  grid-template-columns: var(--o-rail-w, 232px) minmax(0, 1fr) var(--o-panel-w);
+}
+
+.gd-main.threecol.has-panel.panel-wide {
+  grid-template-columns: var(--o-rail-w, 232px) minmax(0, 1fr) var(--o-panel-w-wide);
+}
+
+.gd-aside.has-panel {
   display: flex;
   flex-direction: column;
-  margin: 10px 0 0;
-  border-radius: 16px 16px 0 0;
   min-width: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.one-panelhost {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+  /* Panels host screens written as full-bleed pages, which root themselves
+     with position: fixed. A transform makes this the containing block for
+     them, so they lay out inside the panel without being named or edited. */
+  transform: translateZ(0);
 }
 
 .one-panelbar {
@@ -169,33 +139,17 @@
 
 .one-iconbtn:hover { background: var(--o-muted); color: var(--o-ink); }
 
-.one-panelbody { flex: 1; overflow: auto; padding: 0 14px 24px; min-width: 0; }
-
-/* The panel hosts a screen that was written for a full-width page. Give its
-   own container the width and let its owner CSS keep doing the rest. */
-.one-panelbody .content { padding: 0; overflow: visible; }
-
-/* ---- summon affordances --------------------------------------------- */
-
-/* Quick openers sit with the conversation, not in a menu: this is the only
-   way to reach a panel without asking for it in words. */
-.one-quick { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 0 0 10px; }
-
-.one-chip {
-  border: 0;
-  background: var(--o-muted);
-  border-radius: 999px;
-  padding: 6px 12px;
-  font: 500 13px/18px inherit;
-  color: var(--o-ink);
-  cursor: pointer;
-  white-space: nowrap;
+.one-panelbody {
+  flex: 1;
+  overflow: auto;
+  padding: 0 14px 24px;
+  min-width: 0;
 }
 
-.one-chip:hover { background: var(--o-muted-2); }
-.one-chip[aria-pressed="true"] { background: var(--o-ink); color: var(--o-surface); }
+.one-panelbody .content { padding: 0; overflow: visible; }
 
-@media (max-width: 860px) {
-  .one.has-panel { grid-template-columns: var(--o-rail) minmax(0, 1fr); }
-  .one.has-panel .one-panel { display: none; }
+.one-empty { padding: 20px 14px; font-size: 13px; color: var(--o-ink-2); }
+
+@media (max-width: 1180px) {
+  .one-quick { display: none; }
 }
