@@ -74,6 +74,46 @@ TABLE_ONE_CLOSED_OUTPUTS = frozenset(
     }
 )
 
+# The closed set of measurement/missingness audits the host can compute, named
+# by WHAT EACH ONE ANSWERS rather than by the product id a Planner happened to
+# write.  Ownership of an audit step used to be decided by looking the declared
+# product id up in a literal alias table, which made a free-text namespace the
+# gate: over the recorded corpus 162 audit steps -- pure counting work, nothing
+# a model needs to reason about -- lost their deterministic executor purely
+# because the Planner called the product ``lactate_missingness`` or
+# ``data_quality_measurement_status`` instead of a spelling the table already
+# knew.  Adding each new spelling only guarantees the next plan invents one
+# more, so the declaration moves here and the product id becomes a label.
+#
+# The keys are distinguished by CONTENT, not by output filename.  The runner
+# writes the source/availability table to three different filenames, so a rule
+# counting distinct *files* would let one step declare all three, be claimed,
+# and hand its reader the same table three times.  Distinct kinds cannot.
+MEASUREMENT_AUDIT_KINDS = frozenset(
+    {
+        # Per concept: was it measured at all, and how much of the value column
+        # is missing, splitting structural-no-source from measurement-missing.
+        "measurement_missingness",
+        # The same per-concept counts projected to a plain missing-n/missing-%
+        # profile.
+        "missingness_profile",
+        # Per concept: where the value could have come from, including the
+        # measured-flag/value disagreements.
+        "measurement_source",
+        # Per concept: how OFTEN and WHEN it was observed.
+        "measurement_process",
+        # Per event-timed concept: how the event column and its time behave --
+        # present, absent, before the declared origin, time missing.
+        "event_timing",
+        # Per component of a composite score: completeness of each component.
+        "component_completeness",
+        # Rows surviving each analytic filter, as denominators.
+        "analytic_denominators",
+        # Stagewise cohort flow.
+        "cohort_flow",
+    }
+)
+
 
 def _closed_table_one_levels(values: List[Any], *, label: str) -> List[Any]:
     tokens: list[tuple[str, str]] = []
@@ -1176,6 +1216,89 @@ class ExposureOutcomeDistributionSpec(BaseModel):
         return self
 
 
+class MeasurementAuditProduct(BaseModel):
+    """One declared audit product, said in terms of what it answers."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    product_id: str = Field(
+        description=(
+            "The exact declared product id without its `table:` prefix, so the "
+            "step keeps whatever name its reader expects."
+        ),
+    )
+    audit: str = Field(
+        description=(
+            "Which audit this product IS, from the closed set the host can "
+            "compute. This is the contract; `product_id` is only its label."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _exact_product_and_known_audit(self) -> "MeasurementAuditProduct":
+        self.product_id = str(self.product_id or "").strip()
+        if not self.product_id:
+            raise ValueError("measurement audit product_id must be non-empty")
+        if ":" in self.product_id:
+            raise ValueError(
+                "measurement audit product_id is the bare product name; drop "
+                f"the kind prefix from {self.product_id!r}"
+            )
+        self.audit = str(self.audit or "").strip()
+        if self.audit not in MEASUREMENT_AUDIT_KINDS:
+            raise ValueError(
+                f"unknown measurement audit {self.audit!r}; the host computes "
+                f"{sorted(MEASUREMENT_AUDIT_KINDS)!r}"
+            )
+        return self
+
+
+class MeasurementAuditSpec(BaseModel):
+    """Planner-owned statement of which audit each declared product is.
+
+    An audit step is pure counting: nothing in it needs a model to reason, and
+    every one of these products is something the host already computes.  What
+    the host could not do was recognise the step, because recognition was a
+    lookup of the declared product id in a fixed alias table.  This spec removes
+    the name from that decision.
+
+    Two products may not claim the same audit.  Several of the host's audit
+    tables are written under more than one filename, so "distinct file" is not
+    the same statement as "distinct answer": without this rule a step could
+    promise a reader two tables and be satisfied by one table written twice.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["easyicu.measurement_audit/1"] = (
+        "easyicu.measurement_audit/1"
+    )
+    products: List[MeasurementAuditProduct] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _one_product_per_audit(self) -> "MeasurementAuditSpec":
+        ids = [item.product_id for item in self.products]
+        if len(ids) != len(set(ids)):
+            raise ValueError("measurement audit product_id values must be unique")
+        audits = [item.audit for item in self.products]
+        if len(audits) != len(set(audits)):
+            raise ValueError(
+                "each measurement audit may back at most one declared product; "
+                "two products naming the same audit would be one table promised "
+                f"twice ({sorted(audits)!r})"
+            )
+        return self
+
+    def audit_for(self, product_id: str) -> Optional[str]:
+        """Return the declared audit for one bare product id."""
+
+        wanted = str(product_id or "").strip()
+        for item in self.products:
+            if item.product_id == wanted:
+                return item.audit
+        return None
+
+
 class AnalysisStep(BaseModel):
     """One step in a planner-emitted analysis plan."""
 
@@ -1253,6 +1376,16 @@ class AnalysisStep(BaseModel):
                 "the host must not infer that from names or input order."
             ),
         )
+    )
+    measurement_audit_spec: Optional[MeasurementAuditSpec] = Field(
+        default=None,
+        description=(
+            "For a counting-only measurement/missingness audit step: which "
+            "audit each declared table product IS. Declaring it lets the step "
+            "keep whatever product names its reader expects while still being "
+            "executed by the host, instead of being demoted to generated code "
+            "because the name was not one the host had seen before."
+        ),
     )
 
     def required_primary_exposure_sources(self) -> tuple[str, ...]:
@@ -1332,6 +1465,37 @@ class AnalysisStep(BaseModel):
                 raise ValueError(
                     "exposure_outcome_distribution_spec exposure and outcome must "
                     f"be explicit step inputs; missing {missing_spec_inputs!r}"
+                )
+        if self.measurement_audit_spec is not None:
+            declared = [str(value or "").strip() for value in self.expected_outputs]
+            non_tables = sorted(
+                value for value in declared if not value.startswith("table:")
+            )
+            if non_tables:
+                raise ValueError(
+                    "measurement_audit_spec describes table products only; the "
+                    f"step also declares {non_tables!r}, which it cannot back"
+                )
+            declared_products = [value.split(":", 1)[1] for value in declared]
+            unbacked = sorted(
+                product
+                for product in declared_products
+                if self.measurement_audit_spec.audit_for(product) is None
+            )
+            if unbacked:
+                raise ValueError(
+                    "every declared product must say which audit it is; "
+                    f"measurement_audit_spec does not name {unbacked!r}"
+                )
+            undeclared = sorted(
+                item.product_id
+                for item in self.measurement_audit_spec.products
+                if item.product_id not in set(declared_products)
+            )
+            if undeclared:
+                raise ValueError(
+                    "measurement_audit_spec names products the step does not "
+                    f"declare as outputs: {undeclared!r}"
                 )
         consumption_keys = [
             contract.input_key for contract in self.input_consumption_contracts
