@@ -930,13 +930,35 @@ def infer_analysis_type(
     target_outcome = target_outcome or context.target_outcome
     cohort_sensitivity_framed = _cohort_definition_sensitivity_framing(text)
     treatment_response_framed = _treatment_response_framing(text)
+    # A bare "causal" anywhere in the text asserts the causal family, so the
+    # disclaimer that cancels it must be at least as easy to say as the
+    # assertion. It was not: the negation had to be a "not/avoid/without" word
+    # within 40 characters, and it was matched case-sensitively while the
+    # assertion beside it is case-insensitive. A guardrail reading "label the
+    # estimand as observational rather than causal" therefore *selected* the
+    # causal family and imposed a seven-role target-trial contract on a
+    # prevalence question -- the instruction not to be causal was the only
+    # reason it became causal.
+    #
+    # Contrastive negation ("rather than", "instead of", "as opposed to") and
+    # the "non-causal" compound are ordinary English ways to disclaim, so they
+    # belong here rather than in another family-specific gate. This only
+    # cancels the bare-keyword branch: a question that names a causal method
+    # (target trial, propensity, IPTW, ...) still routes to the causal family
+    # through explicit_causal_method_framing below, which is what keeps this
+    # from silently disarming genuine causal work.
     causal_disclaimer = re.search(
         r"\b(?:do\s+not|don't|not|avoid|without)\b.{0,40}\bcausal(?:ity|ly)?\b"
+        r"|\b(?:rather\s+than|instead\s+of|as\s+opposed\s+to)\b"
+        r".{0,30}\bcausal(?:ity|ly)?\b"
+        r"|\bnon-?causal\b"
         r"|\bcausal\s+(?:claim|conclusion|interpretation)\b.{0,24}\b"
         r"(?:not|unsupported|avoid)\b"
         r"|(?:不(?:作|做|进行|用于|支持|解释为?)|避免|无意).{0,24}因果"
-        r"|因果.{0,16}(?:不成立|不支持|不解释)",
+        r"|因果.{0,16}(?:不成立|不支持|不解释)"
+        r"|(?:而非|不是|并非).{0,12}因果",
         text,
+        flags=re.IGNORECASE,
     ) is not None
     explicit_causal_method_framing = any(
         _keyword_present(text, term)

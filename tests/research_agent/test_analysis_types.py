@@ -154,6 +154,60 @@ def test_disclaimed_causal_does_not_hijack_trajectory_clustering(ra):
     assert ra.infer_analysis_type(_ctx(crobust)).key == "causal_inference"
 
 
+def test_contrastive_causal_disclaimers_do_not_select_the_causal_family(ra):
+    """Disclaiming causality must be at least as easy to say as asserting it.
+
+    A bare "causal" anywhere in the text selects the causal family, so the
+    negation that cancels it has to cover the ordinary ways people write one.
+    It did not: the negation had to be a not/avoid/without word within 40
+    characters, and it was matched case-sensitively while the assertion beside
+    it is case-insensitive -- a fail-open asymmetry.
+
+    Measured, not hypothetical: a real prevalence-and-association run was
+    classified ``causal_emulation`` and handed a seven-role target-trial
+    contract because a methods guardrail told it to "label the estimand as
+    observational rather than causal". The single word that made it causal was
+    the instruction not to be.
+
+    The second half of this test is the half that matters: broadening a
+    negation must not disarm genuine causal work.
+    """
+
+    def _ctx(text):
+        return ra.ResearchContext(
+            research_question=text,
+            cohort=ra.CohortDescriptor(
+                cohort_name="c", database="synthetic", n_patients=10, n_stays=10
+            ),
+            variables=[],
+            target_outcome="death",
+        )
+
+    disclaimed = (
+        "Estimate prevalence of an index condition and its association with "
+        "in-hospital mortality with a visible denominator; label the estimand "
+        "as observational rather than causal.",
+        "Report an associational estimate instead of a causal one.",
+        "Summarise the cohort with a non-causal descriptive audit.",
+        "Describe the exposure-outcome distribution. Do Not draw Causal "
+        "conclusions from it.",
+    )
+    for text in disclaimed:
+        assert ra.infer_analysis_type(_ctx(text)).key != "causal_inference", text
+
+    # Naming a causal method still selects the causal family, disclaimer or
+    # not: that is what stops a broader negation from silently downgrading a
+    # real target-trial emulation.
+    causal = (
+        "Estimate the causal effect of early antibiotics on mortality.",
+        "Emulate a target trial of vasopressor timing.",
+        "Compare two strategies using propensity score weighting, rather than "
+        "a causal diagram, and report covariate balance.",
+    )
+    for text in causal:
+        assert ra.infer_analysis_type(_ctx(text)).key == "causal_inference", text
+
+
 def test_existing_cluster_membership_remains_an_association_exposure(ra):
     from easyicu.research_agent.planning.study_design import infer_study_design_family
 
