@@ -1379,11 +1379,17 @@ def test_native_idea_mining_is_first_class_route_and_backend_wired() -> None:
     # and page title (Idea Mining / 想法挖掘), not a third alias.
     assert "Idea Mining" in app_js
     assert "Find a Study Idea" not in app_js
-    assert "Discovery & Plan" in app_js
-    assert "ideas-entry" in app_js
-    assert "paper, PDF, or topic → feasible plan" in app_js
+    # The sidebar's "Discovery & Plan" section label and its ideas-entry card
+    # went away with the console shell swap. What those assertions actually
+    # protected — Idea Mining is a primary destination in its own right, not a
+    # child of the data workspace group — is asserted directly instead.
+    assert "t('Idea Mining', '想法挖掘')" in app_js
+    classic_block = app_js.split("const CLASSIC = [")[1].split("];")[0]
+    assert "'ideas'" not in classic_block
     assert "Agent Projects" in app_js
-    assert "Data & Review" in app_js
+    # "Data & Review" was the sidebar's section heading. The console shell
+    # groups the same four destinations behind one nav entry instead.
+    assert "t('Data Workspace', '数据工作台')" in app_js
     assert "Data Workspace" in app_js
     # The misleading "N / 4" progress counter on the Data Workspace group was
     # removed: patient/cohort/crossdb are parallel review lenses, not sequential
@@ -3316,7 +3322,11 @@ def test_review_breadcrumb_parent_matches_sidebar_group() -> None:
     assert "'Data Visualization'" not in viz_js  # gone as a crumb parent
     assert "'Data Workspace': 'patient'" not in app_js
     assert "CRUMB_NAV" not in app_js  # the group label is not a fake patient link
-    assert 'else node = `<span class="mid">${label}</span>`;' in app_js
+    # Same guarantee, new shell: an intermediate crumb renders as inert text.
+    # Only the first crumb is a link, and it goes home — never to a screen
+    # that merely happens to sit under the same group.
+    assert 'return `<span class="mid">${label}</span><span class="sep">/</span>`;' in app_js
+    assert 'class="crumb-link" data-nav="entry"' in app_js
 
 
 def test_seeded_demo_pipeline_is_named_guided_copilot_and_labeled() -> None:

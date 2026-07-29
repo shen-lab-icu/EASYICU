@@ -1,0 +1,233 @@
+/* console-shell.css — owner: the application shell only.
+ *
+ * Replaces the left sidebar + breadcrumb topbar with a Codex-style top nav and
+ * a centred content column. Tokens below were measured from the running Codex
+ * cloud app rather than approximated:
+ *   page #FCFCFC · surface #FFFFFF · muted #F3F3F3 · ink #0D0D0D · ink-2 #8F8F8F
+ *   top bar 52px · labels 14px/500 lh20 · radii 28 (composer) / 24 / 16 / 12
+ *   separation comes from background contrast, not borders
+ *
+ * Scope rule: this file styles the shell (top nav, column, context strip) and
+ * nothing else. Route content keeps its own owner CSS untouched — the whole
+ * point of the swap is that screens did not change. Do not add route-specific
+ * rules here; add them to that route's owner file.
+ */
+
+.console {
+  --cs-page: #FCFCFC;
+  --cs-surface: #FFFFFF;
+  --cs-muted: #F3F3F3;
+  --cs-muted-2: #EBEBEB;
+  --cs-ink: #0D0D0D;
+  --cs-ink-2: #8F8F8F;
+  min-height: 100vh;
+  background: var(--cs-page);
+}
+
+/* .app still carries the sidebar-era `grid-template-columns: 248px 1fr`.
+   The shell keeps the .app class so screen CSS scoped to it still matches,
+   so the two-column track has to be collapsed here or the top nav is laid
+   out into the vanished sidebar column. */
+.console.app { display: block; }
+.console .main { display: block; min-width: 0; }
+
+/* ---- top nav ------------------------------------------------------- */
+
+.console .cs-nav {
+  height: 52px;
+  background: var(--cs-surface);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 15px;
+  position: sticky;
+  top: 0;
+  z-index: 40;
+}
+
+.console .cs-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: none;
+  border: 0;
+  padding: 6px 8px;
+  border-radius: 8px;
+  font: 500 14px/20px inherit;
+  color: var(--cs-ink);
+  cursor: pointer;
+}
+
+.console .cs-brand:hover { background: var(--cs-muted); }
+
+.console .cs-links { display: flex; align-items: center; gap: 2px; margin-left: 10px; }
+
+.console .cs-link {
+  background: none;
+  border: 0;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font: 500 14px/20px inherit;
+  color: var(--cs-ink-2);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.console .cs-link:hover { background: var(--cs-muted); color: var(--cs-ink); }
+.console .cs-link[aria-current="page"] { color: var(--cs-ink); }
+
+.console .cs-spacer { flex: 1; }
+
+.console .cs-right { display: flex; align-items: center; gap: 6px; }
+
+/* The data-mode control keeps its data-datamode hooks so the existing click
+   delegation and syncShellAccessibility in app.js still find it. */
+.console .cs-nav .mode-seg,
+.console .cs-nav .lang-seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  background: var(--cs-muted);
+  border: 0;
+  border-radius: 16px;
+  padding: 2px;
+  height: 32px;
+}
+
+.console .cs-nav .mode-seg button,
+.console .cs-nav .lang-seg button {
+  border: 0;
+  background: none;
+  height: 28px;
+  padding: 0 11px;
+  border-radius: 14px;
+  font: 500 13px/1 inherit;
+  color: var(--cs-ink-2);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.console .cs-nav .mode-seg button.on,
+.console .cs-nav .lang-seg button.on {
+  background: var(--cs-surface);
+  color: var(--cs-ink);
+}
+
+.console .cs-nav .mode-seg.demo-active button.on { background: #FAEEDA; color: #854F0B; }
+
+.console .cs-guide {
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 16px;
+  border: 0;
+  background: var(--cs-muted);
+  font: 500 13px/1 inherit;
+  color: var(--cs-ink);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.console .cs-guide:hover { background: var(--cs-muted-2); }
+
+/* ---- column -------------------------------------------------------- */
+
+.console .cs-col {
+  width: 100%;
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 0 24px 80px;
+}
+
+.console .cs-col.narrow { max-width: 768px; }
+.console .cs-col.wide { max-width: none; padding-left: 32px; padding-right: 32px; }
+
+.console .cs-head { padding: 26px 0 4px; }
+
+.console .cs-crumbs {
+  font: 400 13px/18px inherit;
+  color: var(--cs-ink-2);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.console .cs-crumbs .crumb-link {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: var(--cs-ink-2);
+  cursor: pointer;
+}
+
+.console .cs-crumbs .crumb-link:hover { color: var(--cs-ink); text-decoration: underline; }
+.console .cs-crumbs .cur { color: var(--cs-ink); font-weight: 500; }
+
+.console .cs-title {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  padding: 6px 0 18px;
+  flex-wrap: wrap;
+}
+
+.console .cs-title h1 { font: 400 26px/34px inherit; margin: 0; color: var(--cs-ink); }
+.console .cs-title .cs-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+
+/* ---- sub-tab row (was the collapsible sidebar group) ---------------- */
+
+.console .cs-sub { display: flex; align-items: center; gap: 4px; padding: 2px 0 18px; }
+
+.console .cs-subitem {
+  background: none;
+  border: 0;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font: 500 13px/18px inherit;
+  color: var(--cs-ink-2);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.console .cs-subitem:hover { background: var(--cs-muted); color: var(--cs-ink); }
+.console .cs-subitem.on { background: var(--cs-ink); color: var(--cs-surface); }
+
+/* ---- context strip (was the sidebar rail) --------------------------- */
+
+/* Screens keep emitting the same rail markup; only its container changed from
+   a vertical sidebar block to a horizontal strip, so no screen had to be
+   edited to move it. */
+.console .cs-strip {
+  background: var(--cs-muted);
+  border-radius: 16px;
+  padding: 12px 16px;
+  margin-bottom: 20px;
+}
+
+.console .cs-strip .rail-sep { display: none; }
+.console .cs-strip .rail-block { display: flex; align-items: center; gap: 22px; flex-wrap: wrap; }
+.console .cs-strip .rail-head { display: flex; align-items: center; gap: 8px; }
+.console .cs-strip .rail-head .t { font: 500 13px/18px inherit; color: var(--cs-ink); }
+.console .cs-strip .setup-row { display: flex; align-items: baseline; gap: 7px; min-width: 0; }
+.console .cs-strip .setup-row .k { font-size: 12px; color: var(--cs-ink-2); white-space: nowrap; }
+.console .cs-strip .setup-row .vv { font-size: 13px; color: var(--cs-ink); }
+.console .cs-strip .btn.block { width: auto; margin: 0 0 0 auto !important; }
+
+/* ---- content ------------------------------------------------------- */
+
+.console .content {
+  background: none;
+  padding: 0;
+  overflow: visible;
+}
+
+@media (max-width: 900px) {
+  .console .cs-links { display: none; }
+  .console .cs-col { padding-left: 16px; padding-right: 16px; }
+}
