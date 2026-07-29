@@ -114,11 +114,43 @@
     'Patient Review': ['Patient Review', '患者审阅'],
     'Cohort Statistics': ['Cohort Statistics', '队列统计'],
     'Cross-database comparison': ['Cross-database comparison', '跨库对比'],
+    'Data Extraction': ['Data Extraction', '数据抽取'],
+    'Agent Projects': ['Agent Projects', '研究项目'],
+    'Data Dictionary': ['Data Dictionary', '数据字典'],
+    'Guided Copilot': ['Guided Copilot', '研究引导'],
     Settings: ['Settings', '设置'],
     'Workspace States': ['Workspace States', '工作区状态'],
   };
   const crumbLabel = (c) => L(CRUMB_LABELS[c] || c);
   window.EU_CRUMB_LABEL = crumbLabel;
+
+  /* The one catalogue of destinations the surface can summon. Entries carry a
+     crumb KEY, never a label, so a rail cannot mint a third alias for a screen
+     that already names itself — inventing "Ideas" next to "Idea Mining" is the
+     exact drift "one destination, one name" exists to stop. Order is the
+     reading order of a study, not alphabetical. */
+  const DESTINATIONS = [
+    { id: 'ideas', crumb: 'Idea Mining', ico: 'target' },
+    { id: 'extraction', crumb: 'Data Extraction', ico: 'extract' },
+    { id: 'patient', crumb: 'Patient Review', ico: 'patient' },
+    { id: 'cohort', crumb: 'Cohort Statistics', ico: 'cohort' },
+    { id: 'crossdb', crumb: 'Cross-database comparison', ico: 'benchmark' },
+    { id: 'agent', crumb: 'Agent Projects', ico: 'agent' },
+    { id: 'dictionary', crumb: 'Data Dictionary', ico: 'list' },
+    { id: 'states', crumb: 'Workspace States', ico: 'layers' },
+  ];
+  window.EU_DESTINATIONS = () => DESTINATIONS.map(
+    (d) => ({ id: d.id, ico: d.ico, label: crumbLabel(d.crumb) }),
+  );
+
+  /* Page guide is shell-global — it explains whichever screen you are looking
+     at — so the shell keeps owning it even though the surface decides where to
+     hang it. It is spelled out against Guided Copilot because the two were read
+     as the same thing: one is a help overlay, the other is the conversation. */
+  window.EU_SHELL_CONTROLS = () => `
+    <button type="button" class="one-ghost" data-cpopen
+      title="${t('Page guide: what this screen does and its safe shortcuts. Not Guided Copilot, which is the conversation that plans the study.', '页面指南：说明当前界面能做什么、有哪些安全快捷操作。它不是研究引导——研究引导是规划研究的那段对话。')}"
+      aria-label="${t('Page guide', '页面指南')}">${icon('spark', 13)}<span>${t('Page guide', '页面指南')}</span></button>`;
   const actionHtmlOf = (scr) => {
     if (!scr) return '';
     return typeof scr.actionHtml === 'function' ? scr.actionHtml() : (scr.actionHtml || '');

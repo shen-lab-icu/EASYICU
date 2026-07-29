@@ -141,10 +141,19 @@ def test_native_assistant_labels_disambiguate_page_guide_guided_copilot_and_agen
     help_js = _static_js("screens-help.js")
     index_html = _static_html("index.html")
 
+    one_js = _static_js("screens-one.js")
     assert "Page guide" in app_js
     assert "页面指南" in app_js
     assert "window.EUPageGuide || window.EUCopilot" in app_js
-    assert "t('Guided Copilot', '研究引导')" in app_js
+    # The two names are still spelled out together in the shell, and the guide
+    # control is still built there — the surface only decides where to hang it,
+    # via EU_SHELL_CONTROLS. A surface that spelled its own label would be free
+    # to drift from the dock's.
+    assert "'Guided Copilot': ['Guided Copilot', '研究引导']" in app_js
+    assert "window.EU_SHELL_CONTROLS" in app_js
+    assert "data-cpopen" in app_js
+    assert "window.EU_SHELL_CONTROLS()" in one_js
+    assert "Page guide" not in one_js
     # One guide surface, one name: the per-screen 'Agent guide' duplicate opened
     # the same dock as the adjacent topbar 'Page guide' button and was removed.
     assert "Agent guide" not in agent_js
@@ -172,7 +181,7 @@ def test_native_assistant_labels_disambiguate_page_guide_guided_copilot_and_agen
     assert "Open Copilot" not in help_js
 
     assert "css/dock.css?v=20260625-stage99" in index_html
-    assert "js/app.js?v=20260728-demo-mode1" in index_html
+    assert "js/app.js?v=20260728-one6" in index_html
     assert "js/copilot-dock.js?v=20260712-ux-fixes" in index_html
     assert "js/screens-extraction.js?v=20260712-ux-fixes" in index_html
     assert "js/screens-agent.js?v=20260712-ux-fixes" in index_html
@@ -315,7 +324,7 @@ def test_native_tutorial_screen_uses_active_language_without_mixed_copy() -> Non
     assert ">No tokens, no setup, no patient data. The demo generates" not in help_js
     assert "How a study moves through EasyICU</h2>" not in help_js
 
-    assert "js/app.js?v=20260728-demo-mode1" in index_html
+    assert "js/app.js?v=20260728-one6" in index_html
     assert "js/screens-help.js?v=20260712-ux-fixes" in index_html
 
 
@@ -341,7 +350,7 @@ def test_native_guided_and_page_guide_messages_are_bilingual() -> None:
         "js/screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
         in index_html
     )
-    assert "js/screens-guided.js?v=20260712-ux-fixes" in index_html
+    assert "js/screens-guided.js?v=20260728-one6" in index_html
     assert "js/copilot-dock.js?v=20260712-ux-fixes" in index_html
 
 
@@ -532,7 +541,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     guided_plan_css = _static_css("guided-idea-plan.css")
     redesign_css = _static_css("redesign.css")
 
-    assert "css/guided.css?v=20260712-ux-fixes" in index_html
+    assert "css/guided.css?v=20260728-one6" in index_html
     assert "css/guided-idea-plan.css?v=20260627-ideas-feasibility-plan" in index_html
     assert "js/api.js?v=20260727-patient-demo2" in index_html
     assert (
@@ -630,7 +639,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert ".gdi-plan-details" in guided_plan_css
     assert ".gdi-feature-row.one" in guided_plan_css
     assert ".gdi-plan-details" not in redesign_css
-    assert "js/screens-guided.js?v=20260712-ux-fixes" in index_html
+    assert "js/screens-guided.js?v=20260728-one6" in index_html
 
 
 def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
@@ -1374,22 +1383,26 @@ def test_native_idea_mining_is_first_class_route_and_backend_wired() -> None:
     shell_css = _static_css("shell.css")
     index_html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
 
-    assert 'data-nav="ideas"' in app_js
-    # One destination, one name: the sidebar carries the same label as the crumb
-    # and page title (Idea Mining / 想法挖掘), not a third alias.
+    one_js = _static_js("screens-one.js")
+    # The sidebar went away with the single-surface swap. What its assertions
+    # protected — Idea Mining is a primary destination in its own right, not a
+    # child of the data workspace group, and it carries the same name as its
+    # crumb and page title — is asserted against the catalogue that replaced it.
+    assert "{ id: 'ideas', crumb: 'Idea Mining', ico: 'target' }," in app_js
     assert "Idea Mining" in app_js
     assert "Find a Study Idea" not in app_js
-    # The sidebar's "Discovery & Plan" section label and its ideas-entry card
-    # went away with the console shell swap. What those assertions actually
-    # protected — Idea Mining is a primary destination in its own right, not a
-    # child of the data workspace group — is asserted directly instead.
-    assert "t('Idea Mining', '想法挖掘')" in app_js
+    assert "'Idea Mining': ['Idea Mining', '想法挖掘']" in app_js
+    assert "window.EU_DESTINATIONS" in app_js
+    # One name, structurally: entries carry a crumb KEY, so the nav that renders
+    # them cannot mint a third alias. The surface must hold no label of its own.
+    assert "window.EU_DESTINATIONS ? window.EU_DESTINATIONS() : []" in one_js
+    assert "想法挖掘" not in one_js
     classic_block = app_js.split("const CLASSIC = [")[1].split("];")[0]
     assert "'ideas'" not in classic_block
     assert "Agent Projects" in app_js
     # "Data & Review" was the sidebar's section heading. The console shell
     # groups the same four destinations behind one nav entry instead.
-    assert "t('Data Workspace', '数据工作台')" in app_js
+    assert "'Data Workspace': ['Data Workspace', '数据工作台']" in app_js
     assert "Data Workspace" in app_js
     # The misleading "N / 4" progress counter on the Data Workspace group was
     # removed: patient/cohort/crossdb are parallel review lenses, not sequential
@@ -1409,12 +1422,21 @@ def test_native_idea_mining_is_first_class_route_and_backend_wired() -> None:
     assert "window.__euRender = render;" not in app_js
     assert "Classic Workspace" not in app_js
     assert "Copilot and Classic share one study" not in app_js
-    assert "Already have data? Start with Extract Data." in app_js
-    assert "wsi-sub" in app_js
+    # The "where do I start" hint outlived the entry screen that carried it and
+    # now sits under the rail's destination list. It still covers all three
+    # openings, and each destination it names is the button that opens it — a
+    # sentence pointing at a menu that no longer exists would be a dead end.
+    # (`wsi-sub`, the sidebar item's subtitle line, went with the sidebar; the
+    # rail is single-line, so the hint is where orientation lives now.)
+    one_js = _static_js("screens-one.js")
+    assert "one-starthint" in one_js
+    assert "Starting from a paper? Open" in one_js
+    assert "Already have data? Open" in one_js
+    assert """data-panel="${id}">${esc(hit.label)}</button>""" in one_js
     assert "css/ideas.css?v=20260630-gate-first-ideas" in index_html
     assert "css/shell.css?v=20260626-owner" in index_html
     assert "js/icons.js?v=20260625-stage84" in index_html
-    assert "js/app.js?v=20260728-demo-mode1" in index_html
+    assert "js/app.js?v=20260728-one6" in index_html
     assert "css/ideas-review.css?v=20260702-idea-review-handoff" in index_html
     assert "css/ideas-connectors.css?v=20260702-zotero-simple" in index_html
     assert "js/screens-ideas-zotero.js?v=20260702-zotero-origin" in index_html
@@ -2283,7 +2305,6 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert "loadGuidedDrafts({ limit: 20 })" in guided_js
     assert "createGuidedDraft(payload)" in guided_js
     assert "removeGuidedDraft" in api_js
-    assert "data-remove-localdraft" in guided_js
     assert "removeLocalGuidedDraft(row)" in guided_js
     assert "delete_project_folder: false" in guided_js
     assert "The project folder on disk was left untouched" in guided_js
@@ -2322,8 +2343,10 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert "Find a Study Idea" in guided_js
     assert "Prepare Data" in guided_js
     assert "Run a Research Project" in guided_js
-    assert "Study folders" in guided_js
-    assert "Conversation memory" in guided_js
+    assert "Study folders" in _static_js("screens-guided-rail.js")
+    # The rail note moved into the rail's own file and says what it is for
+    # in one line instead of a bolded heading plus a sentence.
+    assert "conversation’s memory" in _static_js("screens-guided-rail.js")
     assert "data-localdraft" in guided_js
     assert "Agent run artifacts" not in guided_js
     assert "Read-only results" not in guided_js
@@ -2332,7 +2355,15 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert "data-refreshruns" not in guided_js
     assert "loadAgentRunHistory({ limit: 20 })" not in guided_js
     assert "existing Agent run folder" in guided_js
-    assert ".gd-rail-note" in guided_css
+    # The rail was split into its own owner file when it became the
+    # surface's only persistent navigation; guided.css was 2,375 lines.
+    rail_css = _static_css("guided-rail.css")
+    rail_js = _static_js("screens-guided-rail.js")
+    assert ".gd-rail-note" in rail_css
+    assert "data-remove-localdraft" in rail_js
+    assert "window.EU_GUIDED_RAIL.render(host, {" in guided_js
+    assert "css/guided-rail.css" in index_html
+    assert "js/screens-guided-rail.js" in index_html
     assert "~/easyicu/projects" in guided_js
     assert "/Users/haibo" not in guided_js
     assert "Seeded example · not a local project" not in guided_js
@@ -2428,23 +2459,37 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert 'data-open="entry"' in guided_js
     assert "Back to EasyICU home" in guided_js
     assert 'class="gd-rail-utils"' in guided_js
-    assert 'data-open="settings"' in guided_js
+    # Settings is reachable from the rail foot, now through the surface's one
+    # summon contract (data-panel) rather than the retired shell's data-open.
+    assert 'data-panel="settings"' in guided_js
     assert "data-lang-toggle" in guided_js
     assert "Switch language" in guided_js
-    assert "${t('Data workspace', '数据工作台')}" in guided_js
-    assert ".gd-empty-local" in guided_css
-    assert ".gd-sessline" in guided_css
-    assert ".gd-sess-action" in guided_css
-    assert ".gd-sess.draft.active" in guided_css
-    assert ".gd-sess.local.active" in guided_css
-    assert ".gd-sess.example.active" in guided_css
+    # The rail's own "Data workspace" button is gone: extraction is a first-class
+    # destination in the rail list now, so the button was a second way to the
+    # same place — under a third spelling ("Data workspace" vs the canonical
+    # "Data Extraction" / "Data Workspace").
+    assert "${t('Data workspace', '数据工作台')}" not in guided_js
+    assert ".gd-data-workspace" not in rail_css
+    assert "{ id: 'extraction', crumb: 'Data Extraction', ico: 'extract' }," in _static_js(
+        "app.js"
+    )
+    assert ".gd-empty-local" in rail_css
+    assert ".gd-sessline" in rail_css
+    assert ".gd-sess-action" in rail_css
+    # The selected study folder is still visibly marked. The three per-kind
+    # variants (.local/.draft/.example) collapsed into one rule because only
+    # `draft` rows are ever emitted — grep the static js: `gd-sess draft` is the
+    # sole spelling. Three rules for one rendered kind is how a stylesheet keeps
+    # paying rent on markup that no longer exists.
+    assert ".gd-sess.active" in rail_css
+    assert ".gd-sess.local.active" not in rail_css
+    assert ".gd-sess.example.active" not in rail_css
     assert ".gd-home-link" in guided_css
-    assert ".gd-rail-utils" in guided_css
-    assert ".gd-utilbtn.lang" in guided_css
-    assert ".gd-data-workspace" in guided_css
+    assert ".gd-rail-utils" in rail_css
+    assert ".gd-utilbtn.lang" in rail_css
     assert ".gd-draft-setup" in guided_css
-    assert ".gd-folder-picker" in guided_css
-    assert ".gd-folder-menu" in guided_css
+    assert ".gd-folder-picker" in rail_css
+    assert ".gd-folder-menu" in _static_css("guided-rail.css")
     assert ".gd-folder-dialog" in guided_css
     assert ".gd-folder-tabs" in guided_css
     assert ".gds-known" in guided_css
@@ -2469,8 +2514,9 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
         "screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
         in index_html
     )
-    assert "screens-guided.js?v=20260712-ux-fixes" in index_html
-    assert "guided.css?v=20260712-ux-fixes" in index_html
+    assert "screens-guided.js?v=20260728-one6" in index_html
+    assert "guided.css?v=20260728-one6" in index_html
+    assert "guided-rail.css?v=20260728-one6" in index_html
     assert "gd-name\">${t('Guided Copilot', '研究引导')}</span>" in guided_js
     assert "Guided Copilot · local first · nothing leaves your machine" in guided_js
     assert "[t('Review Data', '审阅已有数据'), '@guidedGoal:review_data']" in guided_js
@@ -3322,11 +3368,15 @@ def test_review_breadcrumb_parent_matches_sidebar_group() -> None:
     assert "'Data Visualization'" not in viz_js  # gone as a crumb parent
     assert "'Data Workspace': 'patient'" not in app_js
     assert "CRUMB_NAV" not in app_js  # the group label is not a fake patient link
-    # Same guarantee, new shell: an intermediate crumb renders as inert text.
-    # Only the first crumb is a link, and it goes home — never to a screen
-    # that merely happens to sit under the same group.
-    assert 'return `<span class="mid">${label}</span><span class="sep">/</span>`;' in app_js
-    assert 'class="crumb-link" data-nav="entry"' in app_js
+    # A single surface has no breadcrumb trail to get wrong: there is one
+    # screen, and a panel is titled by the destination catalogue. The guarantee
+    # that survives is that the title over a review screen is that screen's own
+    # name — resolved from its crumb key, never spelled again by the panel.
+    one_js = _static_js("screens-one.js")
+    assert "'Patient Review': ['Patient Review', '患者审阅']" in app_js
+    assert "{ id: 'patient', crumb: 'Patient Review', ico: 'patient' }," in app_js
+    assert "const hit = destinations().find((d) => d.id === id);" in one_js
+    assert "患者审阅" not in one_js
 
 
 def test_seeded_demo_pipeline_is_named_guided_copilot_and_labeled() -> None:
