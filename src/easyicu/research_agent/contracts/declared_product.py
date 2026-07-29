@@ -779,26 +779,18 @@ def _primary_analysis_cohort_product(raw: object) -> tuple[str, str] | None:
     return None
 
 
-def _declares_reserved_primary_cohort_product(step: AnalysisStep) -> bool:
-    """Return whether a step claims one legacy globally reserved identity."""
+def reserved_primary_cohort_product(raw: object) -> tuple[str, str] | None:
+    """Return the identity of one globally reserved primary-cohort product.
 
-    for raw in step.expected_outputs or []:
-        raw_kind, _, _ = str(raw or "").strip().partition(":")
-        parsed = _primary_analysis_cohort_product(raw)
-        if parsed is None:
-            continue
-        _, name = parsed
-        if name == "analysis_cohort" or (
-            _normalise(raw_kind) == "cohort" and name == "analysis_set"
-        ):
-            return True
-    return False
-
-
-def _primary_analysis_cohort_product_matches_plan(
-    raw: object, *, plan: Any
-) -> tuple[str, str] | None:
-    """Bind a named ``cohort:`` product to the Planner-locked cohort only."""
+    ``analysis_cohort`` is the legacy closed name and ``cohort:analysis_set``
+    is its explicit Planner-facing spelling; both denote the single population
+    the run's cohort authority locked.  Every host surface that decides *which
+    population a step sees* must ask here instead of comparing against one
+    spelling: a surface that recognises only one of them silently hands the
+    step a different population than the surface next to it, which is how a
+    development sample gets bypassed by the typed-input plane while the
+    run-level plane still reports it.
+    """
 
     product = _primary_analysis_cohort_product(raw)
     if product is None:
@@ -809,6 +801,30 @@ def _primary_analysis_cohort_product_matches_plan(
         _normalise(raw_kind) == "cohort" and name == "analysis_set"
     ):
         return product
+    return None
+
+
+def _declares_reserved_primary_cohort_product(step: AnalysisStep) -> bool:
+    """Return whether a step claims one legacy globally reserved identity."""
+
+    return any(
+        reserved_primary_cohort_product(raw) is not None
+        for raw in step.expected_outputs or []
+    )
+
+
+def _primary_analysis_cohort_product_matches_plan(
+    raw: object, *, plan: Any
+) -> tuple[str, str] | None:
+    """Bind a named ``cohort:`` product to the Planner-locked cohort only."""
+
+    product = _primary_analysis_cohort_product(raw)
+    if product is None:
+        return None
+    if reserved_primary_cohort_product(raw) is not None:
+        return product
+    raw_kind, _, _ = str(raw or "").strip().partition(":")
+    _, name = product
     cohort_name = _normalise(getattr(getattr(plan, "cohort", None), "name", None))
     if _normalise(raw_kind) == "cohort" and cohort_name and name == cohort_name:
         return product
@@ -3529,6 +3545,7 @@ __all__ = [
     "effect_estimand_tier",
     "effect_measure_family",
     "effect_role_family",
+    "reserved_primary_cohort_product",
     "typed_product",
     "typed_product_binding_contract",
     "typed_product_schema_receipt",
