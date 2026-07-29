@@ -306,6 +306,11 @@ def fraction_scale_shadow_blocking_finding(
             "mismatch_codes": sorted(
                 {mismatch.code for mismatch in comparison.mismatches}
             ),
+            # The code alone is a label, not a diagnosis: ``normalization_error``
+            # is raised for whichever inner error the canonical normalizer hit,
+            # and that inner code lives only on ``mismatch.detail``. Dropping it
+            # left a real blocked step with nothing to debug.
+            "mismatch_details": [mismatch.detail for mismatch in comparison.mismatches],
             "legacy_finding_count": comparison.legacy_finding_count,
             "canonical_finding_count": comparison.canonical_finding_count,
             "legacy_findings_sha256": comparison.legacy_findings_sha256,

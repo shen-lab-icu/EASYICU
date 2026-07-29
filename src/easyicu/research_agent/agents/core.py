@@ -106,7 +106,7 @@ from ..authority.provider_budget import (
     complete_with_provider_budget,
 )
 from ..authority.table_one_binding import bind_table_one_execution_spec
-from ..repairs.coordination import RepairCoordinator
+from ..repairs.coordination import PatchTransportUnavailable, RepairCoordinator
 from ..repairs.reasons import (
     RepairPromptAuthority,
     RepairReason,
@@ -2165,8 +2165,15 @@ _CODER_TYPED_PATCH_DIAGNOSTIC_BYTE_LIMIT = 768
 _CODER_PATCH_MAX_EXCERPT_CHARS = 5_500
 
 
-class CoderPromptBudgetError(RuntimeError):
-    """The lossless Coder prompt exceeds its provider transport envelope."""
+class CoderPromptBudgetError(PatchTransportUnavailable, RuntimeError):
+    """The lossless Coder prompt exceeds its provider transport envelope.
+
+    Raised from the *patch* preflight, so it means the minimal patch could not
+    be posed -- not that the repair is impossible. It is a
+    ``PatchTransportUnavailable`` so the coordinator falls through to the
+    full-rewrite transport instead of spending the attempt on a prompt that
+    was never sent.
+    """
 
     def __init__(self, *, mode: str, actual_bytes: int, limit_bytes: int) -> None:
         self.mode = str(mode)
