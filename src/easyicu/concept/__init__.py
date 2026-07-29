@@ -110,6 +110,40 @@ def _normalize_source_dur_var_hours(
     return frame
 
 
+def _drop_negative_source_end_durations(
+    frame: pd.DataFrame,
+    *,
+    concept_name: str,
+    source_table: str,
+    column: str = "dur_var",
+) -> pd.DataFrame:
+    """Drop raw end-before-start records before strict duration validation.
+
+    ``resolve_dur_var_hours`` intentionally rejects every negative duration:
+    once a value has reached the generic window layer, it cannot distinguish
+    a corrupt source record from a producer/unit bug.  Here that provenance is
+    still known: ``column`` was just calculated as source end minus source
+    start.  Public ICU datasets contain a handful of such malformed records,
+    so quarantine those rows with an explicit warning while keeping the
+    generic window contract fail-closed for all other negative durations.
+    """
+
+    if column not in frame.columns or frame.empty:
+        return frame
+    values = pd.to_numeric(frame[column], errors="coerce")
+    invalid = values < 0
+    count = int(invalid.sum())
+    if not count:
+        return frame
+    logger.warning(
+        "dropping %d raw end-before-start row(s) for concept %r from table %r",
+        count,
+        concept_name,
+        source_table,
+    )
+    return frame.loc[~invalid].copy()
+
+
 def resolve_window_aggregate(concept_name: str, agg_method):
     """套用概念级窗口聚合覆盖，返回最终的 agg_method（纯函数，便于单测）。
 
@@ -2698,7 +2732,6 @@ class ConceptResolver:
                         # 直接在 DuckDB 中 GROUP BY patientid → MAX(datetime)
                         # 然后与 general 表的 discharge_status 合并
                         import duckdb as _hd_duckdb
-                        bucket_dir = data_source.base_path / 'observations_bucket'
                         _hd_conn = _hd_duckdb.connect()
                         _hd_conn.execute("SET memory_limit = '2GB'")
                         
@@ -2743,11 +2776,15 @@ class ConceptResolver:
                         from .callback_apply import (
                             _refuse_untimed_deaths,
                             deaths_within_cohort,
+                            hirid_observation_read_exprs,
                         )
 
                         _query_pids = deaths_within_cohort(dead_pids, patient_ids)
+                        _hd_read_exprs = hirid_observation_read_exprs(
+                            data_source.base_path
+                        )
 
-                        if _query_pids and not bucket_dir.exists():
+                        if _query_pids and _hd_read_exprs is None:
                             # Patients are recorded as deceased but the table
                             # that times their last observation is not there.
                             # The empty frame the old ``else`` produced is a
@@ -2760,26 +2797,18 @@ class ConceptResolver:
                                 detail=(
                                     f'{len(_query_pids)} patient(s) in this '
                                     'cohort are recorded as deceased but the '
-                                    'observations bucket is missing at '
-                                    f'{bucket_dir}'
+                                    'observations data are missing from both '
+                                    f'{data_source.base_path / "observations_bucket"} '
+                                    'and '
+                                    f'{data_source.base_path / "observations"}'
                                 ),
                             )
-                        if _query_pids and bucket_dir.exists():
-                            # 显式文件列表，过滤 AppleDouble (._*.parquet) — 见 datasource._enumerate_bucket_parquet_files
-                            _hd_files = _enumerate_bucket_parquet_files(bucket_dir)
-                            if _hd_files:
-                                _hd_files_sql = "[" + ", ".join(f"'{f}'" for f in _hd_files) + "]"
-                                # Same bucket dir was produced by one converter run →
-                                # all parquet files share schema. Skip union_by_name=true
-                                # so DuckDB does not pre-sweep 81 files for schema
-                                # reconciliation on slow mounts (the dominant cost
-                                # on macfuse). Fallback below if schemas differ.
-                                _hd_read_expr_fast = f"read_parquet({_hd_files_sql})"
-                                _hd_read_expr_safe = f"read_parquet({_hd_files_sql}, union_by_name=true)"
-                            else:
-                                _hd_glob = _duckdb_path(bucket_dir / 'bucket_id=*' / '*.parquet')
-                                _hd_read_expr_fast = f"read_parquet('{_hd_glob}')"
-                                _hd_read_expr_safe = f"read_parquet('{_hd_glob}', union_by_name=true)"
+                        if _query_pids and _hd_read_exprs is not None:
+                            (
+                                _hd_read_expr_fast,
+                                _hd_read_expr_safe,
+                                _hd_layout,
+                            ) = _hd_read_exprs
                             src_ids = list(source.ids) if hasattr(source.ids, '__iter__') else [source.ids]
                             # Register dead-pid and variableid filters as DuckDB
                             # views so the planner does a true semi-join instead
@@ -3901,6 +3930,12 @@ class ConceptResolver:
                     if dur_is_end:
                         from ..table.duration import UNIT_MINUTES, set_dur_var_unit
 
+                        frame = _drop_negative_source_end_durations(
+                            frame,
+                            concept_name=concept_name,
+                            source_table=source.table,
+                            column=duration_col,
+                        )
                         set_dur_var_unit(frame, UNIT_MINUTES)
                 if "dur_var" in frame.columns and pd.api.types.is_numeric_dtype(
                     frame["dur_var"]

@@ -14,6 +14,7 @@ import threading
 import pandas as pd
 import pytest
 
+from easyicu.concept import _drop_negative_source_end_durations
 from easyicu.api import (
     MAX_WINDOW_EXPANSION_POINTS,
     SOFA_FIXED_CHUNK_SIZE,
@@ -171,6 +172,26 @@ def test_p0_2_corrupt_duration_fails_closed(bad):
     set_dur_var_unit(frame, UNIT_HOURS)
     with pytest.raises(DurationValueError):
         _expand_public_numeric_win_tbl_output(frame, "norepi_rate", "1h")
+
+
+def test_p0_2_known_source_end_before_start_is_quarantined(caplog):
+    """A raw end-minus-start anomaly is dropped before the generic contract."""
+
+    frame = pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3],
+            "dur_var": [60.0, -15.0, float("nan")],
+        }
+    )
+    with caplog.at_level("WARNING", logger="easyicu.concept"):
+        cleaned = _drop_negative_source_end_durations(
+            frame,
+            concept_name="dex",
+            source_table="inputevents_mv",
+        )
+
+    assert cleaned["stay_id"].tolist() == [1, 3]
+    assert "dropping 1 raw end-before-start" in caplog.text
 
 
 def test_p0_2_missing_duration_is_dropped_not_zeroed(caplog):

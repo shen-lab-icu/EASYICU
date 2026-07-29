@@ -20,10 +20,17 @@ Run without ``--run-real``.
 """
 from __future__ import annotations
 
+from types import SimpleNamespace
+
+import pandas as pd
+import pytest
+
 from easyicu.api.extraction import (
     EXTRACT_MODULE_ORDER,
     _SPECIAL_CONCEPT_MODULES,
+    _get_extraction_mp_context,
     _group_modules_for_extraction,
+    _normalise_module_frame_for_parquet,
 )
 from easyicu.api.concepts import _concepts_need_sofa2
 
@@ -108,3 +115,74 @@ def test_sofa2_trigger_detection_matches_loader():
     assert _concepts_need_sofa2(["my_sofa2_delta"]) is True
     # plain SOFA-1 concepts must NOT pull in the sofa2 dictionary
     assert _concepts_need_sofa2(["sofa", "hr", "map"]) is False
+
+
+class _FakeMultiprocessing:
+    def __init__(self, methods=("fork", "spawn")):
+        self.methods = list(methods)
+        self.requested = None
+
+    def get_all_start_methods(self):
+        return list(self.methods)
+
+    def get_context(self, method):
+        self.requested = method
+        return SimpleNamespace(method=method)
+
+
+@pytest.mark.parametrize(
+    "platform_name",
+    ["posix", "nt"],
+)
+def test_extraction_process_default_is_spawn_on_all_platforms(
+    monkeypatch, platform_name
+):
+    monkeypatch.delenv("EASYICU_MP_START_METHOD", raising=False)
+    fake_mp = _FakeMultiprocessing()
+
+    context = _get_extraction_mp_context(
+        fake_mp, platform_name=platform_name
+    )
+
+    assert context.method == "spawn"
+    assert fake_mp.requested == "spawn"
+
+
+def test_expert_can_explicitly_override_spawn_default(monkeypatch):
+    monkeypatch.setenv("EASYICU_MP_START_METHOD", "fork")
+    fake_mp = _FakeMultiprocessing()
+
+    context = _get_extraction_mp_context(fake_mp, platform_name="posix")
+
+    assert context.method == "fork"
+
+
+def test_invalid_extraction_process_method_fails_clearly(monkeypatch):
+    monkeypatch.setenv("EASYICU_MP_START_METHOD", "not-a-method")
+    fake_mp = _FakeMultiprocessing()
+
+    with pytest.raises(ValueError, match="not-a-method"):
+        _get_extraction_mp_context(fake_mp, platform_name="posix")
+
+
+def test_module_parquet_columns_follow_catalog_order_across_hash_seeds():
+    frame = pd.DataFrame(
+        {
+            "patientunitstayid": [1],
+            "charttime": [0.0],
+            "circ_event": [0],
+            "circ_failure": [1],
+        }
+    )
+
+    normalised = _normalise_module_frame_for_parquet(
+        frame,
+        ["circ_failure", "circ_event"],
+    )
+
+    assert list(normalised.columns) == [
+        "patientunitstayid",
+        "charttime",
+        "circ_failure",
+        "circ_event",
+    ]

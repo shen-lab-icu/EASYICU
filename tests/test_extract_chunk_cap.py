@@ -62,6 +62,18 @@ def test_largest_db_at_most_three_chunks():
         assert _n_chunks(200_000, bs) <= 3
 
 
+def test_eicu_heaviest_modules_use_three_batches_on_16gb():
+    """Pin the established laptop-safe eICU contract for the heavy modules."""
+    for module in ("medications", "chemistry"):
+        bs = auto_batch_size(
+            EXTRACT_MODULES[module],
+            "eicu",
+            200_000,
+            available_memory_mb=_STABLE_AVAIL_MB,
+        )
+        assert _n_chunks(200_000, bs) == 3
+
+
 def test_small_cohort_is_one_shot():
     """小队列 / 窄模块应一次性(返回 None)，不做无意义分批。"""
     bs = auto_batch_size(

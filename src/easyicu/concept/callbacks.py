@@ -2212,7 +2212,18 @@ def _callback_bmi(
 ) -> ICUTable:
     merged, id_columns, _ = _merge_tables(tables, ctx=ctx, how="inner")
     if merged.empty:
-        return _as_icutbl(merged, id_columns=id_columns, index_column=None, value_column="bmi")
+        # ``_merge_tables`` guarantees the component columns (weight/height),
+        # not the derived output column.  ICUTable validates its value column
+        # even for an empty frame, so materialise the public BMI schema before
+        # returning structural non-availability.
+        empty = merged[id_columns].copy()
+        empty["bmi"] = pd.Series(dtype="float64")
+        return _as_icutbl(
+            empty,
+            id_columns=id_columns,
+            index_column=None,
+            value_column="bmi",
+        )
 
     weight = merged["weight"]
     height = merged["height"]

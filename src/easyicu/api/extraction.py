@@ -82,6 +82,43 @@ EXTRACT_MODULE_ORDER: List[str] = [
     if module not in _PREFERRED_EXTRACT_MODULE_ORDER
 ]
 
+# Production cohort boundary used by the default extraction contract.  The
+# five smaller public databases stay below this size and run each module in one
+# pass.  A full eICU cohort crosses it and may use up to three large batches.
+ONESHOT_MAX_PATIENTS = 150_000
+
+
+def _get_extraction_mp_context(mp_module, *, platform_name: Optional[str] = None):
+    """Resolve the extraction worker context with a cross-platform safe default.
+
+    Extraction often follows Arrow/DuckDB conversion in the same Python
+    process.  ``fork`` then copies native allocator and thread-pool state into
+    the child: on a production eICU run this inherited about 30 GB of parent
+    state, ran 32% slower, and produced a stale single-source MAP result for
+    495,371 rows.  ``spawn`` starts every worker from a clean interpreter and
+    is already the only supported Windows process model, so use it consistently
+    on Windows, macOS, and Linux.
+
+    ``EASYICU_MP_START_METHOD`` remains an explicit expert override (for
+    example, a controlled Linux-only benchmark).  ``platform_name`` is retained
+    for compatibility with callers/tests that exercise platform contracts.
+    """
+
+    del platform_name
+    default_start_method = "spawn"
+    start_method = (
+        os.environ.get("EASYICU_MP_START_METHOD", default_start_method)
+        .strip()
+        .lower()
+    )
+    available = mp_module.get_all_start_methods()
+    if start_method not in available:
+        raise ValueError(
+            f"unsupported EASYICU_MP_START_METHOD={start_method!r}; "
+            f"available methods: {available}"
+        )
+    return mp_module.get_context(start_method)
+
 # 特殊概念 — 需要专用加载函数而非 load_concepts
 _SPECIAL_CONCEPT_MODULES = {"sepsis3_sofa1", "sepsis3_sofa2"}
 
@@ -317,6 +354,25 @@ def _normalise_module_frame_for_parquet(result, concepts):
     if not isinstance(result, pd.DataFrame) or result.empty:
         return None
     result = result.copy()
+    if result.columns.duplicated().any():
+        result = result.loc[:, ~result.columns.duplicated()]
+
+    # Dedicated concept loaders are routed through sets internally
+    # (KDIGO/circulatory/comorbidity/microbiology).  Their insertion order is
+    # therefore affected by PYTHONHASHSEED and used to change the physical
+    # Parquet schema across fresh processes and operating systems.  The module
+    # catalog is the export contract: keep identifier/time columns in their
+    # established order, then place requested concepts in catalog order.
+    requested = list(dict.fromkeys(concepts))
+    requested_set = set(requested)
+    context_columns = [
+        column for column in result.columns if column not in requested_set
+    ]
+    ordered_columns = context_columns + [
+        column for column in requested if column in result.columns
+    ]
+    result = result.loc[:, ordered_columns]
+
     # Indicator concepts can arrive as bool/float/NA object columns.  Arrow
     # cannot write that mixed representation, while genuine text columns must
     # stay text.
@@ -473,7 +529,6 @@ def _run_module_extraction(
     # 启用。实测最重非 eICU 模块 miiv medications（49 概念 × 9.4万患者）merge=True 一次性
     # 峰值仅 5.44GB，远低于预算；旧内存估算器约 3-5× 高估会把这类模块误判成要分批（见
     # web 端 dataio.py:1657 的同款观察），故对 ≤15万 的库直接跳过估算、强制一次性。
-    ONESHOT_MAX_PATIENTS = 150_000
     _n_ids = 0
     if patient_ids_filter:
         try:
@@ -1361,10 +1416,10 @@ def extract_database(
       * 每组在独立子进程中运行，组退出后 OS 完整回收内存（含 pymalloc
         arena 碎片），主进程 RSS 几乎不增长。group_modules=False 或环境变量
         EASYICU_EXTRACT_GROUPING=0 退回每模块一个子进程的旧行为。
-      * 模块内默认 **不分批、一次性 in-process** 加载：实测单模块峰值 RSS
-        恒定 ~2-3GB(与队列规模无关)，故 16GB 机器也能对任意规模数据库一次性
-        全量提取。仅当一次性确实 OOM(极小内存机器的最大队列)时，worker 自动
-        降级为有界分批。
+      * 五个不超过 15 万患者的数据库默认一次性 in-process 加载；完整 eICU
+        队列超过该边界，按稳定内存预算使用 1–3 个大 batch（16GB 下最重模块
+        为 3 批）。不会切成大量小批而重复扫描共享源表。一次性路径确实 OOM
+        时，worker 仍会降级为最多 3 批。
       * 参考实测：MIMIC-III 全量 61,532 stays 的 SOFA-2 六分量 ~6 分钟。
 
     Args:
@@ -1374,8 +1429,9 @@ def extract_database(
         modules: 要提取的模块列表（None = 全部 19 个模块）
         patient_ids: 患者 ID 列表或 dict（None = 全部患者）
         max_patients: 限制患者数量（与 patient_ids 互斥）
-        batch_size: 模块内患者分批大小。None(默认) = 不分批，一次性 in-process
-            加载(推荐，最快)。仅在极小内存机器上想强制限制峰值内存时才显式传值。
+        batch_size: 模块内患者分批大小。None(默认) = 五个较小数据库一次性
+            in-process 加载；完整 eICU 队列按稳定内存预算使用 1–3 个大批次。
+            仅在需要覆盖默认策略时显式传值。
         group_modules: True(默认) = 共享源表的模块合并为分组子进程并复用
             keep_cache 缓存；False = 每模块一个子进程（旧行为）。
         native_export_v2: True 时，在所有模块成功后基于刚写出的 parquet
@@ -1385,6 +1441,11 @@ def extract_database(
             worker 内合并整模块 DataFrame。用于本地磁盘/内存受限且输出位于
             外置盘的完整导出；会牺牲部分源表复用以换取稳定的峰值内存。
         verbose: 是否打印进度
+
+    Note:
+        提取 worker 在所有平台均使用 ``spawn`` 以隔离 Arrow/DuckDB 原生状态。
+        从独立 Python 脚本调用本函数时，应和 Windows 的 multiprocessing
+        要求一样，把入口放在 ``if __name__ == "__main__":`` 保护中。
 
     Returns:
         dict: {
@@ -1460,13 +1521,16 @@ def extract_database(
 
     num_patients = len(all_ids)
 
-    # 默认 batch_size：不分批。
+    # 默认 batch_size：先以不分批的哨兵值传入 worker；worker 对不超过
+    # ONESHOT_MAX_PATIENTS 的五库保持一次完成，对完整 eICU 队列再按稳定内存
+    # 预算收敛到最多 3 个大 batch。
     # 每个模块已在独立子进程(_extract_module_worker)中运行，模块退出后 OS 完整
     # 回收内存，所以模块间不会累积碎片。实测单模块峰值 RSS 恒定 ~2-3GB(与队列
-    # 规模无关，因为 load_concepts 按源表流式处理)，全量 6 个库都能一次装下。
+    # 规模无关，因为 load_concepts 按源表流式处理)，五个较小数据库能一次装下。
     # 主动分批只会让 load_concepts 每批重读共享源表(chartevents/labevents…)，
     # 数倍变慢——这是用户“怎么这么慢”的根因。故默认用大于任意队列的哨兵值，
-    # 让模块内单次扫表完成。仅在极端机器上由用户显式传 batch_size 覆盖。
+    # 让较小数据库单次扫表完成；eICU 的 worker 会应用三批上限。仅在特殊
+    # 机器/存储条件下由用户显式传 batch_size 覆盖。
     if stream_output_batches:
         # The bounded writer needs real batches.  10K stays keeps the largest
         # MIMIC-IV chart-event module below the host-memory/swap cliff while
@@ -1509,9 +1573,17 @@ def extract_database(
         print(f"{'='*60}")
         print(f"📊 extract_database: {database}")
         print(f"   患者数: {num_patients:,}, 模块数: {len(modules)}")
-        print(
-            f"   批策略: {'一次性 in-process (推荐)' if _auto_one_shot else f'batch_size={batch_size}'}"
-        )
+        if (
+            _auto_one_shot
+            and database == "eicu"
+            and num_patients > ONESHOT_MAX_PATIENTS
+        ):
+            batch_description = "eICU 自适应 1–3 个大 batch（按模块内存估算）"
+        elif _auto_one_shot:
+            batch_description = "一次性 in-process"
+        else:
+            batch_description = f"batch_size={batch_size}"
+        print(f"   批策略: {batch_description}")
         print(f"   RSS: {rss:.0f}MB, 输出: {output_dir or '仅内存'}")
         print(f"{'='*60}")
 
@@ -1527,7 +1599,11 @@ def extract_database(
     normal_modules = [m for m in modules if m not in _SPECIAL_CONCEPT_MODULES]
     special_modules = [m for m in modules if m in _SPECIAL_CONCEPT_MODULES]
 
-    mp_ctx = mp.get_context("fork" if os.name != "nt" else "spawn")
+    # Always start extraction from a clean interpreter.  Forking after Arrow or
+    # DuckDB conversion can inherit allocator/thread-pool state and stale
+    # loader caches from the parent.  The environment override remains for
+    # controlled expert benchmarks.
+    mp_ctx = _get_extraction_mp_context(mp)
 
     # ---- 模块分组：组内共享源表扫描（keep_cache），组间子进程隔离 ----
     group_flag = group_modules and not stream_output_batches
@@ -1550,6 +1626,7 @@ def extract_database(
         """读回单个模块 worker 的 manifest + parquet 输出。"""
         mod_result = {
             "concepts": {},
+            "rows": 0,
             "elapsed": 0.0,
             "errors": [],
             "warnings": [],
@@ -1581,6 +1658,7 @@ def extract_database(
             if not pq_path or not os.path.exists(pq_path):
                 continue
             module_rows = info.get("rows", 0)
+            mod_result["rows"] += module_rows
             concept_meta = info.get("concept_meta", {}) or {}
             concept_names = info.get("concepts") or list(concept_meta.keys())
             # 逐概念 bounds 元数据（provenance）
@@ -1618,9 +1696,19 @@ def extract_database(
         return mod_result
 
     def _count_rows(mod_result: Dict) -> int:
+        """Count physical module rows, not rows repeated once per concept."""
+        if "rows" in mod_result:
+            return int(mod_result["rows"])
+
         n_rows = 0
+        seen_paths = set()
         for v in mod_result["concepts"].values():
             if isinstance(v, dict):
+                path = v.get("path")
+                if path and path in seen_paths:
+                    continue
+                if path:
+                    seen_paths.add(path)
                 n_rows += v.get("rows", 0)
             elif isinstance(v, pd.DataFrame):
                 n_rows += len(v)
@@ -1640,6 +1728,7 @@ def extract_database(
             if manifest is None:
                 mod_result = {
                     "concepts": {},
+                    "rows": 0,
                     "elapsed": 0.0,
                     "errors": [
                         f"{mod_name}: worker produced no manifest (process may have died)"
@@ -1650,6 +1739,7 @@ def extract_database(
             else:
                 mod_result = {
                     "concepts": {},
+                    "rows": 0,
                     "elapsed": sp_elapsed,
                     "errors": manifest.get("errors", []),
                     "warnings": manifest.get("warnings", []),
@@ -1667,6 +1757,7 @@ def extract_database(
                     info = manifest.get("saved", {}).get(c_name)
                     if info and os.path.exists(info["path"]):
                         rows = info.get("rows", 0)
+                        mod_result["rows"] += rows
                         meta = _bounds_metadata_from_manifest_info(info)
                         if meta:
                             mod_result["bounds"][c_name] = meta
@@ -1819,13 +1910,7 @@ def extract_database(
     if verbose:
         rss = get_rss_mb()
         total_concepts = sum(len(m["concepts"]) for m in result["modules"].values())
-        total_rows = 0
-        for m in result["modules"].values():
-            for v in m["concepts"].values():
-                if isinstance(v, dict):
-                    total_rows += v.get("rows", 0)
-                elif isinstance(v, pd.DataFrame):
-                    total_rows += len(v)
+        total_rows = sum(_count_rows(m) for m in result["modules"].values())
         all_errors = [e for m in result["modules"].values() for e in m["errors"]]
         all_warnings = [
             w for m in result["modules"].values() for w in m.get("warnings", [])
@@ -1947,13 +2032,15 @@ def extract_all_databases(
                 print(f"#   {db}: ❌ {r['error']}")
             else:
                 nc = sum(len(m["concepts"]) for m in r["modules"].values())
-                nr = 0
-                for m in r["modules"].values():
-                    for v in m["concepts"].values():
-                        if isinstance(v, dict):
-                            nr += v.get("rows", 0)
-                        elif hasattr(v, "__len__"):
-                            nr += len(v)
+                nr = sum(
+                    int(m.get("rows", 0))
+                    if "rows" in m
+                    else sum(
+                        len(v) if hasattr(v, "__len__") else 0
+                        for v in m["concepts"].values()
+                    )
+                    for m in r["modules"].values()
+                )
                 print(
                     f"#   {db}: {r['num_patients']:,} patients, "
                     f"{nc} concepts, {nr:,} rows, {r['total_elapsed']:.0f}s"

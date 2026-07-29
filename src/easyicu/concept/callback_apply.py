@@ -49,7 +49,7 @@ from __future__ import annotations
 import operator
 import re
 from dataclasses import replace
-from typing import TYPE_CHECKING, List, Optional, Union
+from typing import TYPE_CHECKING, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -73,6 +73,40 @@ if TYPE_CHECKING:
     from . import ConceptResolver
 
 DEBUG_MODE = False
+
+
+def _duckdb_sql_path_literal(path) -> str:
+    """Quote a filesystem path for a DuckDB SQL string literal."""
+
+    normalized = str(path).replace("\\", "/")
+    return "'" + normalized.replace("'", "''") + "'"
+
+
+def hirid_observation_read_exprs(
+    base_path,
+) -> Optional[Tuple[str, str, str]]:
+    """Return DuckDB read expressions for either supported HiRID layout.
+
+    Converted HiRID data may use item buckets (``observations_bucket``) or
+    the public archive's native numbered shards (``observations/N.parquet``).
+    Both contain the same observation schema and can time deaths.
+    """
+    for directory_name in ("observations_bucket", "observations"):
+        directory = base_path / directory_name
+        files = _enumerate_bucket_parquet_files(directory)
+        if not files:
+            continue
+        files_sql = (
+            "["
+            + ", ".join(_duckdb_sql_path_literal(path) for path in files)
+            + "]"
+        )
+        return (
+            f"read_parquet({files_sql})",
+            f"read_parquet({files_sql}, union_by_name=true)",
+            directory_name,
+        )
+    return None
 
 
 def cohort_patient_ids(patient_ids) -> Optional[set]:
@@ -361,28 +395,23 @@ def _apply_callback(
         last_obs = None
         aggregation_error: Optional[BaseException] = None
         if data_source is not None and hasattr(data_source, 'base_path'):
-            bucket_dir = data_source.base_path / 'observations_bucket'
-            if bucket_dir.exists():
+            read_exprs = hirid_observation_read_exprs(data_source.base_path)
+            if read_exprs is not None:
                 try:
                     import duckdb
                     conn = duckdb.connect()
                     conn.execute("SET memory_limit = '2GB'")
-                    # 显式文件列表，过滤 AppleDouble
-                    _ldd_files = _enumerate_bucket_parquet_files(bucket_dir)
                     # 🚀 perf B1 + B2 (hirid_death secondary callback path):
                     # same union_by_name + inline IN list issue as the primary
                     # fast path in load_concepts. Drop union_by_name=true
                     # (same-dir bucket parquets share schema) and register
                     # dead_pids as a DuckDB view rather than a giant inline
                     # IN list. Try/except falls back to safe union_by_name.
-                    if _ldd_files:
-                        _ldd_files_sql = "[" + ", ".join(f"'{f}'" for f in _ldd_files) + "]"
-                        _ldd_read_expr_fast = f"read_parquet({_ldd_files_sql})"
-                        _ldd_read_expr_safe = f"read_parquet({_ldd_files_sql}, union_by_name=true)"
-                    else:
-                        _ldd_glob = _duckdb_path(bucket_dir / 'bucket_id=*' / '*.parquet')
-                        _ldd_read_expr_fast = f"read_parquet('{_ldd_glob}')"
-                        _ldd_read_expr_safe = f"read_parquet('{_ldd_glob}', union_by_name=true)"
+                    (
+                        _ldd_read_expr_fast,
+                        _ldd_read_expr_safe,
+                        _ldd_layout,
+                    ) = read_exprs
                     conn.register(
                         "_ldd_dead_pids",
                         pd.DataFrame({"patientid": list(cohort_dead)}),
