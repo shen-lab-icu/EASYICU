@@ -382,6 +382,23 @@ class StepRepairBudget:
         return True
 
 
+class PatchTransportUnavailable(Exception):
+    """The minimal patch could not be *posed* -- not answered wrongly.
+
+    The distinction decides who pays. A patch the provider answered badly is
+    evidence about the code and rightly spends a repair. A patch the host
+    could not even assemble is evidence about the host, and the full-rewrite
+    transport beside it is still available.
+
+    Measured 2026-07-29: a real E1 primary step lost its last repair to
+    ``CoderPromptBudgetError`` with ``provider_calls: 0``. The preceding repair
+    had produced a 30,105-byte script, so the *patch* prompt built around it
+    crossed its 30,000-byte envelope. Nothing was sent, nothing was answered,
+    and the step died reported as ``repair_failed`` -- pointing at the science
+    rather than at the prompt that was never built.
+    """
+
+
 @dataclass(frozen=True)
 class RepairTransportResult:
     """Result of one mechanical patch/full-rewrite transport transaction."""
@@ -541,21 +558,36 @@ class RepairCoordinator:
         repaired: str
         mode: str
 
+        # Three ways to have no minimal patch, one answer. The patch may be
+        # unaffordable (below), unassemblable (``PatchTransportUnavailable``),
+        # or unusable once answered (``CodePatchError`` further down). Each
+        # falls through to the full-rewrite transport, which carries its own
+        # preflight and its own envelope. Until 2026-07-29 the middle case was
+        # the odd one out and killed the attempt outright: a real E1 primary
+        # step lost its last repair to a prompt that was never built, and was
+        # then reported as ``repair_failed`` -- naming the science instead of
+        # the host.
+        skip_patch_reason: Optional[str] = None
         if self._must_skip_patch():
-            rewrite_reason = (
+            skip_patch_reason = (
                 "minimal patch skipped because only one non-audit provider "
                 "call remained while the mandatory final audit stayed reserved"
             )
+        elif patch_preflight is not None:
+            try:
+                patch_preflight()
+            except PatchTransportUnavailable as preflight_error:
+                skip_patch_reason = str(preflight_error)
+
+        if skip_patch_reason is not None:
             if full_rewrite_preflight is not None:
-                full_rewrite_preflight(rewrite_reason)
+                full_rewrite_preflight(skip_patch_reason)
             raw = self._call(
                 "full_rewrite",
-                lambda: full_rewrite_call(rewrite_reason),
+                lambda: full_rewrite_call(skip_patch_reason),
             )
             repaired, mode = self._parse_full_rewrite(code=code, raw=raw)
         else:
-            if patch_preflight is not None:
-                patch_preflight()
             raw_patch = self._call("patch", patch_call)
             try:
                 repaired = apply_code_patch(code, raw_patch)
@@ -634,6 +666,7 @@ def authorized_deterministic_concept_repair(
 
 __all__ = [
     "REPAIR_AUTHORITY_BINDING_SCHEMA_VERSION",
+    "PatchTransportUnavailable",
     "RepairAuthorityBinding",
     "RepairCoordinator",
     "RepairTransportResult",
