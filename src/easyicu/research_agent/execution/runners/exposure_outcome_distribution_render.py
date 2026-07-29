@@ -2,18 +2,23 @@
 
 This renderer consumes **one** table and nothing else. That is the point of it:
 the product it reads carries its own denominators, missing counts, event counts
-and intervals, so there is no second lookup into a cohort summary to make the
-percentages meaningful. A renderer that needed two tables could not have its
-input contract closed before its parent ran, which is what left the figure
-steps unresolvable in a preflight.
+and intervals, *and* the design that produced them, so there is no second
+lookup into a cohort summary to make the percentages meaningful. A renderer
+that needed two tables could not have its input contract closed before its
+parent ran, which is what left the figure steps unresolvable in a preflight.
 
 It draws what the parent already measured and decides nothing: no cohort, no
-exposure, no outcome, no category, no denominator, no interval.
+exposure, no outcome, no category, no denominator, no interval. What it does do
+is **re-derive** every published quantity from the counts beside it, using the
+method and confidence level the table itself declares, and refuse to draw when
+one disagrees. Recomputing with the producer's own kernel cannot catch a bug in
+that kernel -- the producer verifies itself for that -- but it does catch a
+table that was edited, truncated or rebuilt between the two steps, which is the
+failure this boundary exists to stop.
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 import re
@@ -32,12 +37,17 @@ from ...figures.publication import (
 from ...schema import AnalysisStep
 from .exposure_outcome_distribution_executor import (
     EXPOSURE_OUTCOME_DISTRIBUTION_COLUMNS,
+    EXPOSURE_OUTCOME_DISTRIBUTION_DESIGN_COLUMNS,
     EXPOSURE_OUTCOME_DISTRIBUTION_OUTPUT,
+    percentage,
+    wilson_interval,
 )
 from .figure_input_capability import TypedInputCapability
 from .planner_display_labels import planner_binary_level_labels
+from .typed_input_binding import BoundTypedInput, load_typed_input
 
 __all__ = [
+    "EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_CAPABILITY",
     "EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_INPUT",
     "exposure_outcome_distribution_figure_code",
     "exposure_outcome_distribution_figure_owns_step",
@@ -50,7 +60,7 @@ EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_INPUT = EXPOSURE_OUTCOME_DISTRIBUTION_OUTPU
 #: Planner-owned label that becomes a filename, never a capability claim.
 _FIGURE_PRODUCT_ID = re.compile(r"[a-z][a-z0-9_]{0,127}")
 
-_CAPABILITY = TypedInputCapability(
+EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_CAPABILITY = TypedInputCapability(
     required=frozenset({EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_INPUT}),
 )
 
@@ -77,7 +87,7 @@ def exposure_outcome_distribution_figure_owns_step(step: AnalysisStep) -> bool:
     """Own a rendering-only step whose single typed input is this product."""
 
     products = [_figure_product(value) for value in step.expected_outputs]
-    if not _CAPABILITY.admits_step(step):
+    if not EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_CAPABILITY.admits_step(step):
         return False
     return bool(
         step.planned_analysis_role == "auxiliary"
@@ -124,81 +134,34 @@ def exposure_outcome_distribution_figure_code(
     ).strip()
 
 
-def _canonical_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def _load_binding(
     *,
     run_dir: Path,
     resolved_inputs: Path | Mapping[str, Any],
     step_id: str,
-) -> tuple[pd.DataFrame, Mapping[str, Any], str]:
-    """Read exactly the one bound table, verifying digest and schema."""
+) -> BoundTypedInput:
+    """Read exactly the one bound table through the shared binding owner.
 
-    if isinstance(resolved_inputs, Mapping):
-        payload = dict(resolved_inputs)
-    else:
-        payload = json.loads(Path(resolved_inputs).read_text(encoding="utf-8"))
-    if not isinstance(payload, dict) or payload.get("step_id") != step_id:
-        raise ValueError("resolved-input manifest does not belong to this step")
-    inputs = payload.get("inputs")
-    if (
-        not isinstance(inputs, dict)
-        or set(inputs) != {EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_INPUT}
-        or not isinstance(inputs.get(EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_INPUT), dict)
-    ):
-        raise ValueError("exact distribution-table binding is absent or widened")
-    binding = inputs[EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_INPUT]
-    expected_sha256 = str(binding.get("sha256") or "")
-    relative_path = binding.get("relative_path")
-    product_contract = binding.get("product_contract")
-    consumption = binding.get("consumption_contract")
-    if (
-        not re.fullmatch(r"[0-9a-f]{64}", expected_sha256)
-        or not isinstance(relative_path, str)
-        or not relative_path
-        or not isinstance(product_contract, dict)
-        or not isinstance(consumption, dict)
-        or binding.get("declared_kind") != "table"
-        or consumption.get("input_key") != EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_INPUT
-        or consumption.get("mode") != "all_rows"
-        or consumption.get("artifact_sha256") != expected_sha256
-    ):
-        raise ValueError("distribution-table authority binding is incomplete")
+    There is no separate loader here on purpose. Every check this renderer
+    needs -- one manifest for this step, one input and no other, a capsule that
+    agrees with its own identity record, a contained path, a digest verified
+    before and after the read, and the exact product schema -- is the same
+    question every other typed consumer asks, and a second implementation of it
+    would only guarantee that the two drift.
+    """
 
-    path = (Path(run_dir).resolve() / relative_path).resolve()
-    try:
-        path.relative_to(Path(run_dir).resolve())
-    except ValueError as exc:
-        raise ValueError(
-            "distribution-table binding escapes the run directory"
-        ) from exc
-    if path.is_symlink() or not path.is_file() or path.suffix.lower() != ".csv":
-        raise ValueError("distribution table must be a regular bound CSV")
-    if _canonical_sha256(path) != expected_sha256:
-        raise ValueError("distribution-table digest verification failed")
-
-    columns = product_contract.get("columns")
-    row_count = product_contract.get("row_count")
-    if (
-        columns != list(EXPOSURE_OUTCOME_DISTRIBUTION_COLUMNS)
-        or isinstance(row_count, bool)
-        or not isinstance(row_count, int)
-        or row_count < 3
-    ):
-        raise ValueError("distribution-table product contract is unsupported")
-    frame = pd.read_csv(path)
-    if (
-        list(frame.columns) != list(EXPOSURE_OUTCOME_DISTRIBUTION_COLUMNS)
-        or len(frame) != row_count
-    ):
-        raise ValueError("distribution-table bytes disagree with its product contract")
-    return frame, binding, path.name
+    return load_typed_input(
+        input_key=EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_INPUT,
+        run_dir=Path(run_dir),
+        resolved_inputs=resolved_inputs,
+        step_id=step_id,
+        expected_declared_kind="table",
+        expected_evidence_kind="table",
+        expected_columns=EXPOSURE_OUTCOME_DISTRIBUTION_COLUMNS,
+        exclusive=True,
+        require_consumption_contract=True,
+        minimum_row_count=3,
+    )
 
 
 def _finite(value: Any) -> float | None:
@@ -209,20 +172,94 @@ def _finite(value: Any) -> float | None:
     return parsed if math.isfinite(parsed) else None
 
 
-def _validate(frame: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
-    """Re-check the arithmetic the producer asserted, before drawing it."""
+def _close(left: Any, right: Any) -> bool:
+    """Whether two published quantities agree, both possibly absent."""
 
+    first, second = _finite(left), _finite(right)
+    if first is None or second is None:
+        return first is None and second is None
+    return abs(first - second) <= 1e-6
+
+
+def _declared_design(frame: pd.DataFrame) -> dict[str, Any]:
+    """The one design every row must agree on, or refuse.
+
+    The design columns are constant by construction, so a table whose rows
+    disagree about which outcome value was the event, or at what confidence its
+    intervals were built, is not one table -- and picking either answer would
+    be this renderer deciding something it does not own.
+    """
+
+    design: dict[str, Any] = {}
+    for column in EXPOSURE_OUTCOME_DISTRIBUTION_DESIGN_COLUMNS:
+        values = frame[column].astype("object")
+        distinct = {repr(value) for value in values}
+        if len(distinct) != 1:
+            raise ValueError(
+                f"distribution table rows disagree on {column!r}; the design "
+                "that produced the numbers must be one declaration"
+            )
+        design[column] = values.iloc[0]
+    return design
+
+
+def _validate(frame: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series, dict[str, Any]]:
+    """Re-derive every published quantity before drawing it.
+
+    Not a plausibility check: each percentage is recomputed from the counts on
+    its own row, each interval is rebuilt by the method and confidence level
+    the table declares, and the strata are required to sum to the totals. A
+    rate that merely lands inside its interval is not evidence that it is the
+    right rate.
+    """
+
+    design = _declared_design(frame)
+    interval_method = str(design["interval_method"])
+    if interval_method != "wilson":
+        raise ValueError(
+            f"distribution table declares interval_method={interval_method!r}, "
+            "which this renderer cannot re-derive"
+        )
+    confidence_level = _finite(design["confidence_level"])
+    if confidence_level is None or not (0.5 < confidence_level < 1.0):
+        raise ValueError("distribution table declares an unusable confidence level")
+    denominator_policy = str(design["denominator_policy"])
+    if denominator_policy not in {"all_declared_rows", "observed_outcome_rows"}:
+        raise ValueError("distribution table declares an unknown denominator policy")
+
+    # Selecting the two known roles would silently drop a third: a row nobody
+    # recognises would then be excluded from every sum below and still be drawn.
+    unknown_roles = set(frame["row_role"].astype(str)) - {_LEVEL_ROLE, _OVERALL_ROLE}
+    if unknown_roles:
+        raise ValueError(
+            f"distribution table carries unknown row roles: {sorted(unknown_roles)}"
+        )
     levels = frame[frame["row_role"] == _LEVEL_ROLE]
     overall = frame[frame["row_role"] == _OVERALL_ROLE]
     if len(overall) != 1:
         raise ValueError("distribution table needs exactly one overall row")
     if len(levels) < 2:
         raise ValueError("distribution table needs at least two exposure levels")
+    if levels["exposure_level"].astype(str).duplicated().any():
+        raise ValueError("an exposure level appears more than once")
+    try:
+        declared_levels = json.loads(str(design["exposure_levels_declared"]))
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            "distribution table declares unreadable exposure levels"
+        ) from exc
+    if not isinstance(declared_levels, list) or len(declared_levels) != len(levels):
+        raise ValueError(
+            "distribution table reports a different number of exposure levels "
+            "from the number its own declaration closes over"
+        )
     total = overall.iloc[0]
     if int(levels["n_rows"].sum()) != int(total["n_rows"]):
         raise ValueError("exposure levels do not partition the reported cohort")
-    if int(levels["outcome_events"].sum()) != int(total["outcome_events"]):
-        raise ValueError("level events do not sum to the overall events")
+    for column in ("outcome_events", "outcome_observed_n", "outcome_missing_n"):
+        if int(levels[column].sum()) != int(total[column]):
+            raise ValueError(f"level {column} does not sum to the overall {column}")
+
     for _, row in frame.iterrows():
         if int(row["outcome_observed_n"]) + int(row["outcome_missing_n"]) != int(
             row["n_rows"]
@@ -230,13 +267,58 @@ def _validate(frame: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
             raise ValueError("observed plus missing does not equal the row count")
         if int(row["outcome_events"]) > int(row["outcome_denominator"]):
             raise ValueError("more events than the denominator they are taken over")
+        if int(row["exposure_denominator"]) != int(total["n_rows"]):
+            raise ValueError(
+                "an exposure denominator is not the cohort the table reports"
+            )
+        expected_denominator = (
+            int(row["n_rows"])
+            if denominator_policy == "all_declared_rows"
+            else int(row["outcome_observed_n"])
+        )
+        if int(row["outcome_denominator"]) != expected_denominator:
+            raise ValueError(
+                "an outcome denominator does not follow the declared "
+                f"denominator_policy={denominator_policy!r}"
+            )
+        if not _close(
+            row["exposure_pct"],
+            percentage(int(row["n_rows"]), int(row["exposure_denominator"])),
+        ):
+            raise ValueError("an exposure percentage is not its own counts")
+        if not _close(
+            row["outcome_rate_pct"],
+            percentage(int(row["outcome_events"]), int(row["outcome_denominator"])),
+        ):
+            raise ValueError("an outcome rate is not its own events over denominator")
+        expected_low, expected_high = wilson_interval(
+            int(row["outcome_events"]),
+            int(row["outcome_denominator"]),
+            confidence_level=confidence_level,
+        )
+        if not _close(row["ci_low_pct"], expected_low) or not _close(
+            row["ci_high_pct"], expected_high
+        ):
+            raise ValueError(
+                "a reported interval is not the declared method at the declared "
+                "confidence level"
+            )
+        # Deliberately NOT checked here: that the rate and interval are finite,
+        # that ci_low <= ci_high, and that both lie in 0-100. Each was written,
+        # probed, and removed as unreachable -- the exact re-derivations above
+        # already pin all three quantities to values recomputed from the counts,
+        # so a non-finite or out-of-range endpoint fails the equality check
+        # several lines earlier with a message that names the real disagreement.
+        # A range check downstream of an equality check cannot fire; adding one
+        # back would only look like more safety. If the equality checks are ever
+        # relaxed, these become live again and must return with them.
         rate = _finite(row["outcome_rate_pct"])
         low = _finite(row["ci_low_pct"])
         high = _finite(row["ci_high_pct"])
         if rate is not None and low is not None and high is not None:
             if not (low - 1e-6 <= rate <= high + 1e-6):
                 raise ValueError("a reported rate falls outside its own interval")
-    return levels, total
+    return levels, total, design
 
 
 def _labels(levels: pd.DataFrame, level_labels: tuple[str, str] | None) -> list[str]:
@@ -267,10 +349,11 @@ def run_exposure_outcome_distribution_figure(
         raise ValueError("unsafe or malformed figure product id")
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    frame, binding, source_name = _load_binding(
+    bound = _load_binding(
         run_dir=Path(run_dir), resolved_inputs=resolved_inputs, step_id=step_id
     )
-    levels, total = _validate(frame)
+    frame, binding, source_name = bound.frame, bound.binding, bound.path.name
+    levels, total, design = _validate(frame)
 
     full_source = out_dir / f"{figure_product}_input_source_data.csv"
     prevalence_source = out_dir / f"{figure_product}_prevalence_source_data.csv"
@@ -409,9 +492,15 @@ def run_exposure_outcome_distribution_figure(
         ],
         source_data=[full_source.name, prevalence_source.name, outcome_source.name],
         statistics_note=(
-            "Percentages and intervals are reproduced from the bound parent table; "
-            "the renderer recomputes none of them and introduces no cohort, "
-            "exposure, outcome, denominator, or missing-data decision."
+            "Percentages and intervals are reproduced from the bound parent "
+            "table, which declares them: outcome rates are taken over "
+            f"{design['denominator_policy']} with missing outcomes handled as "
+            f"{design['missing_outcome_policy']}, and intervals are "
+            f"{design['interval_method']} at "
+            f"{float(design['confidence_level']):.3g} coverage. The renderer "
+            "re-derives each published quantity from the counts beside it and "
+            "introduces no cohort, exposure, outcome, denominator, or "
+            "missing-data decision of its own."
         ),
     )
     # The contract is written by the exporter, not here: it decides the export
@@ -442,6 +531,13 @@ def run_exposure_outcome_distribution_figure(
         "source_evidence_id": binding.get("evidence_id"),
         "source_rows_consumed": int(len(frame)),
         "cohort_n": int(total["n_rows"]),
+        # Echoed from the bound table, not re-decided: a reader of the summary
+        # can see which design the drawing was made under without opening the
+        # plan, and a mismatch against the parent is detectable.
+        "declared_design": {
+            key: (float(value) if key == "confidence_level" else str(value))
+            for key, value in design.items()
+        },
         "figure_path": f"{figure_product}.png",
         "figure_contract": contract_path.name,
         "contract_files": [contract_path.name],

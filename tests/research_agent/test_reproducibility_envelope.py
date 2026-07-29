@@ -392,3 +392,30 @@ def test_pipeline_envelope_composes_with_cost_tracking(ra, synthetic_cohort, tmp
     assert len(manifest["cost_records"]) > 0
     # Every envelope call has a matching cost record (same n_calls).
     assert manifest["reproducibility"]["n_calls"] == len(manifest["cost_records"])
+
+
+def test_a_seed_with_no_path_to_the_provider_is_refused(ra, tmp_path) -> None:
+    """A stamped seed that no request carried is a false provenance claim.
+
+    The seed reaches a provider only through the envelope's recording client.
+    With the envelope off the execution identity still recorded ``llm_seed``,
+    so a run advertised a reproducibility guarantee its transport never
+    delivered. Submission profiles enable the envelope, which is why this hid
+    on the development path rather than the paper one.
+    """
+
+    with pytest.raises(ValueError, match="llm_seed is set but"):
+        ra.ResearchAgentPipeline(
+            workdir=tmp_path / "off",
+            llm=ra.MockLLMClient(),
+            llm_seed=7,
+            enable_reproducibility_envelope=False,
+        )
+
+    # The honest combination still constructs.
+    ra.ResearchAgentPipeline(
+        workdir=tmp_path / "on",
+        llm=ra.MockLLMClient(),
+        llm_seed=7,
+        enable_reproducibility_envelope=True,
+    )

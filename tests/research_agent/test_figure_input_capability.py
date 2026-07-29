@@ -203,7 +203,7 @@ def test_every_figure_renderer_requires_each_of_its_inputs_today():
     """
 
     from easyicu.research_agent.execution.runners import (
-        exposure_outcome_distribution_figure_executor as distribution,
+        exposure_outcome_distribution_render as distribution,
         missingness_measurement_figure_executor as missingness,
         prevalence_mortality_figure_executor as mortality,
         prevalence_outcome_figure_executor as prevalence,

@@ -308,3 +308,46 @@ def test_a_bare_reader_never_observes_a_scoped_concept_id() -> None:
         assert not cohort_contract.concept_id_exists("scoped_only")
     finally:
         cohort_contract.clear_cohort_concept_ids()
+
+
+def test_the_batch_runner_scopes_its_cohort_columns_rather_than_registering_them():
+    """Nine cases share one process, so a permanent registration accumulates.
+
+    ``_run_one_arm`` runs once per benchmark case. It used to call
+    ``register_cohort_concept_ids``, which never un-registers, so case N's
+    planner could name a column only case N-1 had materialised, validate
+    against the leaked registry, and fail at execution -- after its provider
+    calls were paid for. This asserts the structure that prevents it rather
+    than the symptom, because the symptom only shows up in a paid batch.
+    """
+
+    import ast
+    from pathlib import Path
+
+    source = Path("tools/run_research_agent_bench.py").read_text()
+    tree = ast.parse(source)
+
+    arm = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "_run_one_arm"
+    )
+    scoped = [
+        item
+        for node in ast.walk(arm)
+        if isinstance(node, ast.With)
+        for item in node.items
+        if isinstance(item.context_expr, ast.Call)
+        and getattr(item.context_expr.func, "id", None) == "cohort_concept_id_scope"
+    ]
+    assert scoped, "_run_one_arm must scope its cohort columns"
+
+    called = {
+        node.func.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    assert "register_cohort_concept_ids" not in called, (
+        "the batch runner must not register cohort columns permanently; "
+        "use cohort_concept_id_scope so each case validates against its own cohort"
+    )

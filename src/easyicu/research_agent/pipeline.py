@@ -1597,6 +1597,22 @@ class ResearchAgentPipeline:
             config.enable_reproducibility_envelope
         )
         self._llm_seed = int(config.llm_seed) if config.llm_seed is not None else None
+        # The seed reaches a provider request through exactly one path: the
+        # envelope's recording client, which forwards it when the inner client
+        # accepts it. With the envelope off there is no such path, yet the
+        # execution identity stamps ``llm_seed`` unconditionally -- so a run
+        # was frozen claiming a seed no request ever carried. Submission
+        # profiles turn the envelope on, so the paper path was honest and only
+        # development runs recorded the false claim; that is the harder case to
+        # notice, not the safer one. Refuse instead of stamping a promise the
+        # transport cannot keep.
+        if self._llm_seed is not None and not self._enable_reproducibility_envelope:
+            raise ValueError(
+                "llm_seed is set but enable_reproducibility_envelope is False: "
+                "the seed would be recorded in the execution identity without "
+                "being sent to any provider request. Enable the envelope, or "
+                "leave llm_seed unset."
+            )
         self._envelope_include_previews = bool(config.envelope_include_previews)
         self._submission_profile_name = config.submission_profile_name
         self._submission_profile_version = config.submission_profile_version

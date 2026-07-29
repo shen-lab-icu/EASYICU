@@ -21,7 +21,7 @@ import pandas as pd
 from ...authority.plausibility import FlagOnlyPlausibilityScope
 from ...schema import AnalysisStep
 from .plausibility_receipt import render_standard_plausibility_receipt_code
-from .typed_cohort_binding import load_step_cohort_frame, run_dir_from_env
+from .typed_input_binding import load_step_cohort_frame, run_dir_from_env
 
 __all__ = [
     "cohort_summary_executor_code",
@@ -177,8 +177,8 @@ def load_cohort_summary_frame(
     """Load the exact bound cohort once, for both the receipt and the summary.
 
     Kept as this module's published name; the rule itself is owned by
-    ``typed_cohort_binding`` so every executor that reads a bound cohort
-    verifies it identically.
+    ``typed_input_binding`` so every executor and renderer that reads a bound
+    artifact verifies it identically.
     """
 
     return load_step_cohort_frame(typed_cohort_input=typed_cohort_input)

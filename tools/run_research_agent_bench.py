@@ -1351,7 +1351,7 @@ def _run_one_arm(
     provider_hard_stop: Optional[Any] = None,
 ) -> Dict[str, Any]:
     from easyicu.research_agent import ResearchAgentPipeline  # type: ignore
-    from easyicu.research_agent.cohort.schema import register_cohort_concept_ids
+    from easyicu.research_agent.cohort.schema import cohort_concept_id_scope
     from easyicu.research_agent.reporting.reporting_checklist import (
         checklist_names_for_kind,
     )
@@ -1363,106 +1363,114 @@ def _run_one_arm(
     # The provided cohort is already materialised; let the planner reference any
     # of its columns in a CTAS predicate without tripping the static dictionary
     # check ("unknown concept_id: <derived column>").
-    register_cohort_concept_ids(
+    #
+    # SCOPED, not registered. This function runs once PER CASE and the whole
+    # batch shares one process, so a permanent registration accumulated every
+    # earlier case's cohort columns: case N's planner could name a column only
+    # case N-1 materialised, pass validation against the leaked registry, and
+    # fail at execution -- after the provider calls were already paid for. The
+    # scope restores the exact prior set on exit, including on failure, so each
+    # case validates against its own cohort and nothing else.
+    with cohort_concept_id_scope(
         list(getattr(item, "cohort_columns", None) or getattr(cohort, "columns", []))
-    )
+    ):
 
-    workdir.mkdir(parents=True, exist_ok=True)
-    # Force the kind-matched reporting checklist(s) so the EMITTED file matches
-    # what the scorecard READS by task kind (single source of truth:
-    # ``checklist_names_for_kind``). Without this the pipeline falls back to
-    # free-text analysis-family inference, which emitted STROBE for the
-    # mortality_prediction task while the scorecard expected TRIPOD+AI — so
-    # reporting_completeness was silently NA on a run that did reach the write
-    # phase (detector/emitter contract mismatch, G-2). ``setdefault`` lets an
-    # explicit pipeline_options override win.
-    opts = dict(pipeline_options or {})
-    opts.setdefault(
-        "reporting_checklist_names",
-        list(checklist_names_for_kind(getattr(item, "kind", None))),
-    )
-    # The authoritative task kind lets the internal phenotype checklist decide
-    # trajectory-item applicability by kind (cross-sectional clustering vs
-    # longitudinal) instead of fragile manuscript wording (M3 false-open).
-    opts.setdefault("task_kind", getattr(item, "kind", None))
-    scientific_contract = getattr(item, "scientific_acceptance_contract", None)
-    if isinstance(scientific_contract, Mapping):
-        required_cohort_mode = str(
-            scientific_contract.get("primary_cohort_selection_mode") or ""
-        ).strip()
-        if required_cohort_mode:
-            opts.setdefault(
-                "required_primary_cohort_selection_mode",
-                required_cohort_mode,
+        workdir.mkdir(parents=True, exist_ok=True)
+        # Force the kind-matched reporting checklist(s) so the EMITTED file matches
+        # what the scorecard READS by task kind (single source of truth:
+        # ``checklist_names_for_kind``). Without this the pipeline falls back to
+        # free-text analysis-family inference, which emitted STROBE for the
+        # mortality_prediction task while the scorecard expected TRIPOD+AI — so
+        # reporting_completeness was silently NA on a run that did reach the write
+        # phase (detector/emitter contract mismatch, G-2). ``setdefault`` lets an
+        # explicit pipeline_options override win.
+        opts = dict(pipeline_options or {})
+        opts.setdefault(
+            "reporting_checklist_names",
+            list(checklist_names_for_kind(getattr(item, "kind", None))),
+        )
+        # The authoritative task kind lets the internal phenotype checklist decide
+        # trajectory-item applicability by kind (cross-sectional clustering vs
+        # longitudinal) instead of fragile manuscript wording (M3 false-open).
+        opts.setdefault("task_kind", getattr(item, "kind", None))
+        scientific_contract = getattr(item, "scientific_acceptance_contract", None)
+        if isinstance(scientific_contract, Mapping):
+            required_cohort_mode = str(
+                scientific_contract.get("primary_cohort_selection_mode") or ""
+            ).strip()
+            if required_cohort_mode:
+                opts.setdefault(
+                    "required_primary_cohort_selection_mode",
+                    required_cohort_mode,
+                )
+        pipeline = ResearchAgentPipeline(
+            workdir=workdir,
+            llm=llm,
+            provider_hard_stop=provider_hard_stop,
+            disable_icu_context=disable_icu_context,
+            **opts,
+        )
+        resolved_resume_run_id = _resolve_resume_run_id(
+            workdir=workdir,
+            reuse_existing=reuse_existing,
+            resume_run_id=resume_run_id,
+        )
+        if resolved_resume_run_id:
+            mode = "selected" if resume_run_id else "interrupted"
+            print(
+                f"[research_agent] resuming {mode} run {resolved_resume_run_id} "
+                f"(step-level checkpoint) for {item.key}/{label}"
             )
-    pipeline = ResearchAgentPipeline(
-        workdir=workdir,
-        llm=llm,
-        provider_hard_stop=provider_hard_stop,
-        disable_icu_context=disable_icu_context,
-        **opts,
-    )
-    resolved_resume_run_id = _resolve_resume_run_id(
-        workdir=workdir,
-        reuse_existing=reuse_existing,
-        resume_run_id=resume_run_id,
-    )
-    if resolved_resume_run_id:
-        mode = "selected" if resume_run_id else "interrupted"
-        print(
-            f"[research_agent] resuming {mode} run {resolved_resume_run_id} "
-            f"(step-level checkpoint) for {item.key}/{label}"
+        started = time.monotonic()
+        database = str(getattr(item, "database", "") or "bench").strip() or "bench"
+        operational_exposure = _operational_exposure_for_item(item)
+        exposure_display_name = getattr(item, "primary_predictor", None) or None
+        normalized_question = re.sub(
+            r"[^a-z0-9]+", "_", str(item.research_question or "").lower()
+        ).strip("_")
+        normalized_display_name = re.sub(
+            r"[^a-z0-9]+", "_", str(exposure_display_name or "").lower()
+        ).strip("_")
+        display_name_is_question_exposed = bool(
+            normalized_display_name
+            and re.search(
+                rf"(?:^|_){re.escape(normalized_display_name)}(?:_|$)",
+                normalized_question,
+            )
         )
-    started = time.monotonic()
-    database = str(getattr(item, "database", "") or "bench").strip() or "bench"
-    operational_exposure = _operational_exposure_for_item(item)
-    exposure_display_name = getattr(item, "primary_predictor", None) or None
-    normalized_question = re.sub(
-        r"[^a-z0-9]+", "_", str(item.research_question or "").lower()
-    ).strip("_")
-    normalized_display_name = re.sub(
-        r"[^a-z0-9]+", "_", str(exposure_display_name or "").lower()
-    ).strip("_")
-    display_name_is_question_exposed = bool(
-        normalized_display_name
-        and re.search(
-            rf"(?:^|_){re.escape(normalized_display_name)}(?:_|$)",
-            normalized_question,
+        concept_descriptions = (
+            {str(operational_exposure): str(exposure_display_name)}
+            if operational_exposure
+            and exposure_display_name
+            and display_name_is_question_exposed
+            else None
         )
-    )
-    concept_descriptions = (
-        {str(operational_exposure): str(exposure_display_name)}
-        if operational_exposure
-        and exposure_display_name
-        and display_name_is_question_exposed
-        else None
-    )
-    result = pipeline.run(
-        question=item.research_question,
-        cohort=cohort,
-        cohort_authority_path=getattr(item, "cohort_authority_path", None),
-        cohort_authority_ref=getattr(item, "cohort_authority_ref", None),
-        trajectory_path=getattr(item, "trajectory_path", None),
-        trajectory_authority_path=getattr(item, "trajectory_authority_path", None),
-        trajectory_authority_ref=getattr(item, "trajectory_authority_ref", None),
-        cohort_name=f"bench_{item.key}",
-        database=database,
-        target_outcome=item.target_outcome,
-        primary_exposure=operational_exposure,
-        concept_descriptions=concept_descriptions,
-        inclusion_criteria=item.inclusion_criteria,
-        id_columns=(getattr(item, "id_columns", None) or None),
-        user_preferences=task_protocol_preferences_for_item(item),
-        notes=task_protocol_note_for_item(item),
-        resume_run_id=resolved_resume_run_id,
-        resume_from_step_id=resume_from_step_id,
-        stop_after_step_id=stop_after_step_id,
-        force_writer_probe=bool(force_writer_probe),
-    )
-    elapsed = time.monotonic() - started
-    score = _score_arm(run_dir=Path(result.workdir), item=item, label=label)
-    score["elapsed_seconds"] = round(elapsed, 2)
-    return score
+        result = pipeline.run(
+            question=item.research_question,
+            cohort=cohort,
+            cohort_authority_path=getattr(item, "cohort_authority_path", None),
+            cohort_authority_ref=getattr(item, "cohort_authority_ref", None),
+            trajectory_path=getattr(item, "trajectory_path", None),
+            trajectory_authority_path=getattr(item, "trajectory_authority_path", None),
+            trajectory_authority_ref=getattr(item, "trajectory_authority_ref", None),
+            cohort_name=f"bench_{item.key}",
+            database=database,
+            target_outcome=item.target_outcome,
+            primary_exposure=operational_exposure,
+            concept_descriptions=concept_descriptions,
+            inclusion_criteria=item.inclusion_criteria,
+            id_columns=(getattr(item, "id_columns", None) or None),
+            user_preferences=task_protocol_preferences_for_item(item),
+            notes=task_protocol_note_for_item(item),
+            resume_run_id=resolved_resume_run_id,
+            resume_from_step_id=resume_from_step_id,
+            stop_after_step_id=stop_after_step_id,
+            force_writer_probe=bool(force_writer_probe),
+        )
+        elapsed = time.monotonic() - started
+        score = _score_arm(run_dir=Path(result.workdir), item=item, label=label)
+        score["elapsed_seconds"] = round(elapsed, 2)
+        return score
 
 
 def _run_one_item(

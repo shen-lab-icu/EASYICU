@@ -2,8 +2,13 @@
 
 Every scientific choice is the Planner's. These tests pin that: the executor
 must refuse a step that has not declared the design, must never infer the
-exposure from names or input order, and must produce a product a renderer can
-draw without a second table.
+exposure from names or input order, must never read an unbound cohort, and must
+produce a product a renderer can draw *and re-check* without a second table.
+
+The sharpest of these are the negative tests. A distribution executor fails
+quietly rather than loudly -- an undeclared outcome value is observed, is not
+the event, and would be counted as a non-event unless something refuses it --
+so the tests that matter most are the ones proving it refuses.
 
 The case used throughout is deliberately *not* the benchmark item -- a drug
 exposure and a readmission outcome -- so a production branch that recognised
@@ -24,11 +29,16 @@ from easyicu.research_agent.execution.runners.exposure_outcome_distribution_exec
     exposure_outcome_distribution_executor_code,
     exposure_outcome_distribution_executor_owns_step,
     run_exposure_outcome_distribution_from_env,
+    wilson_interval,
 )
 from easyicu.research_agent.execution.runners.selection import (
     select_standard_executor,
 )
-from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+from easyicu.research_agent.schema import (
+    AnalysisPlan,
+    AnalysisStep,
+    ExposureOutcomeDistributionSpec,
+)
 
 STEP_ID = "03_drug_readmission_distribution"
 EXPOSURE = "anticoagulant_exposed"
@@ -38,8 +48,12 @@ _SPEC = {
     "exposure": EXPOSURE,
     "exposure_levels": [0, 1],
     "outcome": OUTCOME,
+    "outcome_levels": [0, 1],
     "outcome_positive_value": 1,
+    "level_match_policy": "exact_typed",
     "denominator_policy": "all_declared_rows",
+    "missing_outcome_policy": "structural_absence_is_non_event",
+    "confidence_level": 0.95,
 }
 
 
@@ -66,17 +80,29 @@ def _cohort(tmp_path: Path, frame: pd.DataFrame) -> tuple[Path, Path]:
     out_dir.mkdir(parents=True)
     cohort_path = run_dir / "cohort.parquet"
     frame.to_parquet(cohort_path, index=False)
+    digest = hashlib.sha256(cohort_path.read_bytes()).hexdigest()
     manifest = {
+        "step_id": STEP_ID,
         "inputs": {
             "artifact:analysis_cohort": {
                 "relative_path": "cohort.parquet",
-                "sha256": hashlib.sha256(cohort_path.read_bytes()).hexdigest(),
+                "sha256": digest,
+                "declared_kind": "artifact",
+                "product": "analysis_cohort",
+                "evidence_id": "ev-cohort",
+                "identity_row": {
+                    "input_key": "artifact:analysis_cohort",
+                    "declared_kind": "artifact",
+                    "product": "analysis_cohort",
+                    "evidence_id": "ev-cohort",
+                    "sha256": digest,
+                },
                 "product_contract": {
                     "columns": list(frame.columns),
                     "row_count": int(len(frame)),
                 },
             }
-        }
+        },
     }
     manifest_path = run_dir / "resolved_inputs.json"
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
@@ -93,6 +119,17 @@ def _run(monkeypatch, tmp_path: Path, frame: pd.DataFrame, **spec_updates) -> di
     return run_exposure_outcome_distribution_from_env(
         spec_payload={**_SPEC, **spec_updates},
         typed_cohort_input="artifact:analysis_cohort",
+    )
+
+
+def _table(summary: dict, root: Path) -> pd.DataFrame:
+    return pd.read_csv(
+        root
+        / "run"
+        / "steps"
+        / STEP_ID
+        / "outputs"
+        / summary["output_files"]["table:exposure_outcome_distribution"]
     )
 
 
@@ -134,6 +171,30 @@ def test_a_step_without_the_spec_is_never_claimed() -> None:
         exposure_outcome_distribution_executor_code(step)
 
 
+def test_a_step_with_no_typed_cohort_input_is_never_claimed() -> None:
+    """No binding, no ownership -- there is no unbound-cohort fallback.
+
+    A cohort handed over as a bare path has no digest, no product contract and
+    no named producer, so a table counted from it cannot be bound to the plan
+    that asked for it. Claiming the step anyway would put an unverifiable
+    number into the run under a deterministic label.
+    """
+
+    step = _step(inputs=[EXPOSURE, OUTCOME])
+    assert not exposure_outcome_distribution_executor_owns_step(step)
+    with pytest.raises(ValueError):
+        exposure_outcome_distribution_executor_code(step)
+
+
+def test_the_runtime_refuses_an_unbound_cohort_too() -> None:
+    """The runtime entry point re-checks; it does not trust its caller."""
+
+    with pytest.raises(RuntimeError, match="requires an exact typed cohort binding"):
+        run_exposure_outcome_distribution_from_env(
+            spec_payload=_SPEC, typed_cohort_input=""
+        )
+
+
 def test_a_scientific_or_widened_contract_is_refused() -> None:
     assert not exposure_outcome_distribution_executor_owns_step(
         _step(planned_analysis_role="primary")
@@ -160,6 +221,59 @@ def test_the_executor_carries_no_case_specific_branch() -> None:
 
 
 # --------------------------------------------------------------------------
+# The declaration must be closed before it is executed
+# --------------------------------------------------------------------------
+
+
+def test_a_positive_value_outside_the_closed_outcome_set_is_refused() -> None:
+    """Otherwise every remaining level is a non-event by omission."""
+
+    with pytest.raises(ValueError, match="must be one of outcome_levels"):
+        ExposureOutcomeDistributionSpec.model_validate(
+            {**_SPEC, "outcome_levels": [0, 1], "outcome_positive_value": 2}
+        )
+
+
+def test_a_positive_value_of_the_wrong_type_is_refused() -> None:
+    """``1`` and ``"1"`` are different declarations, so the check is typed."""
+
+    with pytest.raises(ValueError, match="must be one of outcome_levels"):
+        ExposureOutcomeDistributionSpec.model_validate(
+            {**_SPEC, "outcome_levels": ["0", "1"], "outcome_positive_value": 1}
+        )
+
+
+@pytest.mark.parametrize(
+    ("missing_policy", "denominator_policy"),
+    [
+        ("exclude_from_denominator", "all_declared_rows"),
+        ("structural_absence_is_non_event", "observed_outcome_rows"),
+    ],
+)
+def test_contradictory_missing_and_denominator_policies_are_refused(
+    missing_policy: str, denominator_policy: str
+) -> None:
+    """Complete-case and carry-the-missing are opposite denominators."""
+
+    with pytest.raises(ValueError, match="requires denominator_policy"):
+        ExposureOutcomeDistributionSpec.model_validate(
+            {
+                **_SPEC,
+                "missing_outcome_policy": missing_policy,
+                "denominator_policy": denominator_policy,
+            }
+        )
+
+
+def test_the_confidence_level_must_be_declared() -> None:
+    """No coverage is hard-coded, so the study has to state one."""
+
+    payload = {key: value for key, value in _SPEC.items() if key != "confidence_level"}
+    with pytest.raises(ValueError):
+        ExposureOutcomeDistributionSpec.model_validate(payload)
+
+
+# --------------------------------------------------------------------------
 # The product
 # --------------------------------------------------------------------------
 
@@ -177,17 +291,10 @@ def _frame() -> pd.DataFrame:
 
 
 def test_the_product_is_self_contained(monkeypatch, tmp_path: Path) -> None:
-    """A renderer must not need a second table to draw this."""
+    """A renderer must not need a second table, nor the spec, to check this."""
 
     summary = _run(monkeypatch, tmp_path, _frame())
-    table = pd.read_csv(
-        tmp_path
-        / "run"
-        / "steps"
-        / STEP_ID
-        / "outputs"
-        / summary["output_files"]["table:exposure_outcome_distribution"]
-    )
+    table = _table(summary, tmp_path)
     assert list(table.columns) == list(EXPOSURE_OUTCOME_DISTRIBUTION_COLUMNS)
 
     exposed = table[
@@ -209,6 +316,36 @@ def test_the_product_is_self_contained(monkeypatch, tmp_path: Path) -> None:
     assert overall["outcome_events"] == 4
     assert overall["outcome_missing_n"] == 2
 
+    # The design travels with the numbers, identically on every row.
+    assert exposed["outcome_column"] == OUTCOME
+    declared_outcome_levels = json.loads(exposed["outcome_levels_declared"])
+    assert declared_outcome_levels == [0, 1]
+    # The event is identified by position, because a CSV cell cannot tell 1
+    # from "1" and that is exactly the distinction the level policy protects.
+    assert declared_outcome_levels[int(exposed["outcome_positive_index"])] == 1
+    assert exposed["missing_outcome_policy"] == "structural_absence_is_non_event"
+    assert exposed["confidence_level"] == pytest.approx(0.95)
+    assert table["denominator_policy"].nunique() == 1
+
+
+def test_the_declared_confidence_level_is_the_one_reported(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """No 95% is baked in: a different declaration produces a wider interval."""
+
+    narrow = _table(_run(monkeypatch, tmp_path / "a", _frame()), tmp_path / "a")
+    wide = _table(
+        _run(monkeypatch, tmp_path / "b", _frame(), confidence_level=0.99),
+        tmp_path / "b",
+    )
+    narrow_row = narrow[narrow["row_role"] == "overall"].iloc[0]
+    wide_row = wide[wide["row_role"] == "overall"].iloc[0]
+    assert wide_row["ci_low_pct"] < narrow_row["ci_low_pct"]
+    assert wide_row["ci_high_pct"] > narrow_row["ci_high_pct"]
+    assert (wide_row["ci_low_pct"], wide_row["ci_high_pct"]) == pytest.approx(
+        wilson_interval(4, 20, confidence_level=0.99)
+    )
+
 
 def test_the_denominator_policy_changes_the_reported_rate(
     monkeypatch, tmp_path: Path
@@ -221,17 +358,11 @@ def test_the_denominator_policy_changes_the_reported_rate(
         tmp_path / "b",
         _frame(),
         denominator_policy="observed_outcome_rows",
+        missing_outcome_policy="exclude_from_denominator",
     )
 
     def _exposed_rate(summary: dict, root: Path) -> float:
-        table = pd.read_csv(
-            root
-            / "run"
-            / "steps"
-            / STEP_ID
-            / "outputs"
-            / summary["output_files"]["table:exposure_outcome_distribution"]
-        )
+        table = _table(summary, root)
         row = table[
             (table["row_role"] == "exposure_level") & (table["exposure_level"] == 1)
         ].iloc[0]
@@ -247,42 +378,121 @@ def test_the_declared_event_value_is_honoured_not_assumed(
     """A binary outcome is not always encoded 1/0."""
 
     frame = pd.DataFrame({EXPOSURE: [1, 1, 0, 0], OUTCOME: ["yes", "no", "yes", "no"]})
-    summary = _run(monkeypatch, tmp_path, frame, outcome_positive_value="yes")
-    table = pd.read_csv(
-        tmp_path
-        / "run"
-        / "steps"
-        / STEP_ID
-        / "outputs"
-        / summary["output_files"]["table:exposure_outcome_distribution"]
+    summary = _run(
+        monkeypatch,
+        tmp_path,
+        frame,
+        outcome_levels=["no", "yes"],
+        outcome_positive_value="yes",
+        missing_outcome_policy="fail_closed",
     )
+    table = _table(summary, tmp_path)
     assert int(table[table["row_role"] == "overall"].iloc[0]["outcome_events"]) == 2
 
 
-def test_a_row_matching_no_declared_level_fails_closed(
+# --------------------------------------------------------------------------
+# What must fail closed
+# --------------------------------------------------------------------------
+
+
+def test_an_undeclared_outcome_value_fails_closed(monkeypatch, tmp_path: Path) -> None:
+    """The defect this closed set exists for.
+
+    A ``2`` in a column believed to be 0/1 is observed and is not the event, so
+    without a closed outcome set it is counted as a non-event: the rate drops,
+    the table still balances, and nothing downstream can tell.
+    """
+
+    frame = pd.DataFrame({EXPOSURE: [0, 0, 1, 1], OUTCOME: [0, 1, 2, 1]})
+    with pytest.raises(RuntimeError, match="not one of the declared outcome levels"):
+        _run(monkeypatch, tmp_path, frame, missing_outcome_policy="fail_closed")
+
+
+def test_the_refusal_does_not_echo_the_undeclared_values(
     monkeypatch, tmp_path: Path
 ) -> None:
-    """Neither dropped nor pooled: the spec says fail closed, so it fails."""
+    """Counts make the failure actionable; the values are cohort data.
 
-    frame = pd.DataFrame({EXPOSURE: [0, 1, 2], OUTCOME: [0, 1, 0]})
-    with pytest.raises(RuntimeError, match="do not match any declared exposure level"):
-        _run(monkeypatch, tmp_path, frame)
+    A mis-declared column could be a continuous measurement, so the message
+    reports how many rows and how many distinct values were undeclared and
+    stops there.
+    """
+
+    frame = pd.DataFrame({EXPOSURE: [0, 1], OUTCOME: [0, 987654]})
+    with pytest.raises(RuntimeError) as excinfo:
+        _run(monkeypatch, tmp_path, frame, missing_outcome_policy="fail_closed")
+    assert "987654" not in str(excinfo.value)
+    assert "1 distinct undeclared" in str(excinfo.value)
 
 
-def test_a_numeric_level_matches_a_numerically_stored_column(
+def test_a_boolean_column_is_not_absorbed_by_numeric_levels(
     monkeypatch, tmp_path: Path
 ) -> None:
-    """A declared numeric level matches the same number however it is stored.
+    """``True == 1`` in Python; a study's variables are not interchangeable.
 
-    Deliberate, and worth stating: a prepared column may arrive string-typed,
-    and refusing it would fail-close a run whose design is entirely correct.
-    What must not happen is matching a *different* category, which the next
-    test covers.
+    Without this, a boolean column answers levels declared ``0``/``1`` and the
+    table reports a different variable from the one the plan declared.
+    """
+
+    frame = pd.DataFrame({EXPOSURE: [True, False], OUTCOME: [0, 1]})
+    with pytest.raises(RuntimeError, match="not one of the declared exposure levels"):
+        _run(monkeypatch, tmp_path, frame, missing_outcome_policy="fail_closed")
+
+
+def test_a_boolean_declaration_matches_only_a_boolean_column(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """And the mirror: numeric rows never answer a boolean level."""
+
+    boolean_frame = pd.DataFrame({EXPOSURE: [True, False], OUTCOME: [0, 1]})
+    summary = _run(
+        monkeypatch,
+        tmp_path / "ok",
+        boolean_frame,
+        exposure_levels=[False, True],
+        missing_outcome_policy="fail_closed",
+    )
+    assert summary["cohort_n"] == 2
+
+    numeric_frame = pd.DataFrame({EXPOSURE: [1, 0], OUTCOME: [0, 1]})
+    with pytest.raises(RuntimeError, match="not one of the declared exposure levels"):
+        _run(
+            monkeypatch,
+            tmp_path / "refused",
+            numeric_frame,
+            exposure_levels=[False, True],
+            missing_outcome_policy="fail_closed",
+        )
+
+
+def test_numeric_string_equivalence_is_declared_not_assumed(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """A prepared column may store codes as text -- but that is a declaration.
+
+    Under ``exact_typed`` the same data fails closed. Silently coercing would
+    make the policy field decorative and would mean the host, not the study,
+    decided what counts as the same value.
     """
 
     frame = pd.DataFrame({EXPOSURE: ["0", "1"], OUTCOME: [0, 1]})
-    summary = _run(monkeypatch, tmp_path, frame)
+    summary = _run(
+        monkeypatch,
+        tmp_path / "declared",
+        frame,
+        level_match_policy="numeric_string_equivalent",
+        missing_outcome_policy="fail_closed",
+    )
     assert summary["cohort_n"] == 2
+
+    with pytest.raises(RuntimeError, match="not one of the declared exposure levels"):
+        _run(
+            monkeypatch,
+            tmp_path / "exact",
+            frame,
+            level_match_policy="exact_typed",
+            missing_outcome_policy="fail_closed",
+        )
 
 
 def test_a_differently_categorised_column_fails_closed(
@@ -291,8 +501,44 @@ def test_a_differently_categorised_column_fails_closed(
     """Levels declared 0/1 must not quietly absorb a yes/no column."""
 
     frame = pd.DataFrame({EXPOSURE: ["yes", "no"], OUTCOME: [0, 1]})
-    with pytest.raises(RuntimeError, match="do not match any declared exposure level"):
-        _run(monkeypatch, tmp_path, frame)
+    with pytest.raises(RuntimeError, match="not one of the declared exposure levels"):
+        _run(
+            monkeypatch,
+            tmp_path,
+            frame,
+            level_match_policy="numeric_string_equivalent",
+            missing_outcome_policy="fail_closed",
+        )
+
+
+def test_a_missing_exposure_is_diagnosed_as_missing_not_as_an_odd_category(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Both stop the step, but they send a reader to different places.
+
+    Folding a missing exposure into the undeclared-level message would have
+    someone hunting for a stray category code that does not exist.
+    """
+
+    frame = pd.DataFrame({EXPOSURE: [0, 1, None], OUTCOME: [0, 1, 0]})
+    with pytest.raises(RuntimeError, match="no observed value") as excinfo:
+        _run(monkeypatch, tmp_path, frame, missing_outcome_policy="fail_closed")
+    assert "not one of the declared" not in str(excinfo.value)
+    assert EXPOSURE in str(excinfo.value)
+
+
+def test_a_missing_outcome_under_fail_closed_stops_the_step(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """A study that declared no missingness must not silently acquire some."""
+
+    with pytest.raises(RuntimeError, match="no observed value"):
+        _run(
+            monkeypatch,
+            tmp_path,
+            _frame(),
+            missing_outcome_policy="fail_closed",
+        )
 
 
 def test_a_cohort_whose_digest_does_not_match_is_refused(
@@ -301,12 +547,52 @@ def test_a_cohort_whose_digest_does_not_match_is_refused(
     run_dir, out_dir = _cohort(tmp_path, _frame())
     manifest_path = run_dir / "resolved_inputs.json"
     payload = json.loads(manifest_path.read_text())
-    payload["inputs"]["artifact:analysis_cohort"]["sha256"] = "0" * 64
+    binding = payload["inputs"]["artifact:analysis_cohort"]
+    binding["sha256"] = "0" * 64
+    binding["identity_row"]["sha256"] = "0" * 64
     manifest_path.write_text(json.dumps(payload), encoding="utf-8")
     monkeypatch.setenv("STEP_OUT_DIR", str(out_dir))
     monkeypatch.setenv("EASYICU_RUN_DIR", str(run_dir))
     monkeypatch.setenv("EASYICU_RESOLVED_INPUTS_JSON", str(manifest_path))
     with pytest.raises(RuntimeError, match="digest verification failed"):
+        run_exposure_outcome_distribution_from_env(
+            spec_payload=_SPEC, typed_cohort_input="artifact:analysis_cohort"
+        )
+
+
+def test_a_capsule_disagreeing_with_its_own_identity_row_is_refused(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """One record, not four fields that happen to sit near each other."""
+
+    run_dir, out_dir = _cohort(tmp_path, _frame())
+    manifest_path = run_dir / "resolved_inputs.json"
+    payload = json.loads(manifest_path.read_text())
+    payload["inputs"]["artifact:analysis_cohort"]["identity_row"]["sha256"] = "0" * 64
+    manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setenv("STEP_OUT_DIR", str(out_dir))
+    monkeypatch.setenv("EASYICU_RUN_DIR", str(run_dir))
+    monkeypatch.setenv("EASYICU_RESOLVED_INPUTS_JSON", str(manifest_path))
+    with pytest.raises(RuntimeError, match="identity_row disagrees"):
+        run_exposure_outcome_distribution_from_env(
+            spec_payload=_SPEC, typed_cohort_input="artifact:analysis_cohort"
+        )
+
+
+def test_a_capsule_naming_another_product_is_refused(
+    monkeypatch, tmp_path: Path
+) -> None:
+    run_dir, out_dir = _cohort(tmp_path, _frame())
+    manifest_path = run_dir / "resolved_inputs.json"
+    payload = json.loads(manifest_path.read_text())
+    binding = payload["inputs"]["artifact:analysis_cohort"]
+    binding["product"] = "some_other_table"
+    binding["identity_row"]["product"] = "some_other_table"
+    manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setenv("STEP_OUT_DIR", str(out_dir))
+    monkeypatch.setenv("EASYICU_RUN_DIR", str(run_dir))
+    monkeypatch.setenv("EASYICU_RESOLVED_INPUTS_JSON", str(manifest_path))
+    with pytest.raises(RuntimeError, match="does not match the input key"):
         run_exposure_outcome_distribution_from_env(
             spec_payload=_SPEC, typed_cohort_input="artifact:analysis_cohort"
         )
