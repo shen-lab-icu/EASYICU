@@ -75,71 +75,7 @@
 .one-source button.on { background: var(--surface); color: var(--o-ink); }
 .one-source.demo-active button.on { background: #FAEEDA; color: #854F0B; }
 
-/* ---- destination nav, mounted into .gd-rail ------------------------- */
-
-.one-railnav { display: flex; flex-direction: column; gap: 1px; padding: 2px 8px 4px; }
-
-.one-navitem {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  width: 100%;
-  padding: 6px 9px;
-  border: 0;
-  border-radius: var(--o-r);
-  background: none;
-  font: inherit;
-  font-size: 12.75px;
-  color: var(--o-ink);
-  text-align: left;
-  cursor: pointer;
-}
-
-.one-navitem .ico { flex: none; display: inline-flex; color: var(--o-ink-2); }
-.one-navitem .lb { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.one-navitem:hover { background: var(--o-muted); }
-.one-navitem.on { background: var(--o-muted-2); font-weight: 600; }
-.one-navitem.on .ico { color: var(--accent-ink, var(--o-ink)); }
-.one-navitem.chat { font-weight: 600; }
-
-.one-navsec { padding: 12px 9px 4px; font-size: 11px; color: var(--o-ink-2); }
-.one-navsec:first-child { padding-top: 2px; }
-
-/* The one study every destination shares. It was invisible before, which is
-   most of why the columns read as unrelated apps. */
-.one-study {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  margin: 0 1px 8px;
-  padding: 7px 9px;
-  border-radius: var(--o-r);
-  background: var(--o-muted);
-}
-
-.one-study .lb {
-  font: 600 12.5px/17px inherit;
-  color: var(--o-ink);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.one-study .st { font-size: 10.5px; color: var(--o-ink-2); }
-
-.one-starthint { margin: 10px 9px 2px; font-size: 11px; line-height: 1.6; color: var(--o-ink-2); }
-
-.one-inline {
-  border: 0;
-  background: none;
-  padding: 0 1px;
-  font: inherit;
-  font-size: 11px;
-  color: var(--accent-ink, var(--o-ink));
-  text-decoration: underline;
-  text-underline-offset: 2px;
-  cursor: pointer;
-}
+/* ---- mounted into .gd-rail ------------------------------------------ */
 
 .one-footmount { margin-bottom: 6px; }
 
@@ -208,9 +144,26 @@ body:has(.gd-shell) #cpFab { display: none; }
 .gd-aside.has-panel > .gd-aside-body,
 .gd-aside.has-panel > .gd-aside-foot { display: none; }
 
-/* Size the grid TRACK, not the item — .gd-main is a grid and an item given a
+/* ONE WINDOW is the default. The conversation gets the whole width; the rail
+   and the panel are both off until something asks for them. Depth arrives when
+   it is reached — a first-time reader sees a thread and a composer, not a
+   workspace with three empty regions.
+
+   Size the grid TRACK, not the item — .gd-main is a grid and an item given a
    width just overflows its own column. */
+.gd-main.threecol { grid-template-columns: minmax(0, 1fr); }
+.gd-main.threecol > .gd-rail,
+.gd-main.threecol > .gd-aside { display: none; }
+
+.gd-main.threecol.show-rail { grid-template-columns: var(--o-rail-w) minmax(0, 1fr); }
+.gd-main.threecol.show-rail > .gd-rail { display: flex; }
+
 .gd-main.threecol.has-panel {
+  grid-template-columns: minmax(0, 1fr) var(--o-panel-w);
+}
+.gd-main.threecol.has-panel > .gd-aside { display: flex; }
+
+.gd-main.threecol.show-rail.has-panel {
   grid-template-columns: var(--o-rail-w) minmax(0, 1fr) var(--o-panel-w);
 }
 
@@ -218,11 +171,16 @@ body:has(.gd-shell) #cpFab { display: none; }
    beside it. Column assignment only — no node moves, so the thread keeps its
    scroll position and the composer keeps its draft. */
 .gd-main.threecol.has-panel.panel-center {
+  grid-template-columns: minmax(0, 1fr) var(--o-chat-w);
+}
+.gd-main.threecol.has-panel.panel-center > .gd-aside { grid-column: 1; grid-row: 1; }
+.gd-main.threecol.has-panel.panel-center > .gd-conv { grid-column: 2; grid-row: 1; }
+.gd-main.threecol.show-rail.has-panel.panel-center {
   grid-template-columns: var(--o-rail-w) minmax(0, 1fr) var(--o-chat-w);
 }
-.gd-main.threecol.has-panel.panel-center > .gd-rail { grid-column: 1; grid-row: 1; }
-.gd-main.threecol.has-panel.panel-center > .gd-aside { grid-column: 2; grid-row: 1; }
-.gd-main.threecol.has-panel.panel-center > .gd-conv { grid-column: 3; grid-row: 1; }
+.gd-main.threecol.show-rail.has-panel.panel-center > .gd-rail { grid-column: 1; grid-row: 1; }
+.gd-main.threecol.show-rail.has-panel.panel-center > .gd-aside { grid-column: 2; grid-row: 1; }
+.gd-main.threecol.show-rail.has-panel.panel-center > .gd-conv { grid-column: 3; grid-row: 1; }
 .gd-main.threecol.has-panel.panel-center > .gd-conv .gd-thread { padding: 0 14px; }
 .gd-main.threecol.has-panel.panel-center > .gd-conv .one-viewing { margin: 0 14px 8px; }
 
