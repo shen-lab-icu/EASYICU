@@ -118,6 +118,7 @@
     'Workspace States': ['Workspace States', '工作区状态'],
   };
   const crumbLabel = (c) => L(CRUMB_LABELS[c] || c);
+  window.EU_CRUMB_LABEL = crumbLabel;
   const actionHtmlOf = (scr) => {
     if (!scr) return '';
     return typeof scr.actionHtml === 'function' ? scr.actionHtml() : (scr.actionHtml || '');
@@ -133,7 +134,7 @@
       root.firstElementChild.setAttribute('role', 'main');
       root.firstElementChild.setAttribute('aria-label', t('Page content', '页面内容'));
     }
-    root.querySelectorAll('.cs-nav [data-nav], .cs-sub [data-nav], .mbottomnav [data-nav]').forEach((control) => {
+    root.querySelectorAll('.mbottomnav [data-nav]').forEach((control) => {
       /* A group link is current for any of its children, which this exact-id
          comparison cannot see; topnav() already marked it. */
       if (control.dataset.navgroup) return;
@@ -154,103 +155,6 @@
 
   function screenOf(id) { return window.SCREENS[id]; }
   function sectionOf(id) { return screenOf(id).section; }
-
-  /* ---- shell -------------------------------------------------------
-     Top nav + centred column. Every screen still renders through
-     scr.render(); the swap changed where the shell puts things, not what a
-     screen produces. The data-nav / data-datamode / data-lang / data-cpopen
-     hooks below are the compatibility contract with the click delegation and
-     syncShellAccessibility further down — renaming one silently breaks
-     navigation, so they are kept verbatim from the sidebar era. */
-
-  function topnav() {
-    const scr = screenOf(route);
-    const dataMode = displayedDataMode();
-    const demoMode = dataMode === 'demo';
-    const officialDemo = demoMode
-      && window.EU_DATA_MODE_CONTEXT
-      && window.EU_DATA_MODE_CONTEXT.kind === 'official_demo';
-    const modeTitle = demoMode
-      ? t('Demo mode uses official public deidentified demo datasets or clearly labelled seeded examples. It is never your local data; switch to Real to load a local export.', '演示模式使用官方公开去标识 Demo 数据集，或明确标注的种子示例；都不是你的本地数据。切换到真实模式可加载本地导出。')
-      : t('Real mode: screens compute from your local EasyICU export. Nothing is uploaded.', '真实模式：各页面从你本地的 EasyICU 导出计算，不上传任何数据。');
-    /* Destinations are spelled out rather than mapped from NAV so that
-       `data-nav="ideas"` and friends stay greppable. Guard tests assert the
-       literal wiring in this source, and a template hole would let a
-       destination silently disappear while the tests still passed. */
-    const cur = (id) => (route === id ? ' aria-current="page"' : '');
-    const dataCur = CLASSIC.some(c => c.id === route) ? ' aria-current="page"' : '';
-    const links = `
-      <button type="button" class="cs-link" data-nav="guided"${cur('guided')}>${t('Guided Copilot', '研究引导')}</button>
-      <button type="button" class="cs-link" data-nav="extraction" data-navgroup="1"${dataCur}>${t('Data Workspace', '数据工作台')}</button>
-      <button type="button" class="cs-link" data-nav="agent"${cur('agent')}>${t('Agent Projects', '研究项目')}</button>
-      <button type="button" class="cs-link" data-nav="ideas"${cur('ideas')}>${t('Idea Mining', '想法挖掘')}</button>`;
-    return `
-    <nav class="cs-nav" aria-label="${t('Primary navigation', '主导航')}">
-      <button type="button" class="cs-brand" data-nav="entry">
-        ${icon('flask', 17)}<span>EasyICU</span>
-      </button>
-      <div class="cs-links">${links}</div>
-      <div class="cs-spacer"></div>
-      <div class="cs-right">
-        ${scr.status || ''}
-        <div class="mode-seg ${demoMode ? 'demo-active' : ''}" role="group"
-          aria-label="Data mode" title="${modeTitle}">
-          <button type="button" class="${demoMode ? 'on' : ''}" data-datamode="demo"
-            aria-pressed="${demoMode}">${icon('flask', 12)} ${officialDemo ? t('Official demo', '官方演示') : (demoMode ? t('Demo data', '演示数据') : t('Demo', '演示'))}</button>
-          <button type="button" class="${!demoMode ? 'on' : ''}" data-datamode="real"
-            aria-pressed="${!demoMode}">${icon('db', 12)} ${t('Real', '真实')}</button>
-        </div>
-        <div class="lang-seg" role="group" aria-label="Language">
-          <button type="button" class="${window.EU_LANG !== 'zh' ? 'on' : ''}" data-lang="en"
-            aria-pressed="${window.EU_LANG !== 'zh'}">EN</button>
-          <button type="button" class="${window.EU_LANG === 'zh' ? 'on' : ''}" data-lang="zh"
-            aria-pressed="${window.EU_LANG === 'zh'}">中</button>
-        </div>
-        <button type="button" class="cs-guide" data-cpopen
-          title="${t('Open page guide for this screen', '打开当前页面指南')}">${icon('spark', 13)} ${t('Page guide', '页面指南')}</button>
-        <button type="button" class="cs-link" data-nav="dictionary"
-          ${route === 'dictionary' ? 'aria-current="page"' : ''}>${t('Dictionary', '字典')}</button>
-        <button type="button" class="cs-link" data-nav="settings"
-          ${route === 'settings' ? 'aria-current="page"' : ''}>${t('Settings', '设置')}</button>
-      </div>
-    </nav>`;
-  }
-
-  /* The four data destinations used to be a collapsible sidebar group. They
-     become a sub-tab row so no destination lost its entry point in the swap. */
-  function subnav() {
-    if (CLASSIC.every(c => c.id !== route)) return '';
-    return `
-    <div class="cs-sub" role="group" aria-label="${t('Data Workspace', '数据工作台')}">
-      ${CLASSIC.map(c => `
-        <button type="button" class="cs-subitem ${route === c.id ? 'on' : ''}"
-          data-nav="${c.id}" ${route === c.id ? 'aria-current="page"' : ''}>${L(c.label)}</button>`).join('')}
-    </div>`;
-  }
-
-  function pagehead() {
-    const scr = screenOf(route);
-    const crumbs = (scr.crumbs || []).map((c, i, arr) => {
-      const label = crumbLabel(c);
-      if (i === arr.length - 1) return `<span class="cur" aria-current="page">${label}</span>`;
-      if (i === 0) return `<button type="button" class="crumb-link" data-nav="entry">${label}</button><span class="sep">/</span>`;
-      return `<span class="mid">${label}</span><span class="sep">/</span>`;
-    }).join(' ');
-    const actionHtml = actionHtmlOf(scr);
-    const title = scr.crumbs && scr.crumbs.length
-      ? crumbLabel(scr.crumbs[scr.crumbs.length - 1])
-      : '';
-    return `
-    <div class="cs-head">
-      ${crumbs ? `<div class="cs-crumbs">${crumbs}</div>` : ''}
-      ${title || actionHtml ? `
-      <div class="cs-title">
-        ${title ? `<h1>${title}</h1>` : ''}
-        ${actionHtml ? `<div class="cs-actions">${actionHtml}</div>` : ''}
-      </div>` : ''}
-      ${subnav()}
-    </div>`;
-  }
 
   function mobileChrome() {
     const scr = screenOf(route);
@@ -274,46 +178,33 @@
     return { top, bottom };
   }
 
+  /* One surface. The conversation is always the middle column; `route` names
+     which panel is open beside it, so existing deep links (#patient, #crossdb)
+     keep resolving without a navigation menu existing. Panels render each
+     screen's own render() — no screen was rewritten to become one. */
   function render(opts = {}) {
     const resetScroll = !!opts.resetScroll;
-    const priorContent = app.querySelector('.content');
-    const scrollState = {
-      x: window.scrollX || 0,
-      y: window.scrollY || 0,
-      contentTop: priorContent ? priorContent.scrollTop : 0,
-    };
-    const scr = screenOf(route);
-    if (scr.full) {
-      app.innerHTML = scr.render();
-    } else {
-      const m = mobileChrome();
-      /* The rail moved from the sidebar into a horizontal strip. Screens still
-         supply it through the same scr.rail() contract. */
-      const rail = scr.rail ? scr.rail() : '';
-      app.innerHTML = `
-        <div class="app console">
-          ${m.top}
-          ${topnav()}
-          <main class="main" aria-label="${t('Page content', '页面内容')}">
-            <div class="cs-col ${scr.wide ? 'wide' : ''}">
-              ${pagehead()}
-              ${rail ? `<div class="cs-strip">${rail}</div>` : ''}
-              <div class="content ${scr.wide ? 'wide' : ''}">${scr.render()}</div>
-            </div>
-          </main>
-          ${m.bottom}
-        </div>`;
-    }
-    if (scr.afterRender) scr.afterRender(app);
-    syncShellAccessibility(app, !!scr.full);
-    const c = app.querySelector('.content');
-    if (resetScroll) {
-      if (c) c.scrollTop = 0;
-      window.scrollTo(0, 0);
-    } else {
-      if (c) c.scrollTop = scrollState.contentTop;
-      window.scrollTo(scrollState.x, scrollState.y);
-    }
+    const priorChat = app.querySelector('.one-chat');
+    const priorTop = priorChat ? priorChat.scrollTop : 0;
+    const one = window.EU_ONE;
+    const chat = window.SCREENS.guided || screenOf(route);
+    const panelId = one && one.isPanel(route) ? route : '';
+    const cls = ['one', panelId ? 'has-panel' : '', panelId && one.isWide(panelId) ? 'panel-wide' : ''];
+    app.innerHTML = `
+      <div class="${cls.filter(Boolean).join(' ')}">
+        ${one ? one.rail() : ''}
+        <main class="one-chat" aria-label="${t('Conversation', '对话')}">
+          <div class="content">
+            ${one ? one.quick(panelId) : ''}
+            ${chat.render()}
+          </div>
+        </main>
+        ${panelId && one ? one.panel(panelId) : ''}
+      </div>`;
+    if (one) one.load();
+    syncShellAccessibility(app, false);
+    const nextChat = app.querySelector('.one-chat');
+    if (nextChat) nextChat.scrollTop = resetScroll ? 0 : priorTop;
   }
 
   window.__euRender = function (opts) { render(opts || {}); };
