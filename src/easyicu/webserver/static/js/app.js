@@ -133,7 +133,10 @@
       root.firstElementChild.setAttribute('role', 'main');
       root.firstElementChild.setAttribute('aria-label', t('Page content', '页面内容'));
     }
-    root.querySelectorAll('.sidebar [data-nav], .mbottomnav [data-nav]').forEach((control) => {
+    root.querySelectorAll('.cs-nav [data-nav], .cs-sub [data-nav], .mbottomnav [data-nav]').forEach((control) => {
+      /* A group link is current for any of its children, which this exact-id
+         comparison cannot see; topnav() already marked it. */
+      if (control.dataset.navgroup) return;
       const current = control.dataset.nav === route;
       if (current) control.setAttribute('aria-current', 'page');
       else control.removeAttribute('aria-current');
@@ -152,105 +155,101 @@
   function screenOf(id) { return window.SCREENS[id]; }
   function sectionOf(id) { return screenOf(id).section; }
 
-  function sidebar() {
-    const scr = screenOf(route);
-    const classicActive = CLASSIC.some(c => c.id === route);
-    const wsOpen = classicOpen || classicActive;
+  /* ---- shell -------------------------------------------------------
+     Top nav + centred column. Every screen still renders through
+     scr.render(); the swap changed where the shell puts things, not what a
+     screen produces. The data-nav / data-datamode / data-lang / data-cpopen
+     hooks below are the compatibility contract with the click delegation and
+     syncShellAccessibility further down — renaming one silently breaks
+     navigation, so they are kept verbatim from the sidebar era. */
 
-    const rail = scr.rail ? scr.rail() : '';
-
-    return `
-    <aside class="sidebar" aria-label="${t('Application sidebar', '应用侧边栏')}">
-      <button type="button" class="brand" data-nav="entry">
-        <span class="mark">${icon('flask', 18)}</span>
-        <span><span class="name">EasyICU</span><span class="tag">${t('ICU Research Workspace', 'ICU 研究工作台')}</span></span>
-      </button>
-      <nav class="shell-nav" aria-label="${t('Primary navigation', '主导航')}">
-      <div class="sec-label nav-sec">${t('Discovery & Plan', '发现与计划')}</div>
-      <button type="button" class="cp-entry ${route === 'guided' ? 'on' : ''}" data-nav="guided">
-        <span class="cp-ico">${icon('spark', 16)}</span>
-        <span class="cp-body"><span class="cp-t">${t('Guided Copilot', '研究引导')}</span><span class="cp-d">${window.EU_HASWORK ? t('continue the current workflow by chat', '用对话继续当前流程') : t('plan a study by conversation', '用对话规划研究')}</span></span>
-        <span class="cp-go">${icon('arrow', 14)}</span>
-      </button>
-      <button type="button" class="cp-entry ideas-entry ${route === 'ideas' ? 'on' : ''}" data-nav="ideas">
-        <span class="cp-ico">${icon('target', 16)}</span>
-        <span class="cp-body"><span class="cp-t">${t('Idea Mining', '想法挖掘')}</span><span class="cp-d">${t('paper, PDF, or topic → feasible plan', '文章、PDF 或主题 → 可行计划')}</span></span>
-        <span class="cp-go">${icon('arrow', 14)}</span>
-      </button>
-      <div class="shared-note"><span class="ico">${icon('target', 11)}</span><span>${t('Paper or topic? Start with Idea Mining. Clear question? Start Guided Copilot. Already have data? Start with Extract Data.', '有文章或主题，从想法挖掘开始；有明确问题，从研究引导开始；已有数据，从数据抽取开始。')}</span></div>
-      <div class="sec-label nav-sec">${t('Data & Review', '数据与审阅')}</div>
-      <div class="wsnav">
-        <button type="button" class="wsgroup-head ${wsOpen ? 'open' : ''} ${classicActive ? 'active' : ''}" data-ws-toggle aria-expanded="${wsOpen}" aria-controls="data-workspace-links">
-          <span class="wsg-ico">${icon('grid', 15)}</span>
-          <span class="wsg-t">${t('Data Workspace', '数据工作台')}</span>
-          <span class="wsg-chev">${icon(wsOpen ? 'chevdown' : 'chevron', 13)}</span>
-        </button>
-        ${wsOpen ? `
-        <div class="wsg-children" id="data-workspace-links">
-          ${CLASSIC.map(c => `
-            <button type="button" class="wsitem ${route === c.id ? 'active' : ''}" data-nav="${c.id}">
-              <span class="ico">${icon(c.ico, 15)}</span>
-              <span class="wsi-copy"><span class="wsi-t">${L(c.label)}</span><span class="wsi-sub">${L(c.sub)}</span></span>
-            </button>`).join('')}
-        </div>` : ''}
-      </div>
-      <div class="sec-label nav-sec">${t('Analysis & Evidence', '分析与证据')}</div>
-      <button type="button" class="cp-entry agent-entry ${route === 'agent' ? 'on' : ''}" data-nav="agent">
-        <span class="cp-ico">${icon('agent', 16)}</span>
-        <span class="cp-body"><span class="cp-t">${t('Agent Projects', '研究项目')}</span><span class="cp-d">${t('confirmed plan → evidence-checked draft', '确认计划 → 证据核验草稿')}</span></span>
-        <span class="cp-go">${icon('arrow', 14)}</span>
-      </button>
-      <div class="sec-label" style="margin:16px 0 6px;">${t('Reference', '参考')}</div>
-      <div class="nav" style="padding-top:0;">
-        <button type="button" class="nav-item ${route === 'tutorial' ? 'active' : ''}" data-nav="tutorial"><span class="ico">${icon('help', 17)}</span>${t('Get Started', '快速上手')}</button>
-        <button type="button" class="nav-item ${route === 'dictionary' ? 'active' : ''}" data-nav="dictionary"><span class="ico">${icon('list', 17)}</span>${t('Data Dictionary', '数据字典')}</button>
-        <button type="button" class="nav-item ${route === 'settings' ? 'active' : ''}" data-nav="settings"><span class="ico">${icon('gear', 17)}</span>${t('Settings', '设置')}</button>
-      </div>
-      </nav>
-      ${rail}
-      <div class="rail-spacer"></div>
-      <div class="rail-foot">
-        <button type="button" class="icobtn" title="${t('Back to home', '返回首页')}" aria-label="${t('Back to home', '返回首页')}" data-nav="entry">${icon('back', 16)}</button>
-        <button type="button" class="icobtn ${route === 'tutorial' ? 'on' : ''}" title="${t('Help', '帮助')}" aria-label="${t('Help', '帮助')}" data-nav="tutorial">${icon('help', 16)}</button>
-        <button type="button" class="icobtn ${route === 'settings' ? 'on' : ''}" title="${t('Settings', '设置')}" aria-label="${t('Settings', '设置')}" data-nav="settings">${icon('gear', 16)}</button>
-        <button type="button" class="icobtn" title="${t('Switch language', '切换语言')}" aria-label="${t('Switch language', '切换语言')}" data-lang-toggle>${icon('globe', 16)}</button>
-        <div class="avatar">LK</div>
-      </div>
-    </aside>`;
-  }
-
-  function topbar() {
+  function topnav() {
     const scr = screenOf(route);
     const dataMode = displayedDataMode();
     const demoMode = dataMode === 'demo';
     const officialDemo = demoMode
       && window.EU_DATA_MODE_CONTEXT
       && window.EU_DATA_MODE_CONTEXT.kind === 'official_demo';
+    const modeTitle = demoMode
+      ? t('Demo mode uses official public deidentified demo datasets or clearly labelled seeded examples. It is never your local data; switch to Real to load a local export.', '演示模式使用官方公开去标识 Demo 数据集，或明确标注的种子示例；都不是你的本地数据。切换到真实模式可加载本地导出。')
+      : t('Real mode: screens compute from your local EasyICU export. Nothing is uploaded.', '真实模式：各页面从你本地的 EasyICU 导出计算，不上传任何数据。');
+    /* Destinations are spelled out rather than mapped from NAV so that
+       `data-nav="ideas"` and friends stay greppable. Guard tests assert the
+       literal wiring in this source, and a template hole would let a
+       destination silently disappear while the tests still passed. */
+    const cur = (id) => (route === id ? ' aria-current="page"' : '');
+    const dataCur = CLASSIC.some(c => c.id === route) ? ' aria-current="page"' : '';
+    const links = `
+      <button type="button" class="cs-link" data-nav="guided"${cur('guided')}>${t('Guided Copilot', '研究引导')}</button>
+      <button type="button" class="cs-link" data-nav="extraction" data-navgroup="1"${dataCur}>${t('Data Workspace', '数据工作台')}</button>
+      <button type="button" class="cs-link" data-nav="agent"${cur('agent')}>${t('Agent Projects', '研究项目')}</button>
+      <button type="button" class="cs-link" data-nav="ideas"${cur('ideas')}>${t('Idea Mining', '想法挖掘')}</button>`;
+    return `
+    <nav class="cs-nav" aria-label="${t('Primary navigation', '主导航')}">
+      <button type="button" class="cs-brand" data-nav="entry">
+        ${icon('flask', 17)}<span>EasyICU</span>
+      </button>
+      <div class="cs-links">${links}</div>
+      <div class="cs-spacer"></div>
+      <div class="cs-right">
+        ${scr.status || ''}
+        <div class="mode-seg ${demoMode ? 'demo-active' : ''}" role="group"
+          aria-label="Data mode" title="${modeTitle}">
+          <button type="button" class="${demoMode ? 'on' : ''}" data-datamode="demo"
+            aria-pressed="${demoMode}">${icon('flask', 12)} ${officialDemo ? t('Official demo', '官方演示') : (demoMode ? t('Demo data', '演示数据') : t('Demo', '演示'))}</button>
+          <button type="button" class="${!demoMode ? 'on' : ''}" data-datamode="real"
+            aria-pressed="${!demoMode}">${icon('db', 12)} ${t('Real', '真实')}</button>
+        </div>
+        <div class="lang-seg" role="group" aria-label="Language">
+          <button type="button" class="${window.EU_LANG !== 'zh' ? 'on' : ''}" data-lang="en"
+            aria-pressed="${window.EU_LANG !== 'zh'}">EN</button>
+          <button type="button" class="${window.EU_LANG === 'zh' ? 'on' : ''}" data-lang="zh"
+            aria-pressed="${window.EU_LANG === 'zh'}">中</button>
+        </div>
+        <button type="button" class="cs-guide" data-cpopen
+          title="${t('Open page guide for this screen', '打开当前页面指南')}">${icon('spark', 13)} ${t('Page guide', '页面指南')}</button>
+        <button type="button" class="cs-link" data-nav="dictionary"
+          ${route === 'dictionary' ? 'aria-current="page"' : ''}>${t('Dictionary', '字典')}</button>
+        <button type="button" class="cs-link" data-nav="settings"
+          ${route === 'settings' ? 'aria-current="page"' : ''}>${t('Settings', '设置')}</button>
+      </div>
+    </nav>`;
+  }
+
+  /* The four data destinations used to be a collapsible sidebar group. They
+     become a sub-tab row so no destination lost its entry point in the swap. */
+  function subnav() {
+    if (CLASSIC.every(c => c.id !== route)) return '';
+    return `
+    <div class="cs-sub" role="group" aria-label="${t('Data Workspace', '数据工作台')}">
+      ${CLASSIC.map(c => `
+        <button type="button" class="cs-subitem ${route === c.id ? 'on' : ''}"
+          data-nav="${c.id}" ${route === c.id ? 'aria-current="page"' : ''}>${L(c.label)}</button>`).join('')}
+    </div>`;
+  }
+
+  function pagehead() {
+    const scr = screenOf(route);
     const crumbs = (scr.crumbs || []).map((c, i, arr) => {
       const label = crumbLabel(c);
       if (i === arr.length - 1) return `<span class="cur" aria-current="page">${label}</span>`;
-      let node;
-      if (i === 0) node = `<button type="button" class="crumb-link" data-nav="entry">${label}</button>`;
-      else node = `<span class="mid">${label}</span>`;
-      return `${node}<span class="sep">/</span>`;
+      if (i === 0) return `<button type="button" class="crumb-link" data-nav="entry">${label}</button><span class="sep">/</span>`;
+      return `<span class="mid">${label}</span><span class="sep">/</span>`;
     }).join(' ');
     const actionHtml = actionHtmlOf(scr);
+    const title = scr.crumbs && scr.crumbs.length
+      ? crumbLabel(scr.crumbs[scr.crumbs.length - 1])
+      : '';
     return `
-    <header class="topbar" aria-label="${t('Page controls', '页面控制')}">
-      <div class="crumbs">${crumbs}</div>
-      <div class="spacer"></div>
-      ${scr.status || ''}
-      <div class="mode-seg ${demoMode ? 'demo-active' : ''}" role="group" aria-label="Data mode" title="${demoMode ? t('Demo mode uses official public deidentified demo datasets or clearly labelled seeded examples. It is never your local data; switch to Real to load a local export.', '演示模式使用官方公开去标识 Demo 数据集，或明确标注的种子示例；都不是你的本地数据。切换到真实模式可加载本地导出。') : t('Real mode: screens compute from your local EasyICU export. Nothing is uploaded.', '真实模式：各页面从你本地的 EasyICU 导出计算，不上传任何数据。')}">
-        <button type="button" class="${demoMode ? 'on' : ''}" data-datamode="demo" aria-pressed="${demoMode}">${icon('flask', 12)} ${officialDemo ? t('Official demo', '官方演示') : (demoMode ? t('Demo data', '演示数据') : t('Demo', '演示'))}</button>
-        <button type="button" class="${!demoMode ? 'on' : ''}" data-datamode="real" aria-pressed="${!demoMode}">${icon('db', 12)} ${t('Real', '真实')}</button>
-      </div>
-      <div class="lang-seg" role="group" aria-label="Language">
-        <button type="button" class="${window.EU_LANG !== 'zh' ? 'on' : ''}" data-lang="en" aria-pressed="${window.EU_LANG !== 'zh'}">EN</button>
-        <button type="button" class="${window.EU_LANG === 'zh' ? 'on' : ''}" data-lang="zh" aria-pressed="${window.EU_LANG === 'zh'}">中</button>
-      </div>
-      <button type="button" class="btn sm" data-cpopen title="${t('Open page guide for this screen', '打开当前页面指南')}">${icon('spark', 13)} ${t('Page guide','页面指南')}</button>
-      ${actionHtml}
-    </header>`;
+    <div class="cs-head">
+      ${crumbs ? `<div class="cs-crumbs">${crumbs}</div>` : ''}
+      ${title || actionHtml ? `
+      <div class="cs-title">
+        ${title ? `<h1>${title}</h1>` : ''}
+        ${actionHtml ? `<div class="cs-actions">${actionHtml}</div>` : ''}
+      </div>` : ''}
+      ${subnav()}
+    </div>`;
   }
 
   function mobileChrome() {
@@ -288,13 +287,19 @@
       app.innerHTML = scr.render();
     } else {
       const m = mobileChrome();
+      /* The rail moved from the sidebar into a horizontal strip. Screens still
+         supply it through the same scr.rail() contract. */
+      const rail = scr.rail ? scr.rail() : '';
       app.innerHTML = `
-        <div class="app">
-          ${sidebar()}
+        <div class="app console">
+          ${m.top}
+          ${topnav()}
           <main class="main" aria-label="${t('Page content', '页面内容')}">
-            ${m.top}
-            ${topbar()}
-            <div class="content ${scr.wide ? 'wide' : ''}">${scr.render()}</div>
+            <div class="cs-col ${scr.wide ? 'wide' : ''}">
+              ${pagehead()}
+              ${rail ? `<div class="cs-strip">${rail}</div>` : ''}
+              <div class="content ${scr.wide ? 'wide' : ''}">${scr.render()}</div>
+            </div>
           </main>
           ${m.bottom}
         </div>`;
