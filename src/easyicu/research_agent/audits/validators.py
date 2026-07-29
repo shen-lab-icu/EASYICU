@@ -9758,14 +9758,14 @@ class FigureSourceDataValidator:
                         invalid_bound_evidence.append(raw_input)
                         continue
                     bound_path = item["path"]
-                    evidence_path = item.get("evidence_path")
-                    if isinstance(evidence_path, Path):
-                        declared_table_aliases.setdefault(
-                            evidence_path.name, set()
-                        ).add(bound_path.resolve())
-                    declared_table_aliases.setdefault(str(raw_input), set()).add(
-                        bound_path.resolve()
-                    )
+                    for alias in self._bound_artifact_aliases(
+                        input_key=str(raw_input),
+                        product=product_name,
+                        evidence_path=item.get("evidence_path"),
+                    ):
+                        declared_table_aliases.setdefault(alias, set()).add(
+                            bound_path.resolve()
+                        )
                 elif (
                     not self._safe_regular_run_file(bound_path, run_dir=run_dir)
                     or self._sha256_file(bound_path) != expected_sha
@@ -10873,6 +10873,51 @@ class FigureSourceDataValidator:
             and "/" not in text
             and "\\" not in text
         )
+
+    @staticmethod
+    def _bound_artifact_aliases(
+        *,
+        input_key: str,
+        product: str,
+        evidence_path: Any,
+    ) -> Set[str]:
+        """The names one bound table answers to besides its own filename.
+
+        The host publishes the same artifact under four names: the typed input
+        key the step declared it as (``table:cohort_flow``), the typed product
+        id inside that key (``cohort_flow``), the file the producing step wrote
+        (``cohort_flow.csv``) and the evidence copy taken of it.  A figure that
+        names its parent with any of them is naming the same digest-verified
+        bytes, so all four must resolve; resolving only some makes the verdict
+        depend on which spelling the producer happened to pick, which is not a
+        property of the figure.  Measured on 2026-07-29: a source-data bundle
+        that reconciled row for row against both of its parents was refused as
+        ``declared source table event_timing_audit was not found in an upstream
+        step`` -- the product id was the one name that did not resolve.
+
+        The written filename is deliberately *not* returned here.  The caller
+        already matches a candidate whose ``name`` equals the declared name --
+        it has to, because a legacy run has no bindings and no aliases at all --
+        so repeating it would be a line that can never decide anything.
+
+        This is vocabulary, not authority.  Aliases *filter* tables the step
+        already bound, so none can reach a table the step did not bind; a name
+        resolving to more than one artifact is still refused as ambiguous
+        lineage; and the rows behind a resolved name are still compared value by
+        value against the parent's bytes.  Derived spellings stay out for the
+        same reason: the file stem would resolve the measured case (product id
+        and stem are the same word there) while also admitting names the host
+        never writes, since the audit runner maps product ``measurement_audit``
+        onto ``missingness_measurement_audit.csv``.
+        """
+
+        names = {
+            str(input_key or "").strip(),
+            str(product or "").strip(),
+        }
+        if isinstance(evidence_path, Path):
+            names.add(evidence_path.name)
+        return {name for name in names if name}
 
     @classmethod
     def _table_step_id(cls, path: Path, *, run_dir: Path) -> str:
