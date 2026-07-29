@@ -674,7 +674,46 @@ def _build_planner_user_prompt(
         "          }\n"
         "        ]\n"
         "      },\n"
-        '      "trajectory_stability_spec": null\n'
+        '      "trajectory_stability_spec": null,\n'
+        '      "exposure_outcome_distribution_spec": null\n'
+        "    },\n"
+        # A second example step exists for one reason: the distribution spec
+        # was described in prose only, and a real Planner then guessed its
+        # shape four different ways in five attempts -- `exposure_column`
+        # instead of `exposure`, and twice an `{"column": ..., "levels": ...}`
+        # object where a plain column name belongs. Prose is enough to convey
+        # which choices are the Planner's; it is not enough to convey a key
+        # name or whether a field nests. Show the shape, as table_one_spec
+        # already does.
+        "    {\n"
+        '      "step_id": "02_exposure_outcome_distribution",\n'
+        '      "planned_analysis_role": "auxiliary",\n'
+        '      "intent": "<one sentence>",\n'
+        # Exactly one typed input (the cohort artifact, which carries the
+        # digest and product contract), plus the exposure and outcome column
+        # names as bare inputs -- the schema requires both spec columns to be
+        # explicit step inputs, and a bare name is not a second typed input.
+        '      "inputs": ["artifact:analysis_cohort", '
+        '"<declared exposure column name>", '
+        '"<declared outcome column name>"],\n'
+        '      "expected_outputs": ["table:exposure_outcome_distribution"],\n'
+        '      "method": "descriptive",\n'
+        '      "icu_rule_refs": [],\n'
+        '      "model_requirements": [],\n'
+        '      "input_consumption_contracts": [],\n'
+        '      "table_one_spec": null,\n'
+        '      "trajectory_stability_spec": null,\n'
+        '      "exposure_outcome_distribution_spec": {\n'
+        '        "exposure": "<declared exposure column name>",\n'
+        '        "exposure_levels": ["<closed level 1>", "<closed level 2>"],\n'
+        '        "outcome": "<declared outcome column name>",\n'
+        '        "outcome_levels": ["<closed level 1>", "<closed level 2>"],\n'
+        '        "outcome_positive_value": "<exactly one of outcome_levels>",\n'
+        '        "level_match_policy": "exact_typed",\n'
+        '        "denominator_policy": "all_declared_rows",\n'
+        '        "missing_outcome_policy": "structural_absence_is_non_event",\n'
+        '        "confidence_level": 0.95\n'
+        "      }\n"
         "    }\n"
         "  ],\n"
         '  "robustness_specs": [\n'
