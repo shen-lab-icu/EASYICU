@@ -212,6 +212,54 @@ def test_stream_batch_release_flushes_arrow_pool():
     assert released == [True]
 
 
+def test_streamed_vitals_loads_recursive_concepts_separately():
+    calls = []
+
+    def fake_load_concepts(**kwargs):
+        concepts = list(kwargs["concepts"])
+        calls.append(concepts)
+        if concepts == ["hr"]:
+            return pd.DataFrame(
+                {
+                    "stay_id": [1, 1],
+                    "charttime": [0.0, 1.0],
+                    "hr": [80.0, 90.0],
+                }
+            )
+        concept = concepts[0]
+        return pd.DataFrame(
+            {
+                "stay_id": [1],
+                "charttime": [1.0],
+                concept: [2.0],
+            }
+        )
+
+    class Pool:
+        def release_unused(self):
+            return None
+
+    class FakePyArrow:
+        @staticmethod
+        def default_memory_pool():
+            return Pool()
+
+    result = api._load_stream_module_batch(
+        fake_load_concepts,
+        module_name="vitals",
+        concepts=["hr", "pulse_pressure", "shock_index"],
+        load_kwargs={"concepts": ["hr", "pulse_pressure", "shock_index"]},
+        patient_ids={"stay_id": [1]},
+        loader=None,
+        pyarrow_module=FakePyArrow,
+    )
+
+    assert calls == [["hr"], ["pulse_pressure"], ["shock_index"]]
+    assert result["hr"].tolist() == [80.0, 90.0]
+    assert result["pulse_pressure"].tolist()[1] == 2.0
+    assert result["shock_index"].tolist()[1] == 2.0
+
+
 def test_streamed_special_export_uses_published_dependency_parquets(tmp_path):
     source = tmp_path / "published"
     output = tmp_path / "special"
