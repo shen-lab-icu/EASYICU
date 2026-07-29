@@ -13,12 +13,16 @@
  * Every other destination opens by rendering that screen's own render(). No
  * screen was rewritten to become a panel.
  *
- * PLACEMENT. A 460px aside is the wrong home for a screen built to be read: a
- * cross-database table or a concept dictionary arrives pre-squeezed. So a panel
- * declares where it belongs, and `center` swaps the two columns — the panel
- * takes the wide middle track and the conversation moves to a narrow column
- * beside it. The swap itself moves no node: it is grid-column assignment on a
- * grid that already has three tracks.
+ * PLACEMENT, and which column is the point. The middle is the conversation and
+ * stays the conversation: it is where the project is controlled, and a reader
+ * who watches only the middle should never miss what happened. The right column
+ * is secondary — detail, a figure, a result, the thing a step produced. Nothing
+ * displaces the middle on its own.
+ *
+ * `center` therefore exists as a deliberate override, not a default: it swaps
+ * the two columns for one panel when you actually want to spread something out.
+ * The swap itself moves no node — it is grid-column assignment on a grid that
+ * already has three tracks.
  *
  * That is NOT the same as the conversation surviving untouched. A route change
  * still runs the shell's render(), which rebuilds the whole subtree — measured:
@@ -56,47 +60,34 @@
     { id: 'tutorial', crumb: 'Get Started' },
   ];
 
-  /* Where each panel opens. `center` gives it the wide middle column and moves
-     the conversation to a narrow one beside it; `aside` leaves the conversation
-     in the middle.
+  /* Every panel opens in the right column. That is the hierarchy, not a
+     measurement result — the conversation is the control surface and does not
+     get pushed aside by a page you opened to glance at.
 
-     Measured at 1440px, comparing the same screen in the 836px centre column
-     against the 445px aside. Horizontal overflow turned out to be the wrong
-     test — only `states` clips (194px). The screens are responsive, so the real
-     cost is reflow: the content is wrung out into a taller and taller ribbon.
-     How much taller, squeezed vs centred:
+     What IS measured is the cost of that choice, so it is not silent. At 1440px
+     the same screen in the 560px panel vs the 836px middle is this much taller,
+     wrung out into a narrower ribbon:
 
        dictionary 3.04×   ideas 2.85×   agent 1.95×   settings 1.43×
        crossdb 1.35×      tutorial 1.19×   patient 1.13×   cohort 1.11×
 
-     The ratio under-detects two kinds of screen, so it is a floor rather than
-     a verdict: a chart shrinks instead of rewrapping, and a fixed-height screen
-     whose panes scroll internally reads the same either way (extraction and
-     states are both 796px in either column, which is why states is placed on
-     its 194px clip instead).
+     (Measured against the older 445px panel; horizontal overflow turned out to
+     be the wrong test — only `states` clips, by 194px. The ratio also
+     under-detects two kinds of screen: a chart shrinks instead of rewrapping,
+     and a fixed-height screen whose panes scroll internally reads the same
+     either way — extraction and states are both 796px in either column.)
 
-     Settings is here because the ratio was right and I was not: 1.43× looked
-     mild enough to keep a dip-in-and-leave screen in the aside, and the aside
-     then wrapped its capability cards to three characters per line. When the
-     measurement and the story disagree, the measurement is the one that was
-     looking at the screen. Anything still wrong is one button away — the
-     override below is per panel and per reader. */
-  const PLACEMENT = {
-    patient: 'center',
-    cohort: 'center',
-    crossdb: 'center',
-    extraction: 'center',
-    ideas: 'center',
-    agent: 'center',
-    dictionary: 'center',
-    states: 'center',
-    settings: 'center',
-    tutorial: 'aside',
-  };
-  const PANEL_ROUTES = Object.keys(PLACEMENT);
-  /* Per-panel override: whatever the table guessed, the reader decides. */
+     So the top four have a real cost in the panel, and the answer is a control
+     rather than a different default: the panel bar's 宽栏 / Wide button hands
+     that one panel the middle for as long as you want it. Read the table as
+     "these are the ones you will reach for it on", not as a placement. */
+  const PANEL_ROUTES = [
+    'patient', 'cohort', 'crossdb', 'extraction',
+    'ideas', 'agent', 'dictionary', 'states', 'settings', 'tutorial',
+  ];
+  /* Per-panel override. The default is the hierarchy; this is the reader. */
   const chosen = {};
-  const placementOf = (id) => chosen[id] || PLACEMENT[id] || 'aside';
+  const placementOf = (id) => chosen[id] || 'aside';
 
   function esc(v) {
     return String(v == null ? '' : v).replace(/[&<>"]/g, (c) => (

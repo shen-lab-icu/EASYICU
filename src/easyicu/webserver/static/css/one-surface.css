@@ -32,8 +32,11 @@
   --o-ink: var(--ink);
   --o-ink-2: var(--ink-4);
   --o-rail-w: 232px;
-  --o-panel-w: 460px;   /* panel in the right column */
-  --o-chat-w: 408px;    /* conversation, when the panel takes the middle */
+  /* The right column is the detail column and holds figures and results, so it
+     is sized to show one rather than to stay out of the way. The middle still
+     reads as primary at 1440: 648px of conversation against 560px of detail. */
+  --o-panel-w: 560px;
+  --o-chat-w: 408px;    /* conversation, only while a panel is given the middle */
   --o-r: 8px;
 }
 
@@ -133,6 +136,14 @@
 }
 
 .one-ghost:hover { background: var(--o-muted); color: var(--o-ink); }
+
+/* The page guide's floating launcher is owned by copilot-dock.js and is right
+   for a page that has nowhere else to put it. This surface does: the rail foot
+   opens the same dock through the same data-cpopen. Two buttons for one overlay
+   is the clutter this whole surface exists to remove, and the floating one was
+   landing on top of the composer. Only the launcher is suppressed — the dock,
+   its shortcut, and every other entry point are untouched. */
+body:has(.gd-shell) #cpFab { display: none; }
 
 /* ---- what is open, shown inside the conversation -------------------- */
 
