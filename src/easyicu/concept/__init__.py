@@ -5568,7 +5568,8 @@ class ConceptResolver:
                 raise ValueError(
                     "AUMC time alignment requires an admission identifier"
                 )
-            if "admittedat" in data.columns:
+            source_contains_admission_origin = "admittedat" in data.columns
+            if source_contains_admission_origin:
                 # Admission/outcome concepts are loaded from the admissions
                 # table itself.  Re-merging the same column would create
                 # admittedat_x/admittedat_y and leave no canonical origin.
@@ -5580,10 +5581,11 @@ class ConceptResolver:
                         admission_times is None
                         or primary_id not in admission_times.columns
                         or "admittedat" not in admission_times.columns
+                        or "dischargedat" not in admission_times.columns
                     ):
                         admissions = data_source.load_table(
                             "admissions",
-                            columns=[primary_id, "admittedat"],
+                            columns=[primary_id, "admittedat", "dischargedat"],
                             verbose=False,
                         )
                         admission_times = (
@@ -5591,8 +5593,13 @@ class ConceptResolver:
                             if hasattr(admissions, "data")
                             else admissions
                         )
+                        if "dischargedat" not in admission_times.columns:
+                            admission_times = admission_times.copy()
+                            admission_times["dischargedat"] = pd.NA
                         admission_times = (
-                            admission_times[[primary_id, "admittedat"]]
+                            admission_times[
+                                [primary_id, "admittedat", "dischargedat"]
+                            ]
                             .drop_duplicates(subset=[primary_id], keep="last")
                             .copy()
                         )
@@ -5622,6 +5629,13 @@ class ConceptResolver:
                 else 60.0
             )
             origin_hours = admittedat / admittedat_scale
+            discharge_hours = None
+            if "dischargedat" in frame.columns:
+                discharge_hours = (
+                    pd.to_numeric(frame["dischargedat"], errors="coerce")
+                    / admittedat_scale
+                    - origin_hours
+                )
             for col in cols_to_convert:
                 if col in frame.columns and pd.api.types.is_numeric_dtype(frame[col]):
                     # Source columns reach this layer as absolute minutes.
@@ -5629,7 +5643,46 @@ class ConceptResolver:
                         pd.to_numeric(frame[col], errors="coerce") / 60.0
                         - origin_hours
                     )
-            data = frame.drop(columns=["admittedat"])
+            if (
+                not source_contains_admission_origin
+                and index_column
+                and index_column in frame.columns
+            ):
+                from ..utils.time_units import (
+                    ICU_TIME_FALLBACK_LIMIT_HOURS,
+                    ICU_TIME_POST_DISCHARGE_HOURS,
+                    ICU_TIME_PRE_ADMISSION_HOURS,
+                )
+
+                event_hours = pd.to_numeric(
+                    frame[index_column], errors="coerce"
+                )
+                if discharge_hours is None:
+                    upper_hours = pd.Series(
+                        ICU_TIME_FALLBACK_LIMIT_HOURS,
+                        index=frame.index,
+                        dtype="float64",
+                    )
+                else:
+                    upper_hours = discharge_hours.add(
+                        ICU_TIME_POST_DISCHARGE_HOURS
+                    ).fillna(ICU_TIME_FALLBACK_LIMIT_HOURS)
+                invalid_time = event_hours.notna() & (
+                    (event_hours < -ICU_TIME_PRE_ADMISSION_HOURS)
+                    | (event_hours > upper_hours)
+                )
+                excluded = int(invalid_time.sum())
+                if excluded:
+                    logger.warning(
+                        "dropping %d AUMC row(s) outside the ICU episode "
+                        "(24h pre/post allowance)",
+                        excluded,
+                    )
+                    frame = frame.loc[~invalid_time].copy()
+            origin_columns = ["admittedat"]
+            if "dischargedat" not in cols_to_convert:
+                origin_columns.append("dischargedat")
+            data = frame.drop(columns=origin_columns, errors="ignore")
 
             _normalize_duration_to_hours(data)
             return data
@@ -5679,6 +5732,25 @@ class ConceptResolver:
                 dur_unit = UNIT_HOURS
 
             _normalize_duration_to_hours(data)
+            if index_column and index_column in data.columns:
+                from ..utils.time_units import (
+                    ICU_TIME_FALLBACK_LIMIT_HOURS,
+                )
+
+                event_hours = pd.to_numeric(
+                    data[index_column], errors="coerce"
+                )
+                invalid_time = event_hours.notna() & (
+                    event_hours.abs() > ICU_TIME_FALLBACK_LIMIT_HOURS
+                )
+                excluded = int(invalid_time.sum())
+                if excluded:
+                    logger.warning(
+                        "dropping %d SIC row(s) outside the 366-day "
+                        "source-time sanity bound",
+                        excluded,
+                    )
+                    data = data.loc[~invalid_time].copy()
             return data
         
         # Early return checks (no verbose output for performance)

@@ -1671,6 +1671,108 @@ def _canonicalise_native_export_frame(
     return canonical
 
 
+def _native_export_stay_time_upper_bounds(outcome_frame) -> Dict[int, float]:
+    """Return each stay's last plausible ICU-relative event hour.
+
+    ``los_icu`` is a cross-database days concept.  A one-day post-discharge
+    allowance preserves boundary measurements while preventing a single
+    corrupt source timestamp from stretching hourly score grids for years.
+    """
+    import pandas as pd
+    from ..utils.time_units import ICU_TIME_POST_DISCHARGE_HOURS
+
+    if not isinstance(outcome_frame, pd.DataFrame) or "los_icu" not in outcome_frame:
+        return {}
+    identity = next(
+        (
+            column
+            for column in _NATIVE_EXPORT_ID_COLUMNS
+            if column in outcome_frame.columns
+        ),
+        None,
+    )
+    if identity is None:
+        return {}
+    stay_id = pd.to_numeric(outcome_frame[identity], errors="coerce")
+    los_days = pd.to_numeric(outcome_frame["los_icu"], errors="coerce")
+    valid = stay_id.notna() & los_days.notna() & (los_days >= 0)
+    if not bool(valid.any()):
+        return {}
+    bounds = pd.DataFrame(
+        {
+            "stay_id": stay_id.loc[valid].astype("int64"),
+            "upper": (
+                los_days.loc[valid].astype("float64") * 24.0
+                + ICU_TIME_POST_DISCHARGE_HOURS
+            ),
+        }
+    )
+    return {
+        int(key): float(value)
+        for key, value in bounds.groupby("stay_id", sort=False)["upper"].max().items()
+    }
+
+
+def _enforce_native_export_time_axis(
+    frame,
+    *,
+    module: str,
+    stay_time_upper_bounds: Dict[int, float],
+):
+    """Apply the ICU-relative time contract and return an auditable frame.
+
+    Outcome values are stay-level endpoints with mixed follow-up windows, so
+    their shared physical index is ICU admission (0 h).  Longitudinal modules
+    retain only the ICU episode with a 24-hour pre/post allowance.  Stays
+    without a usable LOS receive a conservative 366-day sanity fallback.
+    """
+    import numpy as np
+    import pandas as pd
+    from ..utils.time_units import (
+        ICU_TIME_FALLBACK_LIMIT_HOURS,
+        ICU_TIME_PRE_ADMISSION_HOURS,
+    )
+
+    audit: Dict[str, object] = {
+        "policy": "icu_episode_with_24h_pre_post_allowance",
+        "excluded_rows": 0,
+        "normalized_stay_level_rows": 0,
+        "fallback_upper_hours": ICU_TIME_FALLBACK_LIMIT_HOURS,
+    }
+    if "charttime" not in frame.columns:
+        audit["policy"] = "not_applicable_stay_level_module"
+        return frame, audit
+
+    if module == "outcome":
+        charttime = pd.to_numeric(frame["charttime"], errors="coerce")
+        audit["policy"] = "stay_level_at_icu_admission"
+        audit["normalized_stay_level_rows"] = int(
+            (charttime.isna() | (charttime != 0.0)).sum()
+        )
+        frame = frame.copy()
+        frame["charttime"] = 0.0
+        return frame, audit
+
+    charttime = pd.to_numeric(frame["charttime"], errors="coerce")
+    upper = frame["stay_id"].map(stay_time_upper_bounds).astype("float64")
+    upper = upper.fillna(ICU_TIME_FALLBACK_LIMIT_HOURS)
+    invalid = charttime.notna() & (
+        (charttime < -ICU_TIME_PRE_ADMISSION_HOURS) | (charttime > upper)
+    )
+    audit["excluded_rows"] = int(invalid.sum())
+    audit["rows_with_los_bound"] = int(
+        frame["stay_id"].isin(stay_time_upper_bounds).sum()
+    )
+    if not bool(invalid.any()):
+        return frame, audit
+    kept = frame.loc[~invalid].copy()
+    # Preserve canonical numeric dtype even when every row was excluded.
+    kept["charttime"] = pd.to_numeric(
+        kept["charttime"], errors="coerce"
+    ).astype(np.float64)
+    return kept, audit
+
+
 def _enforce_native_export_concept_bounds(
     frame,
     *,
@@ -1883,6 +1985,12 @@ def _publish_native_export_v2(
     files: List[Dict[str, object]] = []
     file_bindings = []
     temporary_module_files: List[tuple[Path, Path]] = []
+    outcome_source = output_root / "outcome.parquet"
+    stay_time_upper_bounds: Dict[int, float] = {}
+    if outcome_source.is_file() and not outcome_source.is_symlink():
+        stay_time_upper_bounds = _native_export_stay_time_upper_bounds(
+            pd.read_parquet(outcome_source)
+        )
 
     for module in published_modules:
         relative_path = f"{module}.parquet"
@@ -1984,6 +2092,11 @@ def _publish_native_export_v2(
                 requested_concepts=requested_concept_plan[module],
                 dictionary=dictionary,
             )
+            frame, time_axis_audit = _enforce_native_export_time_axis(
+                frame,
+                module=module,
+                stay_time_upper_bounds=stay_time_upper_bounds,
+            )
             bounds_audit = _enforce_native_export_concept_bounds(
                 frame,
                 requested_concepts=requested_concept_plan[module],
@@ -2067,6 +2180,7 @@ def _publish_native_export_v2(
                 "physical_concept_ids": requested_concept_plan[module],
                 "rows": int(frame.shape[0]),
                 "physical_schema": physical_schema,
+                "time_axis_audit": time_axis_audit,
                 "concept_status": concept_status,
                 "column_metadata_columns": list(binding.columns),
             }
@@ -2113,6 +2227,10 @@ def _publish_native_export_v2(
             "time_column": "charttime",
             "time_origin": "icu_admission",
             "time_unit": "h",
+            "time_window_policy": (
+                "longitudinal modules: ICU episode with 24h pre/post allowance; "
+                "outcome: stay-level at ICU admission"
+            ),
             "concept_order": "module_catalog",
             "unavailable_representation": "typed_all_null_placeholder",
             "declared_bounds_policy": "out_of_range_to_null",

@@ -118,6 +118,39 @@ def test_aumc_admission_table_time_does_not_merge_its_origin_twice():
     assert "admittedat" not in out.columns
 
 
+def test_aumc_source_times_outside_the_icu_episode_are_quarantined():
+    resolver = ConceptResolver.__new__(ConceptResolver)
+    resolver._aumc_admissions_cache = None
+    source = SimpleNamespace(
+        config=SimpleNamespace(name="aumc"),
+        load_table=lambda *_args, **_kwargs: pd.DataFrame(
+            {
+                "admissionid": [2],
+                "admittedat": [300.0],
+                "dischargedat": [600.0],
+            }
+        ),
+    )
+    frame = pd.DataFrame(
+        {
+            "admissionid": [2, 2],
+            "measuredat_minutes": [540.0, 30_300.0],
+            "value": [1.0, 2.0],
+        }
+    )
+
+    out = resolver._align_time_to_admission(
+        frame,
+        source,
+        ["admissionid"],
+        "measuredat_minutes",
+    )
+
+    assert out["measuredat_minutes"].tolist() == [4.0]
+    assert out["value"].tolist() == [1.0]
+    assert "dischargedat" not in out.columns
+
+
 def test_sic_interval_duration_seconds_are_declared_as_hours():
     """SIC data_range durations must not expand seconds as hours."""
 
@@ -143,6 +176,30 @@ def test_sic_interval_duration_seconds_are_declared_as_hours():
     assert out["charttime"].tolist() == [2.0]
     assert out["dur_var"].tolist() == [2.0]
     assert get_dur_var_unit(out) == UNIT_HOURS
+
+
+def test_sic_extreme_source_interval_is_quarantined_before_expansion():
+    resolver = ConceptResolver.__new__(ConceptResolver)
+    source = SimpleNamespace(config=SimpleNamespace(name="sic"))
+    frame = pd.DataFrame(
+        {
+            "CaseID": [1, 1],
+            # Raw SIC offsets are seconds; these correspond to -31,138 h and
+            # +2 h respectively.
+            "charttime": [-31_138.0 * 3_600.0, 2.0 * 3_600.0],
+            "dur_var": [7_200.0, 7_200.0],
+        }
+    )
+
+    out = resolver._align_time_to_admission(
+        frame,
+        source,
+        ["CaseID"],
+        "charttime",
+    )
+
+    assert out["charttime"].tolist() == [2.0]
+    assert out["dur_var"].tolist() == [2.0]
 
 
 # --------------------------------------------------------------------------
