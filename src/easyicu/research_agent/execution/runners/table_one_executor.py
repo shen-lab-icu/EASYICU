@@ -15,29 +15,9 @@ from ...authority.table_one_binding import table_one_execution_spec
 from ...icu_rules import companion_count_column_for_measured
 from ...schema import AnalysisStep, TABLE_ONE_CLOSED_OUTPUTS
 from .plausibility_receipt import render_standard_plausibility_receipt_code
+from .typed_input_binding import sole_typed_cohort_input as _typed_cohort_input
 
 __all__ = ["table_one_executor_code", "table_one_executor_owns_step"]
-
-
-def _typed_cohort_input(step: AnalysisStep) -> str | None:
-    """Return the sole typed row-membership authority, when supported."""
-
-    typed_inputs = {
-        str(value or "").strip()
-        for value in step.inputs
-        if ":" in str(value or "").strip()
-    }
-    if not typed_inputs:
-        return None
-    if len(typed_inputs) != 1:
-        return ""
-    input_key = next(iter(typed_inputs))
-    kind, separator, product = input_key.partition(":")
-    if separator and product and (
-        kind == "cohort" or input_key == "artifact:analysis_cohort"
-    ):
-        return input_key
-    return ""
 
 
 def table_one_executor_owns_step(step: AnalysisStep) -> bool:
@@ -73,9 +53,7 @@ def table_one_executor_code(
     assert specification_model is not None
     specification = specification_model.model_dump(mode="python")
     typed_cohort_input = _typed_cohort_input(step)
-    declared_outputs = {
-        str(value or "").strip() for value in step.expected_outputs
-    }
+    declared_outputs = {str(value or "").strip() for value in step.expected_outputs}
     emit_cohort_flow = "table:cohort_flow" in declared_outputs
     emit_source_reconciliation = (
         "log:source_row_count_reconciliation" in declared_outputs
@@ -102,11 +80,11 @@ def table_one_executor_code(
     )
     plausibility_summary_entry = (
         '"plausibility_audit": plausibility_audit,'
-        if plausibility_scope is not None
-        and plausibility_scope.expected_columns
+        if plausibility_scope is not None and plausibility_scope.expected_columns
         else ""
     )
-    rendered = textwrap.dedent(f"""
+    rendered = textwrap.dedent(
+        f"""
         import hashlib
         import json
         import os
@@ -340,7 +318,8 @@ def table_one_executor_code(
             encoding="utf-8",
         )
         print(json.dumps({{"grouped_table_one": "ok", "cohort_n": len(frame)}}))
-        """)
+        """
+    )
     return rendered.replace(
         "__EASYICU_STANDARD_PLAUSIBILITY_RECEIPT__",
         plausibility_code,

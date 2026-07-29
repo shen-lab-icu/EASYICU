@@ -108,7 +108,8 @@ def prevalence_mortality_figure_executor_code(
 
     if not prevalence_mortality_figure_executor_owns_step(step):
         raise ValueError("The step is not owned by the prevalence/mortality renderer")
-    return textwrap.dedent(f"""
+    return textwrap.dedent(
+        f"""
         import os
         from pathlib import Path
 
@@ -123,7 +124,8 @@ def prevalence_mortality_figure_executor_code(
             step_id={step.step_id!r},
             category_labels={binary_level_labels(display_labels)!r},
         )
-        """).strip()
+        """
+    ).strip()
 
 
 def _sha256(path: Path) -> str:
@@ -386,20 +388,22 @@ def run_prevalence_mortality_figure(
     cohort_source = out_dir / f"{_FIGURE_PRODUCT}_cohort_summary_source_data.csv"
     outcome_source = out_dir / f"{_FIGURE_PRODUCT}_outcome_incidence_source_data.csv"
     cohort_source_frame = cohort.copy()
-    cohort_source_frame["display_label"] = cohort_source_frame[
-        "exposure_level"
-    ].map({0.0: category_labels[0], 1.0: category_labels[1]})
+    cohort_source_frame["display_label"] = cohort_source_frame["exposure_level"].map(
+        {0.0: category_labels[0], 1.0: category_labels[1]}
+    )
     outcome_source_frame = outcome.copy()
-    outcome_source_frame["display_label"] = outcome_source_frame[
-        "exposure_level"
-    ].astype(str).map(
-        {
-            "0": category_labels[0],
-            "0.0": category_labels[0],
-            "1": category_labels[1],
-            "1.0": category_labels[1],
-            "overall": "Overall",
-        }
+    outcome_source_frame["display_label"] = (
+        outcome_source_frame["exposure_level"]
+        .astype(str)
+        .map(
+            {
+                "0": category_labels[0],
+                "0.0": category_labels[0],
+                "1": category_labels[1],
+                "1.0": category_labels[1],
+                "overall": "Overall",
+            }
+        )
     )
     cohort_source_frame.to_csv(cohort_source, index=False)
     outcome_source_frame.to_csv(outcome_source, index=False)
