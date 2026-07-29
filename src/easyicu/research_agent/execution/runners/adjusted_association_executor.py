@@ -88,6 +88,61 @@ ADJUSTED_ASSOCIATION_ESTIMATES_COLUMNS = (
     "notes",
 )
 
+_COEFFICIENT_FILENAME = "adjusted_association_coefficients.csv"
+
+#: The exact header ``PrimaryModelContractValidator`` reads.  Every fitted
+#: primary-association model owes a term-level table: the one-row estimates
+#: product answers "what is the effect", and this one answers "of what, adjusted
+#: for what" -- the question a reader has to be able to check against the plan.
+#:
+#: ``estimate`` is the effect on ``effect_scale`` -- an odds ratio for a
+#: logistic fit.  The validator's own message calls this column
+#: ``estimate_or_odds_ratio``, which is a description of the value rather than a
+#: name it accepts: its reader takes ``estimate``, ``odds_ratio`` or ``or``.
+#: One always-correct, self-describing name beats a header that changes shape
+#: with the family.
+ADJUSTED_ASSOCIATION_COEFFICIENT_COLUMNS = (
+    "model_id",
+    "term",
+    "term_role",
+    "source_variable",
+    "estimate",
+    "ci_low",
+    "ci_high",
+    "standard_error",
+    "effect_scale",
+)
+
+#: The fields ``PrimaryModelContractValidator`` fixes for every model contract.
+#: The emitted record also echoes the plan's ``requirement_id``, ``outcome``,
+#: ``outcome_type`` and ``method_family``, which is how the validator matches a
+#: contract to the requirement it answers.
+MODEL_CONTRACT_FIELDS = (
+    "model_id",
+    "exposure_source",
+    "exposure_expression",
+    "exposure_role",
+    "analysis_role",
+    "analysis_set",
+    "baseline_missing_policy",
+    "n",
+    "event_n",
+    "fit_status",
+    "converged",
+    "separation_detected",
+    "penalized",
+    "fit_method",
+)
+
+#: ``fit_estimator`` drops any row with a missing predictor or outcome before
+#: fitting, which is exactly this policy under the validator's vocabulary.
+_BASELINE_MISSING_POLICY = "drop_missing_baseline"
+
+_FIT_METHODS = {
+    "logistic": "statsmodels_logit_maximum_likelihood",
+    "linear": "statsmodels_ols",
+}
+
 
 class AdjustedAssociationError(RuntimeError):
     """The declared model could not be fitted as declared."""
@@ -216,6 +271,8 @@ def adjusted_association_executor_scaffold(
             "covariates": {list(requirement.covariates)!r},
             "estimator_kind": {kind!r},
             "analysis_set": {requirement.analysis_set!r},
+            "analysis_role": {requirement.analysis_role!r},
+            "method_family": {requirement.method_family!r},
         }}
 
         frame, cohort_path = load_step_cohort_frame(
@@ -286,6 +343,54 @@ def _finite(value: Any) -> Optional[float]:
     return number if math.isfinite(number) else None
 
 
+def _coefficient_rows(
+    terms: Sequence[Any],
+    *,
+    model_id: str,
+    exposure: str,
+    adjustment: Sequence[str],
+    effect_scale: str,
+) -> list[Dict[str, Any]]:
+    """Label each fitted coefficient by the role the plan gave its source.
+
+    The role is read off the declaration, never off the term's name: the
+    exposure is the exposure because the model requirement says so, and an
+    adjustment column is one because it is in the declared adjustment set.  A
+    term whose source is in neither would mean the design and the declaration
+    disagree, which the caller refuses rather than labels.
+    """
+
+    adjustment_set = {str(name) for name in adjustment}
+    rows: list[Dict[str, Any]] = []
+    for term in terms:
+        source = str(term.source_variable)
+        if term.term == "const":
+            role = "intercept"
+        elif source == exposure:
+            role = "exposure"
+        elif source in adjustment_set:
+            role = "adjustment"
+        else:
+            raise AdjustedAssociationError(
+                f"fitted design term {term.term!r} came from {source!r}, which "
+                "is neither the declared exposure nor a declared covariate"
+            )
+        rows.append(
+            {
+                "model_id": model_id,
+                "term": str(term.term),
+                "term_role": role,
+                "source_variable": source,
+                "estimate": _finite(term.estimate),
+                "ci_low": _finite(term.ci_low),
+                "ci_high": _finite(term.ci_high),
+                "standard_error": _finite(term.se),
+                "effect_scale": effect_scale,
+            }
+        )
+    return rows
+
+
 def run_adjusted_association_from_env(
     *,
     requirement_id: str,
@@ -294,6 +399,8 @@ def run_adjusted_association_from_env(
     covariates: Sequence[str],
     estimator_kind: str,
     analysis_set: str,
+    analysis_role: str,
+    method_family: str,
     typed_cohort_input: Optional[str] = None,
     frame: Any = None,
     cohort_path: Any = None,
@@ -363,12 +470,65 @@ def run_adjusted_association_from_env(
         "notes": result.notes or "",
     }
 
+    coefficient_rows = _coefficient_rows(
+        result.terms,
+        model_id=requirement_id,
+        exposure=exposure,
+        adjustment=adjustment,
+        effect_scale=_effect_scale(estimator_kind),
+    )
+    exposure_terms = [
+        item for item in coefficient_rows if item["term_role"] == "exposure"
+    ]
+    if len(exposure_terms) != 1:
+        raise AdjustedAssociationError(
+            f"declared model {requirement_id!r} fitted {len(exposure_terms)} "
+            f"terms for exposure {exposure!r}; exactly one is required to report "
+            "a single primary effect"
+        )
+
     out_dir = Path(os.environ["STEP_OUT_DIR"])
     out_dir.mkdir(parents=True, exist_ok=True)
     table_path = out_dir / _TABLE_FILENAME
     pd.DataFrame([row], columns=list(ADJUSTED_ASSOCIATION_ESTIMATES_COLUMNS)).to_csv(
         table_path, index=False
     )
+    coefficient_path = out_dir / _COEFFICIENT_FILENAME
+    pd.DataFrame(
+        coefficient_rows, columns=list(ADJUSTED_ASSOCIATION_COEFFICIENT_COLUMNS)
+    ).to_csv(coefficient_path, index=False)
+
+    model_contract: Dict[str, Any] = {
+        "model_id": requirement_id,
+        # The plan's roster is keyed by requirement_id, so a contract without
+        # one is a model nobody asked for and a requirement nobody answered.
+        "requirement_id": requirement_id,
+        "outcome": outcome,
+        # Derived from the estimator that actually ran, not copied from the
+        # plan: a logistic fit only reaches here after refusing anything but a
+        # binary 0/1 outcome, so this reports what was fitted.
+        "outcome_type": "binary" if estimator_kind == "logistic" else "continuous",
+        # Passed through, because several declared families map to one
+        # implemented estimator.  ``_estimator_kind`` already refused to claim
+        # the step unless this family is one of them, so the echo is checked.
+        "method_family": method_family,
+        "exposure_source": exposure,
+        "exposure_expression": exposure_terms[0]["term"],
+        "exposure_role": "primary" if analysis_role == "primary" else "secondary",
+        "analysis_role": analysis_role,
+        "analysis_set": analysis_set,
+        "baseline_missing_policy": _BASELINE_MISSING_POLICY,
+        "n": int(result.n),
+        "event_n": n_events,
+        "fit_status": "fitted",
+        # Reaching here means the fit converged with a finite estimate and a
+        # finite interval; a separated design cannot satisfy both, and the
+        # branches above return rather than reporting one that does not.
+        "converged": True,
+        "separation_detected": False,
+        "penalized": False,
+        "fit_method": _FIT_METHODS[estimator_kind],
+    }
 
     summary: Dict[str, Any] = {
         "status": "ok",
@@ -389,6 +549,10 @@ def run_adjusted_association_from_env(
         "primary_estimate": estimate,
         "primary_estimate_interval": [ci_low, ci_high],
         "output_files": {ADJUSTED_ASSOCIATION_OUTPUT: table_path.name},
+        "analysis_role": analysis_role,
+        "model_contracts": [model_contract],
+        "adjustment_covariates": list(adjustment),
+        "coefficient_table": coefficient_path.name,
     }
     if estimator_kind == "logistic":
         summary["primary_or"] = estimate
