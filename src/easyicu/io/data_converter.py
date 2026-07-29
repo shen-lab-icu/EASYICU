@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import os
+import re
 import tarfile
 import logging
 import hashlib
@@ -680,6 +681,54 @@ class DataConverter:
         with self._status_lock:
             self._status[file_key] = result
             self._save_status()
+
+    def _hirid_csv_shard_info(
+        self, csv_path: Path
+    ) -> Optional[Tuple[str, int]]:
+        """Return the ricu table and one-based shard number for HiRID CSV parts.
+
+        The public HiRID CSV archives contain two independent source trees with
+        identical basenames::
+
+            observation_tables/csv/part-0.csv
+            pharma_records/csv/part-0.csv
+
+        Treating the basename as the table name collapses those two inputs and
+        writes incorrect ``part-0/1.parquet`` outputs.  Keep the source shard
+        identity explicit and map it directly to the ricu layout.
+        """
+        if self.database != "hirid":
+            return None
+        match = re.fullmatch(
+            r"part-(\d+)\.csv(?:\.gz)?", csv_path.name.lower()
+        )
+        if match is None:
+            return None
+        path_parts = {part.lower() for part in csv_path.parts}
+        if "observation_tables" in path_parts:
+            table_name = "observations"
+        elif "pharma_records" in path_parts:
+            table_name = "pharma"
+        else:
+            return None
+        return table_name, int(match.group(1)) + 1
+
+    def _status_key(self, csv_path: Path) -> str:
+        """Return a collision-free, stable status key for one CSV input."""
+        if self._hirid_csv_shard_info(csv_path) is not None:
+            try:
+                return csv_path.relative_to(self.data_path).as_posix()
+            except ValueError:
+                return csv_path.as_posix()
+        return csv_path.name
+
+    def _source_identity(self, csv_path: Path) -> str:
+        """Return the logical source identity used during CSV discovery."""
+        shard_info = self._hirid_csv_shard_info(csv_path)
+        if shard_info is not None:
+            table_name, shard_num = shard_info
+            return f"{table_name}:{shard_num:06d}"
+        return self._get_table_name_from_path(csv_path)
     
     def _get_csv_files(self) -> List[Path]:
         """Get all CSV/CSV.GZ files in the data directory (including subdirs).
@@ -779,7 +828,10 @@ class DataConverter:
                 (fname[:2].isdigit() and fname.endswith('.csv'))
             )
             
-            if is_shard_csv:
+            # HiRID's part-N CSVs are the canonical source shards.  They must
+            # be checked one-by-one by _is_conversion_needed; the presence of
+            # one valid target shard does not prove that all 250 are complete.
+            if is_shard_csv and self._hirid_csv_shard_info(f) is None:
                 # Check parent directory to see if ricu parquet shards exist
                 parent_name = f.parent.name.lower()
                 grandparent = f.parent.parent
@@ -832,7 +884,7 @@ class DataConverter:
 
         table_files: Dict[str, Tuple[Path, int]] = {}
         for f, size in sized:
-            table_name = self._get_table_name_from_path(f)
+            table_name = self._source_identity(f)
             existing = table_files.get(table_name)
             if existing is None:
                 table_files[table_name] = (f, size)
@@ -879,6 +931,9 @@ class DataConverter:
     
     def _get_table_name(self, csv_path: Path) -> str:
         """Get the ricu-style table name (may differ from CSV name)."""
+        shard_info = self._hirid_csv_shard_info(csv_path)
+        if shard_info is not None:
+            return shard_info[0]
         csv_name = self._get_table_name_from_path(csv_path)
         return self.TABLE_NAME_MAP.get(csv_name, csv_name)
     
@@ -888,12 +943,18 @@ class DataConverter:
         ricu style: parquet files are in root directory, not preserving subdirectory structure.
         Uses ricu table name mapping for databases like HiRID.
         """
+        shard_info = self._hirid_csv_shard_info(csv_path)
+        if shard_info is not None:
+            table_name, shard_num = shard_info
+            return self.data_path / table_name / f"{shard_num}.parquet"
         name = self._get_table_name(csv_path)
         # ricu puts parquet files in root directory
         return self.data_path / f"{name}.parquet"
     
     def _get_parquet_path_with_subdir(self, csv_path: Path) -> Path:
         """Get parquet path preserving subdirectory structure (alternative location)."""
+        if self._hirid_csv_shard_info(csv_path) is not None:
+            return self._get_parquet_path(csv_path)
         name = self._get_table_name(csv_path)
         try:
             rel_parent = csv_path.parent.relative_to(self.data_path)
@@ -909,6 +970,8 @@ class DataConverter:
         (``general_table.parquet``). Readiness checks should recognize the
         latter so already-prepared local datasets do not emit false warnings.
         """
+        if self._hirid_csv_shard_info(csv_path) is not None:
+            return []
         csv_name = self._get_table_name_from_path(csv_path)
         mapped_name = self._get_table_name(csv_path)
         if csv_name == mapped_name:
@@ -1050,12 +1113,41 @@ class DataConverter:
         Returns:
             (needs_conversion, reason)
         """
-        # First check for sharded directory (for large files)
-        file_key = csv_path.name
+        file_key = self._status_key(csv_path)
         previous = self._status.get(file_key, {})
         previous_status = previous.get("status")
         if previous_status in (ConversionStatus.CONVERTING, ConversionStatus.FAILED):
             return True, f"previous conversion is {previous_status}"
+
+        # A HiRID part-N.csv is already one physical source shard and maps to
+        # exactly one observations/N.parquet or pharma/N.parquet target.  Do
+        # not apply whole-directory shard completeness logic to each part.
+        if self._hirid_csv_shard_info(csv_path) is not None:
+            existing_parquet = self._get_parquet_path(csv_path)
+            if not existing_parquet.exists():
+                return True, "parquet file does not exist"
+            if not self._has_parquet_footer(existing_parquet):
+                return True, "parquet file corrupted"
+            if csv_path.stat().st_mtime > existing_parquet.stat().st_mtime:
+                return True, "CSV is newer than parquet"
+            if previous_status != ConversionStatus.COMPLETED:
+                return True, "parquet exists without completed conversion status"
+            stored_rows = self._validated_status_row_count(
+                previous.get("row_count")
+            )
+            if stored_rows is None:
+                return True, "completed conversion has invalid row count"
+            actual_rows = self._parquet_metadata_row_count([existing_parquet])
+            if actual_rows is None:
+                return True, "parquet file corrupted"
+            if actual_rows != stored_rows:
+                return True, (
+                    "row-count mismatch "
+                    f"(status {stored_rows}, parquet {actual_rows})"
+                )
+            return False, "already converted and verified"
+
+        # First check for sharded directory (for large files)
         has_shards, shard_count = self._has_valid_shards(csv_path)
         if has_shards:
             # A valid Parquet footer proves only that one shard finished, not
@@ -1465,17 +1557,26 @@ class DataConverter:
                             'lowexhaledtv', 'aboression', 'highpeakpress',
                             'lowpeakpress', 'exhaledmvtime', 'highexhaledmv'],
         'respiratorycharting': ['respchartvalue', 'respchartvaluelabel'],
+        # HiRID observations.stringvalue is sparse and can begin with
+        # numeric-like text before later carrying censored values such as
+        # "<1.0".  Keep the separate `value` column numeric for downstream
+        # range filters and aggregations.
+        'observations': ['stringvalue'],
         # AUMC - all object columns should be converted to string
         'admissions': ['destination', 'origin'],
         'drugitems': ['ordercategoryname', 'doserateunit', 'doseunitid', 'doserateunitid'],
         'freetextitems': ['value'],
         'listitems': ['value'],
-        'numericitems': ['value', 'unit', 'registeredby'],
+        # numericitems.value is genuinely numeric. Keeping it numeric avoids
+        # repeated TRY_CAST work in every downstream AUMC concept query.
+        'numericitems': ['unit', 'registeredby'],
         'procedureorderitems': ['ordercategoryname'],
         'processitems': ['item'],
     }
     
-    def _fix_mixed_type_columns(self, df: pd.DataFrame, filename: str) -> pd.DataFrame:
+    def _fix_mixed_type_columns(
+        self, df: pd.DataFrame, filename: str | Path
+    ) -> pd.DataFrame:
         """Fix columns with mixed types by converting to string.
         
         Some tables have columns with mixed bytes/float/string types
@@ -1488,12 +1589,7 @@ class DataConverter:
         Returns:
             Fixed DataFrame
         """
-        # Get table name from filename
-        table_name = filename.lower()
-        for ext in ['.csv.gz', '.csv']:
-            if table_name.endswith(ext):
-                table_name = table_name[:-len(ext)]
-                break
+        table_name = self._get_table_name(Path(filename))
         
         # Check for known problematic columns. MIMIC-III ships uppercase
         # headers, so match case-insensitively (the canonical entry is
@@ -1547,6 +1643,12 @@ class DataConverter:
         
         This ensures large files like emar.csv.gz (774MB) are also sharded.
         """
+        # HiRID archives are already split into 250 source shards per table;
+        # map each directly to one target parquet instead of creating a nested
+        # part-N/1.parquet layout.
+        if self._hirid_csv_shard_info(csv_path) is not None:
+            return False
+
         table_name = self._get_table_name(csv_path)
         
         # Check if table has ID-based partitioning config
@@ -1571,7 +1673,7 @@ class DataConverter:
         Returns:
             Conversion result dictionary
         """
-        file_key = csv_path.name
+        file_key = self._status_key(csv_path)
         table_name = self._get_table_name(csv_path)
         
         result = {
@@ -1624,6 +1726,32 @@ class DataConverter:
         import pyarrow.parquet as pq
         
         parquet_path = self._get_parquet_path(csv_path)
+        parquet_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Use the Arrow streaming path for the already-sharded HiRID inputs.
+        # It is both faster and, with observations.stringvalue pinned to
+        # string, preserves censored values such as "<1.0" while keeping the
+        # separate observations.value column numeric.
+        if (
+            self._hirid_csv_shard_info(csv_path) is not None
+            and self._arrow_csv_enabled(csv_path)
+        ):
+            try:
+                return self._convert_file_single_arrow(
+                    csv_path, parquet_path, result
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "  ⚠️ Arrow single-file path failed for %s (%s: %s); "
+                    "falling back to pandas",
+                    csv_path.name,
+                    type(exc).__name__,
+                    exc,
+                )
+                try:
+                    parquet_path.unlink()
+                except FileNotFoundError:
+                    pass
         
         # Check file size to decide on streaming vs direct write
         bad_row_counter = [0]
@@ -1661,7 +1789,7 @@ class DataConverter:
 
                 for i, chunk in enumerate(chunk_iter):
                     # Fix mixed-type columns in each chunk
-                    chunk = self._fix_mixed_type_columns(chunk, csv_path.name)
+                    chunk = self._fix_mixed_type_columns(chunk, csv_path)
 
                     # Convert to PyArrow table
                     table = pa.Table.from_pandas(chunk, preserve_index=False)
@@ -1718,7 +1846,7 @@ class DataConverter:
             )
 
             # Fix mixed-type columns before parquet export
-            df = self._fix_mixed_type_columns(df, csv_path.name)
+            df = self._fix_mixed_type_columns(df, csv_path)
 
             # Convert to parquet with error handling
             try:
@@ -1794,9 +1922,13 @@ class DataConverter:
         self._wipe_shard_dir(shard_dir)
         partition_config = self._get_partitioning_config(table_name)
         
-        # ID-based partitioning matches ricu's output format exactly.
-        # Now that memory is not an issue, enable by default for tables with config.
-        # Set EASYICU_USE_ID_PARTITIONING=0 to disable if needed.
+        # ID-based partitioning matches ricu's output format and enables
+        # item/patient pruning during extraction.  The default streaming Arrow
+        # implementation keeps only a bounded working table while writers are
+        # open, so it remains suitable for the project's 16GB baseline.
+        # Set EASYICU_USE_ID_PARTITIONING=0 for a single-writer row layout
+        # when compatibility with an unusual filesystem matters more than
+        # downstream pruning.
         use_id_partitioning = os.environ.get('EASYICU_USE_ID_PARTITIONING', '1') == '1'
         
         if partition_config and use_id_partitioning:
@@ -1956,7 +2088,7 @@ class DataConverter:
                     logger.info(f"  Read {total_rows:,} rows...")
 
                 # Fix mixed-type columns before conversion
-                chunk = self._fix_mixed_type_columns(chunk, csv_path.name)
+                chunk = self._fix_mixed_type_columns(chunk, csv_path)
 
                 # Assign each row to a partition
                 if partition_col not in chunk.columns:
@@ -2131,7 +2263,7 @@ class DataConverter:
             for i, chunk in enumerate(chunk_iter):
                 if i >= sample_chunks:
                     break
-                chunk = self._fix_mixed_type_columns(chunk, csv_path.name)
+                chunk = self._fix_mixed_type_columns(chunk, csv_path)
                 table = pa.Table.from_pandas(chunk, preserve_index=False)
                 schemas.append(table.schema)
                 # Explicitly delete to free memory immediately
@@ -2255,7 +2387,7 @@ class DataConverter:
                 total_rows += chunk_len
 
                 # Fix mixed-type columns before conversion
-                chunk = self._fix_mixed_type_columns(chunk, csv_path.name)
+                chunk = self._fix_mixed_type_columns(chunk, csv_path)
 
                 # Convert to PyArrow table
                 table = pa.Table.from_pandas(chunk, preserve_index=False)
@@ -2331,8 +2463,69 @@ class DataConverter:
             enc = self._detect_encoding(csv_path)
         except Exception:  # noqa: BLE001
             return False
-        # pyarrow.csv assumes UTF-8/ASCII; other encodings go to pandas.
-        return enc in ('utf-8', 'ascii', 'utf-8-replace')
+        # pyarrow.csv can transcode ISO-8859-1 directly. This matters for
+        # AUMC's 80GB numericitems.csv: forcing pandas solely because the file
+        # is Latin-1 makes conversion an order of magnitude slower.
+        return enc in (
+            'utf-8',
+            'ascii',
+            'utf-8-replace',
+            'latin1',
+            'iso-8859-1',
+        )
+
+    def _convert_file_single_arrow(
+        self,
+        csv_path: Path,
+        parquet_path: Path,
+        result: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Convert one CSV source shard directly to one Parquet file."""
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+
+        table_name = self._get_table_name(csv_path)
+        bad_row_counter = [0]
+        reader = self._open_arrow_csv(
+            csv_path, table_name, bad_row_counter=bad_row_counter
+        )
+        schema = reader.schema
+        writer = None
+        total_rows = 0
+        try:
+            writer = pq.ParquetWriter(
+                parquet_path,
+                schema,
+                compression=self.parquet_compression,
+            )
+            for batch in self._threaded_batch_iter(reader):
+                writer.write_batch(batch)
+                total_rows += batch.num_rows
+        finally:
+            if writer is not None:
+                writer.close()
+            try:
+                reader.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+        # Ensure even a header-only CSV produces a readable Parquet file.
+        if writer is None:
+            pq.write_table(
+                pa.Table.from_batches([], schema=schema),
+                parquet_path,
+                compression=self.parquet_compression,
+            )
+
+        result["status"] = ConversionStatus.COMPLETED
+        result["row_count"] = total_rows
+        result["shards"] = 0
+        result["bad_rows_skipped"] = bad_row_counter[0]
+        if self.verbose:
+            logger.info(
+                f"  ✅ Converted {result['file']}: {total_rows:,} rows (Arrow)"
+            )
+        return result
 
     def _wipe_shard_dir(self, shard_dir: Path) -> None:
         """Delete parquet shards left behind by a failed Arrow attempt."""
@@ -2379,7 +2572,16 @@ class DataConverter:
                     col_types[c] = pa.string()
                     col_types[c.upper()] = pa.string()
 
-        read_opts = pa_csv.ReadOptions(block_size=16 * 1024 * 1024)
+        source_encoding = self._detect_encoding(csv_path).lower()
+        arrow_encoding = (
+            "latin1"
+            if source_encoding in ("latin1", "iso-8859-1")
+            else "utf8"
+        )
+        read_opts = pa_csv.ReadOptions(
+            block_size=16 * 1024 * 1024,
+            encoding=arrow_encoding,
+        )
 
         def _handle_invalid_row(row):
             if bad_row_counter is not None:
@@ -2463,10 +2665,17 @@ class DataConverter:
             except Exception as exc:  # noqa: BLE001
                 err.append(exc)
             finally:
-                try:
-                    q.put(sentinel, timeout=0.5)
-                except _queue.Full:
-                    pass
+                # Normal completion must always publish the sentinel. A
+                # single timed put can lose it when the final data batch still
+                # fills a small queue; the consumer then drains that batch and
+                # waits forever. On 400M+ row conversions this looked like a
+                # writer deadlock only after the complete input scan.
+                while not stop.is_set():
+                    try:
+                        q.put(sentinel, timeout=0.5)
+                        break
+                    except _queue.Full:
+                        continue
 
         thread = threading.Thread(target=_produce, daemon=True)
         thread.start()
@@ -2712,7 +2921,7 @@ class DataConverter:
         csv_files = self._get_csv_files()
         
         for csv_path in csv_files:
-            file_key = csv_path.name
+            file_key = self._status_key(csv_path)
             needs_conversion, reason = self._is_conversion_needed(csv_path)
 
             if not needs_conversion:
@@ -3035,7 +3244,7 @@ class DataConverter:
                 return
             try:
                 progress_callback({
-                    'file': csv_path.name,
+                    'file': self._status_key(csv_path),
                     'current': done,
                     'total': total,
                     'status': result.get('status'),
@@ -3057,20 +3266,20 @@ class DataConverter:
                     csv_path = future_map[future]
                     try:
                         result = future.result()
-                        results[csv_path.name] = result
+                        results[self._status_key(csv_path)] = result
                     except Exception as e:
                         result = {
                             'status': ConversionStatus.FAILED,
                             'error': str(e),
                         }
-                        results[csv_path.name] = result
+                        results[self._status_key(csv_path)] = result
                     done += 1
                     _emit(csv_path, result, done)
         else:
             # Sequential conversion
             for done, csv_path in enumerate(files_to_convert, start=1):
                 result = self._convert_file(csv_path)
-                results[csv_path.name] = result
+                results[self._status_key(csv_path)] = result
                 _emit(csv_path, result, done)
         # 🚀 perf A1/A2: drop bucket/shard cache so a subsequent call sees
         # the new shards/buckets written by this run.
@@ -3106,7 +3315,9 @@ class DataConverter:
         for csv_path in csv_files:
             needs_conversion, reason = self._is_conversion_needed(csv_path)
             if needs_conversion:
-                missing_or_failed.append(f"{csv_path.name}: {reason}")
+                missing_or_failed.append(
+                    f"{self._status_key(csv_path)}: {reason}"
+                )
         
         return len(missing_or_failed) == 0, missing_or_failed
     
@@ -3272,7 +3483,10 @@ class DataConverter:
 
     def _find_csv_by_name(self, file_name: str) -> Optional[Path]:
         for csv_path in self._get_csv_files():
-            if csv_path.name == file_name:
+            if (
+                csv_path.name == file_name
+                or self._status_key(csv_path) == file_name
+            ):
                 return csv_path
         candidate = self.data_path / file_name
         return candidate if candidate.exists() else None

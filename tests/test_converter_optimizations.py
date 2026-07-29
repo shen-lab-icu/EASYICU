@@ -24,6 +24,7 @@ from __future__ import annotations
 import gzip
 import json
 import threading
+import time
 
 import duckdb
 
@@ -189,3 +190,31 @@ def test_concurrent_record_status_is_consistent(tmp_path):
 
     # No leftover temp files from the atomic-write path.
     assert not list(tmp_path.glob(f"{DataConverter.STATUS_FILE}.*.tmp"))
+
+
+def test_threaded_batch_iterator_never_loses_completion_sentinel(tmp_path):
+    """A full final queue must not turn successful conversion into a hang."""
+
+    class _Reader:
+        def __init__(self) -> None:
+            self._batches = iter([1, 2])
+
+        def read_next_batch(self):
+            return next(self._batches)
+
+    converter = DataConverter(tmp_path, database="aumc", verbose=False)
+    received: list[int] = []
+
+    def consume() -> None:
+        for batch in converter._threaded_batch_iter(_Reader(), queue_size=1):
+            received.append(batch)
+            # Keep the final data batch occupying the one-slot queue longer
+            # than the producer's timed put interval.
+            time.sleep(0.7)
+
+    thread = threading.Thread(target=consume, daemon=True)
+    thread.start()
+    thread.join(timeout=3)
+
+    assert not thread.is_alive()
+    assert received == [1, 2]
