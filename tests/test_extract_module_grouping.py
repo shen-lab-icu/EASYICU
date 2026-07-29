@@ -31,6 +31,7 @@ from easyicu.api.extraction import (
     _get_extraction_mp_context,
     _group_modules_for_extraction,
     _normalise_module_frame_for_parquet,
+    _resolve_extraction_grouping,
 )
 from easyicu.api.concepts import _concepts_need_sofa2
 
@@ -62,6 +63,54 @@ def test_grouping_reduces_subprocess_count():
     # each ungrouped normal group holds exactly one module
     normal_ungrouped = [g for g in ungrouped if g["modules"]]
     assert all(len(g["modules"]) == 1 for g in normal_ungrouped)
+
+
+def test_low_memory_host_automatically_isolates_modules():
+    enabled, reason = _resolve_extraction_grouping(
+        True,
+        False,
+        environment={},
+        total_memory_mb=16 * 1024,
+    )
+
+    assert enabled is False
+    assert reason == "low_memory_host"
+
+
+def test_constrained_cache_budget_isolates_modules_on_large_server():
+    enabled, reason = _resolve_extraction_grouping(
+        True,
+        False,
+        environment={"EASYICU_CACHE_BUDGET_MB": "2048"},
+        total_memory_mb=1024 * 1024,
+    )
+
+    assert enabled is False
+    assert reason == "constrained_cache_budget"
+
+
+def test_large_server_keeps_grouped_speed_path():
+    enabled, reason = _resolve_extraction_grouping(
+        True,
+        False,
+        environment={},
+        total_memory_mb=128 * 1024,
+    )
+
+    assert enabled is True
+    assert reason == "shared_cache_speed_path"
+
+
+def test_expert_grouping_override_has_priority_over_host_size():
+    enabled, reason = _resolve_extraction_grouping(
+        True,
+        False,
+        environment={"EASYICU_EXTRACT_GROUPING": "1"},
+        total_memory_mb=16 * 1024,
+    )
+
+    assert enabled is True
+    assert reason == "forced_by_environment"
 
 
 def test_special_modules_attach_to_scoring_group():

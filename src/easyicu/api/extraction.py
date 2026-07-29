@@ -1178,6 +1178,63 @@ def _group_modules_for_extraction(
     return groups
 
 
+_GROUPING_MIN_HOST_MEMORY_MB = 24 * 1024
+_GROUPING_MIN_CACHE_BUDGET_MB = 4096
+
+
+def _resolve_extraction_grouping(
+    group_modules: bool,
+    stream_output_batches: bool,
+    *,
+    environment: Optional[Dict[str, str]] = None,
+    total_memory_mb: Optional[float] = None,
+) -> tuple[bool, str]:
+    """Choose the safe grouping mode for the current memory contract.
+
+    Sharing source-table caches across related modules is faster on a server,
+    but real full-database profiling found 17--28 GiB process-tree peaks even
+    with a bounded cache. A 16 GiB workstation must therefore isolate modules
+    into separate subprocesses while still loading the full patient cohort
+    once per module. Experts can force either mode with
+    ``EASYICU_EXTRACT_GROUPING=1`` or ``=0``.
+    """
+    if not group_modules:
+        return False, "disabled_by_argument"
+    if stream_output_batches:
+        return False, "streamed_batch_writer"
+
+    env = os.environ if environment is None else environment
+    raw_override = str(env.get("EASYICU_EXTRACT_GROUPING", "")).strip().lower()
+    if raw_override in {"0", "off", "false", "no"}:
+        return False, "disabled_by_environment"
+    if raw_override in {"1", "on", "true", "yes"}:
+        return True, "forced_by_environment"
+
+    raw_cache_budget = env.get("EASYICU_CACHE_BUDGET_MB")
+    if raw_cache_budget is not None:
+        try:
+            cache_budget_mb = float(raw_cache_budget)
+        except (TypeError, ValueError):
+            cache_budget_mb = None
+        if (
+            cache_budget_mb is not None
+            and 0 < cache_budget_mb <= _GROUPING_MIN_CACHE_BUDGET_MB
+        ):
+            return False, "constrained_cache_budget"
+
+    if total_memory_mb is None:
+        try:
+            import psutil
+
+            total_memory_mb = psutil.virtual_memory().total / (1024**2)
+        except Exception:
+            # Fail safe when host capacity cannot be established.
+            total_memory_mb = 16 * 1024
+    if total_memory_mb <= _GROUPING_MIN_HOST_MEMORY_MB:
+        return False, "low_memory_host"
+    return True, "shared_cache_speed_path"
+
+
 _NATIVE_EXPORT_SCHEMA_V2 = "easyicu_native_export_v2"
 _NATIVE_EXPORT_ID_COLUMNS = (
     "stay_id",
@@ -1747,8 +1804,10 @@ def extract_database(
         batch_size: 模块内患者分批大小。None(默认) = 五个较小数据库一次性
             in-process 加载；完整 eICU 队列按稳定内存预算使用 1–3 个大批次。
             仅在需要覆盖默认策略时显式传值。
-        group_modules: True(默认) = 共享源表的模块合并为分组子进程并复用
-            keep_cache 缓存；False = 每模块一个子进程（旧行为）。
+        group_modules: True(默认) = 自动选择：内存充足的服务器将共享源表的
+            模块合并为分组子进程；≤24GB 主机或 ≤4GB 显式缓存预算自动切换
+            为每模块一个隔离子进程。False = 始终逐模块隔离。可用
+            EASYICU_EXTRACT_GROUPING=1/0 强制覆盖。
         native_export_v2: 输出到磁盘时默认启用；基于刚写出的 parquet 建立
             跨库统一 schema 与 typed metadata sidecar，不会重读原始表。传
             False 可显式保留旧版未封装输出。若任何模块或 metadata 绑定失败，
@@ -1924,10 +1983,9 @@ def extract_database(
     mp_ctx = _get_extraction_mp_context(mp)
 
     # ---- 模块分组：组内共享源表扫描（keep_cache），组间子进程隔离 ----
-    group_flag = group_modules and not stream_output_batches
-    _env_grouping = os.environ.get("EASYICU_EXTRACT_GROUPING", "").strip().lower()
-    if _env_grouping in ("0", "off", "false", "no"):
-        group_flag = False
+    group_flag, group_reason = _resolve_extraction_grouping(
+        group_modules, stream_output_batches
+    )
 
     groups = _group_modules_for_extraction(normal_modules, special_modules, group_flag)
 
@@ -1936,6 +1994,8 @@ def extract_database(
             f"   分组: {len(groups)} 组（组内共享源表扫描；"
             f"EASYICU_EXTRACT_GROUPING=0 或 group_modules=False 关闭）"
         )
+    elif verbose:
+        print(f"   分组: 关闭（逐模块进程隔离；reason={group_reason}）")
 
     n_units_total = len(normal_modules) + len(special_modules)
     units_done = 0
