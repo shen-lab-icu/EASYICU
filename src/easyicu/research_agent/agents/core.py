@@ -34,6 +34,7 @@ import hashlib
 import json
 import os
 import re
+import typing
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
@@ -613,7 +614,19 @@ def _build_planner_user_prompt(
         "that step may only be canonical attrition/flow tables.\n\n"
         "When robustness is required, pre-specify one or more executable, "
         "task-supported `robustness_specs`; never invent an unsupported axis, "
-        "endpoint, or variable. Add an auxiliary post-primary step with "
+        "endpoint, or variable. "
+        # "Never invent an unsupported axis" was already here, and the closed
+        # set it refers to was not. A real Planner guessed 'model' on one run
+        # and 'functional_form' on the next, each costing an attempt. Read the
+        # vocabulary off the contract so publishing it cannot drift from
+        # enforcing it. A design that needs a different axis belongs in its own
+        # analysis step, not in a widened robustness axis.
+        "`axis` is closed: use exactly one of "
+        + ", ".join(f"'{value}'" for value in _robustness_axis_vocabulary())
+        + ". A sensitivity that does not fit one of these (for example an "
+        "alternative model form or link function) is a separate analysis "
+        "step, not a new axis value. "
+        "Add an auxiliary post-primary step with "
         "`method='robustness_sensitivity'` producing "
         "`table:robustness_matrix` and `statistic:robustness_summary`. "
         "Variants must not change the primary analysis.\n\n"
@@ -3990,6 +4003,25 @@ def _canonicalise_planned_analysis_role(
     if token == "robustness" and method_token == "robustness_sensitivity":
         return "sensitivity"
     return value
+
+
+def _robustness_axis_vocabulary() -> tuple:
+    """Return the closed robustness axes, read off the contract that enforces them.
+
+    Published to the Planner rather than transcribed, so the sentence telling
+    it not to invent an axis cannot fall out of step with the set that would
+    reject one.
+    """
+
+    axis = typing.get_type_hints(RobustnessSpec)["axis"]
+    values = typing.get_args(axis)
+    if not values:
+        raise TypeError(
+            "RobustnessSpec.axis is no longer a closed Literal, so its "
+            "vocabulary cannot be published to the Planner; state the allowed "
+            "values explicitly at their new source instead of guessing."
+        )
+    return values
 
 
 def _declared_field_names(model: type) -> set:

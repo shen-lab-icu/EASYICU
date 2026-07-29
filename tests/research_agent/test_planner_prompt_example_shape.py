@@ -9,14 +9,21 @@ where a bare column name belongs.
 
 An example is only worth showing while it is still true, so this parses
 the example out of the prompt the Planner actually receives, substitutes
-its ``<placeholder>`` slots, and validates the result against
-``AnalysisPlan``. Change a field name or a Literal in the schema without
-updating the example and this fails.
+its ``<placeholder>`` slots, and checks the resulting step against the
+real schema *and* against the deterministic owner that must claim it.
+Change a field name or a Literal without updating the example and this
+fails.
+
+The same applies to a closed vocabulary the prompt forbids inventing:
+the robustness ``axis`` set is asserted to be published, read off the
+contract that enforces it.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import json
+import typing
 from typing import Any
 
 import pytest
@@ -26,6 +33,7 @@ from easyicu.research_agent.agents.core import _build_planner_user_prompt
 from easyicu.research_agent.execution.runners.exposure_outcome_distribution_executor import (  # noqa: E501
     exposure_outcome_distribution_executor_owns_step,
 )
+from easyicu.research_agent.planning.robustness_contract import RobustnessSpec
 from easyicu.research_agent.schema import (
     AnalysisStep,
     CohortDescriptor,
@@ -175,6 +183,29 @@ def test_the_example_spec_validates_on_its_own() -> None:
 
     assert isinstance(spec, dict)
     ExposureOutcomeDistributionSpec.model_validate(spec)
+
+
+def test_the_closed_robustness_axis_vocabulary_is_published_to_the_planner() -> None:
+    """ "Never invent an unsupported axis" was there; the supported set was not.
+
+    A real Planner guessed ``model`` on one run and ``functional_form`` on the
+    next, each costing an attempt against a three-value closed set it was
+    never shown. Read from the contract so the sentence cannot drift from what
+    would reject it.
+    """
+
+    prompt = _build_planner_user_prompt(_minimal_context())
+    allowed = typing.get_args(typing.get_type_hints(RobustnessSpec)["axis"])
+
+    assert allowed, "RobustnessSpec.axis is no longer a closed Literal"
+    for value in allowed:
+        assert f"'{value}'" in prompt, (
+            f"the Planner is forbidden from inventing an axis but is never "
+            f"shown that {value!r} is allowed"
+        )
+
+    # The guesses must be steered somewhere, not merely refused.
+    assert "separate analysis step" in prompt
 
 
 @pytest.mark.parametrize(
