@@ -336,6 +336,29 @@ def test_grouped_export_nulls_declared_bound_violations_and_audits_them(
     assert status["bmi"]["excluded_out_of_bounds"] == 2
 
 
+def test_native_bounds_survive_sofa2_overlay_redefinition(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(api, "_CONCEPT_BOUNDS_CACHE", None)
+    dictionary = api.load_dictionary(include_sofa2=True)
+    assert dictionary["uo_6h"].minimum is None
+    assert api._load_concept_bounds_map()["uo_6h"] == (0.0, 20.0)
+    frame = pd.DataFrame({"uo_6h": [0.0, 1.5, 20.0, 20.1, 1886.0]})
+
+    audit = api._enforce_native_export_concept_bounds(
+        frame,
+        requested_concepts=["uo_6h"],
+        dictionary=dictionary,
+    )
+
+    assert frame["uo_6h"].tolist()[:3] == [0.0, 1.5, 20.0]
+    assert frame["uo_6h"].iloc[3:].isna().all()
+    assert audit["uo_6h"] == {
+        "excluded_out_of_bounds": 2,
+        "declared_bounds": {"minimum": 0.0, "maximum": 20.0},
+    }
+
+
 def test_grouped_export_reads_special_concept_from_saved_key(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
