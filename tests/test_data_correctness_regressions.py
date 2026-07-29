@@ -16,7 +16,9 @@ from easyicu.datasource import (
     FilterOp,
     FilterSpec,
     ICUDataSource,
+    _resolve_wide_column_batch_size,
     load_bucketed_table_aggregated,
+    load_wide_table_aggregated,
 )
 from easyicu.io.data_converter import ConversionStatus, DataConverter
 from easyicu.runtime.parallel_config import get_parallel_config
@@ -481,6 +483,65 @@ def test_parallel_config_uses_two_worker_safe_default_at_16gb(
         override_memory_gb=16,
         override_workers=6,
     ).max_workers == 6
+
+
+def test_wide_column_batch_size_is_bounded_on_16gb(monkeypatch) -> None:
+    monkeypatch.delenv("EASYICU_WIDE_COLUMN_BATCH_SIZE", raising=False)
+    monkeypatch.setattr(
+        "easyicu.runtime.parallel_config.get_global_config",
+        lambda: SimpleNamespace(total_memory_gb=16),
+    )
+
+    assert _resolve_wide_column_batch_size(6) == 2
+
+    monkeypatch.setenv("EASYICU_WIDE_COLUMN_BATCH_SIZE", "3")
+    assert _resolve_wide_column_batch_size(6) == 3
+
+
+def test_wide_table_column_chunks_reassemble_identical_grid(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    parquet = tmp_path / "vitalperiodic.parquet"
+    pd.DataFrame(
+        {
+            "patientunitstayid": [1, 1, 2],
+            "observationoffset": [0, 30, 60],
+            "a": [1.0, 3.0, 5.0],
+            "b": [2.0, 4.0, 6.0],
+            "c": [10.0, 14.0, 18.0],
+        }
+    ).to_parquet(parquet, index=False)
+    defaults = SimpleNamespace(
+        id_var="patientunitstayid",
+        index_var="observationoffset",
+    )
+    source = SimpleNamespace(
+        config=SimpleNamespace(
+            get_table=lambda name: SimpleNamespace(defaults=defaults),
+        ),
+        _resolve_loader_from_disk=lambda name: parquet,
+    )
+    monkeypatch.setenv("EASYICU_WIDE_COLUMN_BATCH_SIZE", "2")
+
+    result = load_wide_table_aggregated(
+        source,
+        "vitalperiodic",
+        ["a", "b", "c"],
+        patient_ids=[1, 2],
+    ).sort_values(["patientunitstayid", "charttime"]).reset_index(drop=True)
+
+    assert result.columns.tolist() == [
+        "patientunitstayid",
+        "charttime",
+        "a",
+        "b",
+        "c",
+    ]
+    assert result[["a", "b", "c"]].to_dict("records") == [
+        {"a": 2.0, "b": 3.0, "c": 12.0},
+        {"a": 5.0, "b": 6.0, "c": 18.0},
+    ]
 
 
 def test_mimic_hospital_value_transform_carries_unit_through_rolling_cte(

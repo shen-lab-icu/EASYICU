@@ -4072,6 +4072,54 @@ def load_bucketed_table_multi_aggregated(
     return df
 
 
+def _resolve_wide_column_batch_size(value_count: int) -> int:
+    """Choose how many wide-table median states to aggregate per query."""
+    import os
+
+    if value_count < 1:
+        return 1
+    raw_limit = os.environ.get("EASYICU_WIDE_COLUMN_BATCH_SIZE")
+    if raw_limit:
+        try:
+            return min(value_count, max(1, int(raw_limit)))
+        except ValueError:
+            logger.warning(
+                "Ignoring invalid EASYICU_WIDE_COLUMN_BATCH_SIZE=%r",
+                raw_limit,
+            )
+    try:
+        from .runtime.parallel_config import get_global_config
+
+        if get_global_config().total_memory_gb <= 16:
+            return min(value_count, 2)
+    except Exception:
+        pass
+    return value_count
+
+
+def _release_wide_chunk_memory() -> None:
+    """Release temporary query buffers between constrained wide-column chunks."""
+    import gc
+    import sys
+
+    gc.collect()
+    try:
+        import pyarrow as pa
+
+        pa.default_memory_pool().release_unused()
+    except Exception:
+        pass
+    if sys.platform.startswith("linux"):
+        try:
+            import ctypes
+
+            malloc_trim = getattr(ctypes.CDLL(None), "malloc_trim", None)
+            if malloc_trim is not None:
+                malloc_trim(0)
+        except Exception:
+            pass
+
+
 def load_wide_table_aggregated(
     data_source: "ICUDataSource",
     table_name: str,
@@ -4120,6 +4168,46 @@ def load_wide_table_aggregated(
         id_col = icustay_cfg.id if icustay_cfg else 'patientunitstayid'
     
     time_col = table_cfg.defaults.index_var or 'observationoffset'
+
+    # DuckDB's MEDIAN keeps one aggregate state per output group and value
+    # column.  On a full eICU batch, six simultaneous vital columns exceeded
+    # 16 GiB even with a 2 GB DuckDB memory_limit because complex aggregate
+    # state and result buffers are not all governed by that setting.  Keep the
+    # same patient batch, but scan a bounded number of value columns per query
+    # and reassemble their identical key grids afterwards.
+    column_batch_size = _resolve_wide_column_batch_size(len(value_columns))
+    if len(value_columns) > column_batch_size:
+        combined = None
+        key_columns = [id_col, "charttime"]
+        for start in range(0, len(value_columns), column_batch_size):
+            column_chunk = value_columns[start : start + column_batch_size]
+            chunk = load_wide_table_aggregated(
+                data_source,
+                table_name,
+                column_chunk,
+                interval_hours=interval_hours,
+                patient_ids=patient_ids,
+                agg_func=agg_func,
+                column_bounds=column_bounds,
+            )
+            chunk = chunk.sort_values(
+                key_columns,
+                kind="mergesort",
+                ignore_index=True,
+            )
+            if combined is None:
+                combined = chunk
+                continue
+            if not combined[key_columns].equals(chunk[key_columns]):
+                raise ValueError(
+                    "wide-table column chunks produced different key grids"
+                )
+            for column in column_chunk:
+                if column in chunk.columns:
+                    combined[column] = chunk[column].to_numpy(copy=False)
+            del chunk
+            _release_wide_chunk_memory()
+        return combined if combined is not None else pd.DataFrame()
     
     # 确定数据目录
     table_path = data_source._resolve_loader_from_disk(table_name)
