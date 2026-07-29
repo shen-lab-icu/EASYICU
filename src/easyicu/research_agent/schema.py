@@ -114,6 +114,45 @@ MEASUREMENT_AUDIT_KINDS = frozenset(
     }
 )
 
+# The closed set of outputs the prespecified-robustness replay produces from an
+# already-locked specification grid, named by what each one answers.
+#
+# Same disease as MEASUREMENT_AUDIT_KINDS, different dominant organ.  There the
+# product names were the gate that bled (162 steps); here it is the *method*
+# string: the runner's allowlist holds exactly three heads, and over the
+# recorded corpus 182 robustness steps -- with neither a figure nor a claim
+# from the agent-owned validation gate -- were turned away, 62 of them for
+# saying ``prespecified_sensitivity_analysis`` and 12 for the plainest possible
+# ``sensitivity_analysis``, which the list simply does not contain.  Two
+# runners, two allowlists, and in each one it was the *other* half that leaked.
+#
+# Widening the method list would be worse than the gap: this replay executes an
+# already-locked spec grid, and a step named for a causal-emulation or
+# weighting sensitivity may be different science the runner cannot produce.
+# Claiming it and then failing for a missing product is strictly worse than
+# never claiming it.  Only the Planner can say "this step IS that replay", so
+# it says it here.
+ROBUSTNESS_REPLAY_OUTPUTS = frozenset(
+    {
+        # Per locked specification: the estimate, its interval and its n.
+        "robustness_matrix",
+        # Agreement/disagreement across the grid, as one summary.
+        "robustness_summary",
+        # The locked grid itself, one row per specification.
+        "specification_grid",
+        # Cohort overlap and attrition between the primary set and each variant.
+        "membership_change",
+        # Whether each variant's outcome label could be executed at all.
+        "outcome_label_executability",
+        # The prespecified missing-data strategies and their warnings.
+        "missingness_strategy_notes",
+        # The primary effect on its declared scale.
+        "primary_effect",
+        # The complete-case denominator.
+        "complete_case_n",
+    }
+)
+
 
 def _closed_table_one_levels(values: List[Any], *, label: str) -> List[Any]:
     tokens: list[tuple[str, str]] = []
@@ -1216,6 +1255,123 @@ class ExposureOutcomeDistributionSpec(BaseModel):
         return self
 
 
+def _exact_product_naming_a_known_kind(
+    product_id: str,
+    kind: str,
+    *,
+    known_kinds: frozenset[str],
+    label: str,
+) -> tuple[str, str]:
+    """Normalise one `<product id> IS <kind>` declaration, or refuse it."""
+
+    product_id = str(product_id or "").strip()
+    if not product_id:
+        raise ValueError(f"{label} product_id must be non-empty")
+    if ":" in product_id:
+        raise ValueError(
+            f"{label} product_id is the bare product name; drop the kind "
+            f"prefix from {product_id!r}"
+        )
+    kind = str(kind or "").strip()
+    if kind not in known_kinds:
+        raise ValueError(
+            f"unknown {label} {kind!r}; the host produces {sorted(known_kinds)!r}"
+        )
+    return product_id, kind
+
+
+def _one_product_per_kind(
+    products: Sequence[Any],
+    *,
+    kind_attribute: str,
+    label: str,
+) -> None:
+    """Refuse a declaration that promises N products and answers fewer.
+
+    Both hosted product families write some of their answers to more than one
+    filename, so "as many distinct files as products" cannot tell a reader
+    promised two tables from a reader handed one table twice.  Distinct kinds
+    can, which is the whole reason these declarations are keyed on the answer.
+    """
+
+    ids = [item.product_id for item in products]
+    if len(ids) != len(set(ids)):
+        raise ValueError(f"{label} product_id values must be unique")
+    kinds = [getattr(item, kind_attribute) for item in products]
+    if len(kinds) != len(set(kinds)):
+        raise ValueError(
+            f"each {label} may back at most one declared product; two products "
+            f"naming the same one would be one answer promised twice "
+            f"({sorted(kinds)!r})"
+        )
+
+
+def _spec_covers_every_declared_product(
+    expected_outputs: Sequence[Any],
+    *,
+    spec: Any,
+    lookup: str,
+    allowed_kinds: frozenset[str],
+    field: str,
+    noun: str,
+) -> None:
+    """Refuse a spec that does not account for the step's outputs exactly.
+
+    Both directions matter.  A declared product with no entry would be produced
+    by nobody while the step still looked owned; an entry naming a product the
+    step never declares describes work no reader was promised.
+    """
+
+    declared = [str(value or "").strip() for value in expected_outputs]
+    foreign = sorted(
+        value
+        for value in declared
+        if value.partition(":")[0] not in allowed_kinds or ":" not in value
+    )
+    if foreign:
+        raise ValueError(
+            f"{field} describes {sorted(allowed_kinds)!r} products only; the "
+            f"step also declares {foreign!r}, which it cannot back"
+        )
+    declared_products = [value.split(":", 1)[1] for value in declared]
+    repeated = sorted(
+        {
+            product
+            for product in declared_products
+            if declared_products.count(product) > 1
+        }
+    )
+    if repeated:
+        # The real recorded robustness contracts declare `table:robustness_summary`
+        # AND `statistic:robustness_summary`.  The legacy path normalises those to
+        # one name and satisfies both from one CSV -- so the reader who asked for a
+        # statistic is handed a table.  A spec-carrying step must say which one it
+        # means; only new plans reach here, so nothing already executing changes.
+        raise ValueError(
+            f"{field} cannot back the same product under two kinds: {repeated!r}; "
+            f"one {noun} is one answer, so declare the kind the reader needs"
+        )
+    resolve = getattr(spec, lookup)
+    unbacked = sorted(
+        product for product in declared_products if resolve(product) is None
+    )
+    if unbacked:
+        raise ValueError(
+            f"every declared product must say which {noun} it is; {field} "
+            f"does not name {unbacked!r}"
+        )
+    undeclared = sorted(
+        item.product_id
+        for item in spec.products
+        if item.product_id not in set(declared_products)
+    )
+    if undeclared:
+        raise ValueError(
+            f"{field} names products the step does not declare as outputs: "
+            f"{undeclared!r}"
+        )
+
+
 class MeasurementAuditProduct(BaseModel):
     """One declared audit product, said in terms of what it answers."""
 
@@ -1236,20 +1392,12 @@ class MeasurementAuditProduct(BaseModel):
 
     @model_validator(mode="after")
     def _exact_product_and_known_audit(self) -> "MeasurementAuditProduct":
-        self.product_id = str(self.product_id or "").strip()
-        if not self.product_id:
-            raise ValueError("measurement audit product_id must be non-empty")
-        if ":" in self.product_id:
-            raise ValueError(
-                "measurement audit product_id is the bare product name; drop "
-                f"the kind prefix from {self.product_id!r}"
-            )
-        self.audit = str(self.audit or "").strip()
-        if self.audit not in MEASUREMENT_AUDIT_KINDS:
-            raise ValueError(
-                f"unknown measurement audit {self.audit!r}; the host computes "
-                f"{sorted(MEASUREMENT_AUDIT_KINDS)!r}"
-            )
+        self.product_id, self.audit = _exact_product_naming_a_known_kind(
+            self.product_id,
+            self.audit,
+            known_kinds=MEASUREMENT_AUDIT_KINDS,
+            label="measurement audit",
+        )
         return self
 
 
@@ -1277,16 +1425,11 @@ class MeasurementAuditSpec(BaseModel):
 
     @model_validator(mode="after")
     def _one_product_per_audit(self) -> "MeasurementAuditSpec":
-        ids = [item.product_id for item in self.products]
-        if len(ids) != len(set(ids)):
-            raise ValueError("measurement audit product_id values must be unique")
-        audits = [item.audit for item in self.products]
-        if len(audits) != len(set(audits)):
-            raise ValueError(
-                "each measurement audit may back at most one declared product; "
-                "two products naming the same audit would be one table promised "
-                f"twice ({sorted(audits)!r})"
-            )
+        _one_product_per_kind(
+            self.products,
+            kind_attribute="audit",
+            label="measurement audit",
+        )
         return self
 
     def audit_for(self, product_id: str) -> Optional[str]:
@@ -1296,6 +1439,76 @@ class MeasurementAuditSpec(BaseModel):
         for item in self.products:
             if item.product_id == wanted:
                 return item.audit
+        return None
+
+
+class RobustnessReplayProduct(BaseModel):
+    """One declared robustness product, said in terms of what it answers."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    product_id: str = Field(
+        description=(
+            "The exact declared product id without its `table:`/`statistic:`/"
+            "`log:` prefix, so the step keeps whatever name its reader expects."
+        ),
+    )
+    output: str = Field(
+        description=(
+            "Which replay output this product IS, from the closed set the host "
+            "produces. This is the contract; `product_id` is only its label."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _exact_product_and_known_output(self) -> "RobustnessReplayProduct":
+        self.product_id, self.output = _exact_product_naming_a_known_kind(
+            self.product_id,
+            self.output,
+            known_kinds=ROBUSTNESS_REPLAY_OUTPUTS,
+            label="robustness replay output",
+        )
+        return self
+
+
+class RobustnessReplaySpec(BaseModel):
+    """Planner-owned statement that this step is the locked-spec replay.
+
+    Declaring it is a scientific claim, not a formatting choice: it says the
+    step re-estimates the ALREADY-LOCKED specification grid and changes no
+    estimand.  A sensitivity analysis that introduces new science -- a
+    different estimator, a causal-emulation variant, an E-value -- is not this
+    step, and must not carry this spec merely to reach a deterministic runner.
+
+    Given the claim, the method label and the product names stop deciding
+    anything, which is the point: the runner's method allowlist holds three
+    heads, and the corpus is full of steps that mean exactly this replay while
+    spelling it `prespecified_sensitivity_analysis` or `sensitivity_analysis`.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["easyicu.robustness_replay/1"] = (
+        "easyicu.robustness_replay/1"
+    )
+    products: List[RobustnessReplayProduct] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _one_product_per_output(self) -> "RobustnessReplaySpec":
+        _one_product_per_kind(
+            self.products,
+            kind_attribute="output",
+            label="robustness replay output",
+        )
+        return self
+
+    def output_for(self, product_id: str) -> Optional[str]:
+        """Return the declared replay output for one bare product id."""
+
+        wanted = str(product_id or "").strip()
+        for item in self.products:
+            if item.product_id == wanted:
+                return item.output
         return None
 
 
@@ -1387,6 +1600,16 @@ class AnalysisStep(BaseModel):
             "because the name was not one the host had seen before."
         ),
     )
+    robustness_replay_spec: Optional[RobustnessReplaySpec] = Field(
+        default=None,
+        description=(
+            "For a step that re-estimates the already-locked robustness "
+            "specification grid and changes no estimand: which replay output "
+            "each declared product IS. Declare it only when that is genuinely "
+            "the step; a sensitivity analysis introducing new science is a "
+            "different step and must not claim it to reach a host runner."
+        ),
+    )
 
     def required_primary_exposure_sources(self) -> tuple[str, ...]:
         """Return required PRIMARY sources from the Planner-owned model roster."""
@@ -1467,36 +1690,23 @@ class AnalysisStep(BaseModel):
                     f"be explicit step inputs; missing {missing_spec_inputs!r}"
                 )
         if self.measurement_audit_spec is not None:
-            declared = [str(value or "").strip() for value in self.expected_outputs]
-            non_tables = sorted(
-                value for value in declared if not value.startswith("table:")
+            _spec_covers_every_declared_product(
+                self.expected_outputs,
+                spec=self.measurement_audit_spec,
+                lookup="audit_for",
+                allowed_kinds=frozenset({"table"}),
+                field="measurement_audit_spec",
+                noun="audit",
             )
-            if non_tables:
-                raise ValueError(
-                    "measurement_audit_spec describes table products only; the "
-                    f"step also declares {non_tables!r}, which it cannot back"
-                )
-            declared_products = [value.split(":", 1)[1] for value in declared]
-            unbacked = sorted(
-                product
-                for product in declared_products
-                if self.measurement_audit_spec.audit_for(product) is None
+        if self.robustness_replay_spec is not None:
+            _spec_covers_every_declared_product(
+                self.expected_outputs,
+                spec=self.robustness_replay_spec,
+                lookup="output_for",
+                allowed_kinds=frozenset({"table", "statistic", "log"}),
+                field="robustness_replay_spec",
+                noun="replay output",
             )
-            if unbacked:
-                raise ValueError(
-                    "every declared product must say which audit it is; "
-                    f"measurement_audit_spec does not name {unbacked!r}"
-                )
-            undeclared = sorted(
-                item.product_id
-                for item in self.measurement_audit_spec.products
-                if item.product_id not in set(declared_products)
-            )
-            if undeclared:
-                raise ValueError(
-                    "measurement_audit_spec names products the step does not "
-                    f"declare as outputs: {undeclared!r}"
-                )
         consumption_keys = [
             contract.input_key for contract in self.input_consumption_contracts
         ]
