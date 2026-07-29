@@ -93,7 +93,7 @@ def test_grouped_export_records_structural_unavailability_without_selecting_it(
         tmp_path / "demographics.parquet", index=False
     )
 
-    api._publish_native_export_v2(
+    published = api._publish_native_export_v2(
         database="miiv",
         data_path="/raw/source-must-not-be-read",
         output_dir=str(tmp_path),
@@ -108,7 +108,10 @@ def test_grouped_export_records_structural_unavailability_without_selecting_it(
     )
 
     manifest = json.loads((tmp_path / "_manifest.json").read_text())
-    assert manifest["concept_selection"]["modules"] == {"demographics": ["age"]}
+    assert manifest["concept_selection"]["modules"] == {
+        "demographics": ["age"],
+        "sepsis_shared": [],
+    }
     assert manifest["unavailable_modules"] == [
         {
             "module": "sepsis_shared",
@@ -116,6 +119,13 @@ def test_grouped_export_records_structural_unavailability_without_selecting_it(
             "concept_ids": ["susp_inf"],
         }
     ]
+    placeholder = pd.read_parquet(tmp_path / "sepsis_shared.parquet")
+    assert list(placeholder.columns) == ["stay_id", "charttime", "susp_inf"]
+    assert placeholder.empty
+    assert placeholder["stay_id"].dtype == "int64"
+    assert placeholder["charttime"].dtype == "float64"
+    assert str(placeholder["susp_inf"].dtype) == "boolean"
+    assert published["output_validation_reads"] == 2
     with open_export_package(tmp_path) as package:
         assert set(package.concept_index) == {"age"}
 

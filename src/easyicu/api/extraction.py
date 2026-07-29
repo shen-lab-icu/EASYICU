@@ -1447,11 +1447,12 @@ def _publish_native_export_v2(
         for module in modules
         if not (output_root / f"{module}.parquet").is_file()
     ]
-    published_modules = [
-        module for module in modules if (output_root / f"{module}.parquet").is_file()
-    ]
-    if not published_modules:
-        raise ValueError("native_export_v2 has no physical module output to seal")
+    # Native-v2 promises one physical parquet per requested module. A database
+    # may be structurally unable to produce an entire module (for example,
+    # Sepsis-3 in a source without infection timestamps). Seal that absence as
+    # a zero-row parquet with the same typed physical schema instead of making
+    # downstream code branch on missing files.
+    published_modules = list(modules)
 
     normalized_database = str(database).strip().lower()
     dictionary = load_dictionary(include_sofa2=True)
@@ -1472,12 +1473,28 @@ def _publish_native_export_v2(
 
     for module in published_modules:
         relative_path = f"{module}.parquet"
+        source_parquet = output_root / relative_path
+        whole_module_unavailable = not source_parquet.is_file()
         # This is an output validation pass, not a second scan of any raw table.
-        frame = pd.read_parquet(output_root / relative_path)
+        # A structurally unavailable module starts from an empty identity frame;
+        # canonicalisation below adds charttime and every requested typed value
+        # column in catalog order.
+        if whole_module_unavailable:
+            frame = pd.DataFrame(
+                {"stay_id": pd.Series([], dtype="int64")}
+            )
+        else:
+            frame = pd.read_parquet(source_parquet)
         original_columns = set(frame.columns)
-        produced_concepts: Optional[set[str]] = None
+        produced_concepts: Optional[set[str]] = (
+            set() if whole_module_unavailable else None
+        )
         module_manifest_path = output_root / f"{module}.manifest.json"
-        if module_manifest_path.is_file() and not module_manifest_path.is_symlink():
+        if (
+            not whole_module_unavailable
+            and module_manifest_path.is_file()
+            and not module_manifest_path.is_symlink()
+        ):
             module_manifest = json.loads(
                 module_manifest_path.read_text(encoding="utf-8")
             )
@@ -1503,15 +1520,16 @@ def _publish_native_export_v2(
             for concept in requested_concept_plan[module]
             if concept not in structurally_unavailable
         ]
-        unavailable_concepts.extend(
-            {
-                "module": module,
-                "concept": concept,
-                "reason": "producer_returned_no_physical_column",
-            }
-            for concept in requested_concept_plan[module]
-            if concept in structurally_unavailable
-        )
+        if not whole_module_unavailable:
+            unavailable_concepts.extend(
+                {
+                    "module": module,
+                    "concept": concept,
+                    "reason": "producer_returned_no_physical_column",
+                }
+                for concept in requested_concept_plan[module]
+                if concept in structurally_unavailable
+            )
         # A module manifest is the only producer-owned evidence that a concept
         # is structurally unavailable. Without that evidence, a missing selected
         # physical column is a publication error, not an all-null placeholder.
@@ -1598,6 +1616,11 @@ def _publish_native_export_v2(
             {
                 "file": relative_path,
                 "module": module,
+                "availability": (
+                    "structurally_unavailable"
+                    if whole_module_unavailable
+                    else "available"
+                ),
                 "concepts": len(concept_plan[module]),
                 "concept_ids": concept_plan[module],
                 "physical_concept_ids": requested_concept_plan[module],
