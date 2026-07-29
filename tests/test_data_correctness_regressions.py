@@ -16,9 +16,12 @@ from easyicu.datasource import (
     FilterOp,
     FilterSpec,
     ICUDataSource,
+    _resolve_wide_column_batch_size,
     load_bucketed_table_aggregated,
+    load_wide_table_aggregated,
 )
 from easyicu.io.data_converter import ConversionStatus, DataConverter
+from easyicu.runtime.parallel_config import get_parallel_config
 from easyicu.table import ICUTable
 
 
@@ -378,7 +381,10 @@ def test_inline_unit_conversion_resolves_configured_column_case_insensitively(
 
 def test_partitioned_arrow_projection_resolves_mimic_uppercase_columns(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
+    import pyarrow as pa
+
     partition = tmp_path / "inputevents_cv"
     partition.mkdir()
     pd.DataFrame(
@@ -393,6 +399,14 @@ def test_partitioned_arrow_projection_resolves_mimic_uppercase_columns(
         base_path=tmp_path,
         enable_cache=False,
     )
+    configured_thread_counts = []
+    monkeypatch.setenv("EASYICU_ARROW_THREADS", "3")
+    monkeypatch.setattr(pa, "cpu_count", lambda: 384)
+    monkeypatch.setattr(
+        pa,
+        "set_cpu_count",
+        lambda value: configured_thread_counts.append(value),
+    )
 
     frame = source._read_partitioned_data_optimized(
         partition,
@@ -406,8 +420,127 @@ def test_partitioned_arrow_projection_resolves_mimic_uppercase_columns(
     )
 
     assert list(frame.columns) == ["icustay_id", "itemid", "valuenum"]
+    assert configured_thread_counts == [3]
     assert frame.to_dict("records") == [
         {"icustay_id": 2, "itemid": 10, "valuenum": 2.0}
+    ]
+
+
+def test_partitioned_arrow_scan_ignores_invalid_thread_override(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    import pyarrow as pa
+
+    partition = tmp_path / "inputevents_cv"
+    partition.mkdir()
+    pd.DataFrame(
+        {
+            "ICUSTAY_ID": [1],
+            "ITEMID": [10],
+            "VALUENUM": [1.0],
+        }
+    ).to_parquet(partition / "part-0.parquet", index=False)
+    source = ICUDataSource(
+        load_src_cfg("mimic"),
+        base_path=tmp_path,
+        enable_cache=False,
+    )
+    configured_thread_counts = []
+    monkeypatch.setenv("EASYICU_ARROW_THREADS", "not-an-integer")
+    monkeypatch.setattr("os.cpu_count", lambda: 16)
+    monkeypatch.setattr(
+        "easyicu.runtime.parallel_config.get_global_config",
+        lambda: SimpleNamespace(max_workers=4),
+    )
+    monkeypatch.setattr(pa, "cpu_count", lambda: 384)
+    monkeypatch.setattr(
+        pa,
+        "set_cpu_count",
+        lambda value: configured_thread_counts.append(value),
+    )
+
+    frame = source._read_partitioned_data_optimized(
+        partition,
+        columns=["icustay_id", "itemid", "valuenum"],
+    )
+
+    assert configured_thread_counts == [4]
+    assert frame.to_dict("records") == [
+        {"icustay_id": 1, "itemid": 10, "valuenum": 1.0}
+    ]
+
+
+def test_parallel_config_uses_two_worker_safe_default_at_16gb(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("EASYICU_PARALLEL_MAX_WORKERS", raising=False)
+
+    config = get_parallel_config(override_memory_gb=16)
+
+    assert config.max_workers == 2
+    assert get_parallel_config(
+        override_memory_gb=16,
+        override_workers=6,
+    ).max_workers == 6
+
+
+def test_wide_column_batch_size_is_bounded_on_16gb(monkeypatch) -> None:
+    monkeypatch.delenv("EASYICU_WIDE_COLUMN_BATCH_SIZE", raising=False)
+    monkeypatch.setattr(
+        "easyicu.runtime.parallel_config.get_global_config",
+        lambda: SimpleNamespace(total_memory_gb=16),
+    )
+
+    assert _resolve_wide_column_batch_size(6) == 2
+
+    monkeypatch.setenv("EASYICU_WIDE_COLUMN_BATCH_SIZE", "3")
+    assert _resolve_wide_column_batch_size(6) == 3
+
+
+def test_wide_table_column_chunks_reassemble_identical_grid(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    parquet = tmp_path / "vitalperiodic.parquet"
+    pd.DataFrame(
+        {
+            "patientunitstayid": [1, 1, 2],
+            "observationoffset": [0, 30, 60],
+            "a": [1.0, 3.0, 5.0],
+            "b": [2.0, 4.0, 6.0],
+            "c": [10.0, 14.0, 18.0],
+        }
+    ).to_parquet(parquet, index=False)
+    defaults = SimpleNamespace(
+        id_var="patientunitstayid",
+        index_var="observationoffset",
+    )
+    source = SimpleNamespace(
+        config=SimpleNamespace(
+            get_table=lambda name: SimpleNamespace(defaults=defaults),
+        ),
+        _resolve_loader_from_disk=lambda name: parquet,
+    )
+    monkeypatch.setenv("EASYICU_WIDE_COLUMN_BATCH_SIZE", "2")
+
+    result = load_wide_table_aggregated(
+        source,
+        "vitalperiodic",
+        ["a", "b", "c"],
+        patient_ids=[1, 2],
+    ).sort_values(["patientunitstayid", "charttime"]).reset_index(drop=True)
+
+    assert result.columns.tolist() == [
+        "patientunitstayid",
+        "charttime",
+        "a",
+        "b",
+        "c",
+    ]
+    assert result[["a", "b", "c"]].to_dict("records") == [
+        {"a": 2.0, "b": 3.0, "c": 12.0},
+        {"a": 5.0, "b": 6.0, "c": 18.0},
     ]
 
 

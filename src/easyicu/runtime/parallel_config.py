@@ -175,7 +175,8 @@ def get_parallel_config(
     max_workers = min(memory_based_workers, cpu_based_workers)
     
     # 🚀 根据内存大小动态调整上限
-    # 16GB: 最多8个workers
+    # 16GB及以下: 最多2个workers（全库实测的安全基线）
+    # 16-32GB: 最多8个workers
     # 32GB: 最多16个workers
     # 64GB: 最多32个workers
     # 128GB+: 最多64个workers
@@ -185,8 +186,10 @@ def get_parallel_config(
         max_workers_limit = 32
     elif total_mem >= 32:
         max_workers_limit = 16
-    else:
+    elif total_mem > 16:
         max_workers_limit = 8
+    else:
+        max_workers_limit = 2
     
     max_workers = min(max_workers, max_workers_limit)
     

@@ -192,6 +192,26 @@ def test_module_extraction_streams_patient_batches_directly_to_parquet(
     assert not (tmp_path / ".test_module.partial.parquet").exists()
 
 
+def test_stream_batch_release_flushes_arrow_pool():
+    released = []
+
+    class Pool:
+        def release_unused(self):
+            released.append(True)
+
+    class FakePyArrow:
+        @staticmethod
+        def default_memory_pool():
+            return Pool()
+
+    api._release_stream_batch_memory(
+        FakePyArrow,
+        trim_native_allocator=False,
+    )
+
+    assert released == [True]
+
+
 def test_streamed_special_export_uses_published_dependency_parquets(tmp_path):
     source = tmp_path / "published"
     output = tmp_path / "special"

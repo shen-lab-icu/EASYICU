@@ -384,6 +384,39 @@ def _normalise_module_frame_for_parquet(result, concepts):
     return result
 
 
+def _release_stream_batch_memory(
+    pyarrow_module,
+    *,
+    trim_native_allocator: bool = True,
+) -> None:
+    """Return released batch buffers to the host before the next large batch.
+
+    ``gc.collect()`` drops Python references but Arrow's memory pool and glibc
+    may retain the freed pages. Across three eICU batches that made RSS look
+    cumulative even though each batch was bounded. Arrow exposes a portable
+    release hook; Linux additionally benefits from ``malloc_trim``. macOS and
+    Windows use only the portable hook.
+    """
+    import gc
+    import sys
+
+    gc.collect()
+    try:
+        pyarrow_module.default_memory_pool().release_unused()
+    except Exception:
+        pass
+    if trim_native_allocator and sys.platform.startswith("linux"):
+        try:
+            import ctypes
+
+            libc = ctypes.CDLL(None)
+            malloc_trim = getattr(libc, "malloc_trim", None)
+            if malloc_trim is not None:
+                malloc_trim(0)
+        except Exception:
+            pass
+
+
 def _stream_module_batches_to_parquet(
     module_name: str,
     concepts: List[str],
@@ -402,7 +435,6 @@ def _stream_module_batches_to_parquet(
     partial file lives beside the eventual module output, so callers that put
     their output on an external disk never use the system volume for it.
     """
-    import gc
     import os
     from pathlib import Path
 
@@ -430,6 +462,7 @@ def _stream_module_batches_to_parquet(
     batch_load_kwargs.pop("patient_ids", None)
     try:
         for start in range(0, len(all_ids), batch_size):
+            table = None
             batch = _lc(
                 **batch_load_kwargs,
                 patient_ids={id_col: all_ids[start : start + batch_size]},
@@ -449,6 +482,7 @@ def _stream_module_batches_to_parquet(
                     writer = pq.ParquetWriter(partial, schema, compression="snappy")
                 writer.write_table(table)
                 rows += len(frame)
+            del table
             del batch, frame
             if loader is not None:
                 try:
@@ -457,7 +491,7 @@ def _stream_module_batches_to_parquet(
                     resolver = getattr(loader, "concept_resolver", None)
                     if resolver is not None and hasattr(resolver, "drop_source_caches"):
                         resolver.drop_source_caches()
-            gc.collect()
+            _release_stream_batch_memory(pa)
         if writer is None:
             return None
         writer.close()
@@ -1395,10 +1429,9 @@ def _enforce_native_export_concept_bounds(
     import numpy as np
 
     audit: Dict[str, Dict[str, object]] = {}
+    bounds_map = _load_concept_bounds_map()
     for concept in requested_concepts:
-        definition = dictionary.get(concept)
-        minimum = getattr(definition, "minimum", None)
-        maximum = getattr(definition, "maximum", None)
+        minimum, maximum = bounds_map.get(concept, (None, None))
         bounded = _native_export_storage_kind(concept, dictionary) == "float64" and (
             minimum is not None or maximum is not None
         )

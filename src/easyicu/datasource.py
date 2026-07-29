@@ -2501,29 +2501,53 @@ class ICUDataSource:
                 for expr in filter_exprs[1:]:
                     filter_expr = filter_expr & expr
 
-            # 批量读取，启用多线程（优化大规模提取）
-            # 🚀 优化：为90000+患者提取增加线程池
-            # 🚀 线程数自适应：32 线程在大内存多核服务器上最优，但在 16GB 笔记本上
-            # （提取时已有多个 concept-worker 线程并发，每个又开 32 个 Arrow 线程 →
-            # 上百线程严重过度订阅 + 每线程各自分配读缓冲抬高峰值内存）。默认取
-            # min(cpu, 8)，服务器可用 EASYICU_ARROW_THREADS 调回高值。
+            # 批量读取，启用受控的 PyArrow 全局 CPU 线程池。
+            #
+            # Dataset.to_table(use_threads=...) 接受的是 bool，不是线程数。旧代码
+            # 把整数 ``thread_count`` 直接传进去；任何正整数都会变成 True，因此
+            # 在 384 核服务器上实际放开了整个 Arrow CPU 池，而不是预期的 8 个
+            # 线程。这会在大分区扫描时造成明显的短时内存尖峰。先显式限制全局
+            # Arrow CPU 池，再用 bool 控制本次扫描，才能让
+            # EASYICU_ARROW_THREADS 在 Windows/macOS/Linux 上真正生效。
             import os as _os
+            import pyarrow as _pa
+            from easyicu.runtime.parallel_config import get_global_config
+
             _env_at = _os.environ.get('EASYICU_ARROW_THREADS')
             if _env_at:
-                thread_count = max(1, int(_env_at))
+                try:
+                    thread_count = max(1, int(_env_at))
+                except ValueError:
+                    logger.warning(
+                        "Ignoring invalid EASYICU_ARROW_THREADS=%r",
+                        _env_at,
+                    )
+                    thread_count = min(
+                        (_os.cpu_count() or 4),
+                        8,
+                        get_global_config().max_workers,
+                    )
             else:
-                thread_count = min((_os.cpu_count() or 4), 8)
-            
+                thread_count = min(
+                    (_os.cpu_count() or 4),
+                    8,
+                    get_global_config().max_workers,
+                )
+
+            if _pa.cpu_count() != thread_count:
+                _pa.set_cpu_count(thread_count)
+            use_arrow_threads = thread_count > 1
+
             if requested_columns is not None:
                 table = dataset.to_table(
                     columns=actual_columns,
                     filter=filter_expr,
-                    use_threads=thread_count  # 明确线程数
+                    use_threads=use_arrow_threads,
                 )
             else:
                 table = dataset.to_table(
                     filter=filter_expr,
-                    use_threads=True
+                    use_threads=use_arrow_threads,
                 )
 
             # 转换为 pandas，使用 zero-copy 优化
@@ -4048,6 +4072,54 @@ def load_bucketed_table_multi_aggregated(
     return df
 
 
+def _resolve_wide_column_batch_size(value_count: int) -> int:
+    """Choose how many wide-table median states to aggregate per query."""
+    import os
+
+    if value_count < 1:
+        return 1
+    raw_limit = os.environ.get("EASYICU_WIDE_COLUMN_BATCH_SIZE")
+    if raw_limit:
+        try:
+            return min(value_count, max(1, int(raw_limit)))
+        except ValueError:
+            logger.warning(
+                "Ignoring invalid EASYICU_WIDE_COLUMN_BATCH_SIZE=%r",
+                raw_limit,
+            )
+    try:
+        from .runtime.parallel_config import get_global_config
+
+        if get_global_config().total_memory_gb <= 16:
+            return min(value_count, 2)
+    except Exception:
+        pass
+    return value_count
+
+
+def _release_wide_chunk_memory() -> None:
+    """Release temporary query buffers between constrained wide-column chunks."""
+    import gc
+    import sys
+
+    gc.collect()
+    try:
+        import pyarrow as pa
+
+        pa.default_memory_pool().release_unused()
+    except Exception:
+        pass
+    if sys.platform.startswith("linux"):
+        try:
+            import ctypes
+
+            malloc_trim = getattr(ctypes.CDLL(None), "malloc_trim", None)
+            if malloc_trim is not None:
+                malloc_trim(0)
+        except Exception:
+            pass
+
+
 def load_wide_table_aggregated(
     data_source: "ICUDataSource",
     table_name: str,
@@ -4096,6 +4168,46 @@ def load_wide_table_aggregated(
         id_col = icustay_cfg.id if icustay_cfg else 'patientunitstayid'
     
     time_col = table_cfg.defaults.index_var or 'observationoffset'
+
+    # DuckDB's MEDIAN keeps one aggregate state per output group and value
+    # column.  On a full eICU batch, six simultaneous vital columns exceeded
+    # 16 GiB even with a 2 GB DuckDB memory_limit because complex aggregate
+    # state and result buffers are not all governed by that setting.  Keep the
+    # same patient batch, but scan a bounded number of value columns per query
+    # and reassemble their identical key grids afterwards.
+    column_batch_size = _resolve_wide_column_batch_size(len(value_columns))
+    if len(value_columns) > column_batch_size:
+        combined = None
+        key_columns = [id_col, "charttime"]
+        for start in range(0, len(value_columns), column_batch_size):
+            column_chunk = value_columns[start : start + column_batch_size]
+            chunk = load_wide_table_aggregated(
+                data_source,
+                table_name,
+                column_chunk,
+                interval_hours=interval_hours,
+                patient_ids=patient_ids,
+                agg_func=agg_func,
+                column_bounds=column_bounds,
+            )
+            chunk = chunk.sort_values(
+                key_columns,
+                kind="mergesort",
+                ignore_index=True,
+            )
+            if combined is None:
+                combined = chunk
+                continue
+            if not combined[key_columns].equals(chunk[key_columns]):
+                raise ValueError(
+                    "wide-table column chunks produced different key grids"
+                )
+            for column in column_chunk:
+                if column in chunk.columns:
+                    combined[column] = chunk[column].to_numpy(copy=False)
+            del chunk
+            _release_wide_chunk_memory()
+        return combined if combined is not None else pd.DataFrame()
     
     # 确定数据目录
     table_path = data_source._resolve_loader_from_disk(table_name)
