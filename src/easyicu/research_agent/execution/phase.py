@@ -139,6 +139,7 @@ from ..gates.concept import (
     quarantined_errors_superseded_by_current_policy as _quarantined_errors_superseded_by_current_policy,
 )
 from ..gates.plausibility_receipt import plausibility_audit_receipt_findings
+from ..gates.plan_declared_inputs import declared_raw_input_plan_findings
 from ..authority.coder_authority import HostCoderAuthority
 from ..authority.plausibility import (
     FlagOnlyPlausibilityScope,
@@ -4794,8 +4795,13 @@ def run_execute_phase(
             plan=plan,
             context=context,
         )
+        declared_input_preflight = declared_raw_input_plan_findings(
+            plan=plan,
+            context=context,
+        )
         trajectory_directive = None
         typed_plan_directive = None
+        declared_input_directive = None
         if typed_plan_preflight:
             typed_plan_directive = (
                 "Repair the plan's declared typed product DAG without changing "
@@ -4858,6 +4864,26 @@ def run_execute_phase(
                     default=str,
                 )
             )
+        if declared_input_preflight:
+            declared_input_directive = (
+                "Repair the plan's declared raw column inputs without changing "
+                "any scientific choice. Every declared raw input must be a "
+                "column the sealed research context carries; a value a previous "
+                "step derives must be declared as that step's typed product "
+                "instead. Do not invent an exposure, outcome, cohort, covariate, "
+                "or method to satisfy this. Contract findings: "
+                + json.dumps(
+                    [
+                        {
+                            "message": finding.message,
+                            "detail": finding.detail,
+                        }
+                        for finding in declared_input_preflight
+                    ],
+                    ensure_ascii=False,
+                    default=str,
+                )
+            )
         plan = _maybe_replan(
             current_plan=plan,
             reason="probe_summary",
@@ -4869,18 +4895,27 @@ def run_execute_phase(
                     typed_plan_directive,
                     primary_cohort_directive,
                     trajectory_directive,
+                    declared_input_directive,
                 )
                 if directive
             )
             or None,
             force=bool(
-                typed_plan_preflight or primary_cohort_preflight or trajectory_preflight
+                typed_plan_preflight
+                or primary_cohort_preflight
+                or trajectory_preflight
+                or declared_input_preflight
             ),
         )
 
     final_typed_plan_findings = [
         *_typed_plan_dag_findings(plan),
         *primary_analysis_cohort_plan_findings(plan=plan),
+        # A raw input the sealed context cannot resolve raises inside
+        # _execute_one_step, and nothing wraps execute_step -- so without this
+        # the run dies mid-flight with no sealed artifacts instead of blocking
+        # here with a named, repairable finding.
+        *declared_raw_input_plan_findings(plan=plan, context=context),
     ]
     if final_typed_plan_findings:
         typed_plan_dag_blocked = True
