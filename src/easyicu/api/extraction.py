@@ -1395,10 +1395,9 @@ def _enforce_native_export_concept_bounds(
     import numpy as np
 
     audit: Dict[str, Dict[str, object]] = {}
+    bounds_map = _load_concept_bounds_map()
     for concept in requested_concepts:
-        definition = dictionary.get(concept)
-        minimum = getattr(definition, "minimum", None)
-        maximum = getattr(definition, "maximum", None)
+        minimum, maximum = bounds_map.get(concept, (None, None))
         bounded = _native_export_storage_kind(concept, dictionary) == "float64" and (
             minimum is not None or maximum is not None
         )
