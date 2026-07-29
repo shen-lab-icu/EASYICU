@@ -301,6 +301,60 @@ def test_a_successful_read_still_produces_the_death_rows(tmp_path):
     assert bool(result["death"].iloc[0]) is True
 
 
+def test_hirid_death_accepts_flat_numbered_observation_shards(tmp_path):
+    """The public CSV archive converts to observations/N.parquet, not buckets."""
+
+    observation_dir = tmp_path / "observations"
+    observation_dir.mkdir()
+    pd.DataFrame(
+        {
+            "patientid": [1, 1, 2],
+            "datetime": pd.to_datetime(
+                ["2026-01-01", "2026-01-02", "2026-01-03"]
+            ),
+            "variableid": [110, 200, 110],
+        }
+    ).to_parquet(observation_dir / "1.parquet", index=False)
+    general = pd.DataFrame(
+        {"patientid": [1, 2], "discharge_status": ["dead", "alive"]}
+    )
+
+    result = _apply(
+        _GeneralSource(general=general, base_path=tmp_path),
+        frame=pd.DataFrame(),
+    )
+
+    assert result["patientid"].tolist() == [1]
+    assert result["datetime"].tolist() == [pd.Timestamp("2026-01-02")]
+    assert result["death"].tolist() == [True]
+
+
+def test_hirid_death_accepts_cross_platform_path_with_apostrophe(tmp_path):
+    """DuckDB file lists must quote valid Windows/macOS/Linux paths safely."""
+
+    data_root = tmp_path / "researcher's HiRID"
+    observation_dir = data_root / "observations"
+    observation_dir.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "patientid": [1],
+            "datetime": pd.to_datetime(["2026-01-02"]),
+            "variableid": [110],
+        }
+    ).to_parquet(observation_dir / "1.parquet", index=False)
+    general = pd.DataFrame(
+        {"patientid": [1], "discharge_status": ["dead"]}
+    )
+
+    result = _apply(
+        _GeneralSource(general=general, base_path=data_root),
+        frame=pd.DataFrame(),
+    )
+
+    assert result["patientid"].tolist() == [1]
+    assert result["death"].tolist() == [True]
+
+
 def test_both_copies_of_the_logic_fail_closed():
     """The resolver fast path is a second implementation of the same callback.
 
@@ -330,6 +384,10 @@ def test_both_copies_of_the_logic_fail_closed():
     assert "_refuse_untimed_deaths" in fast_path, (
         "a death the query cannot time silently lowers the mortality reported, "
         "and both copies must refuse it through the same helper"
+    )
+    assert "hirid_observation_read_exprs" in fast_path, (
+        "the resolver fast path must support the public archive's "
+        "observations/N.parquet layout as well as observations_bucket"
     )
     assert "_warn_untimed_deaths" not in fast_path, (
         "warning was the old behaviour: it reaches stderr, not the caller, so "
