@@ -1,17 +1,24 @@
 /* screens-one.js — owner: the single surface.
  *
- * There is one screen. The conversation already ships its own three columns —
- * a session rail, the thread, and a study-workspace aside — so this file does
- * not wrap it in a second shell. It mounts into the slots the conversation
- * already has:
+ * It is a conversation window. One column, one thread, and nothing else until
+ * the conversation earns it. Depth arrives when it is reached, not up front.
  *
- *   .gd-rail    study folders  → also the destination nav      (left)
- *   .gd-conv    the thread                                     (middle)
- *   .gd-aside   study workspace → also the panel host          (right)
- *   .gd-top     brand + exit   → also the data-source chip
+ * There is no destination menu, and removing it is the point. The conversation
+ * already offers where to go — in its own words, at the moment it makes sense
+ * ("找研究想法 · 准备/抽取数据 · 审阅已有数据 · 运行研究项目"). A permanent nav
+ * beside it was that same list a second time, always on, always at full depth,
+ * competing with the thread for the answer to "what do I do now".
  *
- * Every other destination opens by rendering that screen's own render(). No
- * screen was rewritten to become a panel.
+ * What is left mounts into the conversation's own slots:
+ *
+ *   .gd-rail    the study list — collapsed; only for switching studies
+ *   .gd-conv    the thread — the window
+ *   .gd-aside   the panel, when there is something to show
+ *   .gd-top     the data-source chip and the rail toggle
+ *
+ * A panel still renders the destination screen's own render(); no screen was
+ * rewritten. Deep links (#patient, #crossdb) still resolve, so nothing became
+ * unreachable — it just stopped being advertised before it was relevant.
  *
  * PLACEMENT, and which column is the point. The middle is the conversation and
  * stays the conversation: it is where the project is controlled, and a reader
@@ -133,64 +140,6 @@
 
   /* ---- destination nav, mounted into the conversation's own rail ---- */
 
-  /* The study the whole surface is about. It lives in EU_STUDY_CONTEXT, the
-     cross-module store that extraction, review and the agent already register
-     with — and until now nothing on screen showed it, which is most of why the
-     surface felt like separate apps sharing a window. */
-  function studyHeadHtml() {
-    const sc = window.EU_STUDY_CONTEXT;
-    const study = sc && sc.active ? sc.active() : null;
-    if (!study) return '';
-    const untitled = !study.title || /^untitled/i.test(study.title);
-    const name = untitled ? t('Untitled study', '未命名研究') : study.title;
-    const stage = study.current_stage
-      ? String(study.current_stage).replace(/_/g, ' ')
-      : t('not started', '尚未开始');
-    return `
-      <div class="one-study" title="${esc(t('The study every destination on this surface shares', '本界面所有目的地共用的这项研究'))}">
-        <span class="lb">${esc(name)}</span>
-        <span class="st">${esc(stage)}</span>
-      </div>`;
-  }
-
-  const LINES = [
-    { key: 'main', label: ['Main line', '主线'], hint: ['each step advances the study', '每一步推进这项研究'] },
-    { key: 'review', label: ['Look at the data', '查阅数据'], hint: ['reads it, never changes it', '只读,不改变研究设计'] },
-    { key: 'tool', label: ['Reference', '工具'], hint: ['independent of any study', '与具体研究无关'] },
-  ];
-
-  function railNavHtml(active) {
-    const list = destinations();
-    const items = LINES.map((line) => {
-      const inLine = list.filter((d) => d.line === line.key);
-      if (!inLine.length) return '';
-      return `<div class="one-navsec" title="${esc(t(line.hint[0], line.hint[1]))}">${esc(t(line.label[0], line.label[1]))}</div>`
-        + inLine.map((d) => `
-      <button type="button" class="one-navitem ${active === d.id ? 'on' : ''}"
-        data-panel="${d.id}"${active === d.id ? ' aria-current="page"' : ''}>
-        <span class="ico">${icon(d.ico, 15)}</span><span class="lb">${esc(d.label)}</span>
-      </button>`).join('');
-    }).join('');
-    /* The orientation hint the entry screen used to carry. It names two
-       destinations, so each name IS the control that opens it — prose pointing
-       at a menu that no longer exists would just be a dead end. */
-    const named = (id) => {
-      const hit = list.find((d) => d.id === id);
-      return hit
-        ? `<button type="button" class="one-inline" data-panel="${id}">${esc(hit.label)}</button>`
-        : '';
-    };
-    return `
-      <nav class="one-railnav" aria-label="${t('Destinations', '目的地')}">
-        ${studyHeadHtml()}
-        <button type="button" class="one-navitem chat ${active ? '' : 'on'}" data-panel=""${active ? '' : ' aria-current="page"'}>
-          <span class="ico">${icon('spark', 15)}</span><span class="lb">${esc(crumb('Guided Copilot'))}</span>
-        </button>
-        ${items}
-        <p class="one-starthint">${t('Starting from a paper? Open', '有文章，从')}${named('ideas')}${t('. Have a clear question? Just say it here. Already have data? Open', '开始；有明确问题，直接在这里说；已经有数据，打开')}${named('extraction')}${t('.', '。')}</p>
-      </nav>`;
-  }
-
   function panelHtml(id) {
     const scr = window.SCREENS[id];
     if (!scr) return '';
@@ -227,6 +176,16 @@
 
   /* ---- mount ---------------------------------------------------------- */
 
+  /* The rail is off by default and remembered, the way a chat app remembers
+     whether you keep its sidebar open. Off is the shallow end. */
+  const RAIL_KEY = 'easyicu.one.rail';
+  const railOpen = () => {
+    try { return localStorage.getItem(RAIL_KEY) === '1'; } catch (e) { return false; }
+  };
+  function setRailOpen(on) {
+    try { localStorage.setItem(RAIL_KEY, on ? '1' : '0'); } catch (e) { /* private mode */ }
+  }
+
   function mountTop(root) {
     const top = root.querySelector('.gd-top');
     if (!top || top.querySelector('.one-source')) return;
@@ -236,20 +195,27 @@
     const grow = top.querySelector('.grow');
     if (grow) top.insertBefore(frag, grow.nextSibling);
     else top.appendChild(frag);
+    const brand = top.querySelector('.gd-home-link');
+    if (brand && !top.querySelector('[data-onerail]')) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'one-iconbtn one-railtoggle';
+      b.setAttribute('data-onerail', '');
+      b.title = t('Your studies', '你的研究');
+      b.setAttribute('aria-label', t('Your studies', '你的研究'));
+      b.innerHTML = icon('list', 16);
+      top.insertBefore(b, brand);
+    }
   }
 
+  /* The rail is the study list and nothing else now — no destination menu.
+     The conversation already offers where to go, in its own words, at the
+     moment it makes sense; a permanent menu beside it was the same list a
+     second time, always on, always at full depth. It stays collapsed until you
+     ask for it, which is the only reason to open it: switching studies. */
   function mountRail(root, panelId) {
     const rail = root.querySelector('.gd-rail');
     if (!rail) return;
-    const prior = rail.querySelector('.one-railnav');
-    if (prior) prior.remove();
-    const holder = document.createElement('div');
-    holder.innerHTML = railNavHtml(panelId);
-    const nav = holder.firstElementChild;
-    const folders = rail.querySelector('#gdSessions');
-    if (folders) rail.insertBefore(nav, folders);
-    else rail.appendChild(nav);
-
     const foot = rail.querySelector('.gd-rail-foot');
     if (foot && !foot.querySelector('[data-cpopen]') && window.EU_SHELL_CONTROLS) {
       const guide = document.createElement('div');
@@ -273,6 +239,8 @@
     if (main) {
       main.classList.toggle('has-panel', !!panelId);
       main.classList.toggle('panel-center', place === 'center');
+      /* One window by default: the rail appears only when asked for. */
+      main.classList.toggle('show-rail', railOpen());
     }
     if (!panelId) return;
     const host = document.createElement('div');
@@ -301,11 +269,49 @@
     wrap.parentNode.insertBefore(bar, wrap);
   }
 
+  /* Opening a main-line destination is a handoff, not a jump: it snapshots what
+     the conversation has collected into the shared study and records the
+     transition, so the destination arrives already knowing the cohort, the
+     outcome, the export target. Review and reference destinations deliberately
+     do NOT — looking a concept up in the dictionary is not a step in anyone's
+     study, and writing one in would be a lie about what the study did.
+
+     It lives on the mount path rather than on a click, because the click that
+     used to trigger it was the nav's, and the nav is gone. A deep link, a
+     conversation link and a restored hash are all openings and all deserve the
+     same handoff. `handedOff` keeps re-renders of the same panel from writing
+     the transition again.
+
+     Through guided's own adapter, not EU_STUDY_CONTEXT.handoff directly: the
+     adapter carries continueExisting (without it a handoff can mint a new study
+     instead of advancing this one) and a real scientific guard that refuses to
+     hand a Cross-DB plan to Agent Projects until it is reframed as a
+     single-export question. Reaching past it would silently drop both. */
+  let handedOff = '';
+  function handOffStudy(panelId) {
+    if (!panelId) { handedOff = ''; return; }
+    if (handedOff === panelId) return;
+    handedOff = panelId;
+    const hit = destinations().find((d) => d.id === panelId);
+    const guided = window.EU_GUIDED_STUDY_CONTEXT;
+    if (!hit || hit.line !== 'main' || !guided || !guided.handoff) return;
+    try {
+      const r = guided.handoff(panelId);
+      if (r && r.persisted && r.persisted.catch) {
+        r.persisted.catch((err) => console.warn('[EasyICU] study handoff refused or stayed local:', err));
+      }
+    } catch (err) {
+      /* A study that cannot be handed over must not strand the reader. */
+      console.warn('[EasyICU] study handoff failed:', err);
+    }
+  }
+
   function mount(root, panelId) {
     mountTop(root);
     mountRail(root, panelId);
     mountConv(root, panelId);
     mountPanel(root, panelId);
+    handOffStudy(panelId);
   }
 
   window.EU_ONE = {
@@ -314,6 +320,14 @@
     placementOf,
     mount,
   };
+
+  document.addEventListener('click', (e) => {
+    const railBtn = e.target.closest('[data-onerail]');
+    if (!railBtn) return;
+    e.preventDefault();
+    setRailOpen(!railOpen());
+    if (window.__euRender) window.__euRender();
+  });
 
   /* One delegated listener owns the summon contract. data-panel="" closes. */
   document.addEventListener('click', (e) => {
@@ -330,32 +344,6 @@
     e.preventDefault();
     if (!id) { location.hash = '#guided'; return; }
     if (!window.SCREENS[id]) return;
-    /* Opening a main-line destination is a handoff, not a jump: it snapshots
-       what the conversation has collected into the shared study and records the
-       transition, so the destination arrives already knowing the cohort, the
-       outcome, the export target. Review and reference destinations
-       deliberately do NOT — looking a concept up in the dictionary is not a
-       step in anyone's study, and writing one into the record would be a lie
-       about what the study did. */
-    const hit = destinations().find((d) => d.id === id);
-    /* Through guided's own adapter, not EU_STUDY_CONTEXT.handoff directly. The
-       adapter is the owner's door and carries two things the raw call does not:
-       continueExisting (without it a handoff can mint a new study instead of
-       advancing this one) and a real scientific guard that refuses to hand a
-       Cross-DB plan to Agent Projects until it is reframed as a single-export
-       question. Reaching past it to the store would silently drop both. */
-    const guided = window.EU_GUIDED_STUDY_CONTEXT;
-    if (hit && hit.line === 'main' && guided && guided.handoff) {
-      try {
-        const r = guided.handoff(id);
-        if (r && r.persisted && r.persisted.catch) {
-          r.persisted.catch((err) => console.warn('[EasyICU] study handoff refused or stayed local:', err));
-        }
-      } catch (err) {
-        /* A study that cannot be handed over must not strand the reader. */
-        console.warn('[EasyICU] study handoff failed:', err);
-      }
-    }
     location.hash = '#' + id;
   });
 }());

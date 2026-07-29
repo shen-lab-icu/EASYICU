@@ -185,7 +185,7 @@ def test_native_assistant_labels_disambiguate_page_guide_guided_copilot_and_agen
     assert "Open Copilot" not in help_js
 
     assert "css/dock.css?v=20260625-stage99" in index_html
-    assert "js/app.js?v=20260728-one10" in index_html
+    assert "js/app.js?v=20260729-one11" in index_html
     assert "js/copilot-dock.js?v=20260712-ux-fixes" in index_html
     assert "js/screens-extraction.js?v=20260712-ux-fixes" in index_html
     assert "js/screens-agent.js?v=20260712-ux-fixes" in index_html
@@ -328,7 +328,7 @@ def test_native_tutorial_screen_uses_active_language_without_mixed_copy() -> Non
     assert ">No tokens, no setup, no patient data. The demo generates" not in help_js
     assert "How a study moves through EasyICU</h2>" not in help_js
 
-    assert "js/app.js?v=20260728-one10" in index_html
+    assert "js/app.js?v=20260729-one11" in index_html
     assert "js/screens-help.js?v=20260712-ux-fixes" in index_html
 
 
@@ -354,7 +354,7 @@ def test_native_guided_and_page_guide_messages_are_bilingual() -> None:
         "js/screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
         in index_html
     )
-    assert "js/screens-guided.js?v=20260728-one10" in index_html
+    assert "js/screens-guided.js?v=20260729-one11" in index_html
     assert "js/copilot-dock.js?v=20260712-ux-fixes" in index_html
 
 
@@ -545,7 +545,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     guided_plan_css = _static_css("guided-idea-plan.css")
     redesign_css = _static_css("redesign.css")
 
-    assert "css/guided.css?v=20260728-one10" in index_html
+    assert "css/guided.css?v=20260729-one11" in index_html
     assert "css/guided-idea-plan.css?v=20260627-ideas-feasibility-plan" in index_html
     assert "js/api.js?v=20260727-patient-demo2" in index_html
     assert (
@@ -643,7 +643,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert ".gdi-plan-details" in guided_plan_css
     assert ".gdi-feature-row.one" in guided_plan_css
     assert ".gdi-plan-details" not in redesign_css
-    assert "js/screens-guided.js?v=20260728-one10" in index_html
+    assert "js/screens-guided.js?v=20260729-one11" in index_html
 
 
 def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
@@ -659,7 +659,7 @@ def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
     index_html = _static_html("index.html")
 
     assert "js/screens-agent.js?v=20260712-ux-fixes" in index_html
-    assert "css/agent.css?v=20260728-one10" in index_html
+    assert "css/agent.css?v=20260729-one11" in index_html
     assert "css/agent-layout.css?v=20260702-agent-focus-layout" in index_html
     assert "css/agent-header.css?v=20260702-agent-compact-header" in index_html
     assert "css/agent-review.css?v=20260702-agent-review-compact" in index_html
@@ -804,7 +804,7 @@ def test_native_agent_research_blocks_are_project_owned() -> None:
     assert ".ag-wf-cell" in agent_css
     assert ".ag-lib-card" in agent_css
     assert ".ag-block-contract" in agent_css
-    assert "css/agent.css?v=20260728-one10" in index_html
+    assert "css/agent.css?v=20260729-one11" in index_html
     assert "js/screens-agent.js?v=20260712-ux-fixes" in index_html
 
     assert "ag-block-grid" not in app_js
@@ -1437,15 +1437,22 @@ def test_native_idea_mining_is_first_class_route_and_backend_wired() -> None:
     # sentence pointing at a menu that no longer exists would be a dead end.
     # (`wsi-sub`, the sidebar item's subtitle line, went with the sidebar; the
     # rail is single-line, so the hint is where orientation lives now.)
+    # The "where do I start" guarantee moved to where it always belonged: the
+    # conversation's own opening turn. It offers the same three openings, in
+    # its own words, at the moment they are the question — a rail hint beside
+    # it was the same list a second time. The surface must not re-add a menu.
     one_js = _static_js("screens-one.js")
-    assert "one-starthint" in one_js
-    assert "Starting from a paper? Open" in one_js
-    assert "Already have data? Open" in one_js
-    assert """data-panel="${id}">${esc(hit.label)}</button>""" in one_js
+    guided_js = _static_js("screens-guided.js")
+    assert "[t('Find a Study Idea', '找研究想法'), '@guidedGoal:idea_mining']," in guided_js
+    assert "[t('Prepare Data', '准备/抽取数据'), '@guidedGoal:data_extraction']," in guided_js
+    assert "[t('Review Data', '审阅已有数据'), '@guidedGoal:review_data']," in guided_js
+    assert "one-starthint" not in one_js
+    assert "one-railnav" not in one_js
+    assert "one-navitem" not in one_js
     assert "css/ideas.css?v=20260630-gate-first-ideas" in index_html
     assert "css/shell.css?v=20260626-owner" in index_html
     assert "js/icons.js?v=20260625-stage84" in index_html
-    assert "js/app.js?v=20260728-one10" in index_html
+    assert "js/app.js?v=20260729-one11" in index_html
     assert "css/ideas-review.css?v=20260702-idea-review-handoff" in index_html
     assert "css/ideas-connectors.css?v=20260702-zotero-simple" in index_html
     assert "js/screens-ideas-zotero.js?v=20260702-zotero-origin" in index_html
@@ -2529,9 +2536,9 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
         "screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
         in index_html
     )
-    assert "screens-guided.js?v=20260728-one10" in index_html
-    assert "guided.css?v=20260728-one10" in index_html
-    assert "guided-rail.css?v=20260728-one10" in index_html
+    assert "screens-guided.js?v=20260729-one11" in index_html
+    assert "guided.css?v=20260729-one11" in index_html
+    assert "guided-rail.css?v=20260729-one11" in index_html
     assert "gd-name\">${t('Guided Copilot', '研究引导')}</span>" in guided_js
     assert "Guided Copilot · local first · nothing leaves your machine" in guided_js
     assert "[t('Review Data', '审阅已有数据'), '@guidedGoal:review_data']" in guided_js
@@ -3396,7 +3403,7 @@ def test_review_breadcrumb_parent_matches_sidebar_group() -> None:
     )
     # Through guided's adapter, not the store: the adapter carries
     # continueExisting and the Cross-DB reframe guard.
-    assert "hit.line === 'main' && guided && guided.handoff" in one_js
+    assert "if (!hit || hit.line !== 'main' || !guided || !guided.handoff) return;" in one_js
     assert "window.EU_GUIDED_STUDY_CONTEXT" in one_js
     assert "const guided = window.EU_GUIDED_STUDY_CONTEXT;" in one_js
     # Anchored on the call form, not the name: the name also appears in the
