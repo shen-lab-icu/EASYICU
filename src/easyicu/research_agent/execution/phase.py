@@ -183,6 +183,7 @@ from .runners.deterministic_missingness import (
     missingness_measurement_audit_code,
 )
 from .runners.deterministic_robustness import (
+    robustness_replay_spec_is_emittable,
     robustness_sensitivity_preflight_code,
 )
 from ..contracts.declared_product import (
@@ -2209,13 +2210,25 @@ def _robustness_sensitivity_runner_owns_step(
     method: str,
     step_id: str,
     expected_outputs: Sequence[str],
+    *,
+    step: Optional[AnalysisStep] = None,
 ) -> bool:
-    """True for a separate prespecified robustness-comparison owner."""
+    """True for a separate prespecified robustness-comparison owner.
+
+    A step carrying ``robustness_replay_spec`` has stated outright that it is
+    the locked-grid replay, so neither the method label below nor the product
+    names decide anything for it.  Both were string sets, and over the recorded
+    corpus the method set is the one that bled: 182 robustness steps that were
+    neither figures nor claimed by the agent-owned validation gate were turned
+    away by it.
+    """
 
     del step_id
     outputs = {str(item or "").lower() for item in (expected_outputs or [])}
     if any(item.startswith("figure:") for item in outputs):
         return False
+    if step is not None and step.robustness_replay_spec is not None:
+        return robustness_replay_spec_is_emittable(step)
     method_head = _method_head(method)
     if method_head not in _ROBUSTNESS_SENSITIVITY_METHODS:
         return False
@@ -6699,6 +6712,7 @@ def run_execute_phase(
                 str(step.method or ""),
                 str(step.step_id or ""),
                 step.expected_outputs or [],
+                step=step,
             )
 
         def _deterministic_robustness_sensitivity_code(

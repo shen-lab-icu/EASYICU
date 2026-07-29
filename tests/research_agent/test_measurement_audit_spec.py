@@ -200,7 +200,7 @@ def test_an_audit_naming_a_product_the_step_never_declares_is_refused() -> None:
 
 
 def test_a_non_table_product_is_refused_rather_than_quietly_uncovered() -> None:
-    with pytest.raises(ValueError, match="table products only"):
+    with pytest.raises(ValueError, match=r"figure:missingness.*cannot back"):
         _step(
             expected_outputs=[
                 "table:missingness_measurement_audit",

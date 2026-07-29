@@ -19,8 +19,9 @@ import shutil
 import subprocess
 import sys
 import textwrap
+from collections.abc import Mapping
 from pathlib import Path
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import Any, Dict, List, Optional, Sequence
 
 from ...authority.plausibility import FlagOnlyPlausibilityScope
@@ -53,10 +54,60 @@ from ...contracts.host_scaffold import HostScaffoldedScript
 from .plausibility_receipt import render_standard_plausibility_receipt_code
 
 __all__ = [
+    "ROBUSTNESS_REPLAY_OUTPUT_FILES",
     "replay_locked_memberships",
+    "robustness_replay_spec_is_emittable",
     "robustness_sensitivity_preflight_code",
     "robustness_sensitivity_preflight_scaffold",
 ]
+
+# The one declaration of what this replay can answer: output -> canonical file.
+#
+# Keyed on the answer, not on the filename.  Several of these frames are copied
+# to additional filenames below (``sensitivity_comparison.csv`` is byte-for-byte
+# ``robustness_matrix.csv``; ``membership_change_summary.csv`` is written three
+# times), because a fail-closed gate in ``gates/contract.py`` resolves declared
+# spec/denominator tables by *filename* and those aliases are what it looks for.
+# The copies therefore stay.  What does not stay is the possibility of promising
+# a reader two products and satisfying it with one answer twice: a declaration
+# keyed here cannot name the same output for two products.
+ROBUSTNESS_REPLAY_OUTPUT_FILES: Mapping[str, str] = MappingProxyType(
+    {
+        "robustness_matrix": "robustness_matrix.csv",
+        "robustness_summary": "robustness_summary.csv",
+        "specification_grid": "sensitivity_specification_grid.csv",
+        "membership_change": "membership_change_summary.csv",
+        "outcome_label_executability": "outcome_label_executability.csv",
+        "missingness_strategy_notes": "missingness_strategy_notes.txt",
+        "primary_effect": "primary_or.json",
+        "complete_case_n": "complete_case_n.json",
+    }
+)
+
+
+def robustness_replay_spec_is_emittable(step: AnalysisStep) -> bool:
+    """Whether the step's typed replay declaration is one this runner can emit.
+
+    ``AnalysisStep`` has already enforced the declaration's internal
+    consistency (every declared product backed, every named product declared,
+    one product per output).  What is checked here is only the capability
+    question this module owns.
+
+    Nothing about the step's ``method`` label or its product names is consulted,
+    which is the entire point.  The runner's method allowlist is three strings;
+    over the recorded corpus 182 robustness steps that were neither figures nor
+    claimed by the agent-owned validation gate were turned away by it, 62 for
+    saying ``prespecified_sensitivity_analysis``.  Widening that list would be
+    worse than the gap, because this replay executes an already-locked grid and
+    a differently-scienced sensitivity analysis is not it -- so the Planner
+    declares the claim instead of the host guessing it from a label.
+    """
+
+    spec = step.robustness_replay_spec
+    if spec is None:
+        return False
+    return all(item.output in ROBUSTNESS_REPLAY_OUTPUT_FILES for item in spec.products)
+
 
 _MATRIX_COLUMNS = [
     "spec_id",
