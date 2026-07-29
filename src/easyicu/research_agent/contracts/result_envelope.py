@@ -1604,10 +1604,33 @@ def _compile_registered_table(
                 partition_full_n = (
                     nonmissing_n + missing_n if nonmissing_n is not None else None
                 )
+                # A cohort splits into observed, missing, and *not applicable*.
+                # Reading only the first two asserts that the value is
+                # semantically applicable to every subject, which is false for
+                # any conditional quantity. ``MissingnessProfile`` already types
+                # this: ``not_applicable_n`` is "rows where absence is expected
+                # under the typed semantics", defaulting to 0 -- so a row that
+                # does not declare one is unaffected.
+                #
+                # Measured 2026-07-29: a real E1 step was failed for the
+                # ``death_time`` row of its own audit -- n_total=1000,
+                # n_nonmissing=102, missing_n=0, not_applicable_n=898. The row
+                # was right: 102 patients died, so only they have a death time,
+                # and calling the other 898 "missing" would claim 89.8 % of
+                # death times were absent when those patients simply did not
+                # die. Under the full partition it reconciles exactly:
+                # 102 + 0 + 898 = 1000.
+                not_applicable_n = _csv_count(
+                    row,
+                    "not_applicable_n",
+                    product_id=artifact.product_id,
+                    row_index=row_index,
+                    issues=issues,
+                )
                 if (
                     explicit_full_n is not None
                     and partition_full_n is not None
-                    and explicit_full_n != partition_full_n
+                    and explicit_full_n != partition_full_n + (not_applicable_n or 0)
                 ):
                     issues.append(
                         NormalizationIssue(
@@ -1615,7 +1638,8 @@ def _compile_registered_table(
                             code="inconsistent_registered_missingness_partition",
                             message=(
                                 "Explicit full denominator disagreed with the "
-                                "non-missing plus missing partition."
+                                "non-missing plus missing plus not-applicable "
+                                "partition."
                             ),
                             field_path=f"row[{row_index}]",
                             product_id=artifact.product_id,
