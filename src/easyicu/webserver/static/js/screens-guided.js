@@ -1340,7 +1340,8 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
   }
   function resetGuidedExtractionState() {
     guidedExtract = {
-      step: 'source',
+      step: 'question',
+      question: '',
       path: '',
       scan: null,
       scanError: null,
@@ -1385,8 +1386,14 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     if (outcome) studyParams.outcome = outcome;
     if (comparator && guidedDesign.comparator !== 'none') studyParams.exposure = comparator;
     if (windowLabel) studyParams.window = windowLabel;
+    /* The rail's Question row shows the question when there is one. This used
+       to write "结局 · 观察窗" into it unconditionally — a settings echo in the
+       row labelled Question, and, once the question step existed, it would have
+       overwritten the reader's actual sentence one step later. */
     const railBits = [outcome || '', windowLabel].filter(Boolean).join(' · ');
-    if (railBits) setVal({ question: railBits });
+    const asked = String((guidedExtract && guidedExtract.question) || '').trim();
+    if (asked) setVal({ question: asked });
+    else if (railBits) setVal({ question: railBits });
   }
   function sourceReadyForGuidedExtraction() {
     const scan = guidedExtract && guidedExtract.scan;
@@ -1416,12 +1423,33 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       : t('Paste or choose a local ICU data folder, then analyze it before running.', '先粘贴或选择本机 ICU 数据文件夹，然后识别目录再运行。');
   }
   function guidedExtractStepOrder() {
-    return (window.EU_GUIDED_EXTRACT && window.EU_GUIDED_EXTRACT.STEP_ORDER) || ['source', 'cohort', 'design', 'modules', 'export', 'review'];
+    return (window.EU_GUIDED_EXTRACT && window.EU_GUIDED_EXTRACT.STEP_ORDER) || ['question', 'source', 'cohort', 'design', 'modules', 'export', 'review'];
+  }
+  /* Leaving the question step lands its reading on the design defaults.
+
+     It only fills fields the reader has not touched. `outcome` starts empty,
+     `window` starts at whole_stay and `comparator` at none, so "still at the
+     default" is decidable — and a hand-picked endpoint is never overwritten by
+     a keyword three steps back. The reading was already shown on the question
+     step before it was applied, so nothing arrives here unannounced. */
+  function commitGuidedQuestion() {
+    if (!guidedExtract || !guidedDesign) return;
+    const q = String(guidedExtract.question || '').trim();
+    if (!q || !window.EU_GUIDED_EXTRACT || !window.EU_GUIDED_EXTRACT.readQuestion) return;
+    const read = window.EU_GUIDED_EXTRACT.readQuestion(q);
+    if (read.outcome && !guidedDesign.outcome) guidedDesign.outcome = read.outcome;
+    if (read.window && guidedDesign.window === 'whole_stay') guidedDesign.window = read.window;
+    if (read.comparator && guidedDesign.comparator === 'none') guidedDesign.comparator = read.comparator;
+    // The rail's Question row finally holds a question rather than a settings echo.
+    setVal({ question: q });
+    studyParams.question = q;
   }
   function goGuidedExtractStep(step) {
     if (!guidedExtract) return;
     const order = guidedExtractStepOrder();
     if (order.indexOf(step) < 0) return;
+    // leaving the question step seeds the design defaults from what was written
+    if (guidedExtract.step === 'question' && step !== 'question') commitGuidedQuestion();
     // leaving the design step commits the collected study frame into the rail + agent
     if (guidedExtract.step === 'design' && step !== 'design') commitGuidedDesign();
     guidedExtract.step = step;
@@ -1432,135 +1460,69 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
   function stepGuidedExtract(dir) {
     if (!guidedExtract) return;
     const order = guidedExtractStepOrder();
-    const idx = order.indexOf(guidedExtract.step || 'source');
+    const idx = order.indexOf(guidedExtract.step || 'question');
     const next = order[idx + dir];
     if (next) goGuidedExtractStep(next);
+  }
+  /* The render context, built once so the owner file's whole-card render and its
+     type-ahead reading refresh are fed by the same values. */
+  function guidedExtractCtx() {
+    const progressPct = guidedExtract.progress && guidedExtract.progress.total
+      ? Math.max(0, Math.min(100, Math.round((Number(guidedExtract.progress.current || 0) / Number(guidedExtract.progress.total || 1)) * 100)))
+      : (guidedExtract.result ? 100 : 0);
+    return {
+      t, icon, esc, attr, fmtInt, compactPath,
+      ex: guidedExtract,
+      design: guidedDesign,
+      ready: sourceReadyForGuidedExtraction(),
+      statusText: guidedExtractionStatusText(),
+      selectedConcepts: guidedSelectedConceptCount(),
+      moduleConceptCount: guidedModuleConceptCount,
+      cohortPresets: GUIDED_COHORT_PRESETS,
+      modules: GUIDED_EXTRACT_MODULES,
+      coreModules: GUIDED_CORE_MODULES,
+      progressPct,
+    };
   }
   function renderGuidedExtractionCard() {
     if (!guidedExtract) resetGuidedExtractionState();
     if (!guidedDesign) resetGuidedDesignState();
-    if (window.EU_GUIDED_EXTRACT) {
-      const progressPct = guidedExtract.progress && guidedExtract.progress.total
-        ? Math.max(0, Math.min(100, Math.round((Number(guidedExtract.progress.current || 0) / Number(guidedExtract.progress.total || 1)) * 100)))
-        : (guidedExtract.result ? 100 : 0);
-      return window.EU_GUIDED_EXTRACT.render({
-        t, icon, esc, attr, fmtInt, compactPath,
-        ex: guidedExtract,
-        design: guidedDesign,
-        ready: sourceReadyForGuidedExtraction(),
-        statusText: guidedExtractionStatusText(),
-        selectedConcepts: guidedSelectedConceptCount(),
-        moduleConceptCount: guidedModuleConceptCount,
-        cohortPresets: GUIDED_COHORT_PRESETS,
-        modules: GUIDED_EXTRACT_MODULES,
-        coreModules: GUIDED_CORE_MODULES,
-        progressPct,
-      });
+    /* screens-guided-extract.js is loaded unconditionally, and before this
+       file (index.html). A legacy inline copy of this entire card used to sit
+       here as a 93-line 'fallback' that production could never reach — a second
+       owner of the same UI, free to drift from the real one, and it had already
+       drifted (stale window copy, an invalid icon name). Failing loudly beats
+       rendering a different card than the one under test. */
+    if (!window.EU_GUIDED_EXTRACT) {
+      return `<div class="gd-x-card"><div class="gdx-status bad"><span></span><div><strong>${t('The extraction card failed to load.', '抽取卡片未能加载。')}</strong></div></div></div>`;
     }
-    // Fallback (sibling not loaded): minimal legacy render.
-    const ready = sourceReadyForGuidedExtraction();
-    const selected = guidedExtract.modules.length;
-    const concepts = guidedSelectedConceptCount();
-    const scan = guidedExtract.scan || {};
-    const sourceMeta = scan.ok
-      ? `${esc(scan.db || 'Unknown')} · ${esc(scan.source || 'source')} · ${fmtInt(scan.tables, 'n/a')} tables · ${fmtInt(scan.modules, 'n/a')} modules`
-      : t('No path is prefilled because every user machine is different. Paste or choose a local ICU folder.', '不会预填路径，因为每台用户电脑都不同。请粘贴或选择本机 ICU 文件夹。');
-    const progressPct = guidedExtract.progress && guidedExtract.progress.total
-      ? Math.max(0, Math.min(100, Math.round((Number(guidedExtract.progress.current || 0) / Number(guidedExtract.progress.total || 1)) * 100)))
-      : (guidedExtract.result ? 100 : 0);
-    return `
-      <div class="gd-x-card" data-guided-extraction-card>
-        <div class="gdx-head">
-          <span class="gdx-ico">${icon('extract', 15)}</span>
-          <div>
-            <strong>${t('Prepare data inside Copilot', '在 Copilot 内准备/抽取数据')}</strong>
-            <span>${t('Same backend as Classic Data Extraction: cohort, modules, Parquet export, and local job progress.', '复用经典数据抽取同一个后端：队列、模块、Parquet 导出和本地 job 进度。')}</span>
-          </div>
-        </div>
-        <div class="gdx-source ${ready ? '' : 'blocked'}">
-          <span>${icon(ready ? 'check' : 'shield', 12)}</span>
-          <div><strong>${t('Local source', '本地数据源')}</strong><small>${sourceMeta}</small></div>
-        </div>
-        <div class="gdx-pathrow">
-          <label>
-            <span>${t('Data folder path', '数据文件夹路径')}</span>
-            <input data-gx-path value="${attr(guidedExtract.path || '')}" placeholder="${attr(t('Paste or browse to a local ICU folder', '粘贴或选择本机 ICU 文件夹'))}" />
-          </label>
-          <button type="button" class="btn primary" data-gx-analyze ${guidedExtract.scanning ? 'disabled' : ''}>${icon('search', 13)} ${t('Analyze folder', '识别目录')}</button>
-        </div>
-        <div class="gdx-section">
-          <div class="gdx-label">${t('Cohort preset', '队列预设')}</div>
-          <div class="gdx-presets">
-            ${GUIDED_COHORT_PRESETS.map(([key, en, zh, den, dzh]) => `
-              <button type="button" class="gdx-preset ${guidedExtract.cohort === key ? 'on' : ''}" data-gx-cohort="${attr(key)}">
-                <strong>${t(en, zh)}</strong><span>${t(den, dzh)}</span>
-              </button>
-            `).join('')}
-          </div>
-          <div class="gdx-note">${t('Observation window defaults to full available data with a 30-day cap, not first 24h.', '观察窗默认使用全可用数据（30 天上限），不是前 24 小时。')}</div>
-        </div>
-        <div class="gdx-section">
-          <div class="gdx-row">
-            <div><div class="gdx-label">${t('Feature modules', '特征模块')}</div><small>${selected} modules · ${concepts} concepts</small></div>
-            <div class="gdx-tools">
-              <button type="button" class="btn sm" data-gx-module-set="all">${icon('check', 12)} ${t('Select all', '全选')}</button>
-              <button type="button" class="btn sm" data-gx-module-set="none">${icon('x', 12)} ${t('Clear', '清空')}</button>
-              <button type="button" class="btn sm" data-gx-module-set="core">${icon('refresh', 12)} ${t('Core 6', '核心 6')}</button>
-            </div>
-          </div>
-          <div class="gdx-modgrid">
-            ${GUIDED_EXTRACT_MODULES.map(([key, en, zh, fallback]) => {
-              const on = guidedExtract.modules.includes(key);
-              return `<button type="button" class="gdx-module ${on ? 'on' : ''}" data-gx-module="${attr(key)}">
-                <span class="mk">${on ? icon('check', 10, 3) : ''}</span><strong>${t(en, zh)}</strong><span>${guidedModuleConceptCount(key, fallback)}</span>
-              </button>`;
-            }).join('')}
-          </div>
-        </div>
-        <div class="gdx-section compact">
-          <div class="gdx-row">
-            <div><div class="gdx-label">${t('Export', '导出')}</div><small>${t('Parquet is the default. Each run creates a timestamped folder with README.md and _manifest.json.', '默认 Parquet。每次运行创建带时间戳的文件夹，并写入 README.md 和 _manifest.json。')}</small></div>
-            <div class="gdx-seg" role="group" aria-label="Export format">
-              ${['parquet', 'csv', 'excel'].map(fmt => `<button type="button" class="${guidedExtract.format === fmt ? 'on' : ''}" data-gx-format="${fmt}">${fmt === 'parquet' ? 'Parquet' : fmt.toUpperCase()}</button>`).join('')}
-            </div>
-          </div>
-          <div class="gdx-row slim">
-            <span>${t('Cohort size', '队列规模')}</span>
-            <div class="gdx-seg" role="group" aria-label="Cohort size">
-              <button type="button" class="${guidedExtract.maxPatients === 500 ? 'on' : ''}" data-gx-max="500">500 safety cap</button>
-              <button type="button" class="${guidedExtract.maxPatients === null ? 'on' : ''}" data-gx-max="all">${t('All stays', '全量 stays')}</button>
-            </div>
-          </div>
-        </div>
-        <div class="gdx-status ${guidedExtract.error ? 'bad' : guidedExtract.result ? 'ok' : ''}">
-          <span>${icon(guidedExtract.error ? 'x' : guidedExtract.result ? 'check' : 'shield', 12)}</span>
-          <div><strong>${guidedExtractionStatusText()}</strong>${guidedExtract.jobId ? `<small>job ${esc(guidedExtract.jobId)}</small>` : ''}</div>
-        </div>
-        ${(guidedExtract.running || guidedExtract.result) ? `<div class="gdx-bar"><span style="width:${progressPct}%"></span></div>` : ''}
-        ${guidedExtract.result ? `<div class="gdx-result">
-          <span>${t('Output folder', '输出文件夹')}</span>
-          <code>${esc(compactPath(guidedExtract.result.out_dir || guidedExtract.result.path || ''))}</code>
-          <span>${t('Rows', '行数')}</span><strong>${fmtInt(guidedExtract.result.total_rows, 'n/a')}</strong>
-          <span>${t('Files', '文件')}</span><strong>${fmtInt(guidedExtract.result.files_written || guidedExtract.result.files, 'n/a')}</strong>
-        </div>` : ''}
-        <div class="gdx-actions">
-          <button type="button" class="btn primary" data-gx-run ${!ready || !selected || guidedExtract.running ? 'disabled' : ''}>${icon('play', 13)} ${t('Run extraction here', '在这里开始抽取')}</button>
-          ${scan.ok && scan.source === 'module' ? `<button type="button" class="btn primary" data-gx-use-export>${icon('check', 13)} ${t('Register this export', '注册这个导出')}</button>` : ''}
-          <button type="button" class="btn" data-open="extraction">${t('Advanced classic settings', '打开高级经典设置')}</button>
-          ${guidedExtract.result ? `<button type="button" class="btn" data-open="patient">${t('Review export', '审阅导出结果')}</button>` : ''}
-        </div>
-      </div>`;
+    return window.EU_GUIDED_EXTRACT.render(guidedExtractCtx());
   }
-  function startGuidedExtractionFlow(label) {
+  /* `seed` is what the reader actually typed at the front door. Before it was
+     threaded through, this flow was started with the LABEL OF THE BUTTON — so
+     the thread's own promise one message earlier ("我会把你的描述带进去" /
+     "I'll carry your wording into it") was broken for this goal, while
+     idea_mining kept it. */
+  function startGuidedExtractionFlow(label, seed) {
     if (label) pushUser(label);
     resetGuidedExtractionState();
+    const asked = String(seed || '').trim();
+    if (asked) {
+      guidedExtract.question = asked;
+      commitGuidedQuestion();
+    }
     dataMode = 'real';
     setVal({ data: 'choose local folder', concepts: 'all modules', extract: 'inline Copilot' });
     markThrough('extract', 'active');
-    thread.push({ bot: true, html: bi(
-      `We can do the core extraction flow here in Copilot. Choose a local ICU data folder, I’ll scan it first, then start the same local extraction job Classic uses.`,
-      `核心数据抽取可以直接在 Copilot 里完成。先选择本机 ICU 数据文件夹，我会先识别目录，再启动和经典视图相同的本地抽取任务。`,
-    ) });
+    thread.push({ bot: true, html: asked
+      ? bi(
+        `Good — let's start from your question. I've put it at the top; check I read it right, then we work out which patients count and what to pull.`,
+        `好 —— 就从你这句话开始。我把它放在最上面了，你看看我理解得对不对，然后我们再定哪些患者算数、要取哪些变量。`,
+      )
+      : bi(
+        `Let's start with the question. Say it in plain words and I'll work the rest out from there — which patients count, what to measure, and where the data comes from.`,
+        `我们从问题开始。用大白话说一句就行，剩下的我从这句话往下推 —— 哪些患者算数、量什么、数据从哪来。`,
+      ) });
     thread.push({ guidedExtraction: true });
     chips = [];
     renderThread();
@@ -3354,17 +3316,49 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       </div>` });
     renderThread();
   }
+  /* ---- front-door routing -------------------------------------------------
+
+     THE RULE: these matchers may only contain words for what you want the app
+     to DO. Never a word for what your study is ABOUT.
+
+     Every one of them used to carry domain nouns, and the review matcher
+     carried `患者`. A research question in Chinese almost always contains
+     患者, so almost every real question a clinician typed was routed to
+     "review your existing export" — a different flow, with a different card,
+     that never asked the question. The greeting's OWN suggested example
+     ("脓毒症患者早期用血管活性药，会不会影响 28 天死亡") hit it.
+
+     Removed for that reason: patient/患者, cohort/队列, 生存, 曲线 from review;
+     analysis/分析 from agent. They are the vocabulary of the question, not of
+     the request. What stays is verbs — export, review, run, 抽取, 审阅, 跑 —
+     plus method names specific enough to be a request for a screen (km,
+     kaplan, logrank). */
   function isGuidedExtractionIntent(text) {
     const s = String(text || '').toLowerCase();
     return /extract|export|prepare data|data extraction|抽取|提取|导出|准备数据|生成数据/.test(s);
   }
   function isGuidedReviewIntent(text) {
     const s = String(text || '').toLowerCase();
-    return /review|patient|cohort|km|kaplan|logrank|visual|visualiz|可视化|审阅|查看|队列|患者|生存|曲线/.test(s);
+    return /review|km|kaplan|logrank|visual|visualiz|可视化|审阅|查看/.test(s);
   }
   function isGuidedAgentIntent(text) {
     const s = String(text || '').toLowerCase();
-    return /agent|analysis|run project|research project|preflight|manuscript|draft|跑研究|运行研究|分析|预检|草稿/.test(s);
+    return /agent|run project|research project|preflight|manuscript|draft|跑研究|运行研究|预检|草稿/.test(s);
+  }
+  /* A question is not a command, so it must not be routed like one.
+
+     This runs BEFORE the matchers above, which is the structural half of the
+     fix: word lists will always leak, but a sentence that ASKS something is
+     recognisable by its shape, and the right response to it is never to guess
+     a destination. It goes to reflectGuidedFrontdoor, which shows the four
+     goals and carries the wording into whichever one is chosen — the front
+     door's designed behaviour, previously unreachable for most real
+     questions. */
+  function looksLikeResearchQuestion(text) {
+    const s = String(text || '').trim();
+    if (!s) return false;
+    if (/[?？]/.test(s)) return true;
+    return /会不会|有没有|是否|能不能|能否|哪些|为什么|多大程度|whether|\bdoes\b|\bdo\b|\bis there\b|\bare there\b|\bhow (much|many|does)\b/i.test(s);
   }
   function isGuidedIdeaIntent(text) {
     const s = String(text || '').toLowerCase();
@@ -3377,6 +3371,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     if (!host) return;
     host.innerHTML = thread.map(t => {
       if (t.typing) return `<div class="msg bot"><div class="m-ava">${icon('spark', 14)}</div><div class="m-body"><div class="m-bubble"><div class="typing"><span></span><span></span><span></span></div></div></div></div>`;
+      if (t.goalCards) return `<div class="msg bot"><div class="m-ava">${icon('spark', 14)}</div><div class="m-body">${renderGuidedGoalCards()}</div></div>`;
       if (t.guidedExtraction) return `<div class="msg bot"><div class="m-ava">${icon('spark', 14)}</div><div class="m-body">${renderGuidedExtractionCard()}</div></div>`;
       if (t.guidedReview) return `<div class="msg bot"><div class="m-ava">${icon('spark', 14)}</div><div class="m-body">${renderGuidedReviewCard()}</div></div>`;
       if (t.guidedAgent) return `<div class="msg bot"><div class="m-ava">${icon('spark', 14)}</div><div class="m-body">${renderGuidedAgentCard()}</div></div>`;
@@ -3909,12 +3904,14 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     if (!pendingGuidedGoal) return false;
     const pending = pendingGuidedGoal;
     pendingGuidedGoal = null;
-    const meta = guidedGoalMeta(pending.goal);
-    thread.push({ bot: true, html: bi(
-      `Folder memory is ready. Continuing with <strong>${esc(meta.label_en || pending.label || pending.goal)}</strong> inside this project context.`,
-      `文件夹记忆已就绪。现在会在这个项目上下文里继续<strong>${esc(meta.label_zh || pending.label || pending.goal)}</strong>。`,
-    ) });
-    chooseGuidedGoal(pending.goal, null);
+    /* No "Folder memory is ready. Continuing with X" line, and no re-echo of
+       the goal. Picking one card used to produce three setup messages and two
+       identical user bubbles before any work appeared: the goal was echoed once
+       on the click and again on the resume, with a jargon line ("文件夹记忆已就
+       绪") between them saying nothing the reader asked about. The plain
+       disclosure already went out when the folder was created, and the flow
+       itself opens by naming what it is doing. */
+    chooseGuidedGoal(pending.goal, null, { silent: true });
     return true;
   }
   function ensureGuidedSession(force) {
@@ -4002,7 +3999,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         `这个上下文关联到已有 Agent run 文件夹。你可以审阅 artifacts 或打开 Agent Projects；Guided 不会改写 run 输出。`,
       ) });
     } else if (!restored.length) {
-      thread.push({ bot: true, html: bi(renderGuidedGoalCards(), renderGuidedGoalCards()) });
+      pushGuidedGoalCards();
     }
     chips = kind === 'run'
       ? [['Review local artifacts', '@reviewLocalRun'], ['Open Agent Projects', '@openAgent'], ['Use active export for a new run', '@activeExport']]
@@ -4031,7 +4028,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       `Created <strong>${esc(title)}</strong> at <span class="mono">${esc(path)}</span>. A new Guided conversation has started for this project; previous chat content stays with the previous project.`,
       `已创建 <strong>${esc(title)}</strong> 到 <span class="mono">${esc(path)}</span>。这个项目的新 Guided 对话已开始；之前的聊天内容仍归属之前的项目。`,
     ) });
-    thread.push({ bot: true, html: bi(renderGuidedGoalCards(), renderGuidedGoalCards()) });
+    pushGuidedGoalCards();
     chips = [
       [t('Find a Study Idea', '找研究想法'), '@guidedGoal:idea_mining'],
       [t('Prepare Data', '准备/抽取数据'), '@guidedGoal:data_extraction'],
@@ -4085,6 +4082,30 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       target_route: goal === 'idea_mining' ? 'ideas' : goal === 'data_extraction' ? 'extraction' : goal === 'review_data' ? 'patient' : 'agent',
     };
   }
+  /* One live goal menu, never two.
+
+     Each site used to push renderGuidedGoalCards() as FROZEN html. Two costs,
+     both visible on one screen: typing a question and getting it reflected left
+     the identical four cards stacked twice, and the older block kept whatever
+     state it was built with — its "已存到本机" strip could never learn that a
+     folder now exists, because the string had already been rendered.
+
+     So the menu becomes a typed entry rendered live, and pushing a new one
+     retires the previous. Superseded entries are matched on `goalCards` or, for
+     the greeting's frozen copy, on our own [data-guided-frontdoor] marker —
+     a structural attribute this file emits, not a guess at wording. */
+  function pushGuidedGoalCards() {
+    /* A thread entry's html is either a string or a bi() pair {en, zh} — the
+       greeting's copy is the pair, which is why a string-only check missed it
+       and left the menu on screen twice. */
+    const carriesMenu = (h) => {
+      if (typeof h === 'string') return h.indexOf('data-guided-frontdoor') >= 0;
+      if (h && typeof h === 'object') return carriesMenu(h.en) || carriesMenu(h.zh);
+      return false;
+    };
+    thread = thread.filter(m => !m.goalCards && !carriesMenu(m.html));
+    thread.push({ bot: true, goalCards: true });
+  }
   function renderGuidedGoalCards() {
     const cards = [
       ['idea_mining', 'spark', t('I have a paper, or a hunch', '我有一篇文章，或一个想法'), t('Bring a paper, a PDF, or just a hunch — we turn it into a question you can actually test.', '拿一篇文章、一个 PDF，或者只是一个念头 —— 我们把它变成一个真能验证的问题。')],
@@ -4133,7 +4154,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       const handoff = result.handoff || result.result.handoff;
       thread.push({ bot: true, html: renderGuidedHandoffCard(handoff) });
     } else if (result.goal_cards) {
-      thread.push({ bot: true, html: renderGuidedGoalCards() });
+      pushGuidedGoalCards();
     }
     renderThread();
     renderChips();
@@ -4149,29 +4170,46 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         <button class="btn primary sm" data-guided-handoff="${attr((handoff && handoff.goal) || meta.goal)}" data-target="${attr(target)}">${t('Open module', '打开模块')}</button>
       </div>`;
   }
-  function chooseGuidedGoal(goal, label) {
+  /* The goal's name in the reader's language.
+
+     Every call below feeds pushUser(), i.e. it is rendered as the READER'S own
+     message. `.label_en` was taken unconditionally, so a Chinese session put
+     "Prepare Data" in your own speech bubble. rememberPendingGoal had the same
+     bug and was fixed in isolation; it came straight back through this path,
+     which is why the fallback now lives in one place instead of five. */
+  function guidedGoalLabel(goal) {
+    const meta = guidedGoalMeta(goal);
+    if (!meta) return goal;
+    return window.EU_LANG === 'zh'
+      ? (meta.label_zh || meta.label_en || goal)
+      : (meta.label_en || meta.label_zh || goal);
+  }
+  /* `opts.silent` = the reader's click was already echoed before a detour (the
+     first-run folder). Resuming must not say it again in their name. */
+  function chooseGuidedGoal(goal, label, opts) {
     const seed = guidedFrontdoorSeedText;
     if (requireGuidedProjectMemory(goal, label)) return;
     guidedFrontdoorSeedText = null;
+    const echo = (opts && opts.silent) ? null : (label || guidedGoalLabel(goal));
     if (goal === 'idea_mining') {
-      startGuidedIdeaFlow(label || guidedGoalMeta(goal).label_en);
+      startGuidedIdeaFlow(echo);
       if (seed && guidedIdea) { guidedIdea.topic = seed; renderThread(); }
       return;
     }
     if (goal === 'data_extraction') {
-      startGuidedExtractionFlow(label || guidedGoalMeta(goal).label_en);
+      startGuidedExtractionFlow(echo, seed);
       return;
     }
     if (goal === 'review_data') {
-      startGuidedReviewFlow(label || guidedGoalMeta(goal).label_en);
+      startGuidedReviewFlow(echo);
       return;
     }
     if (goal === 'run_agent') {
-      startGuidedAgentFlow(label || guidedGoalMeta(goal).label_en);
+      startGuidedAgentFlow(echo);
       return;
     }
     if (!window.EU_API || !window.EU_API.runGuidedAction) {
-      pushUser(label || goal);
+      pushUser(echo || goal);
       pushBot(
         `Guided Copilot backend is unavailable, so I cannot create a reliable handoff yet.`,
         `研究引导后端不可用，所以暂时不能创建可靠交接。`,
@@ -4185,7 +4223,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         action: 'choose_goal',
         goal,
         context: guidedBackendContext(),
-      }).then(result => applyGuidedBackendReply(result, label || (guidedGoalMeta(goal).label_en)))
+      }).then(result => applyGuidedBackendReply(result, echo))
         .catch(err => {
           pushBot(`Guided handoff failed: <span class="mono">${esc(err.message || String(err))}</span>`, `引导交接失败：<span class="mono">${esc(err.message || String(err))}</span>`);
           renderThread();
@@ -4553,7 +4591,19 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     const options = opts || {};
     const text = label || 'New local study';
     const parent = String(parentDir || '').trim();
-    pushUser(parent ? `Create local study folder: ${text} in ${parent}` : `Create local study folder: ${text}`);
+    /* `quiet` is the automatic first-run path, where the reader picked a goal
+       and never asked for a folder. It used to put "Create local study folder:
+       准备/抽取数据 in ~/easyicu/projects" into their OWN speech bubble — an
+       internal command, half English, attributed to someone who did not type
+       it — and then explain the folder twice, once in the plain line the goal
+       flow already shows and once in registry vocabulary. When the reader fills
+       the folder form themselves, both still belong. */
+    if (!options.quiet) {
+      pushUser(bi(
+        parent ? `Create local study folder: ${text} in ${parent}` : `Create local study folder: ${text}`,
+        parent ? `在 ${parent} 里新建本地研究文件夹：${text}` : `新建本地研究文件夹：${text}`,
+      ));
+    }
     if (!window.EU_API || !window.EU_API.createGuidedDraft) {
       pushBot(
         `This browser can draft the conversation, but the local draft registry endpoint is not available yet.`,
@@ -4562,10 +4612,12 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       renderThread();
       return;
     }
-    pushBot(
-      `Creating a <strong>metadata-only local study folder</strong>. This does not create an Agent run, does not read patient rows, and does not unlock a manuscript draft.`,
-      `正在创建<strong>仅元数据的本地研究文件夹</strong>。这不会创建 Agent run、不会读取患者行，也不会解锁稿件草稿。`,
-    );
+    if (!options.quiet) {
+      pushBot(
+        `Creating a <strong>metadata-only local study folder</strong>. This does not create an Agent run, does not read patient rows, and does not unlock a manuscript draft.`,
+        `正在创建<strong>仅元数据的本地研究文件夹</strong>。这不会创建 Agent run、不会读取患者行，也不会解锁稿件草稿。`,
+      );
+    }
     renderThread();
     const payload = guidedDraftPayload(text);
     payload.folder_slug = folderSlug || payload.folder_slug;
@@ -4618,7 +4670,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     const seed = meta
       ? t(meta.label_en || 'New study', meta.label_zh || meta.label_en || 'New study')
       : t('My first study', '我的第一个研究');
-    createLocalGuidedDraft(seed, slugifyDraftFolder(seed), '~/easyicu/projects', { continueGoal: !!pend });
+    createLocalGuidedDraft(seed, slugifyDraftFolder(seed), '~/easyicu/projects', { continueGoal: !!pend, quiet: true });
   }
   function openGuidedRunReview(row, label) {
     if (!row || !row.project_dir || !window.EU_API || !window.EU_API.loadAgentRunReview) {
@@ -5092,7 +5144,16 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         }
         const guidedGoalEl = e.target.closest('[data-guided-goal]');
         if (guidedGoalEl) {
-          chooseGuidedGoal(guidedGoalEl.dataset.guidedGoal, stripText(guidedGoalEl.textContent));
+          /* The card's TITLE, not its whole textContent. This echoed the title
+             AND the explanatory body as one run-on line inside the reader's own
+             speech bubble — "我已经想好要研究什么用大白话说出来。我来定哪些患者
+             算数、把要用的变量取出来。" — which nobody said. Chips carry no
+             <strong>, so they fall back to their own text. */
+          const title = guidedGoalEl.querySelector('strong');
+          chooseGuidedGoal(
+            guidedGoalEl.dataset.guidedGoal,
+            stripText((title || guidedGoalEl).textContent),
+          );
           return;
         }
         const gxCohort = e.target.closest('[data-gx-cohort]');
@@ -5577,6 +5638,21 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       });
 
       shell.addEventListener('input', (e) => {
+        const gxQuestion = e.target.closest('[data-gx-question]');
+        if (gxQuestion && guidedExtract) {
+          guidedExtract.question = gxQuestion.value;
+          /* Refresh ONLY the reading block, not the thread: a renderThread()
+             here would replace the textarea being typed into and drop the
+             caret. The reading has to move while they type — it is the card
+             showing its work, and work shown after the fact is not shown. */
+          const slot = gxQuestion.closest('.gdx-body');
+          const target = slot && slot.querySelector('[data-gx-reading]');
+          if (target && window.EU_GUIDED_EXTRACT && window.EU_GUIDED_EXTRACT.readingHtml) {
+            target.innerHTML = window.EU_GUIDED_EXTRACT.readingHtml(guidedExtractCtx());
+          }
+          scheduleGuidedSlotSave('edit_study_question');
+          return;
+        }
         const gxPath = e.target.closest('[data-gx-path]');
         if (gxPath && guidedExtract) {
           guidedExtract.path = gxPath.value;
@@ -5703,6 +5779,12 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       answerConceptQuestion(v, conceptCode);
       return;
     }
+    /* Asked, not instructed: show the four goals and carry the wording in,
+       rather than picking a flow out of a word that happened to appear. */
+    if (currentId === 'frontdoor' && looksLikeResearchQuestion(v)) {
+      reflectGuidedFrontdoor(v);
+      return;
+    }
     if (currentId === 'frontdoor' && isGuidedIdeaIntent(v)) {
       if (requireGuidedProjectMemory('idea_mining', v)) return;
       startGuidedIdeaFlow(v);
@@ -5712,7 +5794,8 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     }
     if (currentId === 'frontdoor' && isGuidedExtractionIntent(v)) {
       if (requireGuidedProjectMemory('data_extraction', v)) return;
-      startGuidedExtractionFlow(v);
+      // The sentence is both the echoed message and the study question.
+      startGuidedExtractionFlow(v, v);
       return;
     }
     if (currentId === 'frontdoor' && isGuidedReviewIntent(v)) {
@@ -5761,7 +5844,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       `It sounds like you want to study “<em>${esc(v)}</em>”. I can take that four ways — pick the one that fits and I’ll carry your wording into it.`,
       `听起来你想研究“<em>${esc(v)}</em>”。我可以从四个方向推进 —— 选一个最合适的，我会把你的描述带进去。`,
     ) });
-    thread.push({ bot: true, html: renderGuidedGoalCards() });
+    pushGuidedGoalCards();
     chips = [];
     renderThread();
     renderChips();

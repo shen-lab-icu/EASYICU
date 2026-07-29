@@ -2162,6 +2162,62 @@
 }
 .gdx-field{ display: flex; flex-direction: column; gap: 6px; }
 .gdx-hint{ color: var(--ink-4); font-size: 10.75px; line-height: 1.45; }
+
+/* ---- question step (the first step) -------------------------------------
+   Sized to invite a sentence rather than a search term: the box is the tallest
+   control in the whole flow because the step it belongs to is the one the card
+   is actually for. */
+.gdx-question{
+  width: 100%;
+  min-height: 68px;
+  padding: 9px 11px;
+  border: 1px solid var(--hair);
+  border-radius: var(--r-2);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.55;
+  resize: vertical;
+}
+.gdx-question:focus{ outline: none; border-color: var(--accent); }
+.gdx-question::placeholder{ color: var(--ink-4); }
+
+/* The card showing its work. Quiet by default — it is a reading offered for
+   correction, not a result, and styling it as a result would invite the
+   trust it is specifically trying not to ask for. */
+.gdx-reading{
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 9px 11px;
+  border-radius: var(--r-2);
+  background: var(--surface-2);
+}
+.gdx-readhead{ color: var(--ink-3); font-size: 10.75px; font-weight: 600; }
+.gdx-readrow{
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 11.5px;
+  color: var(--ink-2);
+}
+/* The literal words matched, quoted back verbatim, so a wrong reading is
+   traceable to the text that caused it. */
+.gdx-readterm{
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--surface);
+  border: 1px solid var(--hair);
+  color: var(--ink);
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 10.75px;
+}
+.gdx-readarrow{ color: var(--ink-4); display: inline-flex; align-items: center; }
+.gdx-readfield{ color: var(--ink-4); }
+.gdx-readrow strong{ color: var(--ink); font-weight: 600; }
+.gdx-reading.empty{ background: none; padding: 0; }
 .gdx-seg.wrap{ flex-wrap: wrap; height: auto; padding: 3px; gap: 3px; }
 .gdx-seg.wrap button{ min-height: 28px; }
 .gdx-custom,

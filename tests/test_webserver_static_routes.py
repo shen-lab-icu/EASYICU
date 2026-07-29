@@ -185,7 +185,7 @@ def test_native_assistant_labels_disambiguate_page_guide_guided_copilot_and_agen
     assert "Open Copilot" not in help_js
 
     assert "css/dock.css?v=20260625-stage99" in index_html
-    assert "js/app.js?v=20260729-plain3" in index_html
+    assert "js/app.js?v=20260729-question5" in index_html
     assert "js/copilot-dock.js?v=20260712-ux-fixes" in index_html
     assert "js/screens-extraction.js?v=20260712-ux-fixes" in index_html
     assert "js/screens-agent.js?v=20260712-ux-fixes" in index_html
@@ -328,7 +328,7 @@ def test_native_tutorial_screen_uses_active_language_without_mixed_copy() -> Non
     assert ">No tokens, no setup, no patient data. The demo generates" not in help_js
     assert "How a study moves through EasyICU</h2>" not in help_js
 
-    assert "js/app.js?v=20260729-plain3" in index_html
+    assert "js/app.js?v=20260729-question5" in index_html
     assert "js/screens-help.js?v=20260712-ux-fixes" in index_html
 
 
@@ -354,7 +354,7 @@ def test_native_guided_and_page_guide_messages_are_bilingual() -> None:
         "js/screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
         in index_html
     )
-    assert "js/screens-guided.js?v=20260729-plain3" in index_html
+    assert "js/screens-guided.js?v=20260729-question5" in index_html
     assert "js/copilot-dock.js?v=20260712-ux-fixes" in index_html
 
 
@@ -417,13 +417,27 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert "function registerGuidedModuleExport" in guided_js
     assert "GUIDED_EXTRACT_MODULES" in guided_js
     assert "GUIDED_EXTRACT_WINDOW_HOURS = 24 * 30" in guided_js
-    assert "data-gx-path" in guided_js
-    assert "data-gx-analyze" in guided_js
-    assert "data-gx-run" in guided_js
-    assert 'data-gx-module-set="all"' in guided_js
-    assert 'data-gx-module-set="none"' in guided_js
+    # The card's MARKUP is owned by screens-guided-extract.js. screens-guided.js
+    # used to carry a second, unreachable copy of the whole card as a "fallback"
+    # for a sibling that index.html always loads; these markup assertions were
+    # passing against that dead copy, so they proved the duplicate existed, not
+    # that the rendered card had the controls. The copy is gone; each control is
+    # now asserted where it is actually rendered, and screens-guided.js is
+    # asserted to keep the HANDLERS those controls fire.
+    extract_js = _static_js("screens-guided-extract.js")
+    assert "data-gx-path" in extract_js
+    assert "data-gx-analyze" in extract_js
+    assert "data-gx-run" in extract_js
+    assert 'data-gx-module-set="all"' in extract_js
+    assert 'data-gx-module-set="none"' in extract_js
+    assert 'data-gx-format="${fmt}"' in extract_js
+    # …and no second renderer may reappear in the host.
+    assert "gdx-modgrid" not in guided_js
+    assert "[data-gx-path]" in guided_js
+    assert "[data-gx-analyze]" in guided_js
+    assert "[data-gx-run]" in guided_js
+    assert "[data-gx-module-set]" in guided_js
     assert "format: 'parquet'" in guided_js
-    assert 'data-gx-format="${fmt}"' in guided_js
     assert "window.EU_API.startExtractionJob" in guided_js
     assert (
         "new EventSource('/api/jobs/' + encodeURIComponent(r.job_id) + '/events')"
@@ -432,7 +446,9 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert "window.EU_API.registerWorkspaceSource(out" in guided_js
     assert "window.EU_API.scanPath(path, null)" in guided_js
     assert "source !== 'module'" in guided_js
-    assert "No path is prefilled because every user machine is different" in guided_js
+    # Same guarantee (say WHY no path is prefilled), asserted against the owner
+    # file's own wording rather than the deleted duplicate's stale variant.
+    assert "No path is prefilled because every machine is different" in extract_js
     assert "goal === 'data_extraction'" in guided_js
     assert "isGuidedExtractionIntent(v)" in guided_js
     assert "function startGuidedReviewFlow" in guided_js
@@ -545,7 +561,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     guided_plan_css = _static_css("guided-idea-plan.css")
     redesign_css = _static_css("redesign.css")
 
-    assert "css/guided.css?v=20260729-plain3" in index_html
+    assert "css/guided.css?v=20260729-question5" in index_html
     assert "css/guided-idea-plan.css?v=20260627-ideas-feasibility-plan" in index_html
     assert "js/api.js?v=20260727-patient-demo2" in index_html
     assert (
@@ -567,7 +583,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
 
     # Progressive extraction + study-design stepper owner file (screens-guided-extract.js)
     extract_js = _static_js("screens-guided-extract.js")
-    assert "js/screens-guided-extract.js?v=20260707-copilot" in index_html
+    assert "js/screens-guided-extract.js?v=20260729-question5" in index_html
     extract_pos = index_html.find("screens-guided-extract.js")
     assert extract_pos != -1 and extract_pos < guided_pos
     assert "window.EU_GUIDED_EXTRACT = {" in extract_js
@@ -643,7 +659,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert ".gdi-plan-details" in guided_plan_css
     assert ".gdi-feature-row.one" in guided_plan_css
     assert ".gdi-plan-details" not in redesign_css
-    assert "js/screens-guided.js?v=20260729-plain3" in index_html
+    assert "js/screens-guided.js?v=20260729-question5" in index_html
 
 
 def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
@@ -659,7 +675,7 @@ def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
     index_html = _static_html("index.html")
 
     assert "js/screens-agent.js?v=20260712-ux-fixes" in index_html
-    assert "css/agent.css?v=20260729-plain3" in index_html
+    assert "css/agent.css?v=20260729-question5" in index_html
     assert "css/agent-layout.css?v=20260702-agent-focus-layout" in index_html
     assert "css/agent-header.css?v=20260702-agent-compact-header" in index_html
     assert "css/agent-review.css?v=20260702-agent-review-compact" in index_html
@@ -804,7 +820,7 @@ def test_native_agent_research_blocks_are_project_owned() -> None:
     assert ".ag-wf-cell" in agent_css
     assert ".ag-lib-card" in agent_css
     assert ".ag-block-contract" in agent_css
-    assert "css/agent.css?v=20260729-plain3" in index_html
+    assert "css/agent.css?v=20260729-question5" in index_html
     assert "js/screens-agent.js?v=20260712-ux-fixes" in index_html
 
     assert "ag-block-grid" not in app_js
@@ -1452,7 +1468,7 @@ def test_native_idea_mining_is_first_class_route_and_backend_wired() -> None:
     assert "css/ideas.css?v=20260630-gate-first-ideas" in index_html
     assert "css/shell.css?v=20260626-owner" in index_html
     assert "js/icons.js?v=20260625-stage84" in index_html
-    assert "js/app.js?v=20260729-plain3" in index_html
+    assert "js/app.js?v=20260729-question5" in index_html
     assert "css/ideas-review.css?v=20260702-idea-review-handoff" in index_html
     assert "css/ideas-connectors.css?v=20260702-zotero-simple" in index_html
     assert "js/screens-ideas-zotero.js?v=20260702-zotero-origin" in index_html
@@ -2306,6 +2322,110 @@ def test_native_ui_uses_verification_terms_instead_of_gate_literal_translations(
         assert old_term not in ui_text
 
 
+def test_native_guided_extraction_starts_from_the_question_not_the_folder() -> None:
+    """The plain-language question is a real step, and it is the first one.
+
+    The front door invites a sentence ("用大白话说出来") and promises in the
+    thread to carry the wording into whichever goal is picked. For
+    data_extraction that promise was broken: the flow was started with the
+    LABEL OF THE CLICKED BUTTON, the six steps opened with `source`, and the
+    reader was asked for a folder path instead of the question they had just
+    been asked for. idea_mining used the seed; extraction dropped it.
+    """
+    extract_js = _static_js("screens-guided-extract.js")
+    guided_js = _static_js("screens-guided.js")
+
+    # `question` exists and leads the order.
+    assert "['question', 'Question', '研究问题']" in extract_js
+    step_block = extract_js.split("const STEPS = [", 1)[1]
+    assert step_block.index("'question'") < step_block.index("'source'")
+    assert "case 'question': return bodyQuestion(ctx);" in extract_js
+    assert "step: 'question'," in guided_js  # reset state starts there
+
+    # The typed sentence reaches the flow, and lands on the design defaults.
+    assert "function startGuidedExtractionFlow(label, seed)" in guided_js
+    assert "startGuidedExtractionFlow(echo, seed)" in guided_js
+    assert "startGuidedExtractionFlow(v, v)" in guided_js  # typed-command path
+    assert "function commitGuidedQuestion" in guided_js
+    assert "commitGuidedQuestion();" in guided_js
+
+    # A hand-picked choice is never overwritten by a keyword read from the text.
+    assert "if (read.outcome && !guidedDesign.outcome)" in guided_js
+    assert "if (read.window && guidedDesign.window === 'whole_stay')" in guided_js
+    assert "if (read.comparator && guidedDesign.comparator === 'none')" in guided_js
+
+    # The reading is DETERMINISTIC and it shows its work: an unmatched field
+    # stays empty rather than defaulting to something plausible, and each hit
+    # carries the literal term that produced it.
+    assert "function readQuestion(text)" in extract_js
+    assert "out.matched.push({ field, term: hit.term, key: hit.key });" in extract_js
+    assert "const out = { outcome: '', window: '', comparator: '', matched: [] };" in extract_js
+    assert "gdx-readterm" in extract_js
+    # …and it is refreshed in place while typing, so it cannot be applied unseen.
+    assert "window.EU_GUIDED_EXTRACT.readingHtml(guidedExtractCtx())" in guided_js
+
+    # Step one is about the sentence: no classic-settings escape hatch there.
+    assert "const classicBtn = step === 'question'" in extract_js
+
+
+def test_native_guided_frontdoor_routes_questions_by_shape_not_domain_nouns() -> None:
+    """A research question must not be routed like a command.
+
+    isGuidedReviewIntent matched `患者`. Almost every Chinese clinical question
+    contains 患者, so almost every real question typed at the front door was
+    sent to "review your existing export" — including the example the greeting
+    itself suggests. Intent matchers may only name what you want the app to DO.
+    """
+    guided_js = _static_js("screens-guided.js")
+
+    review = guided_js.split("function isGuidedReviewIntent", 1)[1].split("}", 1)[0]
+    for noun in ("患者", "patient", "队列", "cohort", "生存", "曲线"):
+        assert noun not in review, f"domain noun {noun!r} back in the review matcher"
+    assert "审阅" in review and "review" in review  # the verbs stay
+
+    agent = guided_js.split("function isGuidedAgentIntent", 1)[1].split("}", 1)[0]
+    assert "分析" not in agent and "analysis" not in agent
+    assert "运行研究" in agent
+
+    # The structural half: a question is recognised by shape and reflected,
+    # BEFORE any keyword matcher gets to guess a destination.
+    assert "function looksLikeResearchQuestion" in guided_js
+    body = guided_js.split("function handleText(v) {", 1)[1]
+    assert body.index("looksLikeResearchQuestion(v)") < body.index(
+        "isGuidedIdeaIntent(v)"
+    )
+
+
+def test_native_guided_goal_click_speaks_once_in_the_readers_language() -> None:
+    """One click, one message, in the language on screen.
+
+    Picking a goal used to produce three user bubbles — the card's title AND
+    its explanatory body as one run-on line, an internal command string
+    ("Create local study folder: … in ~/easyicu/projects"), and the goal echoed
+    a second time on resume — plus an English label in a Chinese session.
+    """
+    guided_js = _static_js("screens-guided.js")
+
+    # Echo the card's title, not its whole textContent.
+    assert "const title = guidedGoalEl.querySelector('strong');" in guided_js
+    assert "stripText(guidedGoalEl.textContent)" not in guided_js
+
+    # One language-aware fallback, not five copies of `.label_en`.
+    assert "function guidedGoalLabel(goal)" in guided_js
+    assert "guidedGoalMeta(goal).label_en" not in guided_js
+
+    # The automatic first-run folder does not speak in the reader's name.
+    assert "if (!options.quiet) {" in guided_js
+    assert "quiet: true" in guided_js
+    # …and resuming after that detour does not re-echo the goal.
+    assert "chooseGuidedGoal(pending.goal, null, { silent: true });" in guided_js
+
+    # One live goal menu, rendered fresh, never a second frozen copy.
+    assert "function pushGuidedGoalCards" in guided_js
+    assert "if (t.goalCards) return" in guided_js
+    assert "thread.push({ bot: true, html: renderGuidedGoalCards() });" not in guided_js
+
+
 def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     guided_js = _static_js("screens-guided.js")
     projects_js = _static_js("screens-guided-projects.js")
@@ -2539,9 +2659,9 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
         "screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
         in index_html
     )
-    assert "screens-guided.js?v=20260729-plain3" in index_html
-    assert "guided.css?v=20260729-plain3" in index_html
-    assert "guided-rail.css?v=20260729-plain3" in index_html
+    assert "screens-guided.js?v=20260729-question5" in index_html
+    assert "guided.css?v=20260729-question5" in index_html
+    assert "guided-rail.css?v=20260729-question5" in index_html
     assert "gd-name\">${t('Guided Copilot', '研究引导')}</span>" in guided_js
     assert "Guided Copilot · local first · nothing leaves your machine" in guided_js
     assert "[t('Review Data', '审阅已有数据'), '@guidedGoal:review_data']" in guided_js
