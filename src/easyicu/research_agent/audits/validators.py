@@ -11116,13 +11116,24 @@ class FigureSourceDataValidator:
         upstream: pd.DataFrame,
         key_cols: tuple,
     ) -> tuple:
-        """Widen ``key_cols`` until it identifies one row in both frames.
+        """Widen ``key_cols`` until it identifies one row *upstream*.
 
-        Returns ``(key_cols, [])`` once the key is unique on both sides, or
-        ``(None, duplicate_examples)`` when no available combination gets
-        there. Refusing is the point: a value comparison across a
-        many-to-many join reports differences produced by the join itself,
-        which reads as a fabricated figure and is impossible to act on.
+        Returns ``(key_cols, [])`` once every source row can match at most one
+        parent row, or ``(None, duplicate_examples)`` when no available
+        combination gets there.  Refusing is the point: a value comparison
+        across a many-to-many join reports differences produced by the join
+        itself, which reads as a fabricated figure and is impossible to act on.
+
+        Uniqueness is required on the upstream side only.  The upstream table
+        is the authority each source row is checked against, so one duplicated
+        parent key is what makes "which row authenticates this one?"
+        unanswerable.  A duplicated *source* key is not that: several source
+        rows citing the same parent row is a many-to-one join, and every one of
+        them is still compared against that parent's values.  It is also a
+        shape the projection format supports on purpose -- two panels drawing
+        the same parent row each trace it -- so demanding uniqueness on both
+        sides rejects a truthful long-form projection for a hazard it does not
+        have.  (It did: requiring it broke exactly those cases.)
         """
 
         def _duplicates(frame: pd.DataFrame, cols: tuple) -> list:
@@ -11142,10 +11153,10 @@ class FigureSourceDataValidator:
             duplicated = keys[keys.duplicated(keep=False)]
             return sorted(set(duplicated.tolist()))[:10]
 
-        def _unique_everywhere(cols: tuple) -> bool:
-            return not _duplicates(source, cols) and not _duplicates(upstream, cols)
+        def _identifies_one_parent(cols: tuple) -> bool:
+            return not _duplicates(upstream, cols)
 
-        if _unique_everywhere(key_cols):
+        if _identifies_one_parent(key_cols):
             return key_cols, []
 
         # Any column shared by both frames may help identify the row. Value
@@ -11181,15 +11192,14 @@ class FigureSourceDataValidator:
                 remaining,
                 key=lambda col: (
                     measures[col],
-                    len(_duplicates(source, (*widened, col)))
-                    + len(_duplicates(upstream, (*widened, col))),
+                    len(_duplicates(upstream, (*widened, col))),
                     col,
                 ),
             )
             candidate = (*widened, best_col)
 
             def _ambiguity(cols: tuple) -> int:
-                return len(_duplicates(source, cols)) + len(_duplicates(upstream, cols))
+                return len(_duplicates(upstream, cols))
 
             if _ambiguity(candidate) >= _ambiguity(widened):
                 # The best remaining column separates nothing, so no other
@@ -11197,7 +11207,7 @@ class FigureSourceDataValidator:
                 break
             widened = candidate
             remaining.remove(best_col)
-            if _unique_everywhere(widened):
+            if _identifies_one_parent(widened):
                 return widened, []
 
         return None, {
@@ -11477,10 +11487,11 @@ class FigureSourceDataValidator:
                 "upstream_table": upstream_path.name,
                 "duplicate_key_values": duplicate_examples,
                 "message": (
-                    f"no key identifies a single row in both this figure's "
-                    f"source data and {upstream_path.name}; comparing values "
-                    "across a many-to-many join would report differences that "
-                    "are an artefact of the join, not of the figure"
+                    f"no key identifies a single row of {upstream_path.name}, "
+                    "so no source row can be traced to one parent row; "
+                    "comparing values across a many-to-many join would report "
+                    "differences that are an artefact of the join, not of the "
+                    "figure"
                 ),
             }
 
