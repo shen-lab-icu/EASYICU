@@ -631,3 +631,189 @@ what the producer emits.
   `~/.cache/easyicu-regress/baseline-0df6d26.failed`.
 * **A case-token guard test belongs in every new owner**, and it earns its
   place immediately -- it caught the author, not a hypothetical future one.
+
+## M — correction round on L1/L2 (external review, 5 reproduced defects)
+
+The reviewer reproduced five real defects in the code I had just landed. All
+five were confirmed against the source before any edit. Recorded here because
+four of them share one shape: **a check that reads as complete but is not**.
+
+1. **An undeclared outcome value was silently a non-event.** `outcome_levels`
+   did not exist, so a `2` in a column believed to be 0/1 was observed, was not
+   the declared event, and was counted in the denominator as a non-event. The
+   rate deflates, the table still balances against every total, and nothing
+   downstream can detect it. This is the worst of the five: it produces a
+   *wrong number*, not a crash.
+2. **`True` matched a declared numeric level `1`,** because
+   `isinstance(True, int)` is true in Python. A boolean column would answer a
+   0/1 declaration and the study would report a different variable from the one
+   it declared.
+3. **The distribution owner still fell back to bare `COHORT_PARQUET`.**
+   `_typed_cohort_input` returned `None` when a step declared no typed input,
+   and `owns_step` tested `!= ""`, so `None` passed. A table counted from
+   unverified bytes was being labelled deterministically owned.
+4. **The renderer's "re-check the arithmetic" was hollow.** It asserted the
+   rate fell inside its own interval -- which a wrong rate usually does. 30.0%
+   altered to 31.0% passed every check it had.
+5. **L2 copied the binding loader** it was supposed to share with L1.
+
+Closed by one commit:
+
+* `ExposureOutcomeDistributionSpec` → schema version `/2`: closed
+  `outcome_levels`; `outcome_positive_value` must be a **typed** member of it
+  (`1` and `"1"` are different declarations); explicit `level_match_policy`
+  (`exact_typed` / `numeric_string_equivalent`); explicit
+  `missing_outcome_policy` cross-validated against `denominator_policy`
+  (complete-case and carry-the-missing are opposite denominators, so the
+  contradictory pairs are refused at validation); Planner-owned
+  `confidence_level`, from which the `z` multiplier is derived rather than
+  written down.
+* Level matching is a partition, not a lookup: a value matching **two**
+  declared levels is as fatal as one matching none. The refusal reports the
+  number of undeclared rows and the number of distinct undeclared values and
+  **not the values** -- a mis-declared column could be a continuous
+  measurement, and the count is what makes the failure actionable.
+* `typed_cohort_binding.py` → `typed_input_binding.py`, now the only binding
+  loader: manifest `step_id`, exclusivity, `declared_kind`, product identity,
+  `identity_row` self-agreement, consumption contract, containment, digest
+  **before and after** the read, and the product contract. Failures carry a
+  stable `reason_code`. L2's copy is deleted.
+* The product carries its own design on every row, so a consumer can check it
+  without being told anything. `outcome_positive_index` rather than the value:
+  a CSV cell cannot carry a typed scalar -- `1` and `"1"` are written
+  identically and both read back as a number -- so the event is identified by
+  position in the levels array, which does survive the round trip.
+* The renderer re-derives: each percentage from the counts on its own row, each
+  interval rebuilt by the declared method at the declared confidence level, the
+  strata summed against every total, and the denominators checked against the
+  declared policy.
+
+### Mutation results (and one that came back honest)
+
+Each new check was deleted and the corresponding test re-run. Three failed
+immediately as intended. Two came back green and needed diagnosis rather than
+acceptance:
+
+* The confidence-interval mutation was **my own precedence bug** --
+  `if False and A or B` still evaluates `B`. Rewritten as `if False:`, two
+  tests failed. The check was live all along.
+* The boolean guard was **genuinely duplicated**: one copy in `_matches_scalar`
+  and one in `_number`, each individually removable with tests still green.
+  That is how a check goes dead later -- one copy is deleted, nothing notices,
+  and the second goes the same way. Consolidated onto `_number`, which is the
+  semantic home ("a boolean is not a number"), with a comment saying why there
+  is only one. Removing it now fails a test.
+
+### Boundary left open, stated rather than papered over
+
+`load_typed_cohort` requires a consumption contract only when the *step*
+declared one, because production attaches it only in that case. Requiring it
+unconditionally on the cohort path would fail-close plans I cannot show
+production satisfies -- I could not find a real cohort capsule on this machine
+to check. The figure path requires it unconditionally, because its owner
+requires the step to declare one. Raising the cohort path is a separate change
+that needs a real capsule as evidence.
+
+`deterministic_robustness.py` still holds the third copy of
+`_contained_regular_file`. Unchanged from L1; still its own migration.
+
+### A collision I found while auditing my own diff
+
+`exposure_outcome_distribution_figure_executor.py` (the **pre-existing**
+two-table renderer) already claims the product name
+`table:exposure_outcome_distribution`, and expects a completely different
+schema for it: `row_type, exposure_variable, exposure_category,
+outcome_variable, outcome_category, count, percentage_of_locked_cohort,
+denominator_n`. L1 introduced a second meaning for that name.
+
+Checked in both directions rather than assumed:
+
+* the old two-table executor, handed my 22-column contract, returns
+  `owns_step=False`;
+* my renderer, handed the old 8-column contract, refuses with
+  `contract_columns_mismatch`.
+
+It is survivable because **both owners bind on the schema the host recorded,
+not on the name** -- which is the same principle that motivated L0 from the
+other side. Now pinned by a test, because a name collision resolved by
+structure is precisely what starts mis-rendering the day someone relaxes a
+check to "make the shapes compatible".
+
+### Two more defects the correction's own tests found
+
+Both are the same shape as the one Codex reported about missing outcomes: the
+code refused correctly but **named the wrong cause**, which sends a reader to
+the wrong place.
+
+* A **missing exposure** was swept into the undeclared-level bucket, so a row
+  with no exposure value at all was reported as carrying "a value that is not
+  one of the declared exposure levels". Someone reading that would go hunting
+  for a stray category code that does not exist. Missing exposure now refuses
+  on its own terms.
+* With an exclusive binding, a **missing** input reported as
+  `binding_widened`, because the set-inequality check ran before the presence
+  check. "The host gave this step something extra" and "the thing it needs
+  isn't there" are opposite problems. Presence is now checked first, and the
+  widened message names what was added.
+
+The second was found only because the binding owner got its own test file
+rather than being tested through its two consumers -- both of which happened
+to exercise the widened case and neither the absent one. A shared owner needs
+tests at the owner, not coverage inherited from whoever calls it.
+
+### A correction to how tonight's regressions were reported
+
+Earlier entries in this log say "33 failed, identical to the cached baseline,
+zero new". That is true **of the research-agent leg**, which is the only leg
+`baseline-0df6d26.failed` covers. The core leg (all of `tests/` minus
+`research_agent`) had **no** cached baseline, and when first measured it showed
+**136 failures** -- which looked like a large regression.
+
+It is not. Running the same nine files in a clean detached worktree at
+`acbba99` produces the **identical 136-item set**; both `comm` directions are
+empty. They are overwhelmingly figure2 canonical9 scorer-tree / frozen-authority
+digest staleness, which any core `src/` edit invalidates by design and which
+must not be "fixed" by refreshing the freeze. Now cached as
+`baseline-acbba99-core-subset.failed` with a `.meta` recording why it exists,
+so the next patch can diff it in three minutes instead of rediscovering it.
+
+The lesson is narrow and worth keeping: **a cached baseline is only a baseline
+for the selection it recorded.** Saying "zero new failures" without naming the
+selection invites exactly the reading it does not support.
+
+### Re-measured after the correction, and what 4/12 does *not* mean
+
+The zero-Provider replay on the real authority plan gives the **same** matrix
+after the correction as before it -- 4 owned / 1 conditional / 2 unknown /
+5 coder -- so tightening the distribution owner (it now requires a real typed
+cohort binding) did not cost the figure claim.
+
+Two things found by reading that run's own artifacts rather than reasoning
+about them, both of which qualify the number:
+
+**The Coder had already computed this product, under a third set of names.**
+`04_prevalence_mortality_distribution` completed, and the table it wrote for
+`table:exposure_outcome_distribution` has columns
+`classification, classification_level, n_stays, prevalence_denominator_n,
+prevalence_pct, n_deaths, mortality_denominator_n, mortality_pct,
+mortality_ci_low_pct, mortality_ci_high_pct`. That is the *same content* as the
+typed product -- role, level, count, denominator, percentage, events, rate,
+interval -- spelled differently. It is the strongest evidence yet for the whole
+direction: the step was deterministically computable all along and went to an
+LLM only because nobody had written the contract down. It is also now the
+**third** schema living under that one product name (this one, the two-table
+renderer's, and mine), which is exactly why every owner must bind on schema.
+
+**The figure step produced nothing.** Its directory holds only a quarantined
+`concept_draft.py` -- no outputs, no summary. So my renderer claiming it is not
+converting a working Coder step into a failure; it is converting a step that
+already failed into one that will fail *closed with a precise reason* until the
+plan declares an `exposure_outcome_distribution_spec`.
+
+That is the honest reading of the number: **4/12 owned is 4 steps whose
+execution no longer depends on an LLM writing correct code, not 4 steps that
+will now succeed on this plan.** On *this* plan the figure's parent is still a
+Coder step, so the figure will refuse the parent's bytes. The ownership pays
+off only once the plan declares the spec -- which is a Planner-instruction
+change that has landed, and will show up on the next freshly planned run, not
+on this frozen one.

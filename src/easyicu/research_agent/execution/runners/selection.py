@@ -29,11 +29,6 @@ from .deterministic_missingness import (
     missingness_measurement_audit_code,
     source_availability_audit_executor_owns_step,
 )
-from .exposure_outcome_distribution_figure_executor import (
-    EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_INPUTS,
-    exposure_outcome_distribution_figure_executor_code,
-    exposure_outcome_distribution_figure_executor_owns_step,
-)
 from .missingness_measurement_figure_executor import (
     MISSINGNESS_MEASUREMENT_FIGURE_INPUTS,
     missingness_measurement_figure_executor_code,
@@ -247,33 +242,6 @@ def select_standard_executor(
             )
         )
     _missed("prevalence_mortality_figure")
-    if exposure_outcome_distribution_figure_executor_owns_step(
-        step,
-        resolved_bindings=resolved_bindings,
-        display_labels=plan.display_labels,
-    ):
-        if receipt_required:
-            _receipt_declined("exposure_outcome_distribution_figure")
-            return None
-        return _selected(
-            StandardExecutorSelection(
-                analysis_kind="exposure_outcome_distribution_figure",
-                selection_reason=(
-                    "exposure_outcome_distribution_figure_contract_preflight"
-                ),
-                progress_message=(
-                    "Using planner-scoped exposure/outcome distribution figure "
-                    "executor"
-                ),
-                code=exposure_outcome_distribution_figure_executor_code(
-                    step,
-                    resolved_bindings=resolved_bindings,
-                    display_labels=plan.display_labels,
-                ),
-                consumed_input_keys=EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_INPUTS,
-            )
-        )
-    _missed("exposure_outcome_distribution_figure")
     if missingness_measurement_figure_executor_owns_step(step):
         if receipt_required:
             _receipt_declined("missingness_measurement_figure")

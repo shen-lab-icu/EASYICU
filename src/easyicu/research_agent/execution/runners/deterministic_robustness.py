@@ -34,6 +34,7 @@ from ...robustness.primary_effect import (
     _extract_primary_effect_payload_from_records,
     _primary_effect_payload_is_complete,
 )
+from .typed_input_binding import contained_regular_file
 from ...robustness.membership import (
     _identifier_column,
     _membership_audit,
@@ -761,33 +762,6 @@ def _safe_step_id(step_id: str) -> bool:
     )
 
 
-def _contained_regular_file(path: Path, root: Path) -> Optional[Path]:
-    """Return a resolved file only when no path component is a symlink."""
-
-    candidate = Path(path)
-    root = Path(root).resolve()
-    try:
-        candidate.relative_to(root)
-    except ValueError:
-        return None
-    cursor = candidate
-    while cursor != root:
-        if cursor.is_symlink():
-            return None
-        parent = cursor.parent
-        if parent == cursor:
-            return None
-        cursor = parent
-    if not candidate.is_file():
-        return None
-    try:
-        resolved = candidate.resolve(strict=True)
-        resolved.relative_to(root)
-    except (OSError, ValueError):
-        return None
-    return resolved
-
-
 def _coefficient_filename_from_summary(summary: Dict[str, Any]) -> Optional[str]:
     """Resolve the exact registered coefficient companion name.
 
@@ -826,7 +800,7 @@ def _coefficient_path_from_summary(
     filename = _coefficient_filename_from_summary(summary)
     if filename is None:
         return None
-    return _contained_regular_file(outputs_dir / filename, containment_root)
+    return contained_regular_file(outputs_dir / filename, containment_root)
 
 
 def _primary_contract_from_summary(
@@ -898,7 +872,7 @@ def _matching_active_evidence_id(
             or ".." in relative_path.parts
         ):
             continue
-        evidence_path = _contained_regular_file(run_root / relative_path, run_root)
+        evidence_path = contained_regular_file(run_root / relative_path, run_root)
         if evidence_path is None:
             continue
         try:
@@ -948,9 +922,9 @@ def _find_structured_primary_model_source(
         if not _safe_step_id(step_id):
             continue
         step_dir = steps_root / step_id
-        script_path = _contained_regular_file(step_dir / "analysis.py", run_root)
+        script_path = contained_regular_file(step_dir / "analysis.py", run_root)
         outputs_dir = step_dir / "outputs"
-        summary_path = _contained_regular_file(
+        summary_path = contained_regular_file(
             outputs_dir / "step_summary.json",
             run_root,
         )
@@ -1921,7 +1895,7 @@ def _load_authority_snapshot(
     digest = str(expected_sha256 or "").strip().lower()
     if not re.fullmatch(r"[0-9a-f]{64}", digest):
         raise ValueError("run artifact authority snapshot digest is invalid")
-    candidate = _contained_regular_file(Path(path), Path(run_dir))
+    candidate = contained_regular_file(Path(path), Path(run_dir))
     if candidate is None:
         raise ValueError(
             "run artifact authority snapshot is not a contained regular file"

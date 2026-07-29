@@ -953,6 +953,17 @@ class TableOneSpec(BaseModel):
         return self
 
 
+def _typed_level_key(value: Any) -> tuple[str, str]:
+    """Identity of a declared level: its type *and* its value.
+
+    ``1`` and ``"1"`` and ``True`` are three different declarations. Comparing
+    them by ``==`` would make the first two indistinguishable and would let the
+    third be absorbed by the first, because ``True == 1`` in Python.
+    """
+
+    return (type(value).__name__, repr(value))
+
+
 class ExposureOutcomeDistributionSpec(BaseModel):
     """Planner-owned exposure-by-outcome distribution design.
 
@@ -963,31 +974,87 @@ class ExposureOutcomeDistributionSpec(BaseModel):
     input ordering, or from prose has taken a decision that belongs to the
     Planner.
 
-    ``denominator_policy`` is the field that carries the most weight. A
-    prevalence over every declared row and a rate among rows with an observed
-    outcome are different quantities, and which one a study reports is part of
-    its design rather than a rendering detail, so it is declared rather than
-    defaulted.
+    Three fields carry most of the scientific weight:
+
+    ``outcome_levels`` closes the outcome. Without it an outcome value the
+    study never declared -- a ``2`` in a column believed to be 0/1, or a
+    ``"yes"`` in a column declared numerically -- is observed, matches no
+    event, and is therefore counted as a *non-event*. That silently deflates
+    every rate in the table and nothing downstream can detect it. With the set
+    closed, an undeclared observed value stops the step instead.
+
+    ``denominator_policy`` and ``missing_outcome_policy`` together decide what
+    an unobserved outcome means. Treating missingness as "the event did not
+    happen" is legitimate only when absence really is structural (no death
+    record because the patient lived), and that is a claim about the data
+    source, not a default an executor may take.
+
+    ``level_match_policy`` decides whether a declared number may match the same
+    number stored as text. Prepared exports differ, so this is real, but it is
+    declared rather than assumed -- and no policy ever lets a boolean answer a
+    numeric level.
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["easyicu.exposure_outcome_distribution/1"] = (
-        "easyicu.exposure_outcome_distribution/1"
+    schema_version: Literal["easyicu.exposure_outcome_distribution/2"] = (
+        "easyicu.exposure_outcome_distribution/2"
     )
     exposure: str
     exposure_levels: List[Any] = Field(min_length=2)
     outcome: str
+    outcome_levels: List[Any] = Field(
+        min_length=2,
+        description=(
+            "The closed set of observed outcome values the study recognises. "
+            "Any other non-missing value stops the step rather than being "
+            "counted as a non-event."
+        ),
+    )
     outcome_positive_value: Any = Field(
         description=(
             "The exact observed value that counts as the event. Declared "
             "because a binary outcome is not always encoded 1/0, and guessing "
-            "silently inverts every rate in the table."
+            "silently inverts every rate in the table. Must be one of "
+            "outcome_levels, by type as well as by value."
+        ),
+    )
+    level_match_policy: Literal["exact_typed", "numeric_string_equivalent"] = Field(
+        description=(
+            "'exact_typed' matches a declared level only against values of the "
+            "same kind. 'numeric_string_equivalent' additionally treats a "
+            "number and its exact text spelling as the same value, for exports "
+            "that store codes as strings. Neither policy lets a boolean match "
+            "a numeric level."
         ),
     )
     denominator_policy: Literal["all_declared_rows", "observed_outcome_rows"]
     missing_exposure_policy: Literal["fail_closed"] = "fail_closed"
+    missing_outcome_policy: Literal[
+        "fail_closed",
+        "exclude_from_denominator",
+        "structural_absence_is_non_event",
+    ] = Field(
+        description=(
+            "What an unobserved outcome means. 'fail_closed' refuses any "
+            "missing outcome. 'exclude_from_denominator' is complete-case and "
+            "requires denominator_policy='observed_outcome_rows'. "
+            "'structural_absence_is_non_event' asserts that absence encodes "
+            "'the event did not occur' and requires "
+            "denominator_policy='all_declared_rows'."
+        ),
+    )
+    undeclared_outcome_policy: Literal["fail_closed"] = "fail_closed"
     interval_method: Literal["wilson"] = "wilson"
+    confidence_level: float = Field(
+        gt=0.5,
+        lt=1.0,
+        description=(
+            "Planner-owned two-sided confidence level for every interval in "
+            "the product. Declared rather than defaulted so the executor never "
+            "hard-codes a coverage the study did not choose."
+        ),
+    )
 
     @field_validator("exposure_levels")
     @classmethod
@@ -996,12 +1063,28 @@ class ExposureOutcomeDistributionSpec(BaseModel):
             values, label="exposure_outcome_distribution exposure_levels"
         )
 
+    @field_validator("outcome_levels")
+    @classmethod
+    def _closed_outcome_levels(cls, values: List[Any]) -> List[Any]:
+        return _closed_table_one_levels(
+            values, label="exposure_outcome_distribution outcome_levels"
+        )
+
     @field_validator("outcome_positive_value")
     @classmethod
     def _closed_positive_value(cls, value: Any) -> Any:
         return _closed_table_one_levels(
             [value], label="exposure_outcome_distribution outcome_positive_value"
         )[0]
+
+    @field_validator("confidence_level")
+    @classmethod
+    def _finite_confidence_level(cls, value: float) -> float:
+        if not math.isfinite(float(value)):
+            raise ValueError(
+                "exposure_outcome_distribution confidence_level must be finite"
+            )
+        return float(value)
 
     @model_validator(mode="after")
     def _closed_design(self) -> "ExposureOutcomeDistributionSpec":
@@ -1014,6 +1097,32 @@ class ExposureOutcomeDistributionSpec(BaseModel):
         if self.exposure == self.outcome:
             raise ValueError(
                 "exposure_outcome_distribution exposure and outcome must differ"
+            )
+        declared = {_typed_level_key(value) for value in self.outcome_levels}
+        if _typed_level_key(self.outcome_positive_value) not in declared:
+            raise ValueError(
+                "exposure_outcome_distribution outcome_positive_value must be one "
+                "of outcome_levels, matched by type as well as by value: a "
+                "positive value outside the closed set would make every "
+                "remaining level a non-event by omission"
+            )
+        if (
+            self.missing_outcome_policy == "exclude_from_denominator"
+            and self.denominator_policy != "observed_outcome_rows"
+        ):
+            raise ValueError(
+                "exposure_outcome_distribution missing_outcome_policy="
+                "'exclude_from_denominator' is complete-case analysis and "
+                "requires denominator_policy='observed_outcome_rows'"
+            )
+        if (
+            self.missing_outcome_policy == "structural_absence_is_non_event"
+            and self.denominator_policy != "all_declared_rows"
+        ):
+            raise ValueError(
+                "exposure_outcome_distribution missing_outcome_policy="
+                "'structural_absence_is_non_event' keeps unobserved rows in the "
+                "denominator and requires denominator_policy='all_declared_rows'"
             )
         return self
 

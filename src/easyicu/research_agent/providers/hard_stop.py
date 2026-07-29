@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import inspect
 from typing import Any, Dict, Optional, Sequence
 
 from ..authority.provider_hard_stop import (
@@ -97,16 +96,10 @@ class HardStopClient:
                     )
                 else:
                     complete = self._inner.complete
-                    params = inspect.signature(complete).parameters
                     kwargs: Dict[str, Any] = {
                         "max_tokens": max_tokens,
                         "temperature": temperature,
                     }
-                    if "seed" in params:
-                        # No seed is invented; this branch only preserves the
-                        # reviewed client's normal default when the call-scoped
-                        # usage API is unavailable.
-                        kwargs.pop("seed", None)
                     response = complete(messages, **kwargs)
                     usage = None
             except BaseException as exc:
