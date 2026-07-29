@@ -936,6 +936,7 @@ def _stream_special_extraction_batches(
     import os
     import time
 
+    import pandas as pd
     import pyarrow.dataset as ds
     import pyarrow.parquet as pq
 
@@ -963,7 +964,29 @@ def _stream_special_extraction_batches(
     def _read_dependency(module_name: str, ids: List) -> "pd.DataFrame":
         source = source_root / f"{module_name}.parquet"
         if not source.is_file():
-            raise FileNotFoundError(f"missing streamed dependency module: {source}")
+            # A normal module can complete successfully with zero rows (for
+            # example strict suspected infection is structurally unavailable
+            # in SIC).  Its collector publishes an empty, error-free module
+            # manifest but deliberately leaves parquet placeholder creation to
+            # the final native publisher.  Accept only that explicit state;
+            # an absent/failed dependency must remain fail-closed.
+            manifest_path = source_root / f"{module_name}.manifest.json"
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (FileNotFoundError, json.JSONDecodeError, OSError):
+                manifest = None
+            if not (
+                isinstance(manifest, dict)
+                and manifest.get("module") == module_name
+                and not manifest.get("errors")
+                and not manifest.get("saved")
+            ):
+                raise FileNotFoundError(
+                    f"missing streamed dependency module: {source}"
+                )
+            return pd.DataFrame(
+                columns=[id_col, *EXTRACT_MODULES.get(module_name, [])]
+            )
         return (
             ds.dataset(source, format="parquet")
             .to_table(filter=ds.field(id_col).isin(ids))
@@ -1008,6 +1031,12 @@ def _stream_special_extraction_batches(
         for start in range(0, len(all_ids), safe_batch_size):
             ids = all_ids[start : start + safe_batch_size]
             susp = _read_dependency("sepsis_shared", ids)
+            # No strict infection evidence means Sepsis-3 is structurally
+            # unavailable, not a cohort-wide negative label.  Leave both
+            # derived modules empty so the native publisher can emit typed
+            # structural placeholders.
+            if susp.empty:
+                continue
             sofa1 = _read_dependency("sofa1_score", ids) if need_sofa1 else None
             sofa2 = _read_dependency("sofa2_score", ids) if need_sofa2 else None
             if "susp_inf" not in susp.columns:

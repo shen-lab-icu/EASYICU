@@ -343,6 +343,42 @@ def test_streamed_special_export_broadcasts_stay_level_suspicion(tmp_path):
     assert pd.read_parquet(output / "sep3_sofa2.parquet")["sep3_sofa2"].tolist() == [1]
 
 
+def test_streamed_special_export_accepts_declared_empty_infection_dependency(
+    tmp_path,
+):
+    source = tmp_path / "published"
+    output = tmp_path / "special"
+    source.mkdir()
+    output.mkdir()
+    (source / "sepsis_shared.manifest.json").write_text(
+        json.dumps(
+            {
+                "module": "sepsis_shared",
+                "saved": {},
+                "errors": [],
+                "warnings": [],
+            }
+        )
+    )
+
+    api._stream_special_extraction_batches(
+        ["sepsis3_sofa1", "sepsis3_sofa2"],
+        "sic",
+        str(tmp_path),
+        {"stay_id": [1, 2]},
+        2_000,
+        str(output),
+        use_sofa2=True,
+        published_output_dir=str(source),
+    )
+
+    manifest = json.loads((output / "_manifest.json").read_text())
+    assert manifest["errors"] == []
+    assert manifest["saved"] == {}
+    assert not (output / "sep3_sofa1.parquet").exists()
+    assert not (output / "sep3_sofa2.parquet").exists()
+
+
 def test_nonstream_special_export_reuses_already_published_scores(
     tmp_path, monkeypatch
 ):
