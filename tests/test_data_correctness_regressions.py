@@ -19,6 +19,7 @@ from easyicu.datasource import (
     load_bucketed_table_aggregated,
 )
 from easyicu.io.data_converter import ConversionStatus, DataConverter
+from easyicu.runtime.parallel_config import get_parallel_config
 from easyicu.table import ICUTable
 
 
@@ -466,6 +467,20 @@ def test_partitioned_arrow_scan_ignores_invalid_thread_override(
     assert frame.to_dict("records") == [
         {"icustay_id": 1, "itemid": 10, "valuenum": 1.0}
     ]
+
+
+def test_parallel_config_uses_two_worker_safe_default_at_16gb(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("EASYICU_PARALLEL_MAX_WORKERS", raising=False)
+
+    config = get_parallel_config(override_memory_gb=16)
+
+    assert config.max_workers == 2
+    assert get_parallel_config(
+        override_memory_gb=16,
+        override_workers=6,
+    ).max_workers == 6
 
 
 def test_mimic_hospital_value_transform_carries_unit_through_rolling_cte(
