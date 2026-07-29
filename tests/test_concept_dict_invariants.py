@@ -145,6 +145,18 @@ def test_aumc_hba1c_scales_are_harmonised_before_pooling(concept_dict):
     assert concept_dict["hba1c"]["max"] == 25
 
 
+def test_vasopressor_durations_are_non_negative_hours(concept_dict):
+    """Export one explicit duration contract across all databases.
+
+    Source systems occasionally contain end times before start times.  Without
+    a lower bound those records survive as plausible numeric exposures, while
+    the missing unit leaves downstream clients unable to compare databases.
+    """
+    for name in ("dobu_dur", "dopa_dur", "epi_dur", "norepi_dur"):
+        assert concept_dict[name]["unit"] == "hours"
+        assert concept_dict[name]["min"] == 0
+
+
 def test_declared_component_concepts_exist(concept_dict):
     """Every rec_cncpt component must resolve to a concept that exists.
 
