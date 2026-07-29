@@ -26,6 +26,9 @@ from .ast_semantics import (
     runtime_context_opaque_level_findings as _runtime_context_level_findings,
 )
 from .binary_feasibility import binary_feasibility_guard_findings
+from .host_helper_serialization import (
+    host_helper_result_serialization_findings,
+)
 from .host_helper_result import (
     host_helper_result_findings,
     table_one_spec_binding_findings,
@@ -8586,6 +8589,9 @@ def audit_mechanical_code_contracts(
     findings.extend(_host_helper_call_signature_findings(tree, step))
     findings.extend(_count_companion_closed_domain_findings(tree, step))
     findings.extend(host_helper_result_findings(tree, step))
+    findings.extend(
+        host_helper_result_serialization_findings(tree, script_text=script_text)
+    )
     findings.extend(table_one_spec_binding_findings(tree, step))
     findings.extend(_boolean_reduction_identity_findings(tree))
     findings.extend(_local_helper_unpack_arity_findings(tree))
