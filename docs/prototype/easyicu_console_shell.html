@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>EasyICU 统一控制台 — Codex 版式原型</title>
+<!--
+  Design prototype. Tokens and geometry were measured from the live Codex
+  cloud app (chatgpt.com/codex/cloud, 2026-07-28) rather than approximated:
+    page #FCFCFC · card #FFFFFF · muted #F3F3F3 · text #0D0D0D · muted #8F8F8F
+    top bar 52px · content column 768px centred · composer r28 h102
+    shortcut card 235x72 r16 · panel r24 · inner card r16
+    hero 30px/400 lh36 · labels 14px/500 lh20 · base 16px/400 lh24
+    borders are essentially absent; separation comes from background contrast
+  Switching is radio + CSS so the page needs no JavaScript to be judged.
+-->
+<style>
+:root{
+  --page:#FCFCFC; --card:#FFFFFF; --muted:#F3F3F3; --muted-2:#EBEBEB;
+  --ink:#0D0D0D; --ink-2:#8F8F8F;
+  --ok:#3B6D11; --stop:#A32D2D; --wait:#854F0B; --live:#185FA5;
+  --font:-apple-system-body,ui-sans-serif,-apple-system,system-ui,"Segoe UI",
+    "PingFang SC",Helvetica,Arial,sans-serif;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);font:400 16px/1.5 var(--font);
+  -webkit-font-smoothing:antialiased}
+.sw{position:absolute;opacity:0;pointer-events:none}
+
+.bar{height:52px;background:var(--card);display:flex;align-items:center;gap:8px;
+  padding:0 15px}
+.bar .brand{font-size:14px;font-weight:500;margin-right:auto}
+.bar a,.bar .navi{font-size:14px;font-weight:500;line-height:20px;color:var(--ink);
+  text-decoration:none;padding:6px 10px;border-radius:8px;cursor:pointer}
+.bar .navi.off{color:var(--ink-2)}
+.bar .navi:hover{background:var(--muted)}
+.who{width:26px;height:26px;border-radius:50%;background:var(--muted-2);
+  font-size:11px;font-weight:500;display:flex;align-items:center;justify-content:center;
+  margin-left:6px}
+
+.col{width:768px;margin:0 auto;padding:0 0 72px}
+.hero{font-size:30px;font-weight:400;line-height:36px;text-align:center;
+  padding:44px 0 24px;margin:0}
+
+.composer{background:var(--card);border-radius:28px;padding:16px 20px 12px;
+  box-shadow:0 0 0 1px rgba(0,0,0,.05)}
+.composer .ph{font-size:16px;line-height:24px;color:var(--ink-2);min-height:48px}
+.composer .foot{display:flex;align-items:center;gap:8px;margin-top:4px}
+.pill{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 12px;
+  border-radius:16px;background:var(--muted);font-size:14px;font-weight:500;
+  line-height:20px;cursor:pointer;white-space:nowrap}
+.pill:hover{background:var(--muted-2)}
+.pill.demo{background:#FAEEDA;color:#854F0B}
+.grow{flex:1}
+.go{height:32px;padding:0 16px;border-radius:16px;background:var(--ink);color:#fff;
+  font-size:14px;font-weight:500;display:inline-flex;align-items:center;cursor:pointer}
+.ghost{height:32px;padding:0 14px;border-radius:16px;font-size:14px;font-weight:500;
+  display:inline-flex;align-items:center;cursor:pointer}
+.ghost:hover{background:var(--muted)}
+
+.cards{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:28px}
+.sc{height:72px;background:var(--muted);border-radius:16px;padding:12px 14px;
+  cursor:pointer;display:flex;flex-direction:column;justify-content:center}
+.sc:hover{background:var(--muted-2)}
+.sc .t{display:block;font-size:14px;font-weight:500;line-height:20px}
+.sc .s{display:block;font-size:12px;line-height:16px;color:var(--ink-2);margin-top:2px}
+
+.tabs{display:flex;gap:20px;margin:34px 0 4px;padding:0 8px}
+.tabs label{font-size:14px;font-weight:500;line-height:20px;color:var(--ink-2);
+  cursor:pointer;padding-bottom:8px}
+.row{display:flex;align-items:center;gap:12px;padding:14px 8px;cursor:pointer;
+  border-radius:12px}
+.row:hover{background:var(--muted)}
+.dot{width:8px;height:8px;border-radius:50%;flex:none}
+.d-ok{background:var(--ok)}.d-stop{background:var(--stop)}
+.d-wait{background:var(--wait)}.d-live{background:var(--live)}
+.row .m{min-width:0;flex:1}
+.row .t{display:block;font-size:14px;font-weight:500;line-height:20px;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.row .s{display:block;font-size:13px;line-height:18px;color:var(--ink-2);margin-top:2px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row .r{font-size:13px;color:var(--ink-2);white-space:nowrap}
+.kind{font-size:12px;font-weight:500;color:var(--ink-2);background:var(--muted);
+  border-radius:8px;padding:2px 8px;white-space:nowrap}
+
+.panel{background:var(--muted);border-radius:24px;padding:16px;margin-top:32px}
+.panel .h{font-size:14px;font-weight:500;line-height:17.5px;padding:0 4px 12px}
+.panel .g{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.ic{background:var(--card);border-radius:16px;padding:16px;min-height:132px}
+.ic .t{font-size:14px;font-weight:500;line-height:20px}
+.ic .s{font-size:13px;line-height:19px;color:var(--ink-2);margin-top:6px}
+
+.view{display:none}
+#v-home:checked~.wrap .view.home{display:block}
+#v-task:checked~.wrap .view.task{display:block}
+#v-data:checked~.wrap .view.data{display:block}
+
+.back{font-size:14px;font-weight:500;color:var(--ink-2);cursor:pointer;
+  padding:20px 8px 6px;display:inline-block}
+.dtitle{font-size:24px;font-weight:400;line-height:32px;margin:0 0 8px;padding:0 8px}
+.dmeta{font-size:13px;color:var(--ink-2);padding:0 8px 20px;display:flex;
+  align-items:center;gap:8px}
+.tag{font-size:12px;font-weight:500;border-radius:8px;padding:2px 8px}
+.tag.stop{background:#FCEBEB;color:var(--stop)}
+.tag.ok{background:#EAF3DE;color:var(--ok)}
+
+.step{background:var(--card);border-radius:16px;margin-bottom:8px;
+  box-shadow:0 0 0 1px rgba(0,0,0,.04)}
+.step summary{list-style:none;display:flex;align-items:center;gap:10px;
+  padding:14px 16px;cursor:pointer;font-size:14px;font-weight:500;line-height:20px}
+.step summary::-webkit-details-marker{display:none}
+.step .grow{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.step .r{font-size:13px;font-weight:400;color:var(--ink-2)}
+.ev{display:flex;gap:10px;padding:6px 16px 6px 36px;font-size:13px;line-height:19px;
+  color:#4A4945}
+.ev .r{margin-left:auto;color:var(--ink-2);font-size:12px}
+.rep{font-size:11px;background:var(--muted);color:var(--ink-2);border-radius:8px;
+  padding:0 6px;margin-left:6px}
+
+.claim{background:var(--card);border-radius:16px;padding:14px 16px;margin-bottom:8px;
+  font-size:14px;line-height:21px;box-shadow:0 0 0 1px rgba(0,0,0,.04)}
+.claim.bad{background:#FDF3F3;box-shadow:0 0 0 1px rgba(163,45,45,.18)}
+.claim .ev-id{font-size:12px;line-height:17px;color:var(--ok);margin-top:6px;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;word-break:break-all}
+.claim.bad .ev-id{color:var(--stop)}
+.sec{font-size:14px;font-weight:500;padding:26px 8px 10px}
+
+table.tbl{width:100%;border-collapse:collapse;background:var(--card);
+  border-radius:16px;overflow:hidden;box-shadow:0 0 0 1px rgba(0,0,0,.04);
+  font-size:13px;line-height:19px}
+table.tbl th{text-align:left;font-weight:500;color:var(--ink-2);padding:10px 14px;
+  background:var(--muted)}
+table.tbl td{padding:10px 14px}
+table.tbl tr+tr td{box-shadow:inset 0 1px 0 rgba(0,0,0,.04)}
+.num{font-variant-numeric:tabular-nums}
+</style>
+</head>
+<body>
+
+<input class="sw" type="radio" name="v" id="v-home" checked>
+<input class="sw" type="radio" name="v" id="v-task">
+<input class="sw" type="radio" name="v" id="v-data">
+
+<div class="wrap">
+
+<div class="bar">
+  <span class="brand">EasyICU</span>
+  <label class="navi" for="v-home">研究</label>
+  <label class="navi off" for="v-data">数据</label>
+  <span class="navi off">字典</span>
+  <span class="navi off">设置</span>
+  <span class="who">HZ</span>
+</div>
+
+<!-- ── 首页：顶栏 + 居中 768 单列，与 Codex 同版式 ───────────────── -->
+<div class="view home">
+<div class="col">
+  <h1 class="hero">今天想研究什么？</h1>
+
+  <div class="composer">
+    <div class="ph">例如：脓毒症患者早期乳酸清除率与 28 天死亡的关系</div>
+    <div class="foot">
+      <span class="pill demo">官方演示 · MIMIC-IV Demo 2.2</span>
+      <span class="pill">94,458 例 · 19 模块</span>
+      <span class="grow"></span>
+      <span class="ghost">问一问</span>
+      <span class="go">开始研究</span>
+    </div>
+  </div>
+
+  <div class="cards">
+    <label class="sc" for="v-data"><span class="t">抽取数据</span>
+      <span class="s">选队列与模块</span></label>
+    <label class="sc" for="v-data"><span class="t">患者审阅</span>
+      <span class="s">281 特征 · 轨迹</span></label>
+    <label class="sc" for="v-data"><span class="t">队列统计</span>
+      <span class="s">分组与覆盖率</span></label>
+    <label class="sc" for="v-data"><span class="t">跨库对比</span>
+      <span class="s">一致性检查</span></label>
+  </div>
+
+  <div class="tabs">
+    <label style="color:var(--ink)">任务</label>
+    <label>想法</label>
+    <label>归档</label>
+  </div>
+
+  <label class="row" for="v-task">
+    <span class="dot d-stop"></span>
+    <span class="m"><span class="t">早期血管活性药暴露与院内死亡（显式处理适应证混杂）</span>
+      <span class="s">已拦截 · 1 处结论未绑定证据，手稿未生成</span></span>
+    <span class="kind">分析</span><span class="r">2.3 小时</span>
+  </label>
+
+  <label class="row" for="v-task">
+    <span class="dot d-live"></span>
+    <span class="m"><span class="t">MIMIC-IV × eICU 跨库一致性检查</span>
+      <span class="s">运行中 · 19 共享模块，正在比对第 12 个</span></span>
+    <span class="kind">跨库</span><span class="r">6 分钟</span>
+  </label>
+
+  <label class="row" for="v-task">
+    <span class="dot d-wait"></span>
+    <span class="m"><span class="t">首 24 小时峰值乳酸与院内死亡的描述性关联</span>
+      <span class="s">暂停 · 等你确认是否继续敏感性分析</span></span>
+    <span class="kind">分析</span><span class="r">8.0 小时</span>
+  </label>
+
+  <label class="row" for="v-task">
+    <span class="dot d-ok"></span>
+    <span class="m"><span class="t">MIMIC-IV 全库 19 模块抽取</span>
+      <span class="s">完成 · 94,458 例 · 98,596,746 行</span></span>
+    <span class="kind">抽取</span><span class="r">昨天</span>
+  </label>
+
+  <label class="row" for="v-task">
+    <span class="dot d-ok"></span>
+    <span class="m"><span class="t">PEEP 与 AKI：从 12 篇文献到可测候选</span>
+      <span class="s">完成 · 12 个候选，4 个数据可行</span></span>
+    <span class="kind">想法</span><span class="r">3 天前</span>
+  </label>
+
+  <div class="panel">
+    <div class="h">还没上手？</div>
+    <div class="g">
+      <div class="ic"><div class="t">先看官方演示</div>
+        <div class="s">MIMIC-IV 与 eICU 去标识演示数据已就绪，不需要申请权限即可走完整流程。</div></div>
+      <div class="ic"><div class="t">连自己的数据库</div>
+        <div class="s">指向本地已转换的 parquet 目录，或从原始 CSV 开始转换。</div></div>
+      <div class="ic"><div class="t">证据是怎么绑的</div>
+        <div class="s">每个进入手稿的数字都要有证据编号，绑不上就拦下不写。</div></div>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- ── 任务详情：同一 768 单列，过程在上、结论在下 ───────────────── -->
+<div class="view task">
+<div class="col">
+  <label class="back" for="v-home">← 全部任务</label>
+  <h2 class="dtitle">早期血管活性药暴露与院内死亡（显式处理适应证混杂）</h2>
+  <div class="dmeta">21 个阶段 · 用时 2.3 小时 · 官方演示 MIMIC-IV
+    <span class="tag stop">已拦截 · 等你确认</span></div>
+
+  <details class="step" open>
+    <summary><span class="dot d-ok"></span><span class="grow">锁定分析队列</span>
+      <span class="r">2 分</span></summary>
+    <div class="ev"><span>队列锁定完成</span><span class="r">n_stays=2,431</span></div>
+    <div class="ev"><span>Skipped completed step from prior run<span class="rep">×18</span></span>
+      <span class="r">已折叠</span></div>
+  </details>
+
+  <details class="step">
+    <summary><span class="dot d-ok"></span><span class="grow">混杂选择与正性检验</span>
+      <span class="r">6 分</span></summary>
+    <div class="ev"><span>共 83 条记录，无重复——这一步是真在算</span><span class="r">6 分</span></div>
+  </details>
+
+  <details class="step">
+    <summary><span class="dot d-stop"></span><span class="grow">主加权关联</span>
+      <span class="r">0.3 秒</span></summary>
+    <div class="ev"><span>写作阶段被 fail-closed 门拦下</span><span class="r">error</span></div>
+  </details>
+
+  <div class="sec">结论与证据　0/1 条已绑定</div>
+  <div class="claim bad">Formal manuscript was not generated.
+    <div class="ev-id">未绑定证据 · diagnostic_only · Strict fail-closed gate blocked writer output</div>
+  </div>
+
+  <div class="sec">产物</div>
+  <table class="tbl">
+    <tr><th>文件</th><th>类型</th><th>证据摘要</th></tr>
+    <tr><td>target_trial_protocol.json</td><td>设计</td><td class="num">—</td></tr>
+    <tr><td>table_one.csv</td><td>表</td><td class="num">6265aaa5b5c6</td></tr>
+    <tr><td>data_quality.csv</td><td>质控</td><td class="num">6265aaa5b5c6</td></tr>
+    <tr><td>measurement_availability.csv</td><td>质控</td><td class="num">6265aaa5b5c6</td></tr>
+  </table>
+</div>
+</div>
+
+<!-- ── 数据：browse 型页面，同一版式不再另起一套外壳 ─────────────── -->
+<div class="view data">
+<div class="col">
+  <label class="back" for="v-home">← 全部任务</label>
+  <h2 class="dtitle">患者审阅</h2>
+  <div class="dmeta">官方演示 MIMIC-IV Demo 2.2 · 140 例 · 19 模块 · 281 特征
+    <span class="tag ok">已就绪</span></div>
+
+  <div class="tabs">
+    <label style="color:var(--ink)">模块总览</label>
+    <label>轨迹画廊</label>
+    <label>跨患者对比</label>
+  </div>
+
+  <table class="tbl">
+    <tr><th>模块</th><th>特征</th><th>有观测</th><th>全空</th><th>结构无源</th></tr>
+    <tr><td>生命体征</td><td class="num">24</td><td class="num">24</td><td class="num">0</td><td class="num">0</td></tr>
+    <tr><td>化验</td><td class="num">61</td><td class="num">58</td><td class="num">3</td><td class="num">0</td></tr>
+    <tr><td>SOFA-1</td><td class="num">12</td><td class="num">12</td><td class="num">0</td><td class="num">0</td></tr>
+    <tr><td>SOFA-2</td><td class="num">14</td><td class="num">13</td><td class="num">1</td><td class="num">0</td></tr>
+    <tr><td>结局</td><td class="num">9</td><td class="num">8</td><td class="num">0</td><td class="num">1</td></tr>
+  </table>
+
+  <div class="panel">
+    <div class="h">这三个口径不一样，不能互相替代</div>
+    <div class="g">
+      <div class="ic"><div class="t">281 个目录定义</div>
+        <div class="s">字典里声明过的特征总数。</div></div>
+      <div class="ic"><div class="t">280 个已物化</div>
+        <div class="s">这份导出里真的落到 parquet 的。</div></div>
+      <div class="ic"><div class="t">257 个有非空观测</div>
+        <div class="s">这批患者身上真的测到过值的。</div></div>
+    </div>
+  </div>
+</div>
+</div>
+
+</div>
+</body>
+</html>
