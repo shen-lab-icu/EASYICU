@@ -20,6 +20,7 @@ from ..contracts.declared_product import (
     RUNTIME_BINDABLE_TYPED_INPUT_KINDS,
     RUNTIME_TYPED_INPUT_EVIDENCE_KINDS,
     merge_host_table_contract,
+    reserved_primary_cohort_product,
     typed_product_binding_contract,
     typed_product_schema_receipt,
     typed_product as _canonical_typed_product,
@@ -923,9 +924,15 @@ def _resolved_typed_input_binding(
     verified_path = parent_verified_path
     selected_record = record
     declared_kind, product_name = typed_product
+    # The reserved primary-cohort identity is decided by its owner, not by one
+    # spelling of it: ``cohort:analysis_set`` is the same locked population as
+    # ``analysis_cohort``, and recognising only the latter here let every typed
+    # consumer execute on the full cohort while the run still reported the
+    # development sample.
+    binds_primary_cohort = reserved_primary_cohort_product(input_name) is not None
     parent_already_development_scoped = (
         development_sample is not None
-        and product_name == "analysis_cohort"
+        and binds_primary_cohort
         and _producer_output_is_already_development_scoped(
             evidence_id=evidence_ref.evidence_id,
             producer_step_records=producer_step_records,
@@ -934,14 +941,15 @@ def _resolved_typed_input_binding(
     )
     if (
         development_sample is not None
-        and product_name == "analysis_cohort"
+        and binds_primary_cohort
         and not parent_already_development_scoped
     ):
         projection = resolve_development_input_projection(
-            product_name=product_name,
+            declared_input=input_name,
             parent_evidence_id=parent_evidence_id,
             parent_sha256=parent_sha256,
             parent_produced_by_step=parent_produced_by_step,
+            parent_verified_path=parent_verified_path,
             evidence_records=evidence_records,
             run_dir=run_dir,
             authoritative_cohort_path=authoritative_cohort_path,

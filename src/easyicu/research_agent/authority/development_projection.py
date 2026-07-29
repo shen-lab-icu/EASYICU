@@ -14,6 +14,7 @@ from typing import Any, Mapping, Optional, Sequence
 
 import pandas as pd
 
+from ..contracts.declared_product import reserved_primary_cohort_product
 from .evidence_store import sha256_of_file
 from .runtime_artifacts import verified_run_evidence_path
 from .typed_input_receipt import typed_input_row_identity_sha256
@@ -43,18 +44,27 @@ def _record_field(record: Any, name: str) -> Any:
 
 def resolve_development_input_projection(
     *,
-    product_name: str,
+    declared_input: str,
     parent_evidence_id: str,
     parent_sha256: str,
     parent_produced_by_step: str,
+    parent_verified_path: Path,
     evidence_records: Sequence[Any],
     run_dir: Path,
     authoritative_cohort_path: Optional[Path],
     development_sample: Optional[Any],
 ) -> Optional[DevelopmentInputProjection]:
-    """Return the exact development child, or ``None`` on any ambiguity."""
+    """Return the exact development child, or ``None`` on any ambiguity.
 
-    if development_sample is None or product_name != "analysis_cohort":
+    ``declared_input`` is the raw Planner token, because the reserved
+    primary-cohort identity is owned by ``declared_product`` and cannot be
+    recovered from the canonical ``kind:product`` pair.
+    """
+
+    if (
+        development_sample is None
+        or reserved_primary_cohort_product(declared_input) is None
+    ):
         return None
     try:
         selected_cohort_path = Path(authoritative_cohort_path or "").resolve()
@@ -114,6 +124,24 @@ def resolve_development_input_projection(
         or identity_frame[identity_column].astype("string").duplicated().any()
         or len(identity_frame) != int(development_sample.selected_rows)
     ):
+        return None
+
+    # The sample was drawn from the locked cohort, but the input it replaces
+    # is whatever the declared producer emitted.  If that producer narrowed
+    # the population, substituting the sample would hand the consumer rows its
+    # own producer excluded, so require the substitution to be a real subset
+    # of the declared parent rather than assuming the two agree.
+    try:
+        parent_identities = pd.read_parquet(
+            parent_verified_path,
+            columns=[identity_column],
+        )
+    except (OSError, TypeError, ValueError, ImportError):
+        return None
+    if identity_column not in parent_identities.columns:
+        return None
+    sampled = set(identity_frame[identity_column].astype("string"))
+    if not sampled.issubset(set(parent_identities[identity_column].astype("string"))):
         return None
 
     authority_payload = {

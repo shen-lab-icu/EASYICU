@@ -184,6 +184,122 @@ def test_analysis_cohort_binding_selects_sample_and_preserves_parent(
     assert loaded.receipt.evidence_id == DEVELOPMENT_COHORT_EVIDENCE_ID
 
 
+def _register_full_universe_producer_output(
+    tmp_path: Path,
+    store,
+    records,
+    *,
+    frame: pd.DataFrame,
+    evidence_id: str,
+):
+    """Register a step-emitted primary cohort produced on the full universe."""
+
+    path = tmp_path / f"{evidence_id}.parquet"
+    frame.to_parquet(path, index=False)
+    record = store.register_file(
+        kind="table",
+        description="Step-emitted primary analysis cohort.",
+        source_path=path,
+        evidence_id=evidence_id,
+        produced_by_step="01_cohort",
+    )
+    records[0].update(
+        {
+            "evidence_ids": [record.evidence_id],
+            "execution_cohort_role": (
+                "raw_universe_for_primary_analysis_cohort_producer"
+            ),
+        }
+    )
+    return record
+
+
+def test_planner_spelled_cohort_product_is_projected_onto_the_sample(
+    tmp_path: Path,
+) -> None:
+    """``cohort:analysis_set`` is the same reserved population as the legacy name.
+
+    Recognising only ``analysis_cohort`` here let every typed consumer execute
+    on the full cohort while the run still reported the development sample.
+    """
+
+    store, _parent, sample, _plan, records = _arrange_projection(tmp_path)
+    emitted = pd.read_parquet(tmp_path / "cohort_analysis.parquet")
+    producer_output = _register_full_universe_producer_output(
+        tmp_path,
+        store,
+        records,
+        frame=emitted,
+        evidence_id="step01_analysis_set",
+    )
+
+    binding = _resolved_typed_input_binding(
+        input_name="cohort:analysis_set",
+        evidence_ref=EvidenceRef(evidence_id=producer_output.evidence_id),
+        evidence_records=store.records(),
+        run_dir=tmp_path,
+        producer_step_records=records,
+        authoritative_cohort_path=sample.cohort_path,
+        development_sample=sample,
+    )
+
+    assert binding is not None
+    assert binding["evidence_id"] == DEVELOPMENT_COHORT_EVIDENCE_ID
+    assert binding["sha256"] == sample.sample_sha256
+    assert binding["product"] == "analysis_set"
+    projection = binding["execution_projection"]
+    assert projection["paper_authority"] is False
+    assert projection["declared_parent_input"]["evidence_id"] == (
+        producer_output.evidence_id
+    )
+    manifest_path = _write_resolved_inputs_manifest(
+        run_dir=tmp_path,
+        step_id="02_model",
+        planner_declared_inputs=["cohort:analysis_set"],
+        bindings={"cohort:analysis_set": binding},
+    )
+    loaded = load_typed_input(
+        resolved_inputs_path=manifest_path,
+        expected_resolved_inputs_sha256=hashlib.sha256(
+            manifest_path.read_bytes()
+        ).hexdigest(),
+        run_root=tmp_path,
+        input_key="cohort:analysis_set",
+        consumer_step_id="02_model",
+        consumer_code_sha256="d" * 64,
+    )
+    assert loaded.payload.num_rows == sample.selected_rows
+
+
+def test_producer_that_narrowed_the_population_fails_closed(tmp_path: Path) -> None:
+    """The sample may only replace an input it is genuinely a subset of."""
+
+    store, _parent, sample, _plan, records = _arrange_projection(tmp_path)
+    sampled_ids = set(pd.read_parquet(sample.cohort_path)["stay_id"])
+    narrowed = pd.read_parquet(tmp_path / "cohort_analysis.parquet")
+    dropped = sorted(sampled_ids)[0]
+    narrowed = narrowed[narrowed["stay_id"] != dropped]
+    producer_output = _register_full_universe_producer_output(
+        tmp_path,
+        store,
+        records,
+        frame=narrowed,
+        evidence_id="step01_narrowed_analysis_set",
+    )
+
+    binding = _resolved_typed_input_binding(
+        input_name="cohort:analysis_set",
+        evidence_ref=EvidenceRef(evidence_id=producer_output.evidence_id),
+        evidence_records=store.records(),
+        run_dir=tmp_path,
+        producer_step_records=records,
+        authoritative_cohort_path=sample.cohort_path,
+        development_sample=sample,
+    )
+
+    assert binding is None
+
+
 def test_development_scoped_producer_artifact_is_not_replaced_by_base_sample(
     tmp_path: Path,
 ) -> None:

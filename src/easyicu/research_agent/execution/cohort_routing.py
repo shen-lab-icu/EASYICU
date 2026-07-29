@@ -15,6 +15,7 @@ from typing import Any, Mapping, MutableMapping
 from ..authority.evidence_store import sha256_of_file
 from ..contracts.declared_product import (
     primary_analysis_cohort_producer_uses_universe,
+    reserved_primary_cohort_product,
 )
 from ..schema import AnalysisPlan, AnalysisStep
 
@@ -53,18 +54,23 @@ def bound_step_execution_cohort_path(
     fallback_path: Path,
     resolved_input_bindings: Mapping[str, Mapping[str, Any]],
 ) -> Path:
-    """Prefer the unique digest-bound ``analysis_cohort`` typed input.
+    """Prefer the unique digest-bound primary-cohort typed input.
 
     Bindings have already passed lineage resolution, but this final routing
     boundary rechecks path agreement, containment, existence, and digest before
     changing the compatibility runner surface.  It never infers a cohort from
     a variable name or from a file scan.
+
+    The mapping key is the raw declared input the Planner wrote, so the
+    reserved primary-cohort identity is decided by its owner rather than by
+    matching one spelling of the product name -- the canonical binding view
+    has already folded ``cohort:`` into ``dataset:`` and cannot answer it.
     """
 
     run_root = Path(run_dir).resolve()
     candidates: dict[Path, str] = {}
-    for binding in resolved_input_bindings.values():
-        if str(binding.get("product") or "") != "analysis_cohort":
+    for declared_input, binding in resolved_input_bindings.items():
+        if reserved_primary_cohort_product(declared_input) is None:
             continue
         relative_path = str(binding.get("relative_path") or "").strip()
         absolute_path = str(binding.get("absolute_path") or "").strip()
