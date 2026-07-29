@@ -50,8 +50,10 @@ from ...schema import AnalysisStep
 from .plausibility_receipt import render_standard_plausibility_receipt_code
 
 __all__ = [
+    "MEASUREMENT_AUDIT_KIND_FILES",
     "MISSINGNESS_AUDIT_PRODUCT_FILES",
     "declared_audit_products_are_emittable",
+    "declared_audit_spec_is_emittable",
     "is_compact_missingness_measurement_contract",
     "is_missingness_complete_case_contract",
     "is_missingness_measurement_availability_contract",
@@ -124,40 +126,69 @@ _MEASUREMENT_BIAS_PRODUCT_IDS = frozenset(
     }
 )
 
-# The one declaration of what this runner can emit: product id -> output file.
+# The one declaration of what this runner can emit: audit kind -> output file.
 # It is rendered into the generated script rather than duplicated there, because
 # the previous arrangement -- a literal inside the template plus several
 # hand-enumerated contracts out here -- is what let the two drift apart.
 #
-# Ownership is a *capability* question ("can I emit exactly these products?"),
-# and this map answers it.  Scientific sufficiency ("must this study declare the
-# component-completeness product at all?") is a different question that belongs
-# to the study protocol and the evaluator, not to an executor: being able to
+# Ownership is a *capability* question ("can I emit exactly these audits?"), and
+# this map answers it.  Scientific sufficiency ("must this study declare the
+# component-completeness audit at all?") is a different question that belongs to
+# the study protocol and the evaluator, not to an executor: being able to
 # compute two tables must never be read as a licence to accept two tables where
 # the science requires three.
-MISSINGNESS_AUDIT_PRODUCT_FILES: Mapping[str, str] = MappingProxyType(
+#
+# Keyed on the audit, not on a product name.  ``measurement_source`` is written
+# to three filenames, so a rule counting distinct *files* would let one step
+# declare all three and be satisfied by the same table three times; keyed this
+# way that declaration is one audit claimed three times, which fails closed.
+MEASUREMENT_AUDIT_KIND_FILES: Mapping[str, str] = MappingProxyType(
     {
-        "missingness_audit": "missingness_audit.csv",
+        "measurement_missingness": "missingness_measurement_audit.csv",
         "missingness_profile": "missingness_audit.csv",
-        "missingness_measurement_audit": "missingness_measurement_audit.csv",
-        "measurement_audit": "missingness_measurement_audit.csv",
+        "measurement_source": "measurement_source_audit.csv",
         # Its own table, not an alias of the missingness one: "was it ever
         # measured" and "how often, and when" are different questions, and
         # two declared products resolving to one file satisfies a contract
         # without satisfying a reader.
-        "measurement_process_audit": "measurement_process_audit.csv",
-        "exposure_component_completeness_audit": (
-            "exposure_component_completeness_audit.csv"
-        ),
-        "measurement_source_audit": "measurement_source_audit.csv",
-        "measurement_availability": "measurement_availability.csv",
-        "measurement_availability_audit": "measurement_availability_audit.csv",
-        "data_quality_audit": "missingness_measurement_audit.csv",
-        "source_coverage": "measurement_source_audit.csv",
-        "analytic_denominator": "analytic_denominators.csv",
+        "measurement_process": "measurement_process_audit.csv",
+        "event_timing": "event_timing_audit.csv",
+        "component_completeness": "exposure_component_completeness_audit.csv",
         "analytic_denominators": "analytic_denominators.csv",
-        "complete_case_attrition": "analytic_denominators.csv",
         "cohort_flow": "cohort_flow.csv",
+    }
+)
+
+# Product ids seen in recorded plans, mapped to the audit each one names.  This
+# is a compatibility shim for plans written before ``measurement_audit_spec``
+# existed, NOT a second capability declaration -- every value is looked up in
+# MEASUREMENT_AUDIT_KIND_FILES above, so the two cannot drift.  It is also why
+# the shim can only ever shrink: a plan that declares the spec does not consult
+# it, and a plan that does not is limited to names someone already wrote down.
+_LEGACY_PRODUCT_AUDITS: Mapping[str, str] = MappingProxyType(
+    {
+        "missingness_audit": "missingness_profile",
+        "missingness_profile": "missingness_profile",
+        "missingness_measurement_audit": "measurement_missingness",
+        "measurement_audit": "measurement_missingness",
+        "measurement_process_audit": "measurement_process",
+        "exposure_component_completeness_audit": "component_completeness",
+        "measurement_source_audit": "measurement_source",
+        "measurement_availability": "measurement_source",
+        "measurement_availability_audit": "measurement_source",
+        "data_quality_audit": "measurement_missingness",
+        "source_coverage": "measurement_source",
+        "analytic_denominator": "analytic_denominators",
+        "analytic_denominators": "analytic_denominators",
+        "complete_case_attrition": "analytic_denominators",
+        "cohort_flow": "cohort_flow",
+    }
+)
+
+MISSINGNESS_AUDIT_PRODUCT_FILES: Mapping[str, str] = MappingProxyType(
+    {
+        product: MEASUREMENT_AUDIT_KIND_FILES[audit]
+        for product, audit in _LEGACY_PRODUCT_AUDITS.items()
     }
 )
 
@@ -173,12 +204,25 @@ _AUDIT_METHOD_VOCABULARY = frozenset(
 )
 
 
-def _render_product_files() -> str:
-    """Render the capability map as readable source for the generated script."""
+def _render_product_files(step: AnalysisStep | None = None) -> str:
+    """Render this step's product -> file map as source for the script.
 
+    With a typed audit spec the map is the step's own declaration resolved
+    through the capability map, so the script collects exactly the products the
+    Planner asked for under exactly the names it used.  Without one it is the
+    legacy shim, unchanged.
+    """
+
+    spec = None if step is None else step.measurement_audit_spec
+    if spec is None:
+        resolved = dict(MISSINGNESS_AUDIT_PRODUCT_FILES)
+    else:
+        resolved = {
+            item.product_id: MEASUREMENT_AUDIT_KIND_FILES[item.audit]
+            for item in spec.products
+        }
     lines = "".join(
-        f"    {product!r}: {filename!r},\n"
-        for product, filename in MISSINGNESS_AUDIT_PRODUCT_FILES.items()
+        f"    {product!r}: {filename!r},\n" for product, filename in resolved.items()
     )
     return "{\n" + lines + "}"
 
@@ -310,27 +354,21 @@ def declared_audit_products_are_emittable(
     method: object,
     expected_outputs: Sequence[object],
 ) -> bool:
-    """Classify any declared audit product set this runner can actually emit.
+    """Classify a legacy audit product set this runner can actually emit.
 
-    The four named contracts above each enumerate one product set that a past
-    Planner revision happened to produce.  That made coverage the intersection
-    of shapes already seen: the same runner owned a one-product and a
-    three-product declaration but not the two-product one in between, and every
-    replan risked landing in a gap and silently demoting a pure counting step to
-    the LLM coder.  The Planner is *supposed* to vary its declared products;
-    what must not vary is whether a computable step gets a reliable executor.
-
-    So ownership is decided against the capability map instead of an enumerated
-    list of blessed shapes:
+    This is the path for a plan written before ``measurement_audit_spec``: the
+    step says nothing about what its products ARE, so the only evidence
+    available is the names themselves, and they are matched against the legacy
+    shim.  It is why the shim exists and also why it is not enough -- see
+    :func:`declared_audit_spec_is_emittable`, which is what a current plan uses.
 
     * the declared set is non-empty and free of duplicates;
-    * every declared product is a ``table:`` product this runner can emit;
-    * the declared products resolve to as many *distinct* files as there are
-      products.
+    * every declared product is a ``table:`` product with a known audit;
+    * the declared products resolve to as many *distinct audits* as products.
 
-    That last rule is the one doing real work.  Several product ids are aliases
-    onto one file, so without it a step could declare two products, be claimed,
-    and be satisfied by a single table -- a contract met without a reader being
+    That last rule is the one doing real work.  Several product ids name the
+    same audit, so without it a step could declare two products, be claimed, and
+    be satisfied by a single table -- a contract met without a reader being
     given the second thing they were promised.  Ambiguity fails closed.
     """
 
@@ -349,10 +387,34 @@ def declared_audit_products_are_emittable(
         return False
 
     products = [value.split(":", 1)[1] for value in outputs]
-    if any(product not in MISSINGNESS_AUDIT_PRODUCT_FILES for product in products):
+    if any(product not in _LEGACY_PRODUCT_AUDITS for product in products):
         return False
-    files = {MISSINGNESS_AUDIT_PRODUCT_FILES[product] for product in products}
-    return len(files) == len(products)
+    audits = {_LEGACY_PRODUCT_AUDITS[product] for product in products}
+    return len(audits) == len(products)
+
+
+def declared_audit_spec_is_emittable(step: AnalysisStep) -> bool:
+    """Whether the step's typed audit declaration is one this runner can emit.
+
+    Recognition here reads what the Planner said each product IS, so the product
+    name decides nothing.  That is the whole point: measured over the recorded
+    corpus, 162 audit steps -- every declared output a table, no duplicates, an
+    input scope this runner supports -- were demoted to the LLM coder solely
+    because their names were spellings the legacy shim had not seen.  Ten more
+    declared perfectly recognised products and were demoted on the *method*
+    string instead.  Both halves were string matching, and a step carrying this
+    spec is subject to neither: the spec is the declaration that it is an audit.
+
+    ``AnalysisStep`` has already enforced the contract's internal consistency
+    (every declared product backed, every named product declared, one product
+    per audit).  What is checked here is only the capability question this
+    module owns: can this runner emit those audits?
+    """
+
+    spec = step.measurement_audit_spec
+    if spec is None:
+        return False
+    return all(item.audit in MEASUREMENT_AUDIT_KIND_FILES for item in spec.products)
 
 
 def _cohort_input_scope(step: AnalysisStep) -> tuple[bool, str | None]:
@@ -395,6 +457,14 @@ def missingness_audit_cohort_input_key(step: AnalysisStep) -> str | None:
 def missingness_audit_executor_owns_step(step: AnalysisStep) -> bool:
     """Own a closed, auxiliary count-only missingness contract."""
 
+    # A typed declaration answers the question outright, so it is consulted
+    # first and alone: when the Planner has said what each product is, nothing
+    # below -- all of which reads names -- may overrule it.
+    if step.measurement_audit_spec is not None:
+        return bool(
+            declared_audit_spec_is_emittable(step)
+            and missingness_audit_input_scope_supported(step)
+        )
     # The named contracts remain, because they are what gives a recognised shape
     # its specific ``analysis_kind``.  The capability rule is what stops an
     # unnamed-but-computable shape from falling through to the coder.
@@ -1170,10 +1240,35 @@ def missingness_measurement_audit_code(
             ]
         ].copy()
         source_audit.to_csv(out_dir / "measurement_source_audit.csv", index=False)
-        source_audit.to_csv(out_dir / "measurement_availability.csv", index=False)
-        source_audit.to_csv(
-            out_dir / "measurement_availability_audit.csv", index=False
-        )
+
+        # --- event timing: what the event columns say about WHEN --------------
+        # These counts are already computed above for every concept whose
+        # indicator carries event semantics; they were only ever reachable
+        # folded into the wide table.  Projected out, they are the audit a
+        # plan means when it declares an event-timing product.  The frame is
+        # written even when empty: "no audited concept is event-timed" is a
+        # finding, and a silently absent file is not.
+        event_timing_audit = audit[
+            audit["indicator_semantics"].isin(
+                ["conditional_event_time", "binary_event_presence"]
+            )
+        ][
+            [
+                "concept",
+                "variable",
+                "value_column",
+                "n_total",
+                "eligible_n",
+                "not_applicable_n",
+                "event_present_n",
+                "event_absent_n",
+                "before_origin_n",
+                "value_missing_n",
+                "indicator_semantics",
+                "missingness_kind",
+            ]
+        ].copy()
+        event_timing_audit.to_csv(out_dir / "event_timing_audit.csv", index=False)
 
         # --- measurement process: how OFTEN, and when ---------------------------
         # Distinct from the missingness table, which answers "was it measured at
@@ -1479,6 +1574,10 @@ def missingness_measurement_audit_code(
             },
             "n_structural_no_source": n_structural,
             "n_binary_event_status": n_binary_event_status,
+            # Zero here is a real answer, not a missing one: it says no audited
+            # concept carries event semantics, which the event-timing table
+            # alone cannot distinguish from "the table was never written".
+            "n_event_timed_concepts": int(len(event_timing_audit)),
             "all_requested_inputs_complete_n": complete_n,
             "requested_input_count": len(requested_inputs),
             "resolved_input_count": len(resolved_inputs),
@@ -1533,7 +1632,7 @@ def missingness_measurement_audit_code(
     )
     template = template.replace(
         "__EASYICU_PRODUCT_FILES__",
-        _render_product_files(),
+        _render_product_files(step),
     )
     template = template.replace(
         "__EASYICU_MEASUREMENT_PROVENANCE_SCOPE__",

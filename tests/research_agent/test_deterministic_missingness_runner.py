@@ -30,6 +30,7 @@ from easyicu.research_agent.authority.plausibility import (
     FlagOnlyPlausibilityScope,
 )
 from easyicu.research_agent.execution.runners.deterministic_missingness import (
+    declared_audit_products_are_emittable,
     is_missingness_complete_case_contract,
     is_missingness_measurement_availability_contract,
     missingness_audit_executor_owns_step,
@@ -697,13 +698,13 @@ def test_measurement_availability_is_a_concrete_declared_product(tmp_path: Path)
         ],
     )
 
-    availability = pd.read_csv(out_dir / "measurement_availability.csv")
+    availability = pd.read_csv(out_dir / "measurement_source_audit.csv")
     lactate = availability.loc[availability["concept"] == "lactate"].iloc[0]
     assert lactate["indicator_semantics"] == "measurement_availability"
     assert summary["status"] == "ok"
     assert summary["output_files"] == {
         "table:missingness_audit": "missingness_audit.csv",
-        "table:measurement_availability": "measurement_availability.csv",
+        "table:measurement_availability": "measurement_source_audit.csv",
     }
 
 
@@ -727,14 +728,41 @@ def test_measurement_availability_audit_is_a_concrete_declared_product(
         ],
     )
 
-    availability = pd.read_csv(out_dir / "measurement_availability_audit.csv")
+    availability = pd.read_csv(out_dir / "measurement_source_audit.csv")
     lactate = availability.loc[availability["concept"] == "lactate"].iloc[0]
     assert lactate["indicator_semantics"] == "measurement_availability"
     assert summary["status"] == "ok"
     assert summary["output_files"] == {
         "table:missingness_audit": "missingness_audit.csv",
-        "table:measurement_availability_audit": ("measurement_availability_audit.csv"),
+        "table:measurement_availability_audit": "measurement_source_audit.csv",
     }
+
+
+def test_the_availability_spellings_are_one_answer_not_several_products() -> None:
+    """These three names were once three files holding the identical table.
+
+    Both tests above assert the property that matters -- a declared product
+    resolves to a file the runner really writes -- and used to assert the
+    filename too.  What no test asserted was the consequence: a step could
+    declare two of these spellings, satisfy the "as many distinct files as
+    products" rule, and hand its reader one table twice.  They resolve to one
+    audit now, so that declaration is refused instead.
+    """
+
+    assert (
+        declared_audit_products_are_emittable(
+            "missingness_and_measurement_availability_audit",
+            ["table:measurement_availability", "table:measurement_availability_audit"],
+        )
+        is False
+    )
+    assert (
+        declared_audit_products_are_emittable(
+            "missingness_and_measurement_availability_audit",
+            ["table:missingness_audit", "table:measurement_availability"],
+        )
+        is True
+    )
 
 
 def test_missingness_runner_uses_manifest_selected_current_plan(tmp_path: Path):
@@ -759,7 +787,7 @@ def test_missingness_runner_uses_manifest_selected_current_plan(tmp_path: Path):
     assert summary["requested_input_count"] == 3
     assert summary["output_files"] == {
         "table:missingness_audit": "missingness_audit.csv",
-        "table:measurement_availability": "measurement_availability.csv",
+        "table:measurement_availability": "measurement_source_audit.csv",
     }
 
 
