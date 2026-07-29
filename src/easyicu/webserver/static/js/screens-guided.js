@@ -4920,12 +4920,11 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       return `
       <div class="gd-shell">
         <div class="gd-top">
-          <button class="gd-home-link" type="button" data-open="entry" aria-label="${t('Back to EasyICU home', '返回 EasyICU 首页')}" title="${t('Back to EasyICU home', '返回 EasyICU 首页')}">
+          <button class="gd-home-link" type="button" data-panel="" aria-label="${t('Back to the conversation', '回到对话')}" title="${t('Back to the conversation', '回到对话')}">
             <span class="brand-mark">${icon('spark', 16)}</span>
             <span><span class="gd-name">${t('Guided Copilot', '研究引导')}</span><span class="gd-mode">${t('EasyICU · conversational study planning', 'EasyICU · 对话式研究规划')}</span></span>
           </button>
           <span class="grow"></span>
-          <button class="btn sm" data-open="entry">${icon('back', 13)} ${t('Exit', '退出')}</button>
         </div>
         <div class="gd-main threecol">
           <aside class="gd-rail">
@@ -4933,7 +4932,6 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
             <div class="gd-rail-list" id="gdSessions"></div>
             <div class="gd-rail-foot">
               <div class="gd-rail-utils" aria-label="${t('Guided Copilot utilities', '研究引导工具')}">
-                <button class="gd-utilbtn" type="button" data-open="entry" title="${t('Home', '主页')}" aria-label="${t('Home', '主页')}">${icon('back', 14)}</button>
                 <button class="gd-utilbtn" type="button" data-panel="settings" title="${t('Settings', '设置')}" aria-label="${t('Settings', '设置')}">${icon('gear', 14)}</button>
                 <button class="gd-utilbtn lang" type="button" data-lang-toggle title="${t('Switch language', '切换语言')}" aria-label="${t('Switch language', '切换语言')}">
                   ${icon('globe', 14)} <span>${window.EU_LANG === 'zh' ? 'EN' : '中'}</span>

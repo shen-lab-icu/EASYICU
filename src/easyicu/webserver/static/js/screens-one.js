@@ -174,14 +174,22 @@
     const swapHint = wide
       ? t('Move beside the conversation', '移到对话旁边')
       : t('Give this the wide column', '让它占用宽栏');
+    /* Two tabs, because this column already had an owner. The study workspace
+       is the conversation's own running output — which step you are on, what
+       is left — and opening the dictionary to look one thing up used to make it
+       vanish with nothing on screen saying it still existed. It is the first
+       tab and the way back, so a panel borrows this column instead of taking
+       it. This is also why there is no separate close button: the way out of a
+       detail view is your study, not an X into nowhere. */
     return `
-    <div class="one-panelbar">
-      <span class="t">${esc(panelTitle(id))}</span>
+    <div class="one-panelbar" role="tablist">
+      <button type="button" class="one-tab" data-panel="" role="tab" aria-selected="false"
+        >${esc(t('Study workspace', '研究工作区'))}</button>
+      <button type="button" class="one-tab on" role="tab" aria-selected="true"
+        >${esc(panelTitle(id))}</button>
       <span class="sp"></span>
       <button type="button" class="one-placebtn" data-oneplace="${swapTo}" data-oneplaceid="${id}"
         title="${esc(swapHint)}">${wide ? t('Side', '侧栏') : t('Wide', '宽栏')}</button>
-      <button type="button" class="one-iconbtn" data-panel=""
-        title="${t('Close panel', '关闭面板')}" aria-label="${t('Close panel', '关闭面板')}">${icon('close', 15)}</button>
     </div>
     <div class="one-panelbody"><div class="content">${body}</div></div>`;
   }

@@ -76,7 +76,11 @@ def test_native_static_route_registry_contains_fallback_only_routes() -> None:
 def test_native_hash_router_has_help_alias_and_unknown_hash_fails_safe() -> None:
     app_js = _static_js("app.js")
 
-    assert "const FALLBACK_ROUTE = 'entry';" in app_js
+    # The surface renders the conversation, so the fallback must land on it.
+    # 'entry' was the old landing screen and can no longer render here: the
+    # three controls that pointed at it were dead buttons.
+    assert "const FALLBACK_ROUTE = 'guided';" in app_js
+    assert 'data-open="entry"' not in _static_js("screens-guided.js")
     assert "if (r === 'help') return 'tutorial';" in app_js
     assert "history.replaceState(null, '', next)" in app_js
     assert "resolveRoute(rawRouteFromHash(), { rewrite: true })" in app_js
@@ -181,7 +185,7 @@ def test_native_assistant_labels_disambiguate_page_guide_guided_copilot_and_agen
     assert "Open Copilot" not in help_js
 
     assert "css/dock.css?v=20260625-stage99" in index_html
-    assert "js/app.js?v=20260728-one7" in index_html
+    assert "js/app.js?v=20260728-one8" in index_html
     assert "js/copilot-dock.js?v=20260712-ux-fixes" in index_html
     assert "js/screens-extraction.js?v=20260712-ux-fixes" in index_html
     assert "js/screens-agent.js?v=20260712-ux-fixes" in index_html
@@ -324,7 +328,7 @@ def test_native_tutorial_screen_uses_active_language_without_mixed_copy() -> Non
     assert ">No tokens, no setup, no patient data. The demo generates" not in help_js
     assert "How a study moves through EasyICU</h2>" not in help_js
 
-    assert "js/app.js?v=20260728-one7" in index_html
+    assert "js/app.js?v=20260728-one8" in index_html
     assert "js/screens-help.js?v=20260712-ux-fixes" in index_html
 
 
@@ -350,7 +354,7 @@ def test_native_guided_and_page_guide_messages_are_bilingual() -> None:
         "js/screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
         in index_html
     )
-    assert "js/screens-guided.js?v=20260728-one7" in index_html
+    assert "js/screens-guided.js?v=20260728-one8" in index_html
     assert "js/copilot-dock.js?v=20260712-ux-fixes" in index_html
 
 
@@ -541,7 +545,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     guided_plan_css = _static_css("guided-idea-plan.css")
     redesign_css = _static_css("redesign.css")
 
-    assert "css/guided.css?v=20260728-one7" in index_html
+    assert "css/guided.css?v=20260728-one8" in index_html
     assert "css/guided-idea-plan.css?v=20260627-ideas-feasibility-plan" in index_html
     assert "js/api.js?v=20260727-patient-demo2" in index_html
     assert (
@@ -639,7 +643,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert ".gdi-plan-details" in guided_plan_css
     assert ".gdi-feature-row.one" in guided_plan_css
     assert ".gdi-plan-details" not in redesign_css
-    assert "js/screens-guided.js?v=20260728-one7" in index_html
+    assert "js/screens-guided.js?v=20260728-one8" in index_html
 
 
 def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
@@ -1436,7 +1440,7 @@ def test_native_idea_mining_is_first_class_route_and_backend_wired() -> None:
     assert "css/ideas.css?v=20260630-gate-first-ideas" in index_html
     assert "css/shell.css?v=20260626-owner" in index_html
     assert "js/icons.js?v=20260625-stage84" in index_html
-    assert "js/app.js?v=20260728-one7" in index_html
+    assert "js/app.js?v=20260728-one8" in index_html
     assert "css/ideas-review.css?v=20260702-idea-review-handoff" in index_html
     assert "css/ideas-connectors.css?v=20260702-zotero-simple" in index_html
     assert "js/screens-ideas-zotero.js?v=20260702-zotero-origin" in index_html
@@ -2455,9 +2459,14 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert "Studies · local folders" not in guided_project_surface
     assert "Creates a new local project folder" not in guided_project_surface
     assert "Created a new project folder" not in guided_project_surface
+    # The brand is still the way back, but back is the conversation now. It
+    # used to point at `entry`, the old landing screen, which this surface can
+    # never render — so did the rail's arrow and the top bar's Exit. All three
+    # were dead buttons: clicking them changed the hash and nothing else.
     assert 'class="gd-home-link"' in guided_js
-    assert 'data-open="entry"' in guided_js
-    assert "Back to EasyICU home" in guided_js
+    assert "Back to the conversation" in guided_js
+    assert "Back to EasyICU home" not in guided_js
+    assert "${t('Exit', '退出')}" not in guided_js
     assert 'class="gd-rail-utils"' in guided_js
     # Settings is reachable from the rail foot, now through the surface's one
     # summon contract (data-panel) rather than the retired shell's data-open.
@@ -2514,9 +2523,9 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
         "screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
         in index_html
     )
-    assert "screens-guided.js?v=20260728-one7" in index_html
-    assert "guided.css?v=20260728-one7" in index_html
-    assert "guided-rail.css?v=20260728-one7" in index_html
+    assert "screens-guided.js?v=20260728-one8" in index_html
+    assert "guided.css?v=20260728-one8" in index_html
+    assert "guided-rail.css?v=20260728-one8" in index_html
     assert "gd-name\">${t('Guided Copilot', '研究引导')}</span>" in guided_js
     assert "Guided Copilot · local first · nothing leaves your machine" in guided_js
     assert "[t('Review Data', '审阅已有数据'), '@guidedGoal:review_data']" in guided_js
