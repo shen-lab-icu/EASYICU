@@ -951,6 +951,8 @@ def _stream_special_extraction_batches(
         for module_name in special_modules
         for concept in EXTRACT_MODULES.get(module_name, [])
     ]
+    need_sofa1 = "sep3_sofa1" in concepts
+    need_sofa2 = "sep3_sofa2" in concepts
     writers = {}
     partials = {}
     rows = {concept: 0 for concept in concepts}
@@ -1006,56 +1008,70 @@ def _stream_special_extraction_batches(
         for start in range(0, len(all_ids), safe_batch_size):
             ids = all_ids[start : start + safe_batch_size]
             susp = _read_dependency("sepsis_shared", ids)
-            sofa1 = _read_dependency("sofa1_score", ids)
-            sofa2 = _read_dependency("sofa2_score", ids)
-            time_col = next(
-                (
-                    name
-                    for name in (
-                        "charttime",
-                        "time",
-                        "starttime",
-                        "datetime",
-                        "Offset",
-                        "measuredat_minutes",
-                        "measuredat",
-                    )
-                    if name in sofa1.columns and name in sofa2.columns
-                ),
-                None,
-            )
-            if time_col is None or "susp_inf" not in susp.columns:
+            sofa1 = _read_dependency("sofa1_score", ids) if need_sofa1 else None
+            sofa2 = _read_dependency("sofa2_score", ids) if need_sofa2 else None
+            if "susp_inf" not in susp.columns:
                 errors.append(
-                    "streamed Sepsis score dependencies lack a shared time index "
-                    "or sepsis_shared lacks susp_inf"
+                    "streamed Sepsis dependency sepsis_shared lacks susp_inf"
                 )
                 continue
-            if "sep3_sofa1" in concepts and "sofa" in sofa1.columns:
+
+            def _score_time_column(score):
+                return next(
+                    (
+                        name
+                        for name in (
+                            "charttime",
+                            "time",
+                            "starttime",
+                            "datetime",
+                            "Offset",
+                            "measuredat_minutes",
+                            "measuredat",
+                        )
+                        if name in score.columns
+                    ),
+                    None,
+                )
+
+            if need_sofa1 and sofa1 is not None and "sofa" in sofa1.columns:
                 from ..scores.sepsis import sep3 as _sep3
 
-                susp1 = _suspicion_timeline(susp, sofa1, time_col)
-                frame = _sep3(
-                    sofa1[[id_col, time_col, "sofa"]],
-                    susp1,
-                    id_cols=[id_col],
-                    index_col=time_col,
-                ).rename(columns={"sep3": "sep3_sofa1"})
-                if "sep3_sofa1" in frame.columns:
-                    frame["sep3_sofa1"] = frame["sep3_sofa1"].fillna(0).astype(int)
-                _append_frame("sep3_sofa1", frame)
-            if "sep3_sofa2" in concepts and "sofa2" in sofa2.columns:
+                time_col = _score_time_column(sofa1)
+                if time_col is None:
+                    errors.append("streamed SOFA-1 dependency lacks a time index")
+                else:
+                    susp1 = _suspicion_timeline(susp, sofa1, time_col)
+                    frame = _sep3(
+                        sofa1[[id_col, time_col, "sofa"]],
+                        susp1,
+                        id_cols=[id_col],
+                        index_col=time_col,
+                    ).rename(columns={"sep3": "sep3_sofa1"})
+                    if "sep3_sofa1" in frame.columns:
+                        frame["sep3_sofa1"] = (
+                            frame["sep3_sofa1"].fillna(0).astype(int)
+                        )
+                    _append_frame("sep3_sofa1", frame)
+            if need_sofa2 and sofa2 is not None and "sofa2" in sofa2.columns:
                 from ..scores.sepsis_sofa2 import sep3_sofa2 as _sep3_sofa2
 
-                susp2 = _suspicion_timeline(susp, sofa2, time_col)
-                frame = _sep3_sofa2(
-                    sofa2[[id_col, time_col, "sofa2"]],
-                    susp2,
-                    id_cols=[id_col],
-                    index_col=time_col,
-                )
-                if "sep3_sofa2" in frame.columns:
-                    frame["sep3_sofa2"] = frame["sep3_sofa2"].fillna(0).astype(int)
-                _append_frame("sep3_sofa2", frame)
+                time_col = _score_time_column(sofa2)
+                if time_col is None:
+                    errors.append("streamed SOFA-2 dependency lacks a time index")
+                else:
+                    susp2 = _suspicion_timeline(susp, sofa2, time_col)
+                    frame = _sep3_sofa2(
+                        sofa2[[id_col, time_col, "sofa2"]],
+                        susp2,
+                        id_cols=[id_col],
+                        index_col=time_col,
+                    )
+                    if "sep3_sofa2" in frame.columns:
+                        frame["sep3_sofa2"] = (
+                            frame["sep3_sofa2"].fillna(0).astype(int)
+                        )
+                    _append_frame("sep3_sofa2", frame)
 
         saved = {}
         for concept, writer in writers.items():
@@ -1104,7 +1120,18 @@ def _run_special_extraction(
     import pandas as pd
     from easyicu import load_concepts as _lc
 
-    if stream_output_batches:
+    dependency_root = Path(published_output_dir or output_dir)
+    required_dependency_modules = ["sepsis_shared"]
+    if any("sep3_sofa1" in EXTRACT_MODULES.get(m, []) for m in special_modules):
+        required_dependency_modules.append("sofa1_score")
+    if any("sep3_sofa2" in EXTRACT_MODULES.get(m, []) for m in special_modules):
+        required_dependency_modules.append("sofa2_score")
+    published_dependencies_ready = bool(published_output_dir) and all(
+        (dependency_root / f"{module}.parquet").is_file()
+        for module in required_dependency_modules
+    )
+
+    if stream_output_batches or published_dependencies_ready:
         if not patient_ids_filter or not batch_size:
             raise ValueError(
                 "streamed special export requires patient_ids and batch_size"

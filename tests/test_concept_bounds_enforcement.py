@@ -341,3 +341,37 @@ def test_streamed_special_export_broadcasts_stay_level_suspicion(tmp_path):
     assert set(manifest["saved"]) == {"sep3_sofa1", "sep3_sofa2"}
     assert pd.read_parquet(output / "sep3_sofa1.parquet")["sep3_sofa1"].tolist() == [1]
     assert pd.read_parquet(output / "sep3_sofa2.parquet")["sep3_sofa2"].tolist() == [1]
+
+
+def test_nonstream_special_export_reuses_already_published_scores(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "published"
+    output = tmp_path / "special"
+    source.mkdir()
+    output.mkdir()
+    for module in ("sepsis_shared", "sofa1_score", "sofa2_score"):
+        (source / f"{module}.parquet").touch()
+    calls = []
+
+    def fake_stream(*args, **kwargs):
+        calls.append((args, kwargs))
+
+    monkeypatch.setattr(api, "_stream_special_extraction_batches", fake_stream)
+
+    api._run_special_extraction(
+        ["sepsis3_sofa1", "sepsis3_sofa2"],
+        "miiv",
+        str(tmp_path),
+        {"stay_id": [1, 2]},
+        2_000_000,
+        str(output),
+        use_sofa2=True,
+        stream_output_batches=False,
+        published_output_dir=str(source),
+    )
+
+    assert len(calls) == 1
+    assert calls[0][0][3] == {"stay_id": [1, 2]}
+    assert calls[0][0][4] == 2_000_000
+    assert calls[0][1]["published_output_dir"] == str(source)
