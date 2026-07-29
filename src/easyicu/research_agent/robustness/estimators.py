@@ -83,9 +83,29 @@ def _robust_design(x_const: Any, *, keep: Sequence[str]) -> Tuple[Any, List[str]
 
 
 def fit_estimator(
-    *, cohort: Any, X: Any, y: Any, kind: EstimatorKind | str
+    *,
+    cohort: Any,
+    X: Any,
+    y: Any,
+    kind: EstimatorKind | str,
+    term: Optional[str] = None,
 ) -> EstimatorResult:
-    """Fit a supported estimator and capture failures as non-converged results."""
+    """Fit a supported estimator and capture failures as non-converged results.
+
+    ``term`` names the predictor whose coefficient is reported.  Without it the
+    first non-constant column is used, which is the historical behaviour and is
+    kept so existing callers are unchanged -- but it makes column order part of
+    the contract, enforced only by a comment in the one caller that knew.  A
+    second caller that adjusts for covariates has no way to discover that rule
+    except by reading this function, and would silently report a covariate's
+    effect as the exposure's.  Naming the term removes the obligation instead
+    of documenting it again.
+
+    A ``term`` that is not a predictor in the design fails closed rather than
+    falling back to the positional guess: being asked for a coefficient that
+    does not exist means the caller and the design disagree, and answering with
+    a different column's number would hide that.
+    """
 
     cohort_note = _cohort_trace_note(cohort)
     try:
@@ -166,8 +186,7 @@ def fit_estimator(
     if kind == "logistic":
         numeric_y = pd.to_numeric(y_series, errors="coerce")
         is_binary = bool(
-            not numeric_y.isna().any()
-            and numeric_y.isin((0.0, 1.0)).all()
+            not numeric_y.isna().any() and numeric_y.isin((0.0, 1.0)).all()
         )
         if not is_binary:
             return EstimatorResult(
@@ -188,7 +207,23 @@ def fit_estimator(
 
     try:
         x_const = sm.add_constant(x_df.astype(float), has_constant="add")
-        coefficient_name = next(col for col in x_const.columns if col != "const")
+        if term is None:
+            coefficient_name = next(col for col in x_const.columns if col != "const")
+        elif term in x_const.columns and term != "const":
+            coefficient_name = term
+        else:
+            return EstimatorResult(
+                None,
+                None,
+                None,
+                None,
+                n,
+                False,
+                _join_notes(
+                    f"requested term {term!r} is not a predictor in the design",
+                    cohort_note,
+                ),
+            )
         _, dropped = _robust_design(x_const, keep=["const", coefficient_name])
         if dropped:
             return EstimatorResult(
@@ -223,9 +258,7 @@ def fit_estimator(
                 False,
                 _join_notes("binary outcome has fewer than two classes", cohort_note),
             )
-        result = sm.Logit(y_series.astype(float), x_const).fit(
-            disp=False, maxiter=100
-        )
+        result = sm.Logit(y_series.astype(float), x_const).fit(disp=False, maxiter=100)
         coef = float(result.params[coefficient_name])
         ci_low, ci_high = _conf_interval_for(result, coefficient_name)
         se = _float_or_none(result.bse[coefficient_name])
@@ -656,8 +689,8 @@ def _fit_one_row(
         missing_strategy = _missing_strategy_for(spec, default_missing)
         # Adjust for the primary model's covariates (when supplied and present)
         # so the variant reports the exposure's *adjusted* effect on the same
-        # footing as the primary — fit_estimator reports the first non-const
-        # column, so the exposure must lead the design matrix.
+        # footing as the primary.  The exposure is named to ``fit_estimator``
+        # below rather than positioned first and trusted to stay there.
         missing_covariates = [
             column
             for column in covariates
@@ -670,9 +703,7 @@ def _fit_one_row(
                 + ", ".join(missing_covariates)
             )
         present_covariates = [
-            column
-            for column in covariates
-            if column not in (exposure, outcome_column)
+            column for column in covariates if column not in (exposure, outcome_column)
         ]
         needed = [exposure, outcome_column, *present_covariates]
         missing_columns = [
@@ -686,6 +717,7 @@ def _fit_one_row(
             X=model_df[[exposure, *present_covariates]],
             y=model_df[outcome_column],
             kind=kind,
+            term=exposure,
         )
         notes = result.notes
         if present_covariates:
