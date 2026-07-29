@@ -29,6 +29,7 @@ generic dispatch Protocol because nothing in the codebase consumes one.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import os
@@ -125,6 +126,7 @@ from ..authority.step_capsule import ContentRef
 from ..schema import (
     AgentRuntimeState,
     AnalysisPlan,
+    ArtifactConsumptionContract,
     ClinicalSemanticsResolution,
     AnalysisStep,
     ConceptRef,
@@ -134,15 +136,19 @@ from ..schema import (
     DataExtractionResult,
     EvidenceRef,
     ManuscriptDraftPacket,
+    PlannedModelRequirement,
     ReflectionMemoryEntry,
     ResearchContext,
     StatisticalAnalysisRequest,
     StatisticalAnalysisResult,
+    TableOneSpec,
+    TableOneVariableSpec,
     ValidationFinding,
     VariableRole,
     VisualizationRequest,
     VisualizationResult,
 )
+from ..planning.robustness_contract import RobustnessSpec
 from ..research_context.temporal_semantics import (
     ConceptValidationLayer,
     ICUEpisodeResolver,
@@ -1040,8 +1046,9 @@ class PlannerAgent:
                 "steps (array of objects "
                 "each with step_id, planned_analysis_role, intent, inputs, expected_outputs, "
                 "method, icu_rule_refs, optional model_requirements, optional "
-                "input_consumption_contracts, optional table_one_spec, and optional "
-                "trajectory_stability_spec), "
+                "input_consumption_contracts, optional table_one_spec, optional "
+                "trajectory_stability_spec, and optional "
+                "exposure_outcome_distribution_spec), "
                 "rationale (string). "
                 "All string values must be plain ASCII or UTF-8 quoted strings; "
                 "do not use special Unicode whitespace inside values."
@@ -3946,6 +3953,26 @@ def _canonicalise_planned_analysis_role(
     return value
 
 
+def _declared_field_names(model: type) -> set:
+    """Return the field names a Planner-facing schema actually declares.
+
+    Accepts both the pydantic models in ``schema.py`` and the dataclass
+    contracts under ``planning/``, so the projection below can be read
+    from whichever type declares the payload rather than transcribed.
+    """
+
+    fields = getattr(model, "model_fields", None)
+    if fields is not None:
+        return set(fields)
+    if dataclasses.is_dataclass(model):
+        return {field.name for field in dataclasses.fields(model)}
+    raise TypeError(
+        f"{model.__name__} declares neither pydantic model_fields nor "
+        "dataclass fields, so its accepted Planner keys cannot be read "
+        "from the schema; do not transcribe them by hand."
+    )
+
+
 def _normalise_plan_payload(
     data: Dict[str, Any],
 ) -> Tuple[Dict[str, Any], Dict[str, List[str]]]:
@@ -3954,74 +3981,29 @@ def _normalise_plan_payload(
     Returns both the normalized payload and a structured summary of the
     keys that were discarded so the pipeline can surface them in the
     manifest instead of silently suppressing them.
+
+    Every allowlist below is read from the declaring schema rather than
+    written out by hand. These models are ``extra="forbid"``, so this
+    projection exists only to tolerate keys a hosted model invents --
+    never to decide which declared fields the Planner is allowed to
+    fill. A hand-maintained copy silently acquires that second job the
+    moment a field is added to the schema and not to the copy: the key
+    is deleted here, and the step is then judged as though the Planner
+    had never sent it. Both drifts this replaced were real. One
+    (``exposure_outcome_distribution_spec``) made a required field
+    impossible to supply -- the validator demanded it, this function
+    removed it, and the retry loop spent every attempt asking the model
+    to send what was already being thrown away. The other
+    (``standardized_difference_mode``) was worse for being quiet: a
+    declared Table 1 reporting choice was dropped with no error at all.
     """
-    allowed_plan = {
-        "research_question",
-        "analysis_type",
-        "cohort",
-        "steps",
-        "robustness_specs",
-        "display_labels",
-        "know_how_decisions",
-        "rationale",
-        "revision",
-    }
-    allowed_step = {
-        "step_id",
-        "planned_analysis_role",
-        "intent",
-        "inputs",
-        "expected_outputs",
-        "method",
-        "icu_rule_refs",
-        "model_requirements",
-        "input_consumption_contracts",
-        "table_one_spec",
-        "trajectory_stability_spec",
-    }
-    allowed_model_requirement = {
-        "requirement_id",
-        "outcome",
-        "outcome_type",
-        "method_family",
-        "exposure_source",
-        "analysis_role",
-        "analysis_set",
-        "required_for_step_success",
-    }
-    allowed_consumption_contract = {
-        "schema_version",
-        "input_key",
-        "mode",
-        "role_column",
-        "expected_roles",
-    }
-    allowed_table_one_spec = {
-        "schema_version",
-        "group_by",
-        "group_levels",
-        "variables",
-        "include_overall",
-        "missing_group_policy",
-        "missingness_display",
-        "p_values_required",
-        "p_value_adjustment",
-    }
-    allowed_table_one_variable = {
-        "name",
-        "variable_kind",
-        "summary",
-        "test",
-        "levels",
-    }
-    allowed_robustness_spec = {
-        "spec_id",
-        "axis",
-        "description",
-        "cohort_override",
-        "missing_override",
-        "outcome_override",
-    }
+    allowed_plan = _declared_field_names(AnalysisPlan)
+    allowed_step = _declared_field_names(AnalysisStep)
+    allowed_model_requirement = _declared_field_names(PlannedModelRequirement)
+    allowed_consumption_contract = _declared_field_names(ArtifactConsumptionContract)
+    allowed_table_one_spec = _declared_field_names(TableOneSpec)
+    allowed_table_one_variable = _declared_field_names(TableOneVariableSpec)
+    allowed_robustness_spec = _declared_field_names(RobustnessSpec)
     dropped: Dict[str, List[str]] = {
         "top_level": [],
         "steps": [],
