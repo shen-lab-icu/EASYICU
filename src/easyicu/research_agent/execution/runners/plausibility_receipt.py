@@ -41,8 +41,24 @@ def render_standard_plausibility_receipt_code(
     if not scope.expected_columns:
         return ""
 
+    # The block carries its own imports rather than relying on whichever
+    # prologue splices it.  Five executors do, and four of them happened to
+    # import `hashlib` for their own reasons; the fifth did not, so the
+    # host's own generated script died at `NameError: name 'hashlib' is not
+    # defined` on a real run -- inside a step the host had just claimed as
+    # deterministic, which then spent a runtime repair and a post-mutation
+    # concept repair on a missing import and was blocked.  A shared fragment
+    # that compiles only when its caller happens to have the right names is a
+    # coupling, not a contract.  Re-importing is idempotent.
     return textwrap.dedent(
         f"""
+        import hashlib
+        import json
+        import os
+        from pathlib import Path
+
+        import pandas as pd
+
         plausibility_expected_columns = {scope.expected_columns!r}
         plausibility_manifest = json.loads(
             Path(os.environ["EASYICU_RESOLVED_INPUTS_JSON"]).read_text(
