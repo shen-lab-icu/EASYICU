@@ -49,9 +49,14 @@ from ...robustness.panel import (
     validate_robustness_specs,
 )
 from ...schema import AnalysisStep
+from ...contracts.host_scaffold import HostScaffoldedScript
 from .plausibility_receipt import render_standard_plausibility_receipt_code
 
-__all__ = ["replay_locked_memberships", "robustness_sensitivity_preflight_code"]
+__all__ = [
+    "replay_locked_memberships",
+    "robustness_sensitivity_preflight_code",
+    "robustness_sensitivity_preflight_scaffold",
+]
 
 _MATRIX_COLUMNS = [
     "spec_id",
@@ -131,7 +136,33 @@ def robustness_sensitivity_preflight_code(
     *,
     plausibility_scope: FlagOnlyPlausibilityScope | None = None,
 ) -> str:
-    """Return the dispatch-ready deterministic robustness runner script.
+    """Return the assembled deterministic robustness runner script.
+
+    Equal by construction to ``robustness_sensitivity_preflight_scaffold(...)
+    .assembled()``; kept so every existing caller and test sees the same bytes
+    while the boundary between host-owned and agent-owned regions becomes
+    explicit.
+    """
+
+    return robustness_sensitivity_preflight_scaffold(
+        step,
+        plausibility_scope=plausibility_scope,
+    ).assembled()
+
+
+def robustness_sensitivity_preflight_scaffold(
+    step: AnalysisStep | None = None,
+    *,
+    plausibility_scope: FlagOnlyPlausibilityScope | None = None,
+) -> HostScaffoldedScript:
+    """Return the runner split into host prologue, agent body, host epilogue.
+
+    The prologue carries the sealed plausibility scope and the pin binding the
+    resolved contracts to the step authority; the epilogue writes the receipt
+    into ``step_summary.json``. Both are host property. Only the body -- the
+    call that actually does the robustness work -- is the model's to replace,
+    which is exactly what fresh17 step 07 proved it must be: asked to repair
+    this script, the model rewrote the scope and deleted the pin.
 
     The robustness runner can consume the pre-filter universe when a locked
     cohort variant needs it.  A flag-only plausibility receipt therefore audits
@@ -174,7 +205,7 @@ def robustness_sensitivity_preflight_code(
         if plausibility_scope is not None and plausibility_scope.expected_columns
         else ""
     )
-    return (
+    prologue = (
         textwrap.dedent(
             """
             import hashlib
@@ -205,9 +236,11 @@ def robustness_sensitivity_preflight_code(
             if plausibility_code
             else ""
         )
-        + "\n\n_run_robustness_preflight_from_env()"
-        + (f"\n\n{receipt_persistence}" if receipt_persistence else "")
-        + "\n"
+    )
+    return HostScaffoldedScript(
+        prologue=prologue,
+        body="_run_robustness_preflight_from_env()",
+        epilogue=receipt_persistence,
     )
 
 
@@ -1188,7 +1221,9 @@ def _verified_complete_case_equivalence(
         str(override.get("strategy") or "").strip().lower() != "complete_case"
         or not isinstance(raw_variables, list)
         or not raw_variables
-        or any(not isinstance(value, str) or not value.strip() for value in raw_variables)
+        or any(
+            not isinstance(value, str) or not value.strip() for value in raw_variables
+        )
     ):
         error = "complete-case equivalence requires explicit locked variables"
         return _blocked_panel_row(spec.spec_id, spec.axis, error), [], None, error
@@ -1230,9 +1265,7 @@ def _verified_complete_case_equivalence(
     }
     required_variables.discard("")
     if not required_variables or not required_variables <= set(variables):
-        error = (
-            "locked complete-case variables do not cover every primary model input"
-        )
+        error = "locked complete-case variables do not cover every primary model input"
         return _blocked_panel_row(spec.spec_id, spec.axis, error), [], None, error
 
     complete_case_n = int(primary_data.dropna(subset=variables).shape[0])
