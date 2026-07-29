@@ -142,6 +142,68 @@ def test_swapping_the_two_levels_is_rejected(tmp_path: Path) -> None:
     assert result["reason"] == "source_values_disagree"
 
 
+def _indistinguishable_pair() -> pd.DataFrame:
+    """Three rows where two cannot be told apart by any column."""
+
+    return pd.DataFrame(
+        [
+            {"row_role": "exposure_level", "value": 1.0},
+            {"row_role": "exposure_level", "value": 1.0},
+            {"row_role": "overall", "value": 2.0},
+        ]
+    )
+
+
+def test_repeating_a_row_is_a_defect_upstream_and_not_in_the_projection(
+    tmp_path: Path,
+) -> None:
+    """Uniqueness is required of the parent, not of the projection.
+
+    The same indistinguishable pair is placed on each side in turn. Upstream
+    it is fatal: a source row matching two parent rows leaves "which row
+    authenticates this?" with no answer, and pandas answers it twice. In the
+    projection it is ordinary: several source rows citing one parent row is a
+    many-to-one join, every one of them is still compared against that
+    parent's values, and two panels each tracing the same row is a shape the
+    format supports on purpose.
+
+    Demanding uniqueness on both sides looks symmetric and is not. It was the
+    first form of this check, and it rejected exactly those truthful long-form
+    projections while catching no forgery the parent-side rule misses.
+    """
+
+    unique = pd.DataFrame(
+        [
+            {"row_role": "exposure_level", "value": 1.0},
+            {"row_role": "overall", "value": 2.0},
+        ]
+    )
+
+    repeated_upstream = _compare(unique.copy(), _indistinguishable_pair(), tmp_path)
+    assert not repeated_upstream["ok"]
+    assert repeated_upstream["reason"] == "ambiguous_join_key"
+
+    repeated_in_source = _compare(_indistinguishable_pair(), unique, tmp_path)
+    assert repeated_in_source["ok"], repeated_in_source.get("reason")
+    assert repeated_in_source["n_source_rows"] == 3
+
+
+def test_a_long_form_positional_projection_is_not_a_many_to_many_join(
+    tmp_path: Path,
+) -> None:
+    """The concrete shape the both-sides rule broke."""
+
+    upstream = pd.DataFrame({"risk": [0.10, 0.20]})
+    source = pd.DataFrame(
+        {"source_row_index": [0, 0, 1, 1], "risk": [0.10, 0.10, 0.20, 0.20]}
+    )
+
+    result = _compare(source, upstream, tmp_path)
+
+    assert result["ok"], result.get("reason")
+    assert result["n_source_rows"] == 4
+
+
 def test_a_key_that_cannot_be_made_unique_says_so(tmp_path: Path) -> None:
     """Refusing beats comparing cross-matched rows and blaming the figure.
 
