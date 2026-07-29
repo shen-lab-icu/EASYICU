@@ -21,6 +21,76 @@
 .gdi-plan-details .gdi-feature-list{
   padding:0 10px 10px;
 }
+/* Plan steps: titles scan, detail opens on request.
+   The seven titles are 300 characters; their action/output/guardrail prose is
+   1,879. Hiding the prose by default is the difference between a list you read
+   and a wall you scroll past — and it is one toggle for the list, not one per
+   step, because seven disclosure controls is its own kind of noise. */
+.gdi-plan-steps-head{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  margin-bottom:4px;
+  color:var(--ink-3);
+  font-size:11px;
+  font-weight:650;
+}
+.gdi-plan-toggle{
+  margin-left:auto;
+  border:0;
+  background:none;
+  padding:2px 6px;
+  border-radius:var(--r-2);
+  color:var(--ink-4);
+  font:inherit;
+  font-size:11px;
+  cursor:pointer;
+}
+.gdi-plan-toggle:hover{ background:var(--surface-2); color:var(--ink); }
+.gdi-plan-steps ol{ margin:0; padding-left:20px; }
+.gdi-plan-steps li{ margin:0 0 4px; line-height:1.5; }
+.gdi-plan-detail{
+  display:block;
+  margin-top:3px;
+  color:var(--ink-4);
+  line-height:1.5;
+}
+.gdi-plan-steps:not(.show-detail) .gdi-plan-detail{ display:none; }
+
+/* A settled step, collapsed to one line. Styled as a receipt — quiet, checked,
+   naming what it settled and what it settled on — so the card reads as a
+   history of decisions with one open question at the end. */
+.gdi-done{
+  border:1px solid var(--hair);
+  border-radius:var(--r-2);
+  background:var(--surface-2);
+  overflow:hidden;
+}
+.gdi-done > summary{
+  min-height:32px;
+  padding:0 11px;
+  display:flex;
+  align-items:center;
+  gap:7px;
+  cursor:pointer;
+  font-size:11.5px;
+  color:var(--ink-3);
+  list-style:none;
+}
+.gdi-done > summary::-webkit-details-marker{ display:none; }
+.gdi-done > summary:hover{ color:var(--ink); }
+.gdi-done-mk{ display:inline-flex; color:var(--ok, #2e7d5b); }
+.gdi-done-t{ font-weight:650; }
+.gdi-done-v{
+  color:var(--ink-4);
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  min-width:0;
+}
+.gdi-done[open] > summary{ border-bottom:1px solid var(--hair); margin-bottom:8px; }
+.gdi-done > *:not(summary){ margin:0 10px 10px; }
+
 .gdi-feature-row.one{
   grid-template-columns:1fr;
 }
