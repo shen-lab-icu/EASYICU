@@ -2965,7 +2965,8 @@ def load_bucketed_table_aggregated(
             raw_columns = set()
 
     # 🔧 FIX 2026-05-11: case-insensitive 列存在性检查（同 multi-concept 路径，应对 MIMIC-III 1.4 大写列名）
-    raw_columns_lower = {str(c).lower() for c in raw_columns}
+    raw_columns_by_lower = {str(c).lower(): str(c) for c in raw_columns}
+    raw_columns_lower = set(raw_columns_by_lower)
 
     # 🔧 FIX 2026-05-16: detect VARCHAR-typed numeric value columns (e.g. eicu
     # respiratorycharting.respchartvalue) and rewrite SQL references to use
@@ -3102,14 +3103,16 @@ def load_bucketed_table_aggregated(
     # 应当无条件应用 *0.1 转换为 g/dL，否则后续 filter_bounds 会丢掉所有行。
     if _has_inline_convert and convert_unit_filter:
         _unit_col_name = None
-        if 'unit' in raw_columns:
-            _unit_col_name = 'unit'
+        if 'unit' in raw_columns_by_lower:
+            _unit_col_name = raw_columns_by_lower['unit']
         else:
             try:
                 _table_cfg = data_source.config.get_table(table_name)
                 _configured_unit = getattr(_table_cfg.defaults, 'unit_var', None)
-                if _configured_unit and _configured_unit in raw_columns:
-                    _unit_col_name = _configured_unit
+                if _configured_unit:
+                    _unit_col_name = raw_columns_by_lower.get(
+                        str(_configured_unit).lower()
+                    )
             except Exception:
                 pass
         if _unit_col_name is None:
@@ -3359,6 +3362,31 @@ def load_bucketed_table_aggregated(
             _cte_extra_cols = ""
             if _has_inline_convert and convert_unit_filter and _unit_col_name:
                 _cte_extra_cols = f", o.{_unit_col_name}"
+            elif value_transform:
+                # set_val(NA)-style value transforms can reference the configured
+                # unit column even though they are not represented by
+                # convert_unit_op/factor. Hospital-table rolling assignment moves
+                # aggregation to an outer CTE, so that referenced unit must travel
+                # with the event row (D-dimer FEU exclusion is the canonical case).
+                _configured_unit_col = None
+                try:
+                    _configured_unit = getattr(
+                        data_source.config.get_table(table_name).defaults,
+                        "unit_var",
+                        None,
+                    )
+                    if _configured_unit:
+                        _configured_unit_col = raw_columns_by_lower.get(
+                            str(_configured_unit).lower()
+                        )
+                except Exception:
+                    _configured_unit_col = None
+                if (
+                    _configured_unit_col
+                    and str(_configured_unit_col).lower()
+                    in value_transform.lower()
+                ):
+                    _cte_extra_cols = f", o.{_configured_unit_col}"
 
             if patient_ids:
                 # Targeted patient loading: filter hadm_ids by target stay_ids

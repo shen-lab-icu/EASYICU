@@ -4019,7 +4019,14 @@ class ConceptResolver:
             if unit_column and unit_column not in frame.columns:
                 unit_column = None
 
-            if source.regex:
+            # A regex-only rgx_itm may already have been resolved to exact
+            # sub_var values above and pushed down into the parquet query.
+            # Re-applying the regex here is both redundant and incorrect after
+            # DuckDB aggregation: sub_var is no longer present and the value
+            # column has been renamed to concept_name, so numeric measurements
+            # (for example eICU ETCO2) would be matched against the label regex
+            # and every row would be discarded.
+            if source.regex and _rgx_pre_matched_ids is None:
                 # 确定 regex 应该应用在哪一列：
                 # - 如果同时存在 ids 和 regex，ids 用于过滤 sub_var，regex 用于过滤 value_var
                 # - 如果只有 regex（没有 ids），regex 用于过滤 sub_var（ricu 的 rgx_itm 行为）
