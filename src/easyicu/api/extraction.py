@@ -1251,12 +1251,22 @@ def _native_export_storage_kind(concept_id: str, dictionary) -> str:
     from ..concept.catalog import CONCEPT_DICTIONARY
 
     definition = dictionary.get(concept_id)
-    class_name = getattr(definition, "class_name", None)
+    raw_class_name = getattr(definition, "class_name", None)
+    if isinstance(raw_class_name, (list, tuple, set, frozenset)):
+        class_names = {
+            str(value).strip()
+            for value in raw_class_name
+            if str(value).strip()
+        }
+    elif raw_class_name is None:
+        class_names = set()
+    else:
+        class_names = {str(raw_class_name).strip()}
     catalog_unit = CONCEPT_DICTIONARY.get(concept_id, ("", "", ""))[2]
-    if class_name == "lgl_cncpt" or str(catalog_unit).strip().lower() == "boolean":
+    if "lgl_cncpt" in class_names or str(catalog_unit).strip().lower() == "boolean":
         return "boolean"
     if (
-        class_name in {"fct_cncpt", "chr_cncpt"}
+        class_names.intersection({"fct_cncpt", "chr_cncpt"})
         or str(catalog_unit).strip().lower() == "category"
         or concept_id == "avpu"
     ):

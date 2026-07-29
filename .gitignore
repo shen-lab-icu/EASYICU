@@ -135,6 +135,8 @@ tests/research_agent/test_pilot_exit_status_capture.py
 tests/research_agent/test_case_b_bootstrap.py
 scripts/*
 !scripts/launch_easyicu.py
+!scripts/figures/
+!scripts/figures/*.py
 
 # 环境文件
 .env
