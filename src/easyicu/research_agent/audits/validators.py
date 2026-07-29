@@ -11109,6 +11109,104 @@ class FigureSourceDataValidator:
         return resolved
 
     @classmethod
+    def _identify_rows_uniquely(
+        cls,
+        *,
+        source: pd.DataFrame,
+        upstream: pd.DataFrame,
+        key_cols: tuple,
+    ) -> tuple:
+        """Widen ``key_cols`` until it identifies one row in both frames.
+
+        Returns ``(key_cols, [])`` once the key is unique on both sides, or
+        ``(None, duplicate_examples)`` when no available combination gets
+        there. Refusing is the point: a value comparison across a
+        many-to-many join reports differences produced by the join itself,
+        which reads as a fabricated figure and is impossible to act on.
+        """
+
+        def _duplicates(frame: pd.DataFrame, cols: tuple) -> list:
+            present = [col for col in cols if col in frame.columns]
+            if not present or frame.empty:
+                return []
+            # Built row by row rather than with astype(str).agg: a row-wise
+            # agg re-infers dtypes and hands back the original floats.
+            keys = pd.Series(
+                [
+                    "|".join(str(value) for value in row)
+                    for row in frame[present].itertuples(index=False, name=None)
+                ],
+                index=frame.index,
+                dtype=object,
+            )
+            duplicated = keys[keys.duplicated(keep=False)]
+            return sorted(set(duplicated.tolist()))[:10]
+
+        def _unique_everywhere(cols: tuple) -> bool:
+            return not _duplicates(source, cols) and not _duplicates(upstream, cols)
+
+        if _unique_everywhere(key_cols):
+            return key_cols, []
+
+        # Any column shared by both frames may help identify the row. Value
+        # columns are not excluded here the way they are when *choosing* a
+        # key: a level indicator such as ``exposure_level`` is numeric and is
+        # exactly what separates the duplicated rows. Correctness comes from
+        # the resulting key being unique, not from the columns' names.
+        shared = [
+            col
+            for col in source.columns
+            if col in upstream.columns and col not in key_cols
+        ]
+
+        def _is_measure(col: str) -> bool:
+            """A column that is fully numeric on both sides reads as a value."""
+
+            left = pd.to_numeric(source[col], errors="coerce")
+            right = pd.to_numeric(upstream[col], errors="coerce")
+            return bool(left.notna().all() and right.notna().all())
+
+        measures = {col: _is_measure(col) for col in shared}
+        remaining = list(shared)
+        widened = tuple(key_cols)
+        while remaining:
+            # Greedy, preferring a real identifier over a measurement: a level
+            # indicator separates the rows and reads as a key, whereas a
+            # confidence bound happens to be distinct and does not. Either
+            # yields a correct join -- a figure that altered the column would
+            # fail to join at all rather than pass -- but the reported key is
+            # also the explanation a reader gets, so it should name what
+            # actually distinguishes the rows.
+            best_col = min(
+                remaining,
+                key=lambda col: (
+                    measures[col],
+                    len(_duplicates(source, (*widened, col)))
+                    + len(_duplicates(upstream, (*widened, col))),
+                    col,
+                ),
+            )
+            candidate = (*widened, best_col)
+
+            def _ambiguity(cols: tuple) -> int:
+                return len(_duplicates(source, cols)) + len(_duplicates(upstream, cols))
+
+            if _ambiguity(candidate) >= _ambiguity(widened):
+                # The best remaining column separates nothing, so no other
+                # will either -- greedy already picked the most separating.
+                break
+            widened = candidate
+            remaining.remove(best_col)
+            if _unique_everywhere(widened):
+                return widened, []
+
+        return None, {
+            "source": _duplicates(source, key_cols),
+            "upstream": _duplicates(upstream, key_cols),
+            "attempted_key": list(widened),
+        }
+
+    @classmethod
     def _compare_source_to_upstream(
         cls,
         *,
@@ -11347,6 +11445,44 @@ class FigureSourceDataValidator:
         for key in key_cols:
             source[key] = source[key].astype(str)
             upstream[key] = upstream[key].astype(str)
+
+        # A join key must IDENTIFY a row, not merely vary across rows. Both
+        # selectors above could hand back a non-unique key: the named
+        # allowlist does it whenever a table repeats a term across models
+        # (already noted on _COMPOSITE_KEY_COLUMNS), and the structural
+        # selector accepts any shared column that is "mostly distinct"
+        # (>= 50% unique), which is not the same as unique.
+        #
+        # Measured consequence: a three-row distribution table keyed on
+        # ``row_role`` -- two ``exposure_level`` rows plus one ``overall`` --
+        # scored 2/3 and was accepted. pandas then joined the duplicates
+        # many-to-many, so exposure level 0 in the figure's source data was
+        # compared against level 1 upstream, and EVERY numeric column was
+        # reported as disagreeing between two byte-identical files. The
+        # figure was rejected for fabricating values it had copied exactly.
+        #
+        # Extend the key with further shared columns until it identifies a
+        # row. If it cannot be made unique, say so precisely rather than
+        # compare cross-matched rows and report the differences as evidence
+        # of a forged figure.
+        key_cols, duplicate_examples = cls._identify_rows_uniquely(
+            source=source,
+            upstream=upstream,
+            key_cols=key_cols,
+        )
+        if key_cols is None:
+            return {
+                "ok": False,
+                "reason": "ambiguous_join_key",
+                "upstream_table": upstream_path.name,
+                "duplicate_key_values": duplicate_examples,
+                "message": (
+                    f"no key identifies a single row in both this figure's "
+                    f"source data and {upstream_path.name}; comparing values "
+                    "across a many-to-many join would report differences that "
+                    "are an artefact of the join, not of the figure"
+                ),
+            }
 
         def _key_set(frame: pd.DataFrame) -> Set[tuple[str, ...]]:
             return set(
