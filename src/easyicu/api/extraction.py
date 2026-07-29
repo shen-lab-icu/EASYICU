@@ -417,6 +417,131 @@ def _release_stream_batch_memory(
             pass
 
 
+_VITAL_STREAM_DERIVED_CONCEPTS = (
+    "pulse_pressure",
+    "shock_index",
+    "modified_shock_index",
+    "diastolic_shock_index",
+)
+
+
+def _clear_stream_loader_caches(loader) -> None:
+    if loader is None:
+        return
+    try:
+        loader.clear_cache()
+        return
+    except Exception:
+        pass
+    resolver = getattr(loader, "concept_resolver", None)
+    if resolver is not None and hasattr(resolver, "drop_source_caches"):
+        resolver.drop_source_caches()
+
+
+def _attach_stream_derived_columns(base, addition, value_columns):
+    """Attach derived values whose time keys are a subset of the base grid."""
+    import numpy as np
+    import pandas as pd
+
+    if not isinstance(base, pd.DataFrame) or base.empty:
+        return addition
+    if not isinstance(addition, pd.DataFrame) or addition.empty:
+        for column in value_columns:
+            if column not in base.columns:
+                base[column] = np.nan
+        return base
+
+    id_candidates = (
+        "stay_id",
+        "patientunitstayid",
+        "icustay_id",
+        "admissionid",
+        "patientid",
+        "CaseID",
+    )
+    key_columns = [
+        column
+        for column in (*id_candidates, "charttime")
+        if column in base.columns and column in addition.columns
+    ]
+    if not key_columns or "charttime" not in key_columns:
+        raise ValueError("streamed derived concept has no shared ICU time key")
+
+    base_index = pd.MultiIndex.from_frame(base[key_columns])
+    addition_index = pd.MultiIndex.from_frame(addition[key_columns])
+    if not base_index.is_unique or not addition_index.is_unique:
+        return base.merge(
+            addition[key_columns + list(value_columns)],
+            on=key_columns,
+            how="outer",
+            sort=False,
+        )
+    indexer = base_index.get_indexer(addition_index)
+    if bool((indexer < 0).any()):
+        return base.merge(
+            addition[key_columns + list(value_columns)],
+            on=key_columns,
+            how="outer",
+            sort=False,
+        )
+
+    for column in value_columns:
+        values = np.full(len(base), np.nan, dtype="float64")
+        if column in addition.columns:
+            values[indexer] = pd.to_numeric(
+                addition[column],
+                errors="coerce",
+            ).to_numpy()
+        base[column] = values
+    return base
+
+
+def _load_stream_module_batch(
+    load_concepts_fn,
+    *,
+    module_name: str,
+    concepts: List[str],
+    load_kwargs: Dict,
+    patient_ids: Dict,
+    loader,
+    pyarrow_module,
+):
+    """Load one patient batch with bounded recursive-vitals intermediates."""
+    requested_derived = [
+        concept
+        for concept in _VITAL_STREAM_DERIVED_CONCEPTS
+        if concept in concepts
+    ]
+    if module_name != "vitals" or not requested_derived:
+        return load_concepts_fn(**load_kwargs, patient_ids=patient_ids)
+
+    base_concepts = [
+        concept for concept in concepts if concept not in requested_derived
+    ]
+    base_kwargs = dict(load_kwargs)
+    base_kwargs["concepts"] = base_concepts
+    result = load_concepts_fn(**base_kwargs, patient_ids=patient_ids)
+
+    for concept in requested_derived:
+        _clear_stream_loader_caches(loader)
+        _release_stream_batch_memory(pyarrow_module)
+        derived_kwargs = dict(load_kwargs)
+        derived_kwargs["concepts"] = [concept]
+        derived = load_concepts_fn(
+            **derived_kwargs,
+            patient_ids=patient_ids,
+        )
+        result = _attach_stream_derived_columns(
+            result,
+            derived,
+            [concept],
+        )
+        del derived
+    _clear_stream_loader_caches(loader)
+    _release_stream_batch_memory(pyarrow_module)
+    return result
+
+
 def _stream_module_batches_to_parquet(
     module_name: str,
     concepts: List[str],
@@ -463,9 +588,16 @@ def _stream_module_batches_to_parquet(
     try:
         for start in range(0, len(all_ids), batch_size):
             table = None
-            batch = _lc(
-                **batch_load_kwargs,
-                patient_ids={id_col: all_ids[start : start + batch_size]},
+            batch = _load_stream_module_batch(
+                _lc,
+                module_name=module_name,
+                concepts=concepts,
+                load_kwargs=batch_load_kwargs,
+                patient_ids={
+                    id_col: all_ids[start : start + batch_size]
+                },
+                loader=loader,
+                pyarrow_module=pa,
             )
             frame = _normalise_module_frame_for_parquet(batch, concepts)
             if frame is not None:
@@ -484,13 +616,7 @@ def _stream_module_batches_to_parquet(
                 rows += len(frame)
             del table
             del batch, frame
-            if loader is not None:
-                try:
-                    loader.clear_cache()
-                except Exception:
-                    resolver = getattr(loader, "concept_resolver", None)
-                    if resolver is not None and hasattr(resolver, "drop_source_caches"):
-                        resolver.drop_source_caches()
+            _clear_stream_loader_caches(loader)
             _release_stream_batch_memory(pa)
         if writer is None:
             return None
