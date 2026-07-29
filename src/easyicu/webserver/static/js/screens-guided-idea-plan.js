@@ -1,5 +1,21 @@
 /* Guided Copilot idea-mining plan/replan panel.
-   Owner: Guided Idea Mining pre-Agent planning widget. */
+   Owner: Guided Idea Mining pre-Agent planning widget.
+
+   DENSITY. Walking the demo flow, this one card measured 5,890 characters in a
+   single chat bubble — 89% of the entire conversation up to that point, which
+   was 6,640 characters across 9 messages after the reader had done two things.
+   Nobody reads that to approve a research plan.
+
+   Where it went: the plan step <ol> alone was 2,192 characters, of which 300
+   were the seven step TITLES and 1,879 were their action/output/guardrail
+   prose. So the titles — the part you scan to decide whether the plan is
+   right — were 14% of the block they were buried in.
+
+   The step list therefore shows titles, with the detail behind ONE toggle
+   rather than seven, and the two reference sections are closed by default with
+   their counts in the summary (patterns was `open`, contributing another 228).
+   Nothing is removed: every character is one click away, and the plan is still
+   the thing the reader must approve before any handoff. */
 (function () {
   'use strict';
 
@@ -126,14 +142,22 @@
           <span>${icon('check', 12)}</span>
           <div><strong>${esc(plan.plan_status || t('draft plan requires review', '计划草案需要审阅'))}</strong><small>${esc((plan.agent_boundary && plan.agent_boundary.reason) || t('Planning is not an Agent execution and does not unlock manuscript claims.', '计划不是 Agent 执行，也不会解锁稿件结论。'))}</small></div>
         </div>
-        ${steps.length ? `<ol>${steps.map((row, i) => {
-          const obj = normalizePlanStep(row, i, t);
-          const title = obj.title || obj.action || t('Plan step', '计划步骤');
-          const detail = [obj.action, obj.output ? `${t('Output', '产物')}: ${obj.output}` : '', obj.guardrail ? `${t('Guardrail', '约束')}: ${obj.guardrail}` : ''].filter(Boolean).join(' · ');
-          return `<li><strong>${esc(title)}</strong>${detail ? `<br><small>${esc(detail)}</small>` : ''}</li>`;
-        }).join('')}</ol>` : ''}
-        ${patterns.length ? `<details class="gdi-plan-details" open><summary>${icon('book', 13)} ${t('Reference method patterns', '参考方法套路')}</summary>${list(patterns, '', 'gdi-feature-list', esc)}</details>` : ''}
-        ${constraints.length ? `<details class="gdi-plan-details"><summary>${icon('shield', 13)} ${t('ICU constraints', 'ICU 场景约束')}</summary>${list(constraints, '', 'gdi-feature-list', esc)}</details>` : ''}
+        ${steps.length ? `
+        <div class="gdi-plan-steps ${guidedIdea.planDetail ? 'show-detail' : ''}">
+          <div class="gdi-plan-steps-head">
+            <span>${t('Plan', '研究计划')} · ${steps.length} ${t('steps', '步')}</span>
+            <button type="button" class="gdi-plan-toggle" data-gi-plandetail
+              >${guidedIdea.planDetail ? t('Hide detail', '收起细节') : t('Show detail', '展开细节')}</button>
+          </div>
+          <ol>${steps.map((row, i) => {
+            const obj = normalizePlanStep(row, i, t);
+            const title = obj.title || obj.action || t('Plan step', '计划步骤');
+            const detail = [obj.action, obj.output ? `${t('Output', '产物')}: ${obj.output}` : '', obj.guardrail ? `${t('Guardrail', '约束')}: ${obj.guardrail}` : ''].filter(Boolean).join(' · ');
+            return `<li><strong>${esc(title)}</strong>${detail ? `<small class="gdi-plan-detail">${esc(detail)}</small>` : ''}</li>`;
+          }).join('')}</ol>
+        </div>` : ''}
+        ${patterns.length ? `<details class="gdi-plan-details"><summary>${icon('book', 13)} ${t('Reference method patterns', '参考方法套路')} · ${patterns.length}</summary>${list(patterns, '', 'gdi-feature-list', esc)}</details>` : ''}
+        ${constraints.length ? `<details class="gdi-plan-details"><summary>${icon('shield', 13)} ${t('ICU constraints', 'ICU 场景约束')} · ${constraints.length}</summary>${list(constraints, '', 'gdi-feature-list', esc)}</details>` : ''}
         ${confirmations.length ? `<div class="gdr-note"><strong>${t('Still needs user confirmation', '仍需用户确认')}</strong><br>${confirmations.map(esc).join(' · ')}</div>` : ''}
         ${appliedNotes ? `<div class="gdr-note"><strong>${t('Applied replan note', '已应用的 replan 说明')}</strong><br>${esc(appliedNotes)}</div>` : ''}
         <label class="gdi-field wide">

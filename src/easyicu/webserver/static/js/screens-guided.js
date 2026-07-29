@@ -2835,6 +2835,29 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       icon,
     });
   }
+  /* A finished step is a receipt, not a chapter.
+
+     This card accumulates every stage in ONE chat bubble — source, evidence,
+     candidate, data context, feasibility, prior art, plan. By the time the plan
+     appeared it measured 5,890 characters, while the reader's only remaining
+     decision was on the last section. gdiDone collapses the settled ones to a
+     single line naming what was settled and what it settled ON, so the card
+     shows the step you are actually on. Nothing is dropped: every section is
+     one click away, and they reopen in place. */
+  function gdiDone(collapsed, title, summary, bodyHtml) {
+    if (!collapsed || !bodyHtml) return bodyHtml || '';
+    return `<details class="gdi-done">
+      <summary><span class="gdi-done-mk">${icon('check', 10, 3)}</span><span class="gdi-done-t">${esc(title)}</span>${summary ? `<span class="gdi-done-v">${esc(summary)}</span>` : ''}</summary>
+      ${bodyHtml}
+    </details>`;
+  }
+  function guidedIdeaCandidateLabel(idea) {
+    if (!idea) return '';
+    // `idea_title` is the field the ledger itself renders — same source, so the
+    // receipt cannot drift from the section it summarises.
+    const s = String(idea.idea_title || idea.title || idea.question || '').trim();
+    return s.length > 46 ? s.slice(0, 45) + '…' : s;
+  }
   function renderGuidedIdeaCard() {
     if (!guidedIdea) resetGuidedIdeaState();
     requestGuidedIdeaProviderStatus(false);
@@ -2842,6 +2865,8 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     const result = guidedIdea.result;
     const miningBlocked = guidedIdea.mining || guidedIdea.resolving;
     const showSourceEditor = !result || guidedIdea.sourceEditorOpen;
+    // Past the data-context gate, everything before the plan is settled.
+    const atPlanStage = !!(result && guidedIdea.dataContextConfirmed);
     return `
       <div class="gd-idea-card">
         <div class="gdx-head">
@@ -2863,11 +2888,11 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           <button type="button" class="btn primary" data-gi-mine ${miningBlocked ? 'disabled' : ''}>${icon('play', 13)} ${t('Mine locally', '本地挖掘 idea')}</button>
           <button type="button" class="btn" data-guided-goal="data_extraction">${t('Prepare data first', '先准备数据')}</button>
         </div>` : ''}
-        ${showSourceEditor ? '' : renderGuidedIdeaEvidence(result)}
-        ${renderGuidedIdeaLedger(idea)}
-        ${renderGuidedIdeaDataContext(result, idea)}
-        ${guidedIdea.dataContextConfirmed ? renderGuidedIdeaPreExperiment(result) : ''}
-        ${guidedIdea.dataContextConfirmed ? renderGuidedIdeaPrior() : ''}
+        ${showSourceEditor ? '' : gdiDone(atPlanStage, t('Source evidence', '来源证据'), '', renderGuidedIdeaEvidence(result))}
+        ${gdiDone(atPlanStage, t('Candidate idea', '候选 idea'), guidedIdeaCandidateLabel(idea), renderGuidedIdeaLedger(idea))}
+        ${gdiDone(atPlanStage, t('Data context', '数据上下文'), activeExportLabel(), renderGuidedIdeaDataContext(result, idea))}
+        ${guidedIdea.dataContextConfirmed ? gdiDone(atPlanStage, t('Feasibility', '可行性'), '', renderGuidedIdeaPreExperiment(result)) : ''}
+        ${guidedIdea.dataContextConfirmed ? gdiDone(atPlanStage, t('Prior art', '既有文献'), '', renderGuidedIdeaPrior()) : ''}
         ${renderGuidedIdeaHandoff()}
         ${guidedIdea.dataContextConfirmed && guidedIdea.project ? `<div class="gdx-status ok"><span>${icon('check', 12)}</span><div><strong>${t('Agent project seed created', 'Agent project seed 已创建')}</strong><small>${esc(compactPath((guidedIdea.project.project || {}).project_dir || (guidedIdea.project.project || {}).study_id || ''))}</small></div></div>` : ''}
       </div>`;
@@ -5476,6 +5501,12 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         }
         if (e.target.closest('[data-gi-plan]')) {
           runGuidedIdeaPlan('plan');
+          return;
+        }
+        if (e.target.closest('[data-gi-plandetail]') && guidedIdea) {
+          // Per-step prose is 86% of the plan block; it opens on request.
+          guidedIdea.planDetail = !guidedIdea.planDetail;
+          renderThread();
           return;
         }
         if (e.target.closest('[data-gi-replan]')) {
