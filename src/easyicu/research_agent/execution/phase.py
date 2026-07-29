@@ -8200,9 +8200,6 @@ def run_execute_phase(
                                         "error named the anti-pattern"
                                     ),
                                 )
-                            _clear_output_dir(
-                                run_dir / "steps" / step.step_id / "outputs"
-                            )
                             continue
 
                     if _llm_repair_budget_available():
@@ -8293,9 +8290,6 @@ def run_execute_phase(
                             )
                             _sync_provider_budget()
                             worker_progress.llm_repair_used = True
-                            _clear_output_dir(
-                                run_dir / "steps" / step.step_id / "outputs"
-                            )
                             continue
                         except (
                             ProviderCallBudgetReceiptError,
@@ -8329,9 +8323,6 @@ def run_execute_phase(
                             )
                             if fallback_code is not None:
                                 code = fallback_code
-                                _clear_output_dir(
-                                    run_dir / "steps" / step.step_id / "outputs"
-                                )
                                 continue
                             with shared_lock:
                                 findings.extend(usage_findings)
@@ -9062,7 +9053,6 @@ def run_execute_phase(
                     fallback_code = _deterministic_fallback_code("no_artefacts")
                     if fallback_code is not None:
                         code = fallback_code
-                        _clear_output_dir(run_result.out_dir)
                         continue
                 visual_step_summary: Dict[str, Any] = {}
                 visual_summary_path = run_result.out_dir / "step_summary.json"
@@ -9222,7 +9212,6 @@ def run_execute_phase(
                             fallback_code = _deterministic_fallback_code("visual_qa")
                             if fallback_code is not None:
                                 code = fallback_code
-                                _clear_output_dir(run_result.out_dir)
                                 continue
                             demoted_findings = list(visual_gate.demoted_findings)
                             blocking_visual_errors = list(visual_gate.blocking_errors)
@@ -9339,7 +9328,6 @@ def run_execute_phase(
                                 )
                                 _sync_provider_budget()
                                 worker_progress.llm_repair_used = True
-                                _clear_output_dir(run_result.out_dir)
                                 continue
                             except (
                                 ProviderCallBudgetReceiptError,
@@ -9398,7 +9386,6 @@ def run_execute_phase(
                                     )
                                     if fallback_code is not None:
                                         code = fallback_code
-                                        _clear_output_dir(run_result.out_dir)
                                         continue
                                     with shared_lock:
                                         findings.extend(visual_findings)
@@ -9664,6 +9651,16 @@ def run_execute_phase(
                     f for f in early_contract_findings if f.severity == "error"
                 ]
                 if early_contract_errors:
+                    # Record the reason here, where the host decides the
+                    # contract failed -- not on whichever terminal branch
+                    # happens to fire later.  A repaired draft can be
+                    # quarantined before it ever executes, and that branch
+                    # writes its own status; without this the only surviving
+                    # trace is a bare ``contract_repair_attempts`` counter and
+                    # the record reads as if the quarantine were the cause.
+                    step_record.setdefault("contract_repair_triggers", []).append(
+                        [finding.model_dump() for finding in early_contract_errors]
+                    )
                     locked_data_quality_issues = (
                         _locked_measurement_data_quality_issues(early_contract_errors)
                     )
@@ -9814,7 +9811,6 @@ def run_execute_phase(
                             current_step=step_current,
                             total_steps=total_steps,
                         )
-                        _clear_output_dir(run_result.out_dir)
                         continue
                     if pipeline._enable_deterministic_runner_repair:
                         before_repair_code = code
@@ -9871,7 +9867,6 @@ def run_execute_phase(
                             current_step=step_current,
                             total_steps=total_steps,
                         )
-                        _clear_output_dir(run_result.out_dir)
                         continue
                     if (
                         worker_progress.llm_contract_repair_attempts
@@ -9994,7 +9989,6 @@ def run_execute_phase(
                         )
                         _sync_provider_budget()
                         worker_progress.llm_repair_used = True
-                        _clear_output_dir(run_result.out_dir)
                         continue
                     except (
                         ProviderCallBudgetReceiptError,
@@ -10009,7 +10003,6 @@ def run_execute_phase(
                         )
                         if fallback_code is not None:
                             code = fallback_code
-                            _clear_output_dir(run_result.out_dir)
                             continue
                         with shared_lock:
                             findings.extend(early_contract_findings)
@@ -10083,7 +10076,6 @@ def run_execute_phase(
                         current_step=step_current,
                         total_steps=total_steps,
                     )
-                    _clear_output_dir(run_result.out_dir)
                     continue
                 deterministic_contract_approved_code_digest = candidate_code_digest
                 step_record["deterministic_contract_approved_code_sha256"] = (
@@ -10276,7 +10268,6 @@ def run_execute_phase(
                     current_step=step_current,
                     total_steps=total_steps,
                 )
-                _clear_output_dir(run_result.out_dir)
                 continue
             if (
                 worker_progress.runtime_repair_attempts
@@ -10286,7 +10277,6 @@ def run_execute_phase(
                 fallback_code = _deterministic_fallback_code("execution_failure")
                 if fallback_code is not None:
                     code = fallback_code
-                    _clear_output_dir(run_result.out_dir)
                     continue
                 with shared_lock:
                     findings.append(
