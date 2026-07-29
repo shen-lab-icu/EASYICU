@@ -2511,6 +2511,7 @@ class ICUDataSource:
             # EASYICU_ARROW_THREADS 在 Windows/macOS/Linux 上真正生效。
             import os as _os
             import pyarrow as _pa
+            from easyicu.runtime.parallel_config import get_global_config
 
             _env_at = _os.environ.get('EASYICU_ARROW_THREADS')
             if _env_at:
@@ -2521,9 +2522,17 @@ class ICUDataSource:
                         "Ignoring invalid EASYICU_ARROW_THREADS=%r",
                         _env_at,
                     )
-                    thread_count = min((_os.cpu_count() or 4), 8)
+                    thread_count = min(
+                        (_os.cpu_count() or 4),
+                        8,
+                        get_global_config().max_workers,
+                    )
             else:
-                thread_count = min((_os.cpu_count() or 4), 8)
+                thread_count = min(
+                    (_os.cpu_count() or 4),
+                    8,
+                    get_global_config().max_workers,
+                )
 
             if _pa.cpu_count() != thread_count:
                 _pa.set_cpu_count(thread_count)
