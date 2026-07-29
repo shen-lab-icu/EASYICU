@@ -37,6 +37,21 @@ def test_grouped_output_is_sealed_without_accessing_the_raw_data_path(
     manifest = json.loads((tmp_path / "_manifest.json").read_text())
     assert manifest["schema_version"] == "easyicu_native_export_v2"
     assert manifest["files"][0]["file"] == "demographics.parquet"
+    assert manifest["canonical_physical_schema"]["identity_column"] == "stay_id"
+    assert manifest["runtime_provenance"]["easyicu_import_path"].endswith(
+        "/src/easyicu"
+    )
+    assert isinstance(
+        manifest["runtime_provenance"]["easyicu_git_dirty"], bool
+    )
+    if manifest["runtime_provenance"]["easyicu_git_dirty"]:
+        assert manifest["runtime_provenance"]["easyicu_git_diff_sha256"]
+    else:
+        assert manifest["runtime_provenance"]["easyicu_git_diff_sha256"] is None
+    assert list(pd.read_parquet(tmp_path / "demographics.parquet").columns) == [
+        "stay_id",
+        "age",
+    ]
     assert published["output_validation_reads"] == 1
     with open_export_package(tmp_path) as package:
         assert package.database == "miiv"
@@ -148,8 +163,91 @@ def test_grouped_export_records_missing_concept_inside_physical_module(
             "reason": "producer_returned_no_physical_column",
         }
     ]
+    exported = pd.read_parquet(output / "outcome.parquet")
+    assert list(exported.columns) == [
+        "stay_id",
+        "charttime",
+        "mort_28d",
+        "vent_free_days_28",
+    ]
+    assert exported["stay_id"].dtype == "int64"
+    assert exported["charttime"].dtype == "float64"
+    assert str(exported["mort_28d"].dtype) == "boolean"
+    assert exported["vent_free_days_28"].dtype == "float64"
+    status = manifest["files"][0]["concept_status"]
+    assert status["mort_28d"] == {"availability": "available", "non_null": 1}
+    assert status["vent_free_days_28"] == {
+        "availability": "structurally_unavailable_placeholder",
+        "non_null": 0,
+    }
     with open_export_package(output) as package:
         assert set(package.concept_index) == {"mort_28d"}
+
+
+def test_grouped_export_normalises_source_identity_and_categorical_placeholder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        api, "EXTRACT_MODULES", {"demographics": ["age", "sex"]}
+    )
+    pd.DataFrame({"patientunitstayid": [11], "age": [63]}).to_parquet(
+        tmp_path / "demographics.parquet", index=False
+    )
+    (tmp_path / "demographics.manifest.json").write_text(
+        json.dumps(
+            {"saved": {"demographics": {"concepts": ["age"]}}}
+        ),
+        encoding="utf-8",
+    )
+
+    api._publish_native_export_v2(
+        database="eicu",
+        data_path="/raw/source-must-not-be-read",
+        output_dir=str(tmp_path),
+        modules=["demographics"],
+        max_patients=None,
+        result=_completed_result(),
+    )
+
+    exported = pd.read_parquet(tmp_path / "demographics.parquet")
+    assert list(exported.columns) == ["stay_id", "age", "sex"]
+    assert exported["stay_id"].tolist() == [11]
+    assert exported["age"].dtype == "float64"
+    assert str(exported["sex"].dtype) == "string"
+    assert exported["sex"].isna().all()
+
+
+def test_native_schema_preserves_numeric_logical_and_categorical_families() -> None:
+    dictionary = api.load_dictionary(include_sofa2=True)
+    frame = pd.DataFrame(
+        {
+            "patientid": [101, 102],
+            "charttime": [0, 1.5],
+            "gcs": [15, 10],
+            "delirium_positive": [0, 1],
+            "avpu": ["A", "V"],
+            "ecmo_indication": ["cardiac", None],
+        }
+    )
+
+    canonical = api._canonicalise_native_export_frame(
+        frame,
+        module="neurological",
+        requested_concepts=[
+            "gcs",
+            "delirium_positive",
+            "avpu",
+            "ecmo_indication",
+        ],
+        dictionary=dictionary,
+    )
+
+    assert canonical["stay_id"].dtype == "int64"
+    assert canonical["charttime"].dtype == "float64"
+    assert canonical["gcs"].dtype == "float64"
+    assert str(canonical["delirium_positive"].dtype) == "boolean"
+    assert str(canonical["avpu"].dtype) == "string"
+    assert str(canonical["ecmo_indication"].dtype) == "string"
 
 
 def test_grouped_export_reads_special_concept_from_saved_key(

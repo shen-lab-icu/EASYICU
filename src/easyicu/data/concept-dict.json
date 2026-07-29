@@ -422,16 +422,6 @@
   "omopid": 1507835,
   "category": "medications",
   "sources": {
-   "aumc": [
-    {
-     "ids": 12467,
-     "table": "drugitems",
-     "sub_var": "itemid",
-     "rate_uom": "doserateunit",
-     "stop_var": "stop",
-     "callback": "aumc_rate_units(0.53)"
-    }
-   ],
    "eicu": [
     {
      "regex": "^vasopressin.*\\(.+/.+\\)$",
@@ -5995,18 +5985,26 @@
  },
  "hba1c": {
   "unit": "%",
+  "min": 2,
+  "max": 25,
   "description": "Hemoglobin A1C",
   "omopid": 4184637,
   "category": "hematology",
   "sources": {
    "aumc": [
     {
-     "ids": [
-      11812,
-      16166
-     ],
+     "ids": 11812,
      "table": "numericitems",
-     "sub_var": "itemid"
+     "sub_var": "itemid",
+     "callback": "convert_unit(binary_op(`*`, 1), '%', 'Geen|%')",
+     "_comment": "AUMC HbA1c reported on the NGSP percentage scale."
+    },
+    {
+     "ids": 16166,
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "callback": "combine_callbacks(convert_unit(binary_op(`*`, 0.09148), '%', 'mmol/mol'), transform_fun(binary_op(`+`, 2.152)))",
+     "_comment": "AUMC IFCC HbA1c (mmol/mol) converted to NGSP percent using NGSP = 0.09148 * IFCC + 2.152."
     }
    ],
    "miiv": [
@@ -7600,10 +7598,6 @@
  "lymph": {
   "unit": [
    "%",
-   "10^9/l",
-   "10^9/L",
-   "G/l",
-   "G/L",
    "Geen"
   ],
   "min": 0,
@@ -7637,15 +7631,6 @@
      "ids": "-lymphs",
      "table": "lab",
      "sub_var": "labname"
-    }
-   ],
-   "hirid": [
-    {
-     "ids": 24000480,
-     "table": "observations",
-     "sub_var": "variableid",
-     "callback": "blood_cell_ratio",
-     "class_name": "hrd_itm"
     }
    ],
    "miiv": [
@@ -9557,10 +9542,6 @@
  "neut": {
   "unit": [
    "%",
-   "10^9/l",
-   "10^9/L",
-   "G/l",
-   "G/L",
    "Geen"
   ],
   "min": 0,
@@ -9597,15 +9578,6 @@
      "ids": "-polys",
      "table": "lab",
      "sub_var": "labname"
-    }
-   ],
-   "hirid": [
-    {
-     "ids": 24000550,
-     "table": "observations",
-     "sub_var": "variableid",
-     "class_name": "hrd_itm",
-     "_comment": "2026-07-04 HiRID 24000550 stores absolute neutrophil count (~9), not % despite its '/100 leukocytes' label. Kept as-is because lymph@hirid (24000480) is also absolute (G/l) and HiRID has no lymphocyte-% variable, so nlr@hirid = abs/abs is the correct NLR. Do NOT switch to 24000556 (segmented-only %) — it would break nlr."
     }
    ],
    "miiv": [
@@ -16751,7 +16723,7 @@
   "max": 50000,
   "description": "D-dimer (blood)",
   "category": "chemistry",
-  "_provenance": "itemids verified against real MIMIC-III/IV d_labitems; eICU labname verified against real lab table. SICdb/AmsterdamUMC pending reference mapping. d_dimer kept MIMIC-only: SIC/AUMC report mg/L (FEU) vs MIMIC ng/mL (DDU) — not unit-comparable.",
+  "_provenance": "MIMIC itemids verified against real MIMIC-III/IV d_labitems. FEU-labelled rows are excluded rather than converted with an invalid universal factor; AUMC/SIC are unavailable until their FEU/DDU assay semantics can be represented explicitly.",
   "sources": {
    "miiv": [
     {
@@ -16761,7 +16733,8 @@
      ],
      "table": "labevents",
      "sub_var": "itemid",
-     "_comment": "2026-07-17: added 51196 (Hematology D-Dimer, ~22.8k rows) - the itemid official mimic-code coagulation.sql actually uses; we had only 50915 (Chemistry). CAVEAT still open: both itemids mix ng/mL (DDU) with 'ng/mL FEU' (~2x) and this concept has no valueuom filter, so the two scales are pooled. FEU/DDU is calibration-dependent - a constant factor would be wrong. Needs a valueuom-aware callback."
+     "callback": "convert_unit(set_val(NA), 'ng/mL', 'FEU')",
+     "_comment": "Both itemids are retained, but valueuom rows containing FEU are set to NA before aggregation. Canonical output is ng/mL DDU only."
     }
    ],
    "mimic": [
@@ -16772,7 +16745,8 @@
      ],
      "table": "labevents",
      "sub_var": "itemid",
-     "_comment": "2026-07-17: added 51196 (Hematology D-Dimer, ~22.8k rows) - the itemid official mimic-code coagulation.sql actually uses; we had only 50915 (Chemistry). CAVEAT still open: both itemids mix ng/mL (DDU) with 'ng/mL FEU' (~2x) and this concept has no valueuom filter, so the two scales are pooled. FEU/DDU is calibration-dependent - a constant factor would be wrong. Needs a valueuom-aware callback."
+     "callback": "convert_unit(set_val(NA), 'ng/mL', 'FEU')",
+     "_comment": "Both itemids are retained, but valueuom rows containing FEU are set to NA before aggregation. Canonical output is ng/mL DDU only."
     }
    ],
    "mimic_demo": [
@@ -16783,17 +16757,8 @@
      ],
      "table": "labevents",
      "sub_var": "itemid",
-     "_comment": "2026-07-17: added 51196 (Hematology D-Dimer, ~22.8k rows) - the itemid official mimic-code coagulation.sql actually uses; we had only 50915 (Chemistry). CAVEAT still open: both itemids mix ng/mL (DDU) with 'ng/mL FEU' (~2x) and this concept has no valueuom filter, so the two scales are pooled. FEU/DDU is calibration-dependent - a constant factor would be wrong. Needs a valueuom-aware callback."
-    }
-   ],
-   "aumc": [
-    {
-     "table": "numericitems",
-     "sub_var": "itemid",
-     "ids": [
-      10393
-     ],
-     "_comment": "2026-07-17 recall: 10393 'D-dimeren (bloed)' (929 rows / 635 adm, median 3.26 mg/L FEU). Concept had no AUMC source. CAVEAT: d_dimer still pools DDU/FEU unresolved across DBs."
+     "callback": "convert_unit(set_val(NA), 'ng/mL', 'FEU')",
+     "_comment": "Both itemids are retained, but valueuom rows containing FEU are set to NA before aggregation. Canonical output is ng/mL DDU only."
     }
    ]
   }
@@ -17148,7 +17113,7 @@
   ],
   "callback": "nlr",
   "class_name": "rec_cncpt",
-  "_comment": " HIRID CAVEAT (verified 2026-07-17, inherited from upstream ricu - NOT introduced here): HiRID's lymph/neut mapping is asymmetric and its data contradicts the official varref. 24000480 'Lymphocytes [#/volume]' is labelled G/l but 62.1% of its 55,229 values are exactly 0 (95.9% <=0.1, p99=0.2) - not a lymphocyte count. 24000550 'Neutrophils/100 leukocytes' is labelled % but only 0.4% of values land in 40-100 (med 9.19; 98.3% <30) - it reads as an absolute count. ricu carries the identical mapping (lymph.hirid with blood_cell_ratio, neut.hirid without), so this is an upstream issue. CONSEQUENCE: this concept is NOT usable on HiRID - _safe_div nulls the 62% zero-denominator rows and the survivors divide by a near-zero. Do not report it for HiRID."
+  "_comment": "HiRID is intentionally unavailable: its candidate lymphocyte and neutrophil variables have contradictory labels, units, and empirical distributions, so no dimensionally reliable ratio can be produced."
  },
  "plr": {
   "unit": [
@@ -17170,7 +17135,7 @@
   ],
   "callback": "plr",
   "class_name": "rec_cncpt",
-  "_comment": "2026-07-17 dimensional fix: PLR = platelets / ABSOLUTE lymphocyte count. `lymph` is a percentage in all 6 DBs, so the absolute count must be reconstructed as lymph% * wbc / 100. The previous plt/lymph% form was off by a patient-dependent factor (~12x) and correlated with WBC. HIRID CAVEAT (verified 2026-07-17, inherited from upstream ricu - NOT introduced here): HiRID's lymph/neut mapping is asymmetric and its data contradicts the official varref. 24000480 'Lymphocytes [#/volume]' is labelled G/l but 62.1% of its 55,229 values are exactly 0 (95.9% <=0.1, p99=0.2) - not a lymphocyte count. 24000550 'Neutrophils/100 leukocytes' is labelled % but only 0.4% of values land in 40-100 (med 9.19; 98.3% <30) - it reads as an absolute count. ricu carries the identical mapping (lymph.hirid with blood_cell_ratio, neut.hirid without), so this is an upstream issue. CONSEQUENCE: this concept is NOT usable on HiRID - _safe_div nulls the 62% zero-denominator rows and the survivors divide by a near-zero. Do not report it for HiRID."
+  "_comment": "PLR = platelets / absolute lymphocyte count; absolute lymphocytes are reconstructed as lymph% * wbc / 100. HiRID is intentionally unavailable because its candidate lymphocyte variable cannot be mapped to a reliable percentage."
  },
  "corrected_calcium": {
   "unit": [
