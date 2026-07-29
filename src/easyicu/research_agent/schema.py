@@ -706,6 +706,14 @@ class PlannedModelRequirement(BaseModel):
     analysis_role: Literal["primary", "secondary", "sensitivity"]
     analysis_set: Literal["source_aware", "complete_case"]
     required_for_step_success: bool = True
+    covariates: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "The exact adjustment set, or null when the planner did not declare "
+            "one. An empty list is a declaration of an unadjusted model, which "
+            "is not the same statement as null."
+        ),
+    )
 
     @field_validator(
         "requirement_id",
@@ -719,6 +727,28 @@ class PlannedModelRequirement(BaseModel):
         if not text:
             raise ValueError("planned model requirement fields must be non-empty")
         return text
+
+    @field_validator("covariates")
+    @classmethod
+    def _exact_unique_covariate_names(
+        cls, value: Optional[List[str]]
+    ) -> Optional[List[str]]:
+        """An adjustment set is a roster of exact columns or it is not declared.
+
+        ``None`` stays ``None``: "the planner did not say" must remain
+        distinguishable from "the planner said none", because a host that reads
+        the first as the second would fit an unadjusted model and label it the
+        pre-specified adjusted one.
+        """
+
+        if value is None:
+            return None
+        names = [str(item or "").strip() for item in value]
+        if any(not name for name in names):
+            raise ValueError("covariates must not contain blank names")
+        if len(names) != len(set(names)):
+            raise ValueError("covariates must not repeat a name")
+        return names
 
     @model_validator(mode="after")
     def _method_family_matches_supported_outcome(self) -> "PlannedModelRequirement":
@@ -743,6 +773,25 @@ class PlannedModelRequirement(BaseModel):
                 "primary and secondary model_requirements must be required "
                 "for step success; only a sensitivity requirement may be optional"
             )
+        if self.covariates is not None:
+            # Two adjustment sets that are wrong on their face, and wrong in a
+            # way the contract can see without knowing the case.  Conditioning
+            # on the outcome, or on the exposure whose effect is being
+            # estimated, does not produce a weaker version of the declared
+            # estimand -- it produces a different quantity that would still be
+            # reported under the declared one's name.
+            if self.outcome in self.covariates:
+                raise ValueError(
+                    "covariates must not contain the outcome "
+                    f"{self.outcome!r}; conditioning on the outcome does not "
+                    "estimate the declared association"
+                )
+            if self.exposure_source in self.covariates:
+                raise ValueError(
+                    "covariates must not contain the exposure "
+                    f"{self.exposure_source!r}; adjusting for the exposure "
+                    "removes the association the requirement declares"
+                )
         return self
 
 

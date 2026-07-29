@@ -27,6 +27,22 @@ count is reported as a pair:
 The truth for a given run is between them.  Reporting only the flattering bound
 would be answering in the permissive direction for a fact this tool lacks.
 
+**It measures one of the two paths, and the other one is invisible here.**
+``select_standard_executor`` is where an owner *claims a step up front*.  There
+is a second mechanism in ``execution/phase.py``: ``_deterministic_*_code``
+substitutes (absolute-risk context, robustness/sensitivity, missingness audit,
+plus a generic fallback) that the host swaps in *after* something has already
+gone wrong, gated on ``_enable_deterministic_runner_repair`` and fired at most
+once per step.  A product this tool reports as unowned may still have a
+deterministic implementation reachable that way -- ``table:robustness_summary``
+and ``table:absolute_risk_context`` both do.
+
+That difference is not cosmetic and is the reason the distinction is recorded
+here rather than smoothed over: a substitute produces a draft, and if the draft
+cannot satisfy the step's declared outputs the step goes to contract repair
+with the *host's own code* as the text the model edits.  Read the unowned-
+product list as "no owner claims this", not as "the host cannot compute this".
+
 This is a measurement, not a gate.  Nothing here may decide whether a run may
 start; a plan that scores well is not thereby authorized to execute.
 
