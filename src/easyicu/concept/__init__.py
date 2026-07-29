@@ -480,15 +480,18 @@ from ..utils import compute_patient_ids_hash as _compute_patient_ids_hash
 # --------------------------------------------------------------------------
 _CACHE_BUDGET_ENV = "EASYICU_CACHE_BUDGET_MB"
 _CACHE_BUDGET_DEFAULT_FRACTION = 0.25
-_CACHE_BUDGET_FALLBACK_BYTES = 4 * 1024 ** 3
+_CACHE_BUDGET_LOW_MEMORY_HOST_BYTES = 24 * 1024 ** 3
+_CACHE_BUDGET_LOW_MEMORY_BYTES = 512 * 1024 ** 2
+_CACHE_BUDGET_FALLBACK_BYTES = _CACHE_BUDGET_LOW_MEMORY_BYTES
 
 
 def _resolve_cache_budget_bytes() -> Optional[int]:
     """Byte budget for the resolver's in-memory caches.
 
     ``EASYICU_CACHE_BUDGET_MB`` > 0 pins the budget; <= 0 disables the
-    bound entirely (legacy unbounded behaviour). Default: 25% of physical
-    RAM, or 4GB when psutil is unavailable.
+    bound entirely (legacy unbounded behaviour). Default: 512MB on hosts
+    with at most 24GB RAM, otherwise 25% of physical RAM. The conservative
+    fallback is also 512MB when host capacity cannot be established.
     """
     raw = os.environ.get(_CACHE_BUDGET_ENV)
     if raw is not None:
@@ -503,7 +506,10 @@ def _resolve_cache_budget_bytes() -> Optional[int]:
     try:
         import psutil
 
-        return int(psutil.virtual_memory().total * _CACHE_BUDGET_DEFAULT_FRACTION)
+        total = int(psutil.virtual_memory().total)
+        if total <= _CACHE_BUDGET_LOW_MEMORY_HOST_BYTES:
+            return _CACHE_BUDGET_LOW_MEMORY_BYTES
+        return int(total * _CACHE_BUDGET_DEFAULT_FRACTION)
     except Exception:
         return _CACHE_BUDGET_FALLBACK_BYTES
 
