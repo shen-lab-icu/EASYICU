@@ -185,7 +185,7 @@ def test_native_assistant_labels_disambiguate_page_guide_guided_copilot_and_agen
     assert "Open Copilot" not in help_js
 
     assert "css/dock.css?v=20260625-stage99" in index_html
-    assert "js/app.js?v=20260729-question5" in index_html
+    assert "js/app.js?v=20260729-after1" in index_html
     assert "js/copilot-dock.js?v=20260712-ux-fixes" in index_html
     assert "js/screens-extraction.js?v=20260712-ux-fixes" in index_html
     assert "js/screens-agent.js?v=20260712-ux-fixes" in index_html
@@ -328,7 +328,7 @@ def test_native_tutorial_screen_uses_active_language_without_mixed_copy() -> Non
     assert ">No tokens, no setup, no patient data. The demo generates" not in help_js
     assert "How a study moves through EasyICU</h2>" not in help_js
 
-    assert "js/app.js?v=20260729-question5" in index_html
+    assert "js/app.js?v=20260729-after1" in index_html
     assert "js/screens-help.js?v=20260712-ux-fixes" in index_html
 
 
@@ -354,7 +354,7 @@ def test_native_guided_and_page_guide_messages_are_bilingual() -> None:
         "js/screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
         in index_html
     )
-    assert "js/screens-guided.js?v=20260729-question5" in index_html
+    assert "js/screens-guided.js?v=20260729-after1" in index_html
     assert "js/copilot-dock.js?v=20260712-ux-fixes" in index_html
 
 
@@ -561,7 +561,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     guided_plan_css = _static_css("guided-idea-plan.css")
     redesign_css = _static_css("redesign.css")
 
-    assert "css/guided.css?v=20260729-question5" in index_html
+    assert "css/guided.css?v=20260729-after1" in index_html
     assert "css/guided-idea-plan.css?v=20260627-ideas-feasibility-plan" in index_html
     assert "js/api.js?v=20260727-patient-demo2" in index_html
     assert (
@@ -583,7 +583,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
 
     # Progressive extraction + study-design stepper owner file (screens-guided-extract.js)
     extract_js = _static_js("screens-guided-extract.js")
-    assert "js/screens-guided-extract.js?v=20260729-question5" in index_html
+    assert "js/screens-guided-extract.js?v=20260729-after1" in index_html
     extract_pos = index_html.find("screens-guided-extract.js")
     assert extract_pos != -1 and extract_pos < guided_pos
     assert "window.EU_GUIDED_EXTRACT = {" in extract_js
@@ -659,7 +659,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert ".gdi-plan-details" in guided_plan_css
     assert ".gdi-feature-row.one" in guided_plan_css
     assert ".gdi-plan-details" not in redesign_css
-    assert "js/screens-guided.js?v=20260729-question5" in index_html
+    assert "js/screens-guided.js?v=20260729-after1" in index_html
 
 
 def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
@@ -675,7 +675,7 @@ def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
     index_html = _static_html("index.html")
 
     assert "js/screens-agent.js?v=20260712-ux-fixes" in index_html
-    assert "css/agent.css?v=20260729-question5" in index_html
+    assert "css/agent.css?v=20260729-after1" in index_html
     assert "css/agent-layout.css?v=20260702-agent-focus-layout" in index_html
     assert "css/agent-header.css?v=20260702-agent-compact-header" in index_html
     assert "css/agent-review.css?v=20260702-agent-review-compact" in index_html
@@ -820,7 +820,7 @@ def test_native_agent_research_blocks_are_project_owned() -> None:
     assert ".ag-wf-cell" in agent_css
     assert ".ag-lib-card" in agent_css
     assert ".ag-block-contract" in agent_css
-    assert "css/agent.css?v=20260729-question5" in index_html
+    assert "css/agent.css?v=20260729-after1" in index_html
     assert "js/screens-agent.js?v=20260712-ux-fixes" in index_html
 
     assert "ag-block-grid" not in app_js
@@ -1468,7 +1468,7 @@ def test_native_idea_mining_is_first_class_route_and_backend_wired() -> None:
     assert "css/ideas.css?v=20260630-gate-first-ideas" in index_html
     assert "css/shell.css?v=20260626-owner" in index_html
     assert "js/icons.js?v=20260625-stage84" in index_html
-    assert "js/app.js?v=20260729-question5" in index_html
+    assert "js/app.js?v=20260729-after1" in index_html
     assert "css/ideas-review.css?v=20260702-idea-review-handoff" in index_html
     assert "css/ideas-connectors.css?v=20260702-zotero-simple" in index_html
     assert "js/screens-ideas-zotero.js?v=20260702-zotero-origin" in index_html
@@ -2322,6 +2322,36 @@ def test_native_ui_uses_verification_terms_instead_of_gate_literal_translations(
         assert old_term not in ui_text
 
 
+def test_panel_mount_runs_each_screen_afterrender() -> None:
+    """A screen is render() AND afterRender(). Panels must call both.
+
+    Mounting screens as panels moved them off the shell's render path, which
+    calls afterRender for the route it is showing. The panel host called only
+    render(), so all ten panel screens came up as dead shells — no fetch, no
+    chart, no listener. Measured: Patient Review showed its "official public
+    ICU demos" heading above an EMPTY grid while the API had two prepared
+    sources ready; opening the demo went from 227 to 843 characters once
+    afterRender ran, and the loaded workspace from nothing to four tabs
+    (数据表 / 时间序列 / 患者概览 / 数据质量) with 14 charts.
+
+    Every id in PANEL_ROUTES defines afterRender, so there is no such thing as
+    a panel screen that does not need this.
+    """
+    one_js = _static_js("screens-one.js")
+    app_js = _static_js("app.js")
+
+    # The panel host calls it, and only after the node is in the document —
+    # screens query the live tree, and a detached subtree finds nothing.
+    assert "afterRender(host)" in one_js
+    mount = one_js.split("function mountPanel", 1)[1]
+    assert mount.index("aside.appendChild(host)") < mount.index("afterRender(host)")
+    # One screen's setup must not take the conversation down with it.
+    assert "console.warn('[EasyICU] panel afterRender failed:'" in one_js
+
+    # The conversation keeps its own call; the two paths are not merged.
+    assert "if (chat.afterRender) chat.afterRender(app);" in app_js
+
+
 def test_native_guided_extraction_starts_from_the_question_not_the_folder() -> None:
     """The plain-language question is a real step, and it is the first one.
 
@@ -2659,9 +2689,9 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
         "screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
         in index_html
     )
-    assert "screens-guided.js?v=20260729-question5" in index_html
-    assert "guided.css?v=20260729-question5" in index_html
-    assert "guided-rail.css?v=20260729-question5" in index_html
+    assert "screens-guided.js?v=20260729-after1" in index_html
+    assert "guided.css?v=20260729-after1" in index_html
+    assert "guided-rail.css?v=20260729-after1" in index_html
     assert "gd-name\">${t('Guided Copilot', '研究引导')}</span>" in guided_js
     assert "Guided Copilot · local first · nothing leaves your machine" in guided_js
     assert "[t('Review Data', '审阅已有数据'), '@guidedGoal:review_data']" in guided_js
