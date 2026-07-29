@@ -5,10 +5,19 @@
    time-window / comparator presets + their resolvers), passed a ctx object.
 
    Progressive disclosure: instead of one bubble with the whole classic form, the
-   card walks source -> cohort -> study design -> modules -> export -> review, one
-   step at a time, so a researcher makes decisions in the order they actually think
-   about them (question -> population -> endpoint/window/comparator -> features ->
-   where it lands -> confirm). */
+   card walks question -> source -> cohort -> study design -> modules -> export ->
+   review, one step at a time, so a researcher makes decisions in the order they
+   actually think about them (question -> population -> endpoint/window/comparator
+   -> features -> where it lands -> confirm).
+
+   That first step used to be missing. This comment already claimed the order
+   started with the question, and STEPS started with `source` — so the front door
+   invited a sentence ("用大白话说出来"), promised in the thread to "carry your
+   wording into it", and then opened by asking for a folder path. The sentence had
+   nowhere to go: the flow was started with the LABEL OF THE BUTTON that was
+   clicked, not with anything the reader had written. `question` is now a real
+   step, `readQuestion` below turns that sentence into this file's own preset
+   vocabulary, and the later steps arrive already filled in. */
 (function () {
   'use strict';
 
@@ -59,7 +68,89 @@
     return label(WINDOW_PRESETS, key, t) || (t ? t('Whole stay (30-day cap)', '全程（30 天上限）') : 'Whole stay');
   }
 
+  /* ---- reading a plain-language question into the vocabulary above ----
+
+     Deterministic substring matching, both languages, no model call. Three
+     reasons it is not an LLM: the front door runs in local mode, which must not
+     call one; a confident wrong reading costs more here than a blank field,
+     because it lands as a pre-filled endpoint the reader may never look at
+     again; and a rule you can read is a rule you can overrule.
+
+     It lives in THIS file because this file owns OUTCOME/WINDOW/COMPARATOR
+     presets. A reader that emits keys belongs beside the keys — screens-guided's
+     own extractEntities() emits free-text labels for the demo aside and is a
+     different contract, not a duplicate of this one.
+
+     Two rules it must keep:
+       · an unmatched field returns '' and stays blank. It never falls back to
+         "probably mortality" — a defaulted endpoint nobody chose is exactly the
+         kind of number that reaches a manuscript unexamined.
+       · every hit records the literal term that produced it, so the card can
+         show its work instead of asking to be trusted.
+
+     Cues run specific -> generic and stop at the first hit, which is why
+     '28 天' resolves to 28-day mortality rather than to plain in-hospital
+     death via the trailing '死亡'. */
+  const OUTCOME_CUES = [
+    ['mortality_28d', ['28-day', '28 day', '28d', '28天', '28 天']],
+    ['icu_mortality', ['icu mortality', 'icu death', 'icu死亡', 'icu 死亡']],
+    ['aki_onset', ['aki', 'acute kidney', 'kidney injury', '急性肾损伤', '肾损伤']],
+    ['vent_free', ['ventilator-free', 'ventilator free', 'vent-free', '无呼吸机', '脱机']],
+    ['icu_los', ['length of stay', 'icu los', '住院时长', '住院天数', 'icu时长', 'icu 时长']],
+    ['inhosp_mortality', ['in-hospital', 'in hospital', 'hospital mortality', '院内死亡', '住院死亡', 'mortality', 'death', 'died', '死亡', '病死']],
+  ];
+  const WINDOW_CUES = [
+    ['first_24h', ['first 24', '24-hour', '24 hour', '24h', '24 h', '24小时', '24 小时', '前24', '前 24']],
+    ['first_48h', ['first 48', '48-hour', '48 hour', '48h', '48 h', '48小时', '48 小时', '前48', '前 48']],
+    ['first_72h', ['first 72', '72-hour', '72 hour', '72h', '72 h', '72小时', '72 小时', '前72', '前 72']],
+  ];
+  /* Only unambiguous contrast markers. '早期' was a candidate and was dropped:
+     "早期用药" is a description of one group as often as it is a comparison, and
+     guessing wrong here silently turns a descriptive cohort into a two-arm
+     study. A missed comparison costs one click on the Design step. */
+  const COMPARATOR_CUES = [
+    ['exposure', [' vs ', ' vs. ', 'versus', 'compared with', 'compared to', '对比', '相比', '比较', '是否', '有无']],
+  ];
+
+  function matchCue(haystack, cues) {
+    for (const [key, terms] of cues) {
+      for (const term of terms) {
+        if (haystack.indexOf(term) >= 0) return { key, term };
+      }
+    }
+    return null;
+  }
+
+  function readQuestion(text) {
+    const raw = String(text == null ? '' : text).trim();
+    const hay = raw.toLowerCase();
+    const out = { outcome: '', window: '', comparator: '', matched: [] };
+    if (!hay) return out;
+    const take = (field, cues) => {
+      const hit = matchCue(hay, cues);
+      if (!hit) return;
+      out[field] = hit.key;
+      out.matched.push({ field, term: hit.term, key: hit.key });
+    };
+    take('outcome', OUTCOME_CUES);
+    take('window', WINDOW_CUES);
+    take('comparator', COMPARATOR_CUES);
+    return out;
+  }
+
+  function readingLabel(field, key, t) {
+    if (field === 'outcome') return label(OUTCOME_PRESETS, key, t);
+    if (field === 'window') return label(WINDOW_PRESETS, key, t);
+    return label(COMPARATOR_PRESETS, key, t);
+  }
+  function readingFieldName(field, t) {
+    if (field === 'outcome') return t('Outcome', '结局');
+    if (field === 'window') return t('Window', '观察窗');
+    return t('Comparison', '比较');
+  }
+
   const STEPS = [
+    ['question', 'Question', '研究问题'],
     ['source', 'Source', '数据源'],
     ['cohort', 'Cohort', '队列'],
     ['design', 'Design', '研究设计'],
@@ -85,6 +176,11 @@
     const t = ctx.t, ex = ctx.ex, design = ctx.design;
     const scan = ex.scan || {};
     const bits = [];
+    /* The question leads the recap because it is the thing every later choice
+       is meant to serve; a recap that opened with the folder name was a recap
+       of the plumbing. Trimmed, because the recap is one line. */
+    const q = String(ex.question || '').trim();
+    if (q) bits.push(q.length > 48 ? q.slice(0, 47) + '…' : q);
     if (scan.ok) bits.push(`${ctx.esc(scan.db || 'local')} · ${ctx.fmtInt(scan.tables, 'n/a')} ${t('tables', '表')}`);
     const cohortRow = ctx.cohortPresets.find(c => c[0] === ex.cohort);
     if (cohortRow) bits.push(t(cohortRow[1], cohortRow[2]));
@@ -97,6 +193,52 @@
   }
 
   /* ---- per-step bodies ---- */
+  /* Split out of bodyQuestion so it can be re-rendered ALONE while the reader
+     types. Re-rendering the whole thread on each keystroke would replace the
+     textarea being typed into and drop the caret; showing the reading only
+     after they leave the step would mean it is applied without ever being
+     seen, which is the thing this display exists to prevent. */
+  function readingHtml(ctx) {
+    const t = ctx.t;
+    const q = String(ctx.ex.question || '').trim();
+    if (!q) return '';
+    const read = readQuestion(q);
+    if (!read.matched.length) {
+      return `
+        <div class="gdx-reading empty">
+          <div class="gdx-readhead">${t('Nothing I can read off directly', '这句话我没能直接读出设置')}</div>
+          <div class="gdx-hint">${t('No endpoint or time window I recognise appears in that sentence. That is fine — it is kept with the study, and you pick those on the Design step.', '这句话里没有我认得的结局或观察窗。没关系 —— 它会跟着这项研究一起存下来，结局和观察窗你在“研究设计”那一步选。')}</div>
+        </div>`;
+    }
+    /* Each row names the literal words it matched. That is the whole argument
+       for doing this with rules rather than a model: a wrong reading is visible
+       here, before it becomes a pre-filled endpoint three steps later that
+       nobody looks at again. */
+    const rows = read.matched.map(m => `
+      <div class="gdx-readrow">
+        <span class="gdx-readterm">${ctx.esc(m.term)}</span>
+        <span class="gdx-readarrow">${ctx.icon('arrow', 11)}</span>
+        <span class="gdx-readfield">${readingFieldName(m.field, t)}</span>
+        <strong>${ctx.esc(readingLabel(m.field, m.key, t))}</strong>
+      </div>`).join('');
+    return `
+      <div class="gdx-reading">
+        <div class="gdx-readhead">${t('What I take from that', '我从这句话读到')}</div>
+        ${rows}
+        <div class="gdx-hint">${t('These become the defaults on the Design step. Change any of them there — nothing is fixed by this.', '这些会作为“研究设计”步骤的默认值。你在那一步随时可以改，这里不会定死任何东西。')}</div>
+      </div>`;
+  }
+
+  function bodyQuestion(ctx) {
+    const t = ctx.t, ex = ctx.ex;
+    return `
+      <div class="gdx-body">
+        <div class="gdx-steplead">${t('What are you trying to find out? Plain words are fine — this is the sentence the whole study is built to answer.', '你想弄清楚什么？用大白话就行 —— 整项研究就是为了回答这一句。')}</div>
+        <textarea class="gdx-question" data-gx-question rows="3"
+          placeholder="${ctx.attr(t('e.g. In sepsis patients, does early vasopressor use affect 28-day mortality?', '例如：脓毒症患者早期使用血管活性药，会不会影响 28 天死亡？'))}">${ctx.esc(String(ex.question || ''))}</textarea>
+        <div data-gx-reading>${readingHtml(ctx)}</div>
+      </div>`;
+  }
   function bodySource(ctx) {
     const t = ctx.t, ex = ctx.ex;
     const scan = ex.scan || {};
@@ -230,6 +372,7 @@
       <div class="gdx-body">
         <div class="gdx-steplead">${t('Here is the study I will prepare. Edit any step above, then run the local extraction.', '这是我将要准备的研究。可点上方任意步骤修改，然后运行本地抽取。')}</div>
         <div class="gdx-summary">
+          ${row(t('Question', '研究问题'), String(ex.question || '').trim())}
           ${row(t('Source', '数据源'), scan.ok ? `${scan.db || 'local'} · ${scan.source || ''}` : '')}
           ${row(t('Cohort', '队列'), cohortRow ? t(cohortRow[1], cohortRow[2]) : ex.cohort)}
           ${row(t('Outcome', '结局'), outcome)}
@@ -245,6 +388,7 @@
 
   function bodyFor(ctx, step) {
     switch (step) {
+      case 'question': return bodyQuestion(ctx);
       case 'source': return bodySource(ctx);
       case 'cohort': return bodyCohort(ctx);
       case 'design': return bodyDesign(ctx);
@@ -275,13 +419,27 @@
     const isModuleExport = ex.scan && ex.scan.source === 'module';
     const sourceBlocked = step === 'source' && !ctx.ready && !isModuleExport;
     const nextId = STEP_ORDER[idx + 1];
-    const nextLabel = nextId === 'review' ? t('Review & run', '确认并运行') : t('Continue', '继续');
+    /* The question step never blocks. Someone who clicked "I know my question"
+       and then cannot phrase it has hit the same wall in a new place, so an
+       empty sentence still continues — but the button says so, which makes
+       skipping a choice the reader made rather than the path of least
+       resistance. */
+    const questionEmpty = step === 'question' && !String(ex.question || '').trim();
+    const nextLabel = questionEmpty
+      ? t('Skip for now', '先跳过')
+      : nextId === 'review' ? t('Review & run', '确认并运行') : t('Continue', '继续');
+    /* No classic escape hatch on the first step: the whole point of asking for
+       the sentence is not to open with a settings screen. It returns from the
+       source step onward, where advanced settings are a real alternative. */
+    const classicBtn = step === 'question'
+      ? ''
+      : `<button type="button" class="btn" data-open="extraction">${t('Advanced classic settings', '打开高级经典设置')}</button>`;
     return `<div class="gdx-actions">
       ${back}
       ${isModuleExport && step === 'source'
         ? `<button type="button" class="btn primary" data-gx-use-export>${ctx.icon('check', 13)} ${t('Register this export', '注册这个导出')}</button>`
         : `<button type="button" class="btn primary" data-gx-step-next ${sourceBlocked ? 'disabled' : ''}>${nextLabel} ${ctx.icon('chevron', 13)}</button>`}
-      <button type="button" class="btn" data-open="extraction">${t('Advanced classic settings', '打开高级经典设置')}</button>
+      ${classicBtn}
     </div>
     ${sourceBlocked ? `<div class="gdx-hint">${t('Paste a local ICU folder and analyze it to continue.', '粘贴本机 ICU 文件夹并识别目录后继续。')}</div>` : ''}`;
   }
@@ -336,6 +494,8 @@
 
   window.EU_GUIDED_EXTRACT = {
     render,
+    readQuestion,
+    readingHtml,
     STEP_ORDER,
     OUTCOME_PRESETS,
     WINDOW_PRESETS,
