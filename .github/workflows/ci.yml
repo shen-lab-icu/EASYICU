@@ -5,6 +5,32 @@ on:
   pull_request:
 
 jobs:
+  portability:
+    name: portability (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14, windows-latest]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install EasyICU and portability test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,webapp]"
+
+      - name: Run conversion and extraction portability regressions
+        run: |
+          pytest -q tests/test_arrow_converter.py tests/test_converter_optimizations.py tests/test_data_converter_hirid.py tests/test_derived_concept_callbacks.py tests/test_concept_outcome_fail_closed.py tests/test_extract_chunk_cap.py tests/test_extract_module_grouping.py
+          pytest -q tests/test_cross_layer_safety_regressions.py -k "p0_2_known_source_end_before_start_is_quarantined or p0_2_corrupt_duration_fails_closed"
+
   test:
     name: tests (py${{ matrix.python-version }})
     runs-on: ubuntu-latest
