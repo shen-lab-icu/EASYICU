@@ -2163,6 +2163,28 @@
 .gdx-field{ display: flex; flex-direction: column; gap: 6px; }
 .gdx-hint{ color: var(--ink-4); font-size: 10.75px; line-height: 1.45; }
 
+/* Already-registered source, offered instead of asked for. */
+.gdx-known{
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 11px;
+  border-radius: var(--r-2);
+  background: var(--ok-soft, var(--surface-2));
+  border: 1px solid var(--hair);
+}
+.gdx-known > span{ display: inline-flex; color: var(--ok, #2e7d5b); }
+.gdx-known > div{ min-width: 0; flex: 1; }
+.gdx-known strong{ display: block; font-size: 12.25px; color: var(--ink); }
+.gdx-known small{
+  display: block;
+  font-size: 10.75px;
+  color: var(--ink-4);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ---- question step (the first step) -------------------------------------
    Sized to invite a sentence rather than a search term: the box is the tallest
    control in the whole flow because the step it belongs to is the one the card

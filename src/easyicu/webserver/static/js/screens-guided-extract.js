@@ -242,12 +242,34 @@
   function bodySource(ctx) {
     const t = ctx.t, ex = ctx.ex;
     const scan = ex.scan || {};
+    /* "Every machine is different" is true of the reader's OWN data and false
+       of a source this app downloaded, prepared and registered itself. In demo
+       mode it was shown anyway: the mode chip read 演示数据, the active export
+       sat at a path the app already knew
+       (/Users/haibo/.easyicu/demo_sources/mimic_iv_demo_v2_2/export), and the
+       step still asked the reader to go find it. Offer what is already there;
+       keep the manual field for everything else. */
+    const known = ctx.activeSource && ctx.activeSource.path ? ctx.activeSource : null;
+    const knownIsCurrent = known && String(ex.path || '').trim() === String(known.path).trim();
     const sourceMeta = scan.ok
       ? `${ctx.esc(scan.db || 'Unknown')} · ${ctx.esc(scan.source || 'source')} · ${ctx.fmtInt(scan.tables, 'n/a')} ${t('tables', '表')} · ${ctx.fmtInt(scan.modules, 'n/a')} ${t('modules', '模块')}`
-      : t('No path is prefilled because every machine is different. Paste or choose a local ICU folder, then analyze it.', '不会预填路径，因为每台电脑都不同。请粘贴或选择本机 ICU 文件夹，然后识别目录。');
+      : known
+        ? t('A prepared export is already registered. Use it, or point me at another folder.', '已经有一份准备好的导出。可以直接用它，也可以另外指定文件夹。')
+        : t('No path is prefilled because every machine is different. Paste or choose a local ICU folder, then analyze it.', '不会预填路径，因为每台电脑都不同。请粘贴或选择本机 ICU 文件夹，然后识别目录。');
+    const knownRow = (known && !knownIsCurrent) ? `
+      <div class="gdx-known">
+        <span>${ctx.icon('check', 12)}</span>
+        <div>
+          <strong>${ctx.esc(known.label || known.database || t('Registered export', '已注册的导出'))}</strong>
+          <small>${ctx.esc(ctx.compactPath(known.path))}</small>
+        </div>
+        <button type="button" class="btn sm primary" data-gx-usesource
+          >${t('Use this one', '就用这个')}</button>
+      </div>` : '';
     return `
       <div class="gdx-body">
         <div class="gdx-steplead">${t('Where is your ICU data? I scan it locally first — nothing is uploaded.', '你的 ICU 数据在哪里？我会先在本地识别目录，不会上传任何数据。')}</div>
+        ${knownRow}
         <div class="gdx-source ${ctx.ready ? '' : 'blocked'}">
           <span>${ctx.icon(ctx.ready ? 'check' : 'shield', 12)}</span>
           <div><strong>${t('Local source', '本地数据源')}</strong><small>${sourceMeta}</small></div>
@@ -446,14 +468,25 @@
 
   function renderDone(ctx) {
     const t = ctx.t, ex = ctx.ex, r = ex.result || {};
+    const scan = ex.scan || {};
+    /* Two different endings share this panel: a run that extracted rows, and
+       registering an export that already existed. Rows-written and
+       files-written describe the first and are meaningless for the second, so
+       the registered case reports what IS true about the folder — the tables
+       and modules the scan actually found — instead of run statistics nobody
+       produced. */
+    const stats = ex.registered
+      ? `<span>${t('Tables', '表')}</span><strong>${ctx.fmtInt(scan.tables, 'n/a')}</strong>
+         <span>${t('Modules', '模块')}</span><strong>${ctx.fmtInt(scan.modules, 'n/a')}</strong>`
+      : `<span>${t('Rows', '行数')}</span><strong>${ctx.fmtInt(r.total_rows, 'n/a')}</strong>
+         <span>${t('Files', '文件')}</span><strong>${ctx.fmtInt(r.files_written || r.files, 'n/a')}</strong>`;
     return `
       <div class="gdx-body">
         <div class="gdx-status ok"><span>${ctx.icon('check', 12)}</span><div><strong>${ctx.esc(ctx.statusText)}</strong>${ex.jobId ? `<small>job ${ctx.esc(ex.jobId)}</small>` : ''}</div></div>
         <div class="gdx-result">
-          <span>${t('Output folder', '输出文件夹')}</span>
+          <span>${ex.registered ? t('Export folder', '导出文件夹') : t('Output folder', '输出文件夹')}</span>
           <code>${ctx.esc(ctx.compactPath(r.out_dir || r.path || ''))}</code>
-          <span>${t('Rows', '行数')}</span><strong>${ctx.fmtInt(r.total_rows, 'n/a')}</strong>
-          <span>${t('Files', '文件')}</span><strong>${ctx.fmtInt(r.files_written || r.files, 'n/a')}</strong>
+          ${stats}
         </div>
       </div>
       <div class="gdx-actions">

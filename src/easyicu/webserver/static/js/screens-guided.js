@@ -317,7 +317,13 @@
     if (live && live.cohort) return live.cohort;
     return (workspaceSnapshot && workspaceSnapshot.cohort) || {};
   }
+  /* null/undefined mean "not known", and must not be reported as a number.
+     Number(null) is 0, so this returned "0" for an absent value: registering an
+     existing export sets total_rows:null and the card announced 「行数 0」 for a
+     140-stay, 151,373-row demo export. A count nobody measured is not zero.
+     (screens-viz.js's fmtInt already guards this way.) */
   function fmtInt(v, fallback) {
+    if (v == null || v === '') return fallback || 'n/a';
     const n = Number(v);
     return Number.isFinite(n) ? n.toLocaleString() : (fallback || 'n/a');
   }
@@ -1500,6 +1506,9 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       cohortPresets: GUIDED_COHORT_PRESETS,
       modules: GUIDED_EXTRACT_MODULES,
       coreModules: GUIDED_CORE_MODULES,
+      // What is already registered, so the source step can offer it instead of
+      // asking the reader to find a folder this app installed itself.
+      activeSource: activeExportSource(),
       progressPct,
     };
   }
@@ -1599,7 +1608,18 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
   function registerGuidedModuleExport() {
     if (!guidedExtract || !guidedExtract.path || !window.EU_API || !window.EU_API.registerWorkspaceSource) return;
     guidedExtract.error = null;
-    window.EU_API.registerWorkspaceSource(guidedExtract.path, { active: true, crossdb: true, label: 'Guided selected export' })
+    /* No label. Registering makes a source ACTIVE; renaming is a separate call
+       (renameWorkspaceSource), and passing a label here silently performs one.
+
+       'Guided selected export' overwrote the official demo's registry label,
+       and official-demo identity is matched on exactly that string
+       (screens-viz-patient-demo-sources.js: `row.label === registryLabel(source)`).
+       So registering the MIMIC-IV demo through this flow un-officialed it:
+       cross-database comparison dropped to 「1 / 2 已就绪」 while both rows still
+       read 已就绪, and the pair could no longer run. Measured — officialPaths()
+       returned the eICU export alone, with the MIMIC path still present in
+       registeredPaths(). */
+    window.EU_API.registerWorkspaceSource(guidedExtract.path, { active: true, crossdb: true })
       .then(() => {
         guidedExtract.result = { out_dir: guidedExtract.path, total_rows: null, files_written: null };
         guidedExtract.registered = true;
@@ -5334,6 +5354,17 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           guidedDesign.comparator = gxComparator.dataset.gxComparator || 'none';
           renderThread();
           scheduleGuidedSlotSave('set_study_comparator');
+          return;
+        }
+        if (e.target.closest('[data-gx-usesource]') && guidedExtract) {
+          const known = activeExportSource();
+          if (known && known.path) {
+            guidedExtract.path = known.path;
+            guidedExtract.scan = null;
+            guidedExtract.scanError = null;
+            guidedExtract.error = null;
+            scanGuidedExtractionPath();
+          }
           return;
         }
         if (e.target.closest('[data-gx-analyze]')) {
