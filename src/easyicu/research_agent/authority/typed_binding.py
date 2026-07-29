@@ -1212,9 +1212,7 @@ def _validated_primary_cohort_execution_receipt(
             and resolved_column.strip()
             and ":" not in resolved_column
         ):
-            raise ValueError(
-                "host cohort execution receipt resolved_column is invalid"
-            )
+            raise ValueError("host cohort execution receipt resolved_column is invalid")
         if row.get("step_order") != index:
             raise ValueError("host cohort execution receipt step order is invalid")
         if before != excluded + remaining:
@@ -1260,8 +1258,25 @@ def _write_resolved_inputs_manifest(
             raise ValueError(
                 "planner_declared_inputs must contain only non-empty strings"
             )
+        # A name repeated in this list is not ambiguous, so refusing it buys
+        # nothing and costs the run.  Both copies index the same entry of
+        # ``bindings`` / ``contracts`` and resolve to the same column, and both
+        # readers below (``declared_typed_inputs`` and ``authorized_raw_inputs``)
+        # are sets, so a repeat already collapses before anything compares it.
+        #
+        # The host manufactures the repeat itself.  ``close_measurement_
+        # companion_inputs`` appends registered ``_measured``/``_n`` companions
+        # to a step's public inputs; a later replan rewrites that step's inputs,
+        # keeps the appended tail verbatim and re-declares one of the same names
+        # in its own body.  A real run died exactly there -- ``lact_n`` absent in
+        # revision 1, appended by the closure in revision 2, declared a second
+        # time by revision 3 -- and the refusal killed the run mid-plan.
+        #
+        # Deduplicating here also makes the uniqueness precondition that
+        # ``typed_input_receipt`` re-checks on the written manifest true by
+        # construction rather than by hope; that reader stays as it is.
         if item in seen_declared_inputs:
-            raise ValueError("planner_declared_inputs must not contain duplicates")
+            continue
         seen_declared_inputs.add(item)
         declared_inputs.append(item)
     declared_typed_inputs = {
