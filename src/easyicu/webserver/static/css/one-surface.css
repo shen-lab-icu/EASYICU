@@ -233,8 +233,25 @@ body:has(.gd-shell) #cpFab { display: none; }
   flex: none;
 }
 
-.one-panelbar .t { font: 600 14px/20px inherit; color: var(--o-ink); }
 .one-panelbar .sp { flex: 1; }
+
+/* Two tabs: the study workspace, and whatever is borrowing the column. */
+.one-tab {
+  border: 0;
+  background: none;
+  border-radius: var(--o-r);
+  padding: 5px 10px;
+  font: 500 13px/18px inherit;
+  color: var(--o-ink-2);
+  cursor: pointer;
+  max-width: 46%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.one-tab:hover { background: var(--o-muted); color: var(--o-ink); }
+.one-tab.on { background: var(--o-muted-2); color: var(--o-ink); font-weight: 600; }
 
 .one-iconbtn {
   border: 0;
