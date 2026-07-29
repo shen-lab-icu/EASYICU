@@ -1364,7 +1364,18 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     if (!guidedDesign) resetGuidedDesignState();
   }
   function resetGuidedDesignState() {
-    guidedDesign = { outcome: '', outcomeCustom: '', window: 'whole_stay', comparator: 'none', comparatorCustom: '', collected: false };
+    /* `collected` = these fields hold real values (however they got there).
+       `reviewed`  = the reader actually walked the Design step and left it.
+       They are separate because a value derived from the question and shown
+       back on the question step is a real value, but it is NOT the reader
+       confirming a configuration — and `reviewed` is what feeds the study
+       record's guided_configuration_collected confirmation. */
+    guidedDesign = { outcome: '', outcomeCustom: '', window: 'whole_stay', comparator: 'none', comparatorCustom: '', collected: false, reviewed: false };
+  }
+  /* The study question in the reader's OWN words, if they gave one. Distinct
+     from the objective sentence the agent card synthesises when they did not. */
+  function guidedStatedQuestion() {
+    return String((guidedExtract && guidedExtract.question) || '').trim();
   }
   function guidedDesignOutcome() {
     return window.EU_GUIDED_EXTRACT ? window.EU_GUIDED_EXTRACT.resolveOutcome(guidedDesign, t) : '';
@@ -1382,6 +1393,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     const comparator = guidedDesignComparator();
     const windowLabel = window.EU_GUIDED_EXTRACT ? window.EU_GUIDED_EXTRACT.windowLabel(guidedDesign, t) : '';
     guidedDesign.collected = !!(outcome || comparator);
+    guidedDesign.reviewed = true;  // they were on the Design step and left it
     // studyParams is the shared study frame the rail + agent default read.
     if (outcome) studyParams.outcome = outcome;
     if (comparator && guidedDesign.comparator !== 'none') studyParams.exposure = comparator;
@@ -1440,6 +1452,13 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     if (read.outcome && !guidedDesign.outcome) guidedDesign.outcome = read.outcome;
     if (read.window && guidedDesign.window === 'whole_stay') guidedDesign.window = read.window;
     if (read.comparator && guidedDesign.comparator === 'none') guidedDesign.comparator = read.comparator;
+    /* Setting the fields is not the same as publishing them. Without this the
+       values sat in guidedDesign while every downstream reader saw blanks:
+       measured, a question that resolved 院内死亡 + 前 48 小时 reached the
+       shared study record as outcome:"" — the window came through and the
+       outcome did not, because the snapshot gates on `collected` and only the
+       Design step used to set it. */
+    guidedDesign.collected = !!(guidedDesignOutcome() || guidedDesignComparator());
     // The rail's Question row finally holds a question rather than a settings echo.
     setVal({ question: q });
     studyParams.question = q;
@@ -1891,7 +1910,13 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     const outcome = collected ? guidedDesignOutcome() : '';
     const comparator = collected ? guidedDesignComparator() : '';
     let question;
-    if (outcome) {
+    /* If they stated the question in their own words, that IS the objective.
+       Synthesising "Evaluate {outcome} in the active ICU cohort" over the top
+       of it replaces what they said with a restatement of one field of it. */
+    const stated = guidedStatedQuestion();
+    if (stated) {
+      question = stated;
+    } else if (outcome) {
       question = (comparator && guidedDesign.comparator !== 'none')
         ? `Evaluate ${outcome} in the active ICU cohort, comparing ${comparator}.`
         : `Evaluate ${outcome} in the active ICU cohort.`;
@@ -1980,7 +2005,16 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     const src = activeExportSource() || {};
     const windowLabel = window.EU_GUIDED_EXTRACT ? window.EU_GUIDED_EXTRACT.windowLabel(guidedDesign, t) : '';
     return {
-      question: (guidedAgent && guidedAgent.question) || (branch && BRANCH[branch] ? (frameFor(branch) || BRANCH[branch].chip) : ''),
+      /* The reader's own sentence wins. This used to read only the agent
+         card's box, which is SEEDED with a synthesised English objective —
+         so a study whose stated question was 「脓毒症患者前 48 小时乳酸能不
+         能预测院内死亡」 reached every downstream module as "Evaluate the
+         active ICU cohort with an evidence-bound local preflight." The
+         synthesised sentence is a good fallback for when nothing was stated;
+         it is not a substitute for something that was. */
+      question: guidedStatedQuestion()
+        || (guidedAgent && guidedAgent.question)
+        || (branch && BRANCH[branch] ? (frameFor(branch) || BRANCH[branch].chip) : ''),
       source: {
         path: (guidedExtract && guidedExtract.result && (guidedExtract.result.out_dir || guidedExtract.result.path)) || src.path || '',
         label: src.label || src.database || (dataMode === 'demo' ? 'Demo data' : 'Local EasyICU export'),
@@ -1989,12 +2023,17 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       cohort_preset: (guidedExtract && guidedExtract.cohort) || 'adult_first',
       max_patients: guidedExtract && guidedExtract.maxPatients,
       modules: guidedExtract && Array.isArray(guidedExtract.modules) ? guidedExtract.modules.slice() : [],
-      outcome: guidedDesign && guidedDesign.collected ? guidedDesignOutcome() : '',
+      /* A value that is set is a value, whichever step set it — the window
+         already published this way, which is why the window arrived and the
+         outcome beside it did not. `configured` is the honest separate claim:
+         it means the reader walked the Design step, not that a keyword
+         derived something and showed it to them. */
+      outcome: guidedDesignOutcome(),
       window_preset: (guidedDesign && guidedDesign.window) || 'whole_stay',
       window_label: windowLabel,
-      comparator: guidedDesign && guidedDesign.collected && guidedDesign.comparator !== 'none' ? guidedDesignComparator() : '',
+      comparator: guidedDesign && guidedDesign.comparator !== 'none' ? guidedDesignComparator() : '',
       export_format: (guidedExtract && guidedExtract.format) || '',
-      configured: !!(guidedDesign && guidedDesign.collected),
+      configured: !!(guidedDesign && guidedDesign.reviewed),
     };
     },
   };
@@ -2076,6 +2115,20 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     renderThread();
     const runState = guidedAgent;
     const capturedQuestion = runState.question || 'Evaluate the active ICU cohort with an evidence-bound local preflight.';
+    /* KNOWN, NOT FIXED HERE. The backend builds its run directory as
+       <projects>/<study_id>/<run_id> and resolves study_id as
+       `(study_context or {}).get("id") or body.get("study_id")` — the context
+       id always wins when one is sent, which is always. So the conversation
+       lives in `guided-<name>/` and its run artifacts land in a sibling
+       `study-<uuid>/`, against the line this flow shows the reader
+       (「对话和过程都放里面」). Measured: the promised folder held only
+       guided_copilot_session.json + guided_draft.json while four runs sat
+       elsewhere.
+
+       Sending a better study_id from here cannot fix it — verified, the value
+       arrives and is discarded. Which id names the folder is shared backend
+       semantics with a second caller (Agent Projects) and test coverage, so it
+       is a boundary decision, not a frontend patch. */
     const studyId = slugifyDraftFolder(capturedQuestion.slice(0, 80)) || 'guided-agent-preflight';
     let runToken = guidedRunChannel.start({
       surface: 'guided-agent-card',
@@ -3842,6 +3895,13 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       console.warn('[EasyICU] Guided idea artifact restore failed:', err);
     });
   }
+  /* The project folder this conversation is actually bound to, or ''. */
+  function guidedBoundProjectDir() {
+    const session = guidedCopilot && guidedCopilot.session;
+    if (session && session.project_dir && session.memory_scope === 'project_folder') return session.project_dir;
+    if (selectedGuidedDraft && selectedGuidedDraft.project_dir) return selectedGuidedDraft.project_dir;
+    return '';
+  }
   function hasGuidedProjectMemory() {
     const session = guidedCopilot && guidedCopilot.session;
     if (session && session.project_dir && session.memory_scope === 'project_folder') return true;
@@ -4205,6 +4265,15 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       return;
     }
     if (goal === 'run_agent') {
+      /* The sentence is the run objective. Threading it only into extraction
+         left the same hole one card over: measured, typing a question and
+         picking 我想把分析跑出来 sent the agent
+         "Evaluate the active ICU cohort with an evidence-bound local
+         preflight." — a placeholder — while the reader's actual question sat
+         unused two messages up. Recorded as the study question so every
+         downstream reader, including guidedStatedQuestion(), sees it. */
+      if (seed && !guidedExtract) resetGuidedExtractionState();
+      if (seed) { guidedExtract.question = seed; commitGuidedQuestion(); }
       startGuidedAgentFlow(echo);
       return;
     }
@@ -4667,10 +4736,21 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     // sensibly on disk; fall back to a neutral title when no goal is pending yet.
     const pend = pendingGuidedGoal;
     const meta = pend ? guidedGoalMeta(pend.goal) : null;
-    const seed = meta
+    /* Name the folder after the RESEARCH when the reader has stated it.
+       Every folder used to be named after the button that created it, so the
+       rail listed several studies about unrelated questions all called
+       「准备/抽取数据」 — measured, two in a row, distinguishable only by
+       timestamp. The front-door sentence is already captured at this point
+       (guidedFrontdoorSeedText survives the folder detour); the goal label
+       stays as the fallback for a reader who picked a card without typing. */
+    const stated = String(guidedFrontdoorSeedText || '').trim();
+    const goalLabel = meta
       ? t(meta.label_en || 'New study', meta.label_zh || meta.label_en || 'New study')
       : t('My first study', '我的第一个研究');
-    createLocalGuidedDraft(seed, slugifyDraftFolder(seed), '~/easyicu/projects', { continueGoal: !!pend, quiet: true });
+    // A title is read; a folder name is typed and tab-completed. Different lengths.
+    const title = stated ? (stated.length > 60 ? stated.slice(0, 60) + '…' : stated) : goalLabel;
+    const slug = slugifyDraftFolder(stated ? stated.slice(0, 40) : goalLabel);
+    createLocalGuidedDraft(title, slug, '~/easyicu/projects', { continueGoal: !!pend, quiet: true });
   }
   function openGuidedRunReview(row, label) {
     if (!row || !row.project_dir || !window.EU_API || !window.EU_API.loadAgentRunReview) {
