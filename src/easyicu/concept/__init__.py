@@ -1496,6 +1496,15 @@ class ConceptResolver:
                                 [id_col],
                                 _time_col_out,
                             )
+                            # The all-covered fast path returns this frame
+                            # directly, bypassing the regular R-format merger
+                            # that normally canonicalises the time-column name.
+                            # Streamed derived vitals therefore need the
+                            # producer to publish the canonical key here.
+                            batch_df = batch_df.rename(
+                                columns={_time_col_out: "charttime"}
+                            )
+                            _time_col_out = "charttime"
 
                         covered_names = set()
                         for concept_name in batch_itemids:
@@ -5559,39 +5568,45 @@ class ConceptResolver:
                 raise ValueError(
                     "AUMC time alignment requires an admission identifier"
                 )
-            try:
-                admission_times = getattr(self, "_aumc_admissions_cache", None)
-                if (
-                    admission_times is None
-                    or primary_id not in admission_times.columns
-                    or "admittedat" not in admission_times.columns
-                ):
-                    admissions = data_source.load_table(
-                        "admissions",
-                        columns=[primary_id, "admittedat"],
-                        verbose=False,
+            if "admittedat" in data.columns:
+                # Admission/outcome concepts are loaded from the admissions
+                # table itself.  Re-merging the same column would create
+                # admittedat_x/admittedat_y and leave no canonical origin.
+                frame = data.copy()
+            else:
+                try:
+                    admission_times = getattr(self, "_aumc_admissions_cache", None)
+                    if (
+                        admission_times is None
+                        or primary_id not in admission_times.columns
+                        or "admittedat" not in admission_times.columns
+                    ):
+                        admissions = data_source.load_table(
+                            "admissions",
+                            columns=[primary_id, "admittedat"],
+                            verbose=False,
+                        )
+                        admission_times = (
+                            admissions.data
+                            if hasattr(admissions, "data")
+                            else admissions
+                        )
+                        admission_times = (
+                            admission_times[[primary_id, "admittedat"]]
+                            .drop_duplicates(subset=[primary_id], keep="last")
+                            .copy()
+                        )
+                        self._aumc_admissions_cache = admission_times
+                    frame = data.merge(
+                        admission_times,
+                        on=primary_id,
+                        how="left",
+                        validate="many_to_one",
                     )
-                    admission_times = (
-                        admissions.data
-                        if hasattr(admissions, "data")
-                        else admissions
-                    )
-                    admission_times = (
-                        admission_times[[primary_id, "admittedat"]]
-                        .drop_duplicates(subset=[primary_id], keep="last")
-                        .copy()
-                    )
-                    self._aumc_admissions_cache = admission_times
-                frame = data.merge(
-                    admission_times,
-                    on=primary_id,
-                    how="left",
-                    validate="many_to_one",
-                )
-            except Exception as exc:
-                raise ValueError(
-                    "AUMC time alignment requires admissions.admittedat"
-                ) from exc
+                except Exception as exc:
+                    raise ValueError(
+                        "AUMC time alignment requires admissions.admittedat"
+                    ) from exc
 
             admittedat = pd.to_numeric(frame["admittedat"], errors="coerce")
             if admittedat.notna().sum() == 0:

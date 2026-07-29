@@ -88,6 +88,36 @@ def test_aumc_later_admissions_use_icu_relative_hours():
     assert "admittedat" not in out.columns
 
 
+def test_aumc_admission_table_time_does_not_merge_its_origin_twice():
+    """Stay-level AUMC concepts already carry admittedat in their frame."""
+
+    resolver = ConceptResolver.__new__(ConceptResolver)
+    source = SimpleNamespace(
+        config=SimpleNamespace(name="aumc"),
+        load_table=lambda *_args, **_kwargs: pytest.fail(
+            "an admissions frame must not reload and duplicate admittedat"
+        ),
+    )
+    frame = pd.DataFrame(
+        {
+            "admissionid": [2],
+            "admittedat": [300.0],
+            "dischargedat": [540.0],
+            "los_icu": [4.0],
+        }
+    )
+
+    out = resolver._align_time_to_admission(
+        frame,
+        source,
+        ["admissionid"],
+        "dischargedat",
+    )
+
+    assert out["dischargedat"].tolist() == [4.0]
+    assert "admittedat" not in out.columns
+
+
 def test_sic_interval_duration_seconds_are_declared_as_hours():
     """SIC data_range durations must not expand seconds as hours."""
 
