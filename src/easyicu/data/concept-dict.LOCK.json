@@ -1,9 +1,9 @@
 {
   "finalized": true,
-  "finalized_note": "定稿 2026-07-17 — dictionary frozen for the full-6-database extraction full6_20260717. No dictionary edits after this without a new lock + re-extraction.",
-  "locked_for_extraction_run": "full6_20260717",
-  "concept_dict_sha256": "b930e4384a07df16bc642a1e7df48d9fb5248c6bdac27f60fd78882ce612df54",
-  "sofa2_dict_sha256": "65075a691ef103112d9df0df452601299c37603c1c075742fe211bb75d2f92cc",
+  "finalized_note": "定稿 2026-07-30 — full6_final_20260730 六库原生 v2 导出合同；升压药持续时间统一为非负 hours。后续字典修改必须建立新 lock 并重新发布受影响模块。",
+  "locked_for_extraction_run": "full6_final_20260730",
+  "concept_dict_sha256": "bd44778fa82b00c3cdd0fbe17e8e9f03dd8d951302d600f1e4794ba210344eaa",
+  "sofa2_dict_sha256": "ab39bdcf03ad481dd65bbd5f6e63bdc71612a2267539aa76cc9fb415e19a0fca",
   "total_concepts": 251,
   "own_concepts_not_in_ricu": 130,
   "new_this_round": [
@@ -14,7 +14,7 @@
   "extraction_contract": {
     "output_layout": "one wide parquet per module ({db}/{module}.parquet): id + time + one column per concept — NOT per-concept files. Matches the web export path (webserver/dataio.py).",
     "load_call": "load_concepts(module_concepts, merge=True) once per module inside keep_cache; do NOT hand-write a per-concept merge (time-column mismatch -> Cartesian blow-up -> OOM).",
-    "batching": "one-shot per module for all databases; only eICU (~200k) may split, capped at MAX_EXTRACT_CHUNKS=3. No manual batch_size tuning.",
+    "batching": "adaptive and result-invariant: one-shot when memory permits; eICU uses three large batches on servers and smaller portable batches; every database falls back to 10,000-stay batches below 12 GB available memory. Explicit batch_size remains authoritative.",
     "spill": "DuckDB temp + batch spill default to <output_dir>/.easyicu_spill (the output drive), not system /tmp."
   },
   "merge_oom_safety": {
@@ -40,6 +40,6 @@
     "recall_sweep": "43 fixes (near-broken SIC mean_airway_pres/calcium_iv/bicarbonate/nitroglycerin; AUMC packed_rbc/ft4/retic; class-vs-molecule enoxaparin/milrinone/warfarin; eICU wrong-table nicardipine/diltiazem/pantoprazole)",
     "cross_db_distribution_scan": "235 concepts scanned; all our-own >=3x outliers resolved or explained (ferritin/myoglobin = true assay-selection difference, ng/mL==ug/L identity)",
     "vent_mode": "new harmonised mode concepts (MIMIC-IV/III/AUMC/HiRID); driving_pres_controlled = mode-conditioned driving pressure",
-    "final_data_distribution_check": "PENDING — to be run on the completed full6_20260717 wide extraction (cross-db consistency + completeness report)."
+    "final_data_distribution_check": "PASSED — full6_final_20260730 contains 6 databases x 19 modules, 114/114 valid Parquet footers and exact cross-database module schemas; distribution review has four non-high-severity source/definition follow-up signals."
   }
 }
