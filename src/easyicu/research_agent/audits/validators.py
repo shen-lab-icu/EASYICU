@@ -5123,15 +5123,23 @@ class PrimaryModelContractValidator:
             issues.append(
                 {
                     "issue": "missing_term_level_coefficient_table",
+                    # Named from what ``_coefficient_rows`` actually accepts.
+                    # It used to say ``estimate_or_odds_ratio``, which is a
+                    # description of the value and not a column this reader
+                    # takes: a table written to that spelling was skipped, and
+                    # the step was told again that its table was missing. A
+                    # fail-closed message whose only implied fix does not
+                    # satisfy the check is a trap, and the repair loop reading
+                    # it has no other source of truth.
                     "required_columns": [
                         "model_id",
                         "term",
                         "term_role",
                         "source_variable",
-                        "estimate_or_odds_ratio",
                         "ci_low",
                         "ci_high",
                     ],
+                    "required_effect_column_one_of": ["estimate", "odds_ratio", "or"],
                 }
             )
         else:

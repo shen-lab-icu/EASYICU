@@ -87,6 +87,8 @@ def _run(tmp_path, frame=None, **overrides):
         "covariates": _COVARIATES,
         "estimator_kind": "logistic",
         "analysis_set": "source_aware",
+        "analysis_role": "primary",
+        "method_family": "binary_logistic_regression",
     }
     payload.update(overrides)
     previous = os.environ.get("STEP_OUT_DIR")

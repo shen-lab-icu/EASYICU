@@ -30,6 +30,26 @@ EstimatorKind = Literal["logistic", "linear", "cox", "glm_poisson"]
 
 
 @dataclass(frozen=True)
+class EstimatorTerm:
+    """One fitted coefficient, reported on the same scale as the result.
+
+    ``term`` is the design-matrix column; ``source_variable`` is the cohort
+    column it came from, which differs for a treatment-coded contrast
+    (``sex=Male`` came from ``sex``).  A reader of a coefficient table needs the
+    second to check the adjustment set against the plan, and only the fit knows
+    the mapping -- reconstructing it from the column name downstream would be a
+    parse of a convention this module owns.
+    """
+
+    term: str
+    source_variable: str
+    estimate: Optional[float]
+    ci_low: Optional[float]
+    ci_high: Optional[float]
+    se: Optional[float]
+
+
+@dataclass(frozen=True)
 class EstimatorResult:
     point_estimate: Optional[float]
     ci_low: Optional[float]
@@ -38,6 +58,15 @@ class EstimatorResult:
     n: int
     converged: bool
     notes: str = ""
+    #: Every fitted coefficient, intercept included, in design order.
+    #:
+    #: The host's primary-model contract requires a term-level coefficient
+    #: table, and this fit is the only place that has one.  Leaving each caller
+    #: to obtain it meant either a second fit -- two estimates that can disagree
+    #: for no scientific reason -- or no table at all, which is what the
+    #: adjusted-association owner shipped: a step that computed the study's
+    #: primary estimate correctly and was then failed for not showing its terms.
+    terms: Tuple["EstimatorTerm", ...] = ()
 
 
 class _UncodeableDesign(Exception):
@@ -120,6 +149,60 @@ def _encode_categorical_predictors(
         if x_df[column].tolist()
     )
     return frame, note, encoded
+
+
+def _fitted_terms(
+    result: Any,
+    *,
+    design_columns: Sequence[str],
+    encoded_map: Dict[str, List[str]],
+    exponentiate: bool,
+) -> Tuple[EstimatorTerm, ...]:
+    """Read every coefficient off the fit that produced the point estimate.
+
+    ``exponentiate`` follows the reported point estimate: a logistic fit reports
+    odds ratios, so its terms do too.  ``se`` stays on the fitted (log) scale,
+    which is the same convention ``EstimatorResult.se`` already uses -- a
+    standard error is not a ratio and exponentiating it would produce a number
+    with no interpretation.
+    """
+
+    import numpy as np  # type: ignore
+
+    source_of: Dict[str, str] = {}
+    for original, names in encoded_map.items():
+        for name in names:
+            source_of[name] = original
+
+    def _scaled(value: Optional[float]) -> Optional[float]:
+        if value is None or not exponentiate:
+            return value
+        scaled = float(np.exp(value))
+        return scaled if math.isfinite(scaled) else None
+
+    terms: List[EstimatorTerm] = []
+    for column in design_columns:
+        name = str(column)
+        try:
+            raw = _float_or_none(result.params[name])
+        except Exception:
+            continue
+        low, high = _conf_interval_for(result, name)
+        try:
+            se = _float_or_none(result.bse[name])
+        except Exception:
+            se = None
+        terms.append(
+            EstimatorTerm(
+                term=name,
+                source_variable=source_of.get(name, name),
+                estimate=_scaled(raw),
+                ci_low=_scaled(low),
+                ci_high=_scaled(high),
+                se=se,
+            )
+        )
+    return tuple(terms)
 
 
 def _robust_design(x_const: Any, *, keep: Sequence[str]) -> Tuple[Any, List[str]]:
@@ -355,7 +438,21 @@ def fit_estimator(
             ci_low, ci_high = _conf_interval_for(result, coefficient_name)
             se = _float_or_none(result.bse[coefficient_name])
             converged = bool(math.isfinite(coef))
-            return EstimatorResult(coef, ci_low, ci_high, se, n, converged, fit_note)
+            return EstimatorResult(
+                coef,
+                ci_low,
+                ci_high,
+                se,
+                n,
+                converged,
+                fit_note,
+                _fitted_terms(
+                    result,
+                    design_columns=list(x_const.columns),
+                    encoded_map=encoded_map,
+                    exponentiate=False,
+                ),
+            )
 
         if len(set(y_series.astype(int).tolist())) < 2:
             return EstimatorResult(
@@ -387,7 +484,21 @@ def fit_estimator(
                 False,
                 _join_notes("logistic fit did not converge", fit_note),
             )
-        return EstimatorResult(point, low, high, se, n, True, fit_note)
+        return EstimatorResult(
+            point,
+            low,
+            high,
+            se,
+            n,
+            True,
+            fit_note,
+            _fitted_terms(
+                result,
+                design_columns=list(x_const.columns),
+                encoded_map=encoded_map,
+                exponentiate=True,
+            ),
+        )
     except Exception as exc:
         return EstimatorResult(
             None,
