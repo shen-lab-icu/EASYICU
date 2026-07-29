@@ -1,48 +1,45 @@
 /* one-surface.css — owner: the single-surface additions.
  *
  * The conversation already owns the three columns. This file styles only what
- * gets mounted into its existing slots: the panel host inside .gd-aside, and
- * the source chip and panel openers inside .gd-top. It deliberately does NOT
- * define a layout of its own — a second grid around a screen that already has
- * one is what made the first attempt look doubled.
+ * gets mounted into its existing slots — the destination nav in .gd-rail, the
+ * source chip in .gd-top, the panel host in .gd-aside — and the one layout rule
+ * that swaps two columns. It defines no shell of its own: a second grid around
+ * a screen that already has one is what made the first attempt look doubled.
  *
- * Tokens measured from the running Codex cloud app:
- *   surface #FFFFFF · muted #F3F3F3 · ink #0D0D0D · ink-2 #8F8F8F
- *   labels 14px/500 lh20 · pill radius 999 · card radius 16
- *   separation is background contrast, not borders
+ * CONTINUITY. The middle column and the panel used to read as two unrelated
+ * apps parked side by side. The rules below are the answer, and every one of
+ * them is about removing a seam rather than adding decoration:
+ *   · one background across conversation and panel, no divider between them
+ *   · the panel bar is the ONLY title; the embedded page's own hero is hidden,
+ *     because a screen rendered as a panel was announcing itself twice, in two
+ *     type scales, six pixels apart
+ *   · the screen's lead paragraph survives as a caption under that bar — it
+ *     often carries real counts, so hiding the hero must not eat it
+ *   · the conversation shows what is open, above its composer, so the two
+ *     columns are one story instead of two windows
+ *
+ * Shape is Codex's (quiet, round, separated by background contrast rather than
+ * rules). Colour is EasyICU's own token set, deliberately: mounting foreign
+ * greys next to the app's warm surfaces is itself a seam.
  *
  * Scope rule: panel *content* stays under each screen's own owner CSS. Do not
  * add route-specific rules here.
  */
 
 :root {
-  --o-muted: #F3F3F3;
-  --o-muted-2: #EBEBEB;
-  --o-ink: #0D0D0D;
-  --o-ink-2: #8F8F8F;
-  --o-panel-w: 460px;
-  --o-panel-w-wide: 46vw;
+  --o-muted: var(--surface-2);
+  --o-muted-2: var(--surface-3);
+  --o-ink: var(--ink);
+  --o-ink-2: var(--ink-4);
+  --o-rail-w: 232px;
+  --o-panel-w: 460px;   /* panel in the right column */
+  --o-chat-w: 408px;    /* conversation, when the panel takes the middle */
+  --o-r: 8px;
 }
 
 /* ---- mounted into .gd-top ------------------------------------------- */
 
 .one-topmount { display: flex; align-items: center; gap: 10px; margin-left: auto; }
-
-.one-quick { display: flex; align-items: center; gap: 4px; flex-wrap: nowrap; }
-
-.one-chip {
-  border: 0;
-  background: var(--o-muted);
-  border-radius: 999px;
-  padding: 5px 11px;
-  font: 500 12.5px/17px inherit;
-  color: var(--o-ink);
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.one-chip:hover { background: var(--o-muted-2); }
-.one-chip[aria-pressed="true"] { background: var(--o-ink); color: #fff; }
 
 /* The source chip is the only thing on screen that states demo vs real.
    It is styled to read as a status, not as a quiet preference toggle. */
@@ -72,8 +69,101 @@
   white-space: nowrap;
 }
 
-.one-source button.on { background: #fff; color: var(--o-ink); }
+.one-source button.on { background: var(--surface); color: var(--o-ink); }
 .one-source.demo-active button.on { background: #FAEEDA; color: #854F0B; }
+
+/* ---- destination nav, mounted into .gd-rail ------------------------- */
+
+.one-railnav { display: flex; flex-direction: column; gap: 1px; padding: 2px 8px 4px; }
+
+.one-navitem {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 6px 9px;
+  border: 0;
+  border-radius: var(--o-r);
+  background: none;
+  font: inherit;
+  font-size: 12.75px;
+  color: var(--o-ink);
+  text-align: left;
+  cursor: pointer;
+}
+
+.one-navitem .ico { flex: none; display: inline-flex; color: var(--o-ink-2); }
+.one-navitem .lb { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.one-navitem:hover { background: var(--o-muted); }
+.one-navitem.on { background: var(--o-muted-2); font-weight: 600; }
+.one-navitem.on .ico { color: var(--accent-ink, var(--o-ink)); }
+.one-navitem.chat { font-weight: 600; }
+
+.one-navsec { padding: 12px 9px 4px; font-size: 11px; color: var(--o-ink-2); }
+
+.one-starthint { margin: 10px 9px 2px; font-size: 11px; line-height: 1.6; color: var(--o-ink-2); }
+
+.one-inline {
+  border: 0;
+  background: none;
+  padding: 0 1px;
+  font: inherit;
+  font-size: 11px;
+  color: var(--accent-ink, var(--o-ink));
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.one-footmount { margin-bottom: 6px; }
+
+.one-ghost {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 9px;
+  border: 0;
+  border-radius: var(--o-r);
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  color: var(--o-ink-2);
+  cursor: pointer;
+}
+
+.one-ghost:hover { background: var(--o-muted); color: var(--o-ink); }
+
+/* ---- what is open, shown inside the conversation -------------------- */
+
+.one-viewing {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 26px 8px;
+  padding: 6px 10px;
+  border-radius: var(--o-r);
+  background: var(--o-muted);
+  font-size: 11.5px;
+  color: var(--o-ink-2);
+}
+
+.one-viewing .nm { color: var(--o-ink); font-weight: 600; }
+.one-viewing .sp { flex: 1; }
+
+.one-viewing button {
+  border: 0;
+  background: none;
+  padding: 0 2px;
+  font: inherit;
+  font-size: 11.5px;
+  color: var(--o-ink-2);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+}
+
+.one-viewing button:hover { color: var(--o-ink); }
 
 /* ---- panel host inside .gd-aside ------------------------------------ */
 
@@ -87,19 +177,30 @@
 /* Size the grid TRACK, not the item — .gd-main is a grid and an item given a
    width just overflows its own column. */
 .gd-main.threecol.has-panel {
-  grid-template-columns: var(--o-rail-w, 232px) minmax(0, 1fr) var(--o-panel-w);
+  grid-template-columns: var(--o-rail-w) minmax(0, 1fr) var(--o-panel-w);
 }
 
-.gd-main.threecol.has-panel.panel-wide {
-  grid-template-columns: var(--o-rail-w, 232px) minmax(0, 1fr) var(--o-panel-w-wide);
+/* `center`: the panel takes the wide middle track and the conversation moves
+   beside it. Column assignment only — no node moves, so the thread keeps its
+   scroll position and the composer keeps its draft. */
+.gd-main.threecol.has-panel.panel-center {
+  grid-template-columns: var(--o-rail-w) minmax(0, 1fr) var(--o-chat-w);
 }
+.gd-main.threecol.has-panel.panel-center > .gd-rail { grid-column: 1; grid-row: 1; }
+.gd-main.threecol.has-panel.panel-center > .gd-aside { grid-column: 2; grid-row: 1; }
+.gd-main.threecol.has-panel.panel-center > .gd-conv { grid-column: 3; grid-row: 1; }
+.gd-main.threecol.has-panel.panel-center > .gd-conv .gd-thread { padding: 0 14px; }
+.gd-main.threecol.has-panel.panel-center > .gd-conv .one-viewing { margin: 0 14px 8px; }
 
+/* One surface, so no wall between the columns and no second background. */
 .gd-aside.has-panel {
   display: flex;
   flex-direction: column;
   min-width: 0;
   padding: 0;
   overflow: hidden;
+  border: 0;
+  background: transparent;
 }
 
 .one-panelhost {
@@ -117,11 +218,11 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 12px 14px;
+  padding: 14px 16px 6px;
   flex: none;
 }
 
-.one-panelbar .t { font: 500 14px/20px inherit; color: var(--o-ink); }
+.one-panelbar .t { font: 600 14px/20px inherit; color: var(--o-ink); }
 .one-panelbar .sp { flex: 1; }
 
 .one-iconbtn {
@@ -129,7 +230,7 @@
   background: none;
   width: 28px;
   height: 28px;
-  border-radius: 8px;
+  border-radius: var(--o-r);
   cursor: pointer;
   color: var(--o-ink-2);
   display: inline-flex;
@@ -139,17 +240,56 @@
 
 .one-iconbtn:hover { background: var(--o-muted); color: var(--o-ink); }
 
+/* Where a panel sits is a reading decision, so it is a control, not a fixed
+   property. The default comes from measurement; this overrides it. */
+.one-placebtn {
+  border: 0;
+  background: var(--o-muted);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font: 500 11.5px/1 inherit;
+  color: var(--o-ink-2);
+  cursor: pointer;
+}
+
+.one-placebtn:hover { background: var(--o-muted-2); color: var(--o-ink); }
+
 .one-panelbody {
   flex: 1;
   overflow: auto;
-  padding: 0 14px 24px;
+  padding: 0 16px 24px;
   min-width: 0;
 }
 
 .one-panelbody .content { padding: 0; overflow: visible; }
 
-.one-empty { padding: 20px 14px; font-size: 13px; color: var(--o-ink-2); }
+/* The panel bar already names the screen. Its own hero said the same thing
+   again, larger, six pixels lower — the single loudest reason the two columns
+   read as two apps. The lead survives, demoted to a caption, because it often
+   carries live counts the title does not. */
+.one-panelbody .page-head { margin-bottom: 10px !important; }
+.one-panelbody .page-head > .eyebrow,
+.one-panelbody .page-head h1 { display: none; }
+.one-panelbody .page-head .lead {
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--o-ink-2);
+  margin: 0;
+  max-width: 60ch;
+}
+
+.one-empty { padding: 20px 16px; font-size: 13px; color: var(--o-ink-2); }
 
 @media (max-width: 1180px) {
-  .one-quick { display: none; }
+  :root { --o-rail-w: 0px; }
+}
+
+/* Desktop/laptop is the QA target; below that the panel simply takes over so
+   nothing is silently clipped. */
+@media (max-width: 920px) {
+  .gd-main.threecol.has-panel,
+  .gd-main.threecol.has-panel.panel-center { grid-template-columns: minmax(0, 1fr); }
+  .gd-main.threecol.has-panel > .gd-rail,
+  .gd-main.threecol.has-panel > .gd-conv { display: none; }
+  .gd-main.threecol.has-panel > .gd-aside { grid-column: 1; grid-row: 1; }
 }
