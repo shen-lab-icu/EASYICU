@@ -446,6 +446,10 @@ def test_partitioned_arrow_scan_ignores_invalid_thread_override(
     configured_thread_counts = []
     monkeypatch.setenv("EASYICU_ARROW_THREADS", "not-an-integer")
     monkeypatch.setattr("os.cpu_count", lambda: 16)
+    monkeypatch.setattr(
+        "easyicu.runtime.parallel_config.get_global_config",
+        lambda: SimpleNamespace(max_workers=4),
+    )
     monkeypatch.setattr(pa, "cpu_count", lambda: 384)
     monkeypatch.setattr(
         pa,
@@ -458,7 +462,7 @@ def test_partitioned_arrow_scan_ignores_invalid_thread_override(
         columns=["icustay_id", "itemid", "valuenum"],
     )
 
-    assert configured_thread_counts == [8]
+    assert configured_thread_counts == [4]
     assert frame.to_dict("records") == [
         {"icustay_id": 1, "itemid": 10, "valuenum": 1.0}
     ]
