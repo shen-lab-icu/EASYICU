@@ -1373,6 +1373,63 @@ def _canonicalise_native_export_frame(
     return canonical
 
 
+def _enforce_native_export_concept_bounds(
+    frame,
+    *,
+    requested_concepts: List[str],
+    dictionary,
+) -> Dict[str, Dict[str, object]]:
+    """Null values outside declared target-unit bounds in a canonical frame.
+
+    Native-v2 is the final cross-database contract.  Earlier extraction paths
+    enforce bounds where possible, but derived concepts and some wide-table
+    routes can be created after that guard.  At publication time, keep the row
+    and every other concept intact while replacing only the offending numeric
+    cell with missing.  This deliberately does not use the loader's
+    unit-suspect median escape hatch: a value outside the published target-unit
+    contract must never survive in a sealed portable package.
+
+    Returns one audit record per physical concept so the manifest can report
+    exactly how many values the final contract excluded.
+    """
+    import numpy as np
+
+    audit: Dict[str, Dict[str, object]] = {}
+    for concept in requested_concepts:
+        definition = dictionary.get(concept)
+        minimum = getattr(definition, "minimum", None)
+        maximum = getattr(definition, "maximum", None)
+        bounded = _native_export_storage_kind(concept, dictionary) == "float64" and (
+            minimum is not None or maximum is not None
+        )
+        excluded = 0
+        if bounded:
+            out_of_bounds = frame[concept].notna()
+            if minimum is not None:
+                out_of_bounds &= frame[concept] < float(minimum)
+            else:
+                out_of_bounds &= False
+            if maximum is not None:
+                above_maximum = frame[concept].notna() & (
+                    frame[concept] > float(maximum)
+                )
+                out_of_bounds |= above_maximum
+            excluded = int(out_of_bounds.sum())
+            if excluded:
+                frame.loc[out_of_bounds, concept] = np.nan
+
+        record: Dict[str, object] = {
+            "excluded_out_of_bounds": excluded,
+        }
+        if bounded:
+            record["declared_bounds"] = {
+                "minimum": (None if minimum is None else float(minimum)),
+                "maximum": (None if maximum is None else float(maximum)),
+            }
+        audit[concept] = record
+    return audit
+
+
 def _native_export_runtime_provenance() -> Dict[str, object]:
     """Capture enough runtime identity to reproduce or diagnose an export."""
     import hashlib
@@ -1621,6 +1678,11 @@ def _publish_native_export_v2(
                 requested_concepts=requested_concept_plan[module],
                 dictionary=dictionary,
             )
+            bounds_audit = _enforce_native_export_concept_bounds(
+                frame,
+                requested_concepts=requested_concept_plan[module],
+                dictionary=dictionary,
+            )
             temporary_parquet = output_root / f".{module}.native-v2.tmp.parquet"
             if temporary_parquet.exists() or temporary_parquet.is_symlink():
                 raise ValueError(
@@ -1669,10 +1731,16 @@ def _publish_native_export_v2(
                 availability = "produced_all_null"
             else:
                 availability = "available"
-            concept_status[concept] = {
+            status = {
                 "availability": availability,
                 "non_null": non_null,
+                "excluded_out_of_bounds": bounds_audit[concept][
+                    "excluded_out_of_bounds"
+                ],
             }
+            if "declared_bounds" in bounds_audit[concept]:
+                status["declared_bounds"] = bounds_audit[concept]["declared_bounds"]
+            concept_status[concept] = status
         import pyarrow.parquet as _pq
 
         physical_schema = {
@@ -1741,6 +1809,7 @@ def _publish_native_export_v2(
             "time_unit": "h",
             "concept_order": "module_catalog",
             "unavailable_representation": "typed_all_null_placeholder",
+            "declared_bounds_policy": "out_of_range_to_null",
         },
         "module_timings_seconds": module_timings,
         "runtime_provenance": _native_export_runtime_provenance(),

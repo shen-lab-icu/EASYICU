@@ -185,10 +185,15 @@ def test_grouped_export_records_missing_concept_inside_physical_module(
     assert str(exported["mort_28d"].dtype) == "boolean"
     assert exported["vent_free_days_28"].dtype == "float64"
     status = manifest["files"][0]["concept_status"]
-    assert status["mort_28d"] == {"availability": "available", "non_null": 1}
+    assert status["mort_28d"] == {
+        "availability": "available",
+        "non_null": 1,
+        "excluded_out_of_bounds": 0,
+    }
     assert status["vent_free_days_28"] == {
         "availability": "structurally_unavailable_placeholder",
         "non_null": 0,
+        "excluded_out_of_bounds": 0,
     }
     with open_export_package(output) as package:
         assert set(package.concept_index) == {"mort_28d"}
@@ -279,6 +284,56 @@ def test_native_schema_accepts_multi_class_numeric_concept() -> None:
 
     assert canonical["dex"].dtype == "float64"
     assert canonical["dex"].tolist() == [0.7]
+
+
+def test_grouped_export_nulls_declared_bound_violations_and_audits_them(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        api,
+        "EXTRACT_MODULES",
+        {"demographics": ["height", "weight", "bmi"]},
+    )
+    pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3],
+            "height": [0.0, 170.0, 612.6],
+            "weight": [0.0, 75.0, 5864.0],
+            "bmi": [7.0, 26.0, 98.0],
+        }
+    ).to_parquet(tmp_path / "demographics.parquet", index=False)
+
+    api._publish_native_export_v2(
+        database="miiv",
+        data_path="/raw/source-must-not-be-read",
+        output_dir=str(tmp_path),
+        modules=["demographics"],
+        max_patients=None,
+        result=_completed_result(),
+    )
+
+    exported = pd.read_parquet(tmp_path / "demographics.parquet")
+    assert exported.loc[1, ["height", "weight", "bmi"]].tolist() == [
+        170.0,
+        75.0,
+        26.0,
+    ]
+    assert exported.loc[[0, 2], ["height", "weight", "bmi"]].isna().all().all()
+
+    manifest = json.loads((tmp_path / "_manifest.json").read_text())
+    assert (
+        manifest["canonical_physical_schema"]["declared_bounds_policy"]
+        == "out_of_range_to_null"
+    )
+    status = manifest["files"][0]["concept_status"]
+    assert status["height"] == {
+        "availability": "available",
+        "non_null": 1,
+        "excluded_out_of_bounds": 2,
+        "declared_bounds": {"minimum": 10.0, "maximum": 230.0},
+    }
+    assert status["weight"]["excluded_out_of_bounds"] == 2
+    assert status["bmi"]["excluded_out_of_bounds"] == 2
 
 
 def test_grouped_export_reads_special_concept_from_saved_key(
