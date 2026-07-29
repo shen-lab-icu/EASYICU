@@ -3854,7 +3854,15 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     return false;
   }
   function rememberPendingGoal(goal, label) {
-    pendingGuidedGoal = goal ? { goal, label: label || (guidedGoalMeta(goal) && guidedGoalMeta(goal).label_en) || goal } : null;
+    /* The remembered label is echoed back as the reader's OWN message, so it
+       has to be in the reader's language. This fell back to label_en whatever
+       the interface language, which meant clicking 我已经想好要研究什么 put
+       "Prepare Data" in your own speech bubble. */
+    const meta = guidedGoalMeta(goal);
+    const fallback = meta
+      ? (window.EU_LANG === 'zh' ? (meta.label_zh || meta.label_en) : (meta.label_en || meta.label_zh))
+      : '';
+    pendingGuidedGoal = goal ? { goal, label: label || fallback || goal } : null;
   }
   function requireGuidedProjectMemory(goal, label) {
     if (goal === 'review_data' && activeExportSource()) return false;
@@ -3873,15 +3881,11 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       return true;
     }
     thread.push({ bot: true, html: bi(
-      `One quick setup step: this goal saves into a <strong>local study folder</strong> (its own conversation + memory). I can create a starter folder for you in one click, or you can pick a custom path.`,
-      `只差一步快速设置：这个目标会保存到一个<strong>本地研究文件夹</strong>（独立的对话 + 记忆）。我可以一键为你创建入门文件夹，你也可以选择自定义路径。`,
+      `Setting up a folder on this machine to keep this study in — its conversation and what it works out. Nothing leaves your computer, and you can delete it or move it later.`,
+      `我在这台电脑上建个文件夹存这项研究 —— 对话和过程都放里面。数据不出你的电脑，之后想删掉或换地方都行。`,
     ) });
-    chips = [
-      [t('Create a starter folder & continue', '一键创建入门文件夹并继续'), '@folderquick'],
-      [t('Pick a custom folder', '选择自定义文件夹'), '@foldernew'],
-    ];
     renderThread();
-    renderChips();
+    quickCreateGuidedStarterFolder();
     return true;
   }
   function bindGuidedDraftMemory(draft) {
@@ -4083,25 +4087,23 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
   }
   function renderGuidedGoalCards() {
     const cards = [
-      ['idea_mining', 'spark', t('Find a Study Idea', '找研究想法'), t('Paper, PDF, review topic, or hunch → idea ledger.', '文章、PDF、综述主题或想法 → idea ledger。')],
-      ['data_extraction', 'extract', t('Prepare Data', '准备/抽取数据'), t('Choose a local data folder, cohort, modules, and export format.', '选择本地数据文件夹、队列、模块和导出格式。')],
-      ['review_data', 'eye', t('Review Data', '审阅已有数据'), t('Open patient, cohort, or Cross-DB review for an active export.', '打开 active export 的患者、队列或跨库审阅。')],
-      ['run_agent', 'agent', t('Run a Research Project', '运行研究项目'), t('Confirm a plan, then hand it to Agent Projects.', '确认计划后交接到研究项目。')],
+      ['idea_mining', 'spark', t('I have a paper, or a hunch', '我有一篇文章，或一个想法'), t('Bring a paper, a PDF, or just a hunch — we turn it into a question you can actually test.', '拿一篇文章、一个 PDF，或者只是一个念头 —— 我们把它变成一个真能验证的问题。')],
+      ['data_extraction', 'extract', t('I know my question', '我已经想好要研究什么'), t('Say it in plain words. I work out which patients count and pull the variables you need.', '用大白话说出来。我来定哪些患者算数、把要用的变量取出来。')],
+      ['review_data', 'eye', t('I already have data', '我已经有数据了'), t('Look at what you have first — who is in it, what is missing, whether it holds up.', '先看看手上这批数据：都是些什么人、缺了什么、靠不靠得住。')],
+      ['run_agent', 'agent', t('I want the analysis run', '我想把分析跑出来'), t('Confirm the plan, then it runs — every number traceable back to a patient row.', '确认方案就开跑 —— 每个数字都能追回到具体的患者记录。')],
     ];
     return `
       <div class="gd-frontdoor" data-guided-frontdoor>
-        <div class="gdf-memory ${hasGuidedProjectMemory() ? 'ready' : ''}">
-          <span>${icon(hasGuidedProjectMemory() ? 'check' : 'folder', 13)}</span>
-          <div><strong>${hasGuidedProjectMemory() ? t('Project memory bound', '已绑定项目记忆') : t('Pick a goal to start — your local folder is set up for you', '选一个目标就能开始 —— 本地文件夹我来建')}</strong>
-          <small>${hasGuidedProjectMemory()
-            ? esc(compactPath((guidedCopilot.session && guidedCopilot.session.project_dir) || (selectedGuidedDraft && selectedGuidedDraft.project_dir) || ''))
-            : t('Each study saves into its own local folder (conversation + memory). No path setup up front — I create one in one click, or you can choose a custom folder.', '每个研究都保存到独立的本地文件夹（对话 + 记忆）。无需预先设置路径 —— 我可以一键创建，你也可以选择自定义文件夹。')}</small></div>
-          ${hasGuidedProjectMemory() ? '' : `<button class="btn sm" type="button" data-go="@folderquick">${t('Create a starter folder', '创建入门文件夹')}</button>`}
-        </div>
+        ${hasGuidedProjectMemory() ? `
+        <div class="gdf-memory ready">
+          <span>${icon('check', 13)}</span>
+          <div><strong>${t('Saved on this machine', '已存到本机')}</strong>
+          <small>${esc(compactPath((guidedCopilot.session && guidedCopilot.session.project_dir) || (selectedGuidedDraft && selectedGuidedDraft.project_dir) || ''))}</small></div>
+        </div>` : ''}
         <div class="gdf-head">
           <span class="gdf-kicker">${t('Choose a goal', '选择目标')}</span>
-          <strong>${t('What should this local study folder do next?', '这个本地研究文件夹下一步要做什么？')}</strong>
-          <span>${t('Pick a goal. If no folder is bound yet, I set up a starter folder in one click and continue the selected workflow inside this conversation.', '选择目标。如果还没有绑定文件夹，我会一键创建入门文件夹，然后在本对话内继续刚才选择的流程。')}</span>
+          <strong>${t('Where would you like to start?', '你想从哪儿开始？')}</strong>
+          <span>${t('Pick whichever is closest — none of it is locked in, and you can change direction at any point.', '挑一个最接近的就行 —— 都不是定死的，中途随时能改。')}</span>
         </div>
         <div class="gdf-grid">
           ${cards.map(([goal, ico, title, body]) => `
@@ -4674,17 +4676,16 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       step: 'question',
       bot: () => [
         bi(
-          `Hi — I’m the EasyICU <strong>Guided Copilot</strong>. I can help you finish the common workflows here, but first every conversation is scoped to a local study folder.`,
-          `你好，我是 EasyICU <strong>研究引导</strong>。常用流程可以在这里完成，但每条对话都必须先绑定到本地研究文件夹。`,
+          `Hi. Tell me what you want to study — say, “does early vasopressor use change 28-day mortality in sepsis”. Not sure yet is fine; pick whichever starting point below is closest and we will work it out as we talk.`,
+          `你好。告诉我你想研究什么 —— 比如「脓毒症患者早期用血管活性药，会不会影响 28 天死亡」。想不清楚也没关系，下面选一个更接近的起点，我们边聊边定。`,
         ),
         bi(renderGuidedGoalCards(), renderGuidedGoalCards()),
       ],
       chips: () => [
-        [t('New / open study folder', '新建/打开研究文件夹'), '@foldernew'],
-        [t('Find a Study Idea', '找研究想法'), '@guidedGoal:idea_mining'],
-        [t('Prepare Data', '准备/抽取数据'), '@guidedGoal:data_extraction'],
-        [t('Review Data', '审阅已有数据'), '@guidedGoal:review_data'],
-        [t('Run a Research Project', '运行研究项目'), '@guidedGoal:run_agent'],
+        [t('I have a paper, or a hunch', '我有一篇文章，或一个想法'), '@guidedGoal:idea_mining'],
+        [t('I know my question', '我已经想好要研究什么'), '@guidedGoal:data_extraction'],
+        [t('I already have data', '我已经有数据了'), '@guidedGoal:review_data'],
+        [t('I want the analysis run', '我想把分析跑出来'), '@guidedGoal:run_agent'],
       ],
       markStep: 'question',
     },
