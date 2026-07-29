@@ -1065,3 +1065,11 @@
 .ag-src .lk{ display:inline-flex; align-items:center; gap:6px; padding:3px 9px; border:1px solid var(--hair-2); border-radius:var(--r-pill); background:var(--surface-2); cursor:pointer; max-width:380px; overflow:hidden; }
 .ag-src .lk:hover{ border-color:var(--hair-3); }
 .ag-src .mid{ width:3px; height:3px; border-radius:50%; background:var(--hair-3); }
+
+/* This screen can be rendered into the single surface's right column, which is
+   560px rather than a full page. Responds to that column's width, not the
+   window's — the window is still wide. Measured before this: .ag-term-strip
+   held three 40px tracks with 18px of text inside them. */
+@container onepanel (max-width: 640px){
+  .ag-term-strip{ grid-template-columns: minmax(0, 1fr); }
+}

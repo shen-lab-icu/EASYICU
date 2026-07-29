@@ -132,18 +132,32 @@
      that already names itself — inventing "Ideas" next to "Idea Mining" is the
      exact drift "one destination, one name" exists to stop. Order is the
      reading order of a study, not alphabetical. */
+  /* `line` is the main-line/branch split, and it is load-bearing rather than
+     decorative — it decides whether opening a destination writes to the study:
+
+       main   advances the study: produces its question, its data, its analysis.
+              Opening one hands the study over (EU_STUDY_CONTEXT.handoff), so
+              the destination arrives knowing what the conversation collected.
+       review reads what the study already has. Informs the design, never
+              changes it, so it must not write a transition into the record.
+       tool   independent of any study. The dictionary says what `sofa2_resp`
+              means whether or not a study is open.
+
+     A destination that started writing study state would move to `main`; that
+     is the test, not how important the screen feels. Order within a line is
+     the reading order of a study, not alphabetical. */
   const DESTINATIONS = [
-    { id: 'ideas', crumb: 'Idea Mining', ico: 'target' },
-    { id: 'extraction', crumb: 'Data Extraction', ico: 'extract' },
-    { id: 'patient', crumb: 'Patient Review', ico: 'patient' },
-    { id: 'cohort', crumb: 'Cohort Statistics', ico: 'cohort' },
-    { id: 'crossdb', crumb: 'Cross-database comparison', ico: 'benchmark' },
-    { id: 'agent', crumb: 'Agent Projects', ico: 'agent' },
-    { id: 'dictionary', crumb: 'Data Dictionary', ico: 'list' },
-    { id: 'states', crumb: 'Workspace States', ico: 'layers' },
+    { id: 'ideas', crumb: 'Idea Mining', ico: 'target', line: 'main' },
+    { id: 'extraction', crumb: 'Data Extraction', ico: 'extract', line: 'main' },
+    { id: 'agent', crumb: 'Agent Projects', ico: 'agent', line: 'main' },
+    { id: 'patient', crumb: 'Patient Review', ico: 'patient', line: 'review' },
+    { id: 'cohort', crumb: 'Cohort Statistics', ico: 'cohort', line: 'review' },
+    { id: 'crossdb', crumb: 'Cross-database comparison', ico: 'benchmark', line: 'review' },
+    { id: 'dictionary', crumb: 'Data Dictionary', ico: 'list', line: 'tool' },
+    { id: 'states', crumb: 'Workspace States', ico: 'layers', line: 'tool' },
   ];
   window.EU_DESTINATIONS = () => DESTINATIONS.map(
-    (d) => ({ id: d.id, ico: d.ico, label: crumbLabel(d.crumb) }),
+    (d) => ({ id: d.id, ico: d.ico, line: d.line, label: crumbLabel(d.crumb) }),
   );
 
   /* Page guide is shell-global — it explains whichever screen you are looking

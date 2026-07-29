@@ -185,7 +185,7 @@ def test_native_assistant_labels_disambiguate_page_guide_guided_copilot_and_agen
     assert "Open Copilot" not in help_js
 
     assert "css/dock.css?v=20260625-stage99" in index_html
-    assert "js/app.js?v=20260728-one8" in index_html
+    assert "js/app.js?v=20260728-one10" in index_html
     assert "js/copilot-dock.js?v=20260712-ux-fixes" in index_html
     assert "js/screens-extraction.js?v=20260712-ux-fixes" in index_html
     assert "js/screens-agent.js?v=20260712-ux-fixes" in index_html
@@ -328,7 +328,7 @@ def test_native_tutorial_screen_uses_active_language_without_mixed_copy() -> Non
     assert ">No tokens, no setup, no patient data. The demo generates" not in help_js
     assert "How a study moves through EasyICU</h2>" not in help_js
 
-    assert "js/app.js?v=20260728-one8" in index_html
+    assert "js/app.js?v=20260728-one10" in index_html
     assert "js/screens-help.js?v=20260712-ux-fixes" in index_html
 
 
@@ -354,7 +354,7 @@ def test_native_guided_and_page_guide_messages_are_bilingual() -> None:
         "js/screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
         in index_html
     )
-    assert "js/screens-guided.js?v=20260728-one8" in index_html
+    assert "js/screens-guided.js?v=20260728-one10" in index_html
     assert "js/copilot-dock.js?v=20260712-ux-fixes" in index_html
 
 
@@ -545,7 +545,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     guided_plan_css = _static_css("guided-idea-plan.css")
     redesign_css = _static_css("redesign.css")
 
-    assert "css/guided.css?v=20260728-one8" in index_html
+    assert "css/guided.css?v=20260728-one10" in index_html
     assert "css/guided-idea-plan.css?v=20260627-ideas-feasibility-plan" in index_html
     assert "js/api.js?v=20260727-patient-demo2" in index_html
     assert (
@@ -643,7 +643,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert ".gdi-plan-details" in guided_plan_css
     assert ".gdi-feature-row.one" in guided_plan_css
     assert ".gdi-plan-details" not in redesign_css
-    assert "js/screens-guided.js?v=20260728-one8" in index_html
+    assert "js/screens-guided.js?v=20260728-one10" in index_html
 
 
 def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
@@ -659,7 +659,7 @@ def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
     index_html = _static_html("index.html")
 
     assert "js/screens-agent.js?v=20260712-ux-fixes" in index_html
-    assert "css/agent.css?v=20260707-design" in index_html
+    assert "css/agent.css?v=20260728-one10" in index_html
     assert "css/agent-layout.css?v=20260702-agent-focus-layout" in index_html
     assert "css/agent-header.css?v=20260702-agent-compact-header" in index_html
     assert "css/agent-review.css?v=20260702-agent-review-compact" in index_html
@@ -804,7 +804,7 @@ def test_native_agent_research_blocks_are_project_owned() -> None:
     assert ".ag-wf-cell" in agent_css
     assert ".ag-lib-card" in agent_css
     assert ".ag-block-contract" in agent_css
-    assert "css/agent.css?v=20260707-design" in index_html
+    assert "css/agent.css?v=20260728-one10" in index_html
     assert "js/screens-agent.js?v=20260712-ux-fixes" in index_html
 
     assert "ag-block-grid" not in app_js
@@ -1392,7 +1392,12 @@ def test_native_idea_mining_is_first_class_route_and_backend_wired() -> None:
     # protected — Idea Mining is a primary destination in its own right, not a
     # child of the data workspace group, and it carries the same name as its
     # crumb and page title — is asserted against the catalogue that replaced it.
-    assert "{ id: 'ideas', crumb: 'Idea Mining', ico: 'target' }," in app_js
+    # `line` is pinned too: it decides whether opening a destination writes a
+    # transition into the shared study, so a silent reclassification would
+    # change what the study record claims happened.
+    assert (
+        "{ id: 'ideas', crumb: 'Idea Mining', ico: 'target', line: 'main' }," in app_js
+    )
     assert "Idea Mining" in app_js
     assert "Find a Study Idea" not in app_js
     assert "'Idea Mining': ['Idea Mining', '想法挖掘']" in app_js
@@ -1440,7 +1445,7 @@ def test_native_idea_mining_is_first_class_route_and_backend_wired() -> None:
     assert "css/ideas.css?v=20260630-gate-first-ideas" in index_html
     assert "css/shell.css?v=20260626-owner" in index_html
     assert "js/icons.js?v=20260625-stage84" in index_html
-    assert "js/app.js?v=20260728-one8" in index_html
+    assert "js/app.js?v=20260728-one10" in index_html
     assert "css/ideas-review.css?v=20260702-idea-review-handoff" in index_html
     assert "css/ideas-connectors.css?v=20260702-zotero-simple" in index_html
     assert "js/screens-ideas-zotero.js?v=20260702-zotero-origin" in index_html
@@ -2479,8 +2484,9 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     # "Data Extraction" / "Data Workspace").
     assert "${t('Data workspace', '数据工作台')}" not in guided_js
     assert ".gd-data-workspace" not in rail_css
-    assert "{ id: 'extraction', crumb: 'Data Extraction', ico: 'extract' }," in _static_js(
-        "app.js"
+    assert (
+        "{ id: 'extraction', crumb: 'Data Extraction', ico: 'extract', line: 'main' },"
+        in _static_js("app.js")
     )
     assert ".gd-empty-local" in rail_css
     assert ".gd-sessline" in rail_css
@@ -2523,9 +2529,9 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
         "screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
         in index_html
     )
-    assert "screens-guided.js?v=20260728-one8" in index_html
-    assert "guided.css?v=20260728-one8" in index_html
-    assert "guided-rail.css?v=20260728-one8" in index_html
+    assert "screens-guided.js?v=20260728-one10" in index_html
+    assert "guided.css?v=20260728-one10" in index_html
+    assert "guided-rail.css?v=20260728-one10" in index_html
     assert "gd-name\">${t('Guided Copilot', '研究引导')}</span>" in guided_js
     assert "Guided Copilot · local first · nothing leaves your machine" in guided_js
     assert "[t('Review Data', '审阅已有数据'), '@guidedGoal:review_data']" in guided_js
@@ -3383,7 +3389,19 @@ def test_review_breadcrumb_parent_matches_sidebar_group() -> None:
     # name — resolved from its crumb key, never spelled again by the panel.
     one_js = _static_js("screens-one.js")
     assert "'Patient Review': ['Patient Review', '患者审阅']" in app_js
-    assert "{ id: 'patient', crumb: 'Patient Review', ico: 'patient' }," in app_js
+    # Review reads the study and must not write to it.
+    assert (
+        "{ id: 'patient', crumb: 'Patient Review', ico: 'patient', line: 'review' },"
+        in app_js
+    )
+    # Through guided's adapter, not the store: the adapter carries
+    # continueExisting and the Cross-DB reframe guard.
+    assert "hit.line === 'main' && guided && guided.handoff" in one_js
+    assert "window.EU_GUIDED_STUDY_CONTEXT" in one_js
+    assert "const guided = window.EU_GUIDED_STUDY_CONTEXT;" in one_js
+    # Anchored on the call form, not the name: the name also appears in the
+    # comment explaining why the store is NOT called directly.
+    assert "sc.handoff(" not in one_js
     assert "const hit = destinations().find((d) => d.id === id);" in one_js
     assert "患者审阅" not in one_js
 

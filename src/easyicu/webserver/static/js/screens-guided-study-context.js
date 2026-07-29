@@ -75,10 +75,20 @@
         persisted: Promise.reject(new Error('Reframe the Cross-DB plan as a single-export question before continuing to Agent Projects.')),
       };
     }
+    /* Only an actual handoff to Agent Projects is an agent handoff. This used
+       to stamp 'agent_handoff' whatever the target, so opening Data Extraction
+       wrote a study record claiming the study had been handed to the agent —
+       measured: stage went study_setup -> agent_handoff on a #extraction open.
+       There is no 'extraction' stage in the vocabulary (study_setup,
+       data_prepared, agent_handoff, crossdb_plan_only), and inventing one here
+       would be worse than leaving the stage alone: target_route already records
+       where the study went. Omitting currentStage leaves prepare()'s nextStage
+       empty, which keeps the existing stage. */
+    const target = targetRoute || 'agent';
     return store.handoff({
       sourceRoute: 'guided',
-      targetRoute: targetRoute || 'agent',
-      currentStage: 'agent_handoff',
+      targetRoute: target,
+      currentStage: target === 'agent' ? 'agent_handoff' : undefined,
       continueExisting: true,
     });
   }
