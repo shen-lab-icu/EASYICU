@@ -16,6 +16,7 @@ import pandas as pd
 import pytest
 
 from easyicu.concept import (
+    ConceptResolver,
     _drop_negative_source_end_durations,
     _source_duration_is_end,
 )
@@ -47,6 +48,71 @@ def _win_frame(dur_values, *, index=(0.0,)) -> pd.DataFrame:
             "norepi_rate": [0.1] * len(dur_values),
         }
     )
+
+
+def test_aumc_later_admissions_use_icu_relative_hours():
+    """AUMC's database-wide clock must not leak into native charttime."""
+
+    resolver = ConceptResolver.__new__(ConceptResolver)
+    resolver._aumc_admissions_cache = None
+    source = SimpleNamespace(
+        config=SimpleNamespace(name="aumc"),
+        load_table=lambda *_args, **_kwargs: pd.DataFrame(
+            {
+                "admissionid": [1, 2],
+                # ICUDataSource exposes AUMC's database-wide clock in minutes.
+                "admittedat": [0, 300],
+            }
+        ),
+    )
+    frame = pd.DataFrame(
+        {
+            "admissionid": [1, 2],
+            # bucketed sources reach the resolver as absolute minutes
+            "measuredat_minutes": [120.0, 540.0],
+            "stop": [180.0, 600.0],
+            "value": [1.0, 2.0],
+        }
+    )
+
+    out = resolver._align_time_to_admission(
+        frame,
+        source,
+        ["admissionid"],
+        "measuredat_minutes",
+        time_columns=["stop"],
+    )
+
+    assert out["measuredat_minutes"].tolist() == pytest.approx([2.0, 4.0])
+    assert out["stop"].tolist() == pytest.approx([3.0, 5.0])
+    assert "admittedat" not in out.columns
+
+
+def test_sic_interval_duration_seconds_are_declared_as_hours():
+    """SIC data_range durations must not expand seconds as hours."""
+
+    resolver = ConceptResolver.__new__(ConceptResolver)
+    source = SimpleNamespace(config=SimpleNamespace(name="sic"))
+    frame = pd.DataFrame(
+        {
+            "CaseID": [1],
+            # The bucketed SIC loader already emitted an hour index.
+            "charttime": [2.0],
+            # data_range OffsetEnd - Offset is still seconds here.
+            "dur_var": [7200.0],
+        }
+    )
+
+    out = resolver._align_time_to_admission(
+        frame,
+        source,
+        ["CaseID"],
+        "charttime",
+    )
+
+    assert out["charttime"].tolist() == [2.0]
+    assert out["dur_var"].tolist() == [2.0]
+    assert get_dur_var_unit(out) == UNIT_HOURS
 
 
 # --------------------------------------------------------------------------
