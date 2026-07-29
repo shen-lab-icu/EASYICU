@@ -847,6 +847,49 @@ class PlannerArticleContractError(ValueError):
     """The parsed Planner response omits a required article-level role."""
 
 
+def describe_article_contract_family_switch(*, shown: Any, judged: Any) -> str:
+    """Say that the declared family replaced the published contract, and publish it.
+
+    The article contract shown to the Planner is compiled from the family the
+    host *inferred* from the research context. The contract that judges the
+    plan is recompiled from the family the plan *declared*. When those differ,
+    every required role is decided by a document the Planner never saw.
+
+    Measured on 2026-07-29: E1's context infers ``survival``
+    (``diagnostics``/``survival_effect``/``temporal_absolute_risk``), and the
+    Planner declared ``association_study`` -- the right label for a binary
+    in-hospital-mortality outcome, and what the previously accepted plan
+    declared. It was then judged on ``primary_estimand`` and ``robustness``,
+    which had never been published to it, and one attempt was told to produce
+    ``table:survival_curve`` for a binary outcome. Five attempts, five distinct
+    violations, nothing executed.
+
+    Which side is right is genuinely open -- the inference read a time-to-event
+    *sensitivity* as the whole design, and the Planner was arguably closer --
+    so this does not pick a winner. It removes the part that is indefensible
+    either way: discovering a contract one missing role per paid attempt. The
+    judging family's whole required set is stated here so a single retry can
+    satisfy it, or reconsider the declaration knowing what it costs.
+
+    Returns ``""`` when the families agree, so the ordinary rejection is not
+    padded with a switch that did not happen.
+    """
+
+    shown_family = str(getattr(shown, "source_analysis_type", "") or "")
+    judged_family = str(getattr(judged, "source_analysis_type", "") or "")
+    if not shown_family or not judged_family or shown_family == judged_family:
+        return ""
+    required = ", ".join(str(role) for role in judged.required_roles)
+    return (
+        f" NOTE: the article contract you were shown was compiled for "
+        f"analysis_type={shown_family}; your plan declares "
+        f"analysis_type={judged_family}, which REPLACED it. The full required "
+        f"role set for {judged_family} is: {required}. Either cover all of "
+        f"them, or declare analysis_type={shown_family} and cover the contract "
+        "you were shown -- do not alternate between the two."
+    )
+
+
 def _planner_retry_response_projection(raw: str) -> str:
     """Keep prior Planner structure without replaying its long prose."""
 
@@ -1173,6 +1216,15 @@ class PlannerAgent:
                 article_contract_context or context,
                 analysis_type=plan.analysis_type,
             )
+            # The contract the Planner was *shown* is compiled without an
+            # analysis_type, so it describes the family the host inferred. The
+            # one above is compiled with the family the plan declared. When
+            # those differ, the plan is being judged by a contract nobody
+            # published, and the rejection below would otherwise reveal it one
+            # missing role per paid attempt.
+            shown_contract = build_article_analysis_contract(
+                article_contract_context or context
+            )
             contract_findings = validate_plan_against_article_contract(
                 plan=plan,
                 contract=contract,
@@ -1215,6 +1267,10 @@ class PlannerAgent:
                     + ", ".join(missing_roles)
                     + "."
                     + hint_text
+                    + describe_article_contract_family_switch(
+                        shown=shown_contract,
+                        judged=contract,
+                    )
                     + " Add explicit typed analysis steps and, when robustness "
                     "is required, at least one task-supported robustness spec plus "
                     "a method='robustness_sensitivity' step producing "

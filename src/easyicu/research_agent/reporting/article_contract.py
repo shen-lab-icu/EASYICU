@@ -309,6 +309,23 @@ def render_article_analysis_contract_for_prompt(
         "put its typed_example (or an equally explicit typed product using an "
         "acceptable term) in expected_outputs. Intent-only prose does not count."
     )
+    # This contract was compiled for source_analysis_type, which the host
+    # inferred from the research context. A plan that declares a different
+    # analysis_type is judged against *that* family's contract, whose required
+    # roles are not listed above. Measured on 2026-07-29: a Planner shown the
+    # survival contract declared association_study -- the better label for a
+    # binary in-hospital-mortality outcome -- and was then judged on
+    # primary_estimand and robustness, which it had never seen, while the
+    # survival roles it had been shown stopped applying. Five attempts produced
+    # five different violations and nothing executed. Re-declaring may well be
+    # right; doing it unknowingly is what costs the run.
+    lines.append(
+        f"- rule: this contract is compiled for analysis_type="
+        f"{contract.source_analysis_type}. Declaring a different analysis_type "
+        "REPLACES it with that family's contract, whose required roles are not "
+        "listed here. Either keep this analysis_type, or declare the family you "
+        "intend and cover its roles -- do not re-declare casually."
+    )
     return "\n".join(lines)
 
 

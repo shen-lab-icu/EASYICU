@@ -146,6 +146,9 @@ _REGISTRY: Dict[str, AnalysisTypeSpec] = {
             "kaplan-meier",
             "hazard",
             "competing risk",
+            # Exact-token matching, so the singular never matched the ordinary
+            # plural spelling ("a competing risks analysis").
+            "competing risks",
             "竞争风险",
             "censoring",
             "删失",
@@ -815,6 +818,59 @@ def strong_trajectory_clustering_framing(text: str) -> bool:
     return bool(english_discovery or chinese_discovery)
 
 
+_SURVIVAL_ELIGIBILITY_PATTERNS = (
+    # "the landmark row must require survival to 24 hours": the word names who
+    # is *in the cohort*, not what is estimated. Landmark / immortal-time
+    # guards are ordinary study setup and are written most often in questions
+    # whose endpoint is a fixed binary outcome -- which is exactly when routing
+    # to the survival family imposes an unsatisfiable contract.
+    #
+    # An eligibility marker is required in the same clause. A bare "survival to
+    # 28 days" is a legitimate estimand and must keep its vote.
+    re.compile(
+        r"\b(?:requires?|required|requiring|restricts?|restricted|limits?|"
+        r"limited|includes?|included|excludes?|excluded|eligibl\w*|"
+        r"eligibility|must|only|landmark|conditional\s+on)\b"
+        r"[^.;]{0,48}?\bsurviv(?:al|e|es|ed|ing)\b\s*"
+        r"(?:to|until|through|beyond|past|at)\b",
+        flags=re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bsurviv(?:al|e|es|ed|ing)\b\s*(?:to|until|through|beyond|past|at)\b"
+        r"[^.;]{0,48}?\b(?:required|requirement|landmark|"
+        r"for\s+(?:inclusion|eligibility)|to\s+be\s+(?:included|eligible))\b",
+        flags=re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:要求|限制|仅|只|纳入|排除|需)[^，。；;]{0,12}"
+        r"(?:存活|生存)\s*(?:至|到|满|超过)",
+        flags=re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:存活|生存)\s*(?:至|到|满)[^，。；;]{0,12}"
+        r"(?:者|的?患者|方可|才|纳入|入组)",
+        flags=re.IGNORECASE,
+    ),
+)
+
+
+def mask_survival_eligibility_phrases(text: str) -> str:
+    """Blank spans where survival vocabulary names cohort membership.
+
+    Returns ``text`` with each eligibility span replaced by spaces of equal
+    length, so offsets are preserved and a *separate* survival term elsewhere
+    in the same sentence still matches. This is deliberately a mask rather than
+    a veto: a question that both restricts to 24-hour survivors *and* asks for
+    a hazard ratio is still a survival question, and only the restriction
+    clause loses its vote.
+    """
+
+    masked = str(text or "")
+    for pattern in _SURVIVAL_ELIGIBILITY_PATTERNS:
+        masked = pattern.sub(lambda match: " " * len(match.group(0)), masked)
+    return masked
+
+
 def _preferred_family_key(context: ResearchContext) -> Optional[str]:
     prefs = context.user_preferences
     if prefs is None:
@@ -830,6 +886,18 @@ def _preferred_family_key(context: ResearchContext) -> Optional[str]:
         if key and key in _REGISTRY:
             return key
     return None
+
+
+_DEFINITION_CUE = (
+    r"(?:cohort\s+definitions?|eligibility\s+criteri(?:a|on)|case\s+definitions?|"
+    r"phenotype\s+definitions?|icd\s+definitions?|inclusion\s+criteri(?:a|on)|"
+    r"exclusion\s+criteri(?:a|on)|eligibility\s+windows?|definitions?)"
+)
+
+_VARIATION_CUE = (
+    r"(?:alternatives?|compare[sd]?|comparisons?|vary|varying|variants?|"
+    r"different|sensitivity|robustness|across)"
+)
 
 
 def _cohort_definition_sensitivity_framing(text: str) -> bool:
@@ -851,36 +919,29 @@ def _cohort_definition_sensitivity_framing(text: str) -> bool:
         )
     ):
         return True
-    has_definition = any(
-        _keyword_present(text, phrase)
-        for phrase in (
-            "cohort definition",
-            "eligibility criteria",
-            "case definition",
-            "phenotype definition",
-            "icd definition",
-            "inclusion criteria",
-            "exclusion criteria",
-            "eligibility window",
+    # The two cues must be *bound to each other*, not merely both present. As
+    # two independent membership tests this fired on almost every task: every
+    # analysis plan in this system is required to carry a robustness/sensitivity
+    # step, so the variation half was effectively always true, and any question
+    # that describes its own cohort supplies the definition half. A real run
+    # routed "estimate prevalence and its association with mortality, with a
+    # transparent, reproducible cohort definition" to this family because the
+    # word "definition" came from the question and the word "sensitivity" came
+    # from an unrelated line of the required-outputs list.
+    #
+    # Varying the cohort definition is the object of study only when the text
+    # says so in one breath; otherwise it is a robustness component of some
+    # other estimand.
+    bound_variation = (
+        re.search(
+            rf"\b{_VARIATION_CUE}\b[^.;\n]{{0,48}}?\b{_DEFINITION_CUE}\b"
+            rf"|\b{_DEFINITION_CUE}\b[^.;\n]{{0,48}}?\b{_VARIATION_CUE}\b",
+            text,
+            flags=re.IGNORECASE,
         )
+        is not None
     )
-    has_variation = any(
-        _keyword_present(text, phrase)
-        for phrase in (
-            "alternative",
-            "alternatives",
-            "compare",
-            "comparison",
-            "vary",
-            "variant",
-            "variants",
-            "different",
-            "sensitivity",
-            "robustness",
-            "across definitions",
-        )
-    )
-    return has_definition and has_variation
+    return bound_variation
 
 
 def _treatment_response_framing(text: str) -> bool:
@@ -993,8 +1054,17 @@ def infer_analysis_type(
         text,
         flags=re.IGNORECASE,
     ) is not None
+    # Survival vocabulary spent on cohort eligibility does not get a vote. A
+    # real run routed a prevalence-and-association question to the survival
+    # family on a single occurrence of the word, inside the clause "the
+    # landmark row must require survival to 24 hours" -- a required-outputs
+    # guardrail describing who is in a cohort variant. The research question
+    # itself never mentioned survival, the target outcome was a binary death
+    # flag, and the Planner was then required to produce a survival curve for
+    # it; five attempts failed in five different ways and nothing executed.
+    survival_estimand_text = mask_survival_eligibility_phrases(text)
     strong_survival_framing = (not survival_disclaimer) and any(
-        _keyword_present(text, term)
+        _keyword_present(survival_estimand_text, term)
         for term in (
             "survival",
             "生存",
@@ -1006,6 +1076,9 @@ def infer_analysis_type(
             "kaplan-meier",
             "hazard",
             "competing risk",
+            # Exact-token matching, so the singular never matched the ordinary
+            # plural spelling ("a competing risks analysis").
+            "competing risks",
             "竞争风险",
             "censoring",
             "删失",
