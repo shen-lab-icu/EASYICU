@@ -912,15 +912,24 @@ def resolved_raw_input_contracts(
     rediscover a range policy or closed domain by scanning the broader
     ResearchContext.  Typed ``kind:name`` products remain under the manifest's
     existing ``inputs`` authority and are intentionally excluded here.
+
+    A repeated name is normalized away rather than rejected.  Every contract
+    here is a pure function of the name -- both branches below resolve it from
+    ``name`` alone and store it in a name-keyed dict -- so a second occurrence
+    produces a byte-identical entry and cannot make the manifest ambiguous.
+    ``raw_contract_inputs_for_step`` already applies exactly this rule to the
+    cohort predicate columns it appends (``if resolved_column not in names``),
+    so rejecting the Planner's own repeat made one call chain treat the same
+    fact as harmless in one line and fatal four lines later.
     """
 
-    raw_names = [
-        str(value).strip()
-        for value in planner_declared_inputs
-        if isinstance(value, str) and str(value).strip() and ":" not in str(value)
-    ]
-    if len(raw_names) != len(set(raw_names)):
-        raise ValueError("Planner-declared raw inputs must be unique")
+    raw_names = list(
+        dict.fromkeys(
+            str(value).strip()
+            for value in planner_declared_inputs
+            if isinstance(value, str) and str(value).strip() and ":" not in str(value)
+        )
+    )
     variables = {variable.name: variable for variable in context.variables}
     contracts: Dict[str, Any] = {}
     if not isinstance(context, ResearchContextV2):
