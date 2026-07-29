@@ -981,6 +981,27 @@ def _stream_special_extraction_batches(
         writers[concept].write_table(table)
         rows[concept] += len(frame)
 
+    def _suspicion_timeline(susp, score, time_col: str):
+        """Return suspected-infection flags on the score time axis.
+
+        Some databases expose ``susp_inf`` as a timed event, while eICU's
+        public ``sepsis_shared`` module is deliberately stay-level.  The
+        ordinary (non-streamed) multi-concept merge broadcasts that stay-level
+        flag onto the SOFA time grid.  Recreate the same representation here
+        so streamed and one-shot exports remain result-invariant.
+        """
+        if time_col in susp.columns:
+            return susp[[id_col, time_col, "susp_inf"]]
+        stay_flags = susp[[id_col, "susp_inf"]].drop_duplicates(
+            subset=[id_col], keep="last"
+        )
+        return score[[id_col, time_col]].merge(
+            stay_flags,
+            on=id_col,
+            how="left",
+            validate="many_to_one",
+        )
+
     try:
         for start in range(0, len(all_ids), safe_batch_size):
             ids = all_ids[start : start + safe_batch_size]
@@ -999,23 +1020,23 @@ def _stream_special_extraction_batches(
                         "measuredat_minutes",
                         "measuredat",
                     )
-                    if name in susp.columns
-                    and name in sofa1.columns
-                    and name in sofa2.columns
+                    if name in sofa1.columns and name in sofa2.columns
                 ),
                 None,
             )
             if time_col is None or "susp_inf" not in susp.columns:
                 errors.append(
-                    "streamed Sepsis dependencies lack a shared time index or susp_inf"
+                    "streamed Sepsis score dependencies lack a shared time index "
+                    "or sepsis_shared lacks susp_inf"
                 )
                 continue
             if "sep3_sofa1" in concepts and "sofa" in sofa1.columns:
                 from ..scores.sepsis import sep3 as _sep3
 
+                susp1 = _suspicion_timeline(susp, sofa1, time_col)
                 frame = _sep3(
                     sofa1[[id_col, time_col, "sofa"]],
-                    susp[[id_col, time_col, "susp_inf"]],
+                    susp1,
                     id_cols=[id_col],
                     index_col=time_col,
                 ).rename(columns={"sep3": "sep3_sofa1"})
@@ -1025,9 +1046,10 @@ def _stream_special_extraction_batches(
             if "sep3_sofa2" in concepts and "sofa2" in sofa2.columns:
                 from ..scores.sepsis_sofa2 import sep3_sofa2 as _sep3_sofa2
 
+                susp2 = _suspicion_timeline(susp, sofa2, time_col)
                 frame = _sep3_sofa2(
                     sofa2[[id_col, time_col, "sofa2"]],
-                    susp[[id_col, time_col, "susp_inf"]],
+                    susp2,
                     id_cols=[id_col],
                     index_col=time_col,
                 )

@@ -307,3 +307,37 @@ def test_streamed_special_export_uses_published_dependency_parquets(tmp_path):
     assert set(manifest["saved"]) == {"sep3_sofa1", "sep3_sofa2"}
     assert (output / "sep3_sofa1.parquet").is_file()
     assert (output / "sep3_sofa2.parquet").is_file()
+
+
+def test_streamed_special_export_broadcasts_stay_level_suspicion(tmp_path):
+    source = tmp_path / "published"
+    output = tmp_path / "special"
+    source.mkdir()
+    output.mkdir()
+    time = pd.to_datetime(["2026-01-01T00:00:00", "2026-01-01T01:00:00"])
+    pd.DataFrame({"stay_id": [1], "susp_inf": [True]}).to_parquet(
+        source / "sepsis_shared.parquet", index=False
+    )
+    pd.DataFrame({"stay_id": [1, 1], "charttime": time, "sofa": [0.0, 3.0]}).to_parquet(
+        source / "sofa1_score.parquet", index=False
+    )
+    pd.DataFrame(
+        {"stay_id": [1, 1], "charttime": time, "sofa2": [0.0, 3.0]}
+    ).to_parquet(source / "sofa2_score.parquet", index=False)
+
+    api._stream_special_extraction_batches(
+        ["sepsis3_sofa1", "sepsis3_sofa2"],
+        "eicu",
+        str(tmp_path),
+        {"stay_id": [1]},
+        1,
+        str(output),
+        use_sofa2=True,
+        published_output_dir=str(source),
+    )
+
+    manifest = json.loads((output / "_manifest.json").read_text())
+    assert manifest["errors"] == []
+    assert set(manifest["saved"]) == {"sep3_sofa1", "sep3_sofa2"}
+    assert pd.read_parquet(output / "sep3_sofa1.parquet")["sep3_sofa1"].tolist() == [1]
+    assert pd.read_parquet(output / "sep3_sofa2.parquet")["sep3_sofa2"].tolist() == [1]
