@@ -59,6 +59,7 @@
   const icon = (n, s) => (window.icon ? window.icon(n, s) : '');
   const crumb = (c) => (window.EU_CRUMB_LABEL ? window.EU_CRUMB_LABEL(c) : c);
   const destinations = () => (window.EU_DESTINATIONS ? window.EU_DESTINATIONS() : []);
+  const scr = (id) => (window.SCREENS && window.SCREENS[id]) || {};
 
   /* Utility panels are not part of a study's reading order, so they open from
      the rail foot rather than the destination list. */
@@ -247,6 +248,25 @@
     host.className = 'one-panelhost';
     host.innerHTML = panelHtml(panelId);
     aside.appendChild(host);
+    /* A screen is render() AND afterRender(). The shell has always called both
+       — for the route it was showing. Mounting screens as panels moved them off
+       that path and called only render(), so all TEN panel screens came up as
+       dead shells: no fetch, no chart, no listener. Patient Review rendered its
+       "official demo sources" heading above an EMPTY grid because the catalog
+       request that fills it lives in afterRender; the API had two prepared
+       sources ready the whole time.
+
+       Must run after appendChild — screens query the live document, and a
+       detached subtree finds nothing. Contract matches the shell's: once per
+       render, scoped to the root it is handed. */
+    if (typeof scr(panelId).afterRender === 'function') {
+      try {
+        scr(panelId).afterRender(host);
+      } catch (e) {
+        /* One screen's setup must not take down the conversation with it. */
+        console.warn('[EasyICU] panel afterRender failed:', panelId, e);
+      }
+    }
   }
 
   /* The conversation says what is open. Without this the two columns are two
