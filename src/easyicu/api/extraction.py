@@ -1179,6 +1179,205 @@ def _group_modules_for_extraction(
 
 
 _NATIVE_EXPORT_SCHEMA_V2 = "easyicu_native_export_v2"
+_NATIVE_EXPORT_ID_COLUMNS = (
+    "stay_id",
+    "patientunitstayid",
+    "icustay_id",
+    "admissionid",
+    "patientid",
+    "CaseID",
+)
+
+
+def _native_export_storage_kind(concept_id: str, dictionary) -> str:
+    """Return the deterministic physical type family for one public concept."""
+    from ..concept.catalog import CONCEPT_DICTIONARY
+
+    definition = dictionary.get(concept_id)
+    class_name = getattr(definition, "class_name", None)
+    catalog_unit = CONCEPT_DICTIONARY.get(concept_id, ("", "", ""))[2]
+    if class_name == "lgl_cncpt" or str(catalog_unit).strip().lower() == "boolean":
+        return "boolean"
+    if (
+        class_name in {"fct_cncpt", "chr_cncpt"}
+        or str(catalog_unit).strip().lower() == "category"
+        or concept_id == "avpu"
+    ):
+        return "string"
+    return "float64"
+
+
+def _canonicalise_native_export_frame(
+    frame,
+    *,
+    module: str,
+    requested_concepts: List[str],
+    dictionary,
+):
+    """Project one native package file onto the cross-database physical schema.
+
+    The extraction engine keeps source-native identifiers internally. Native-v2
+    is the portable downstream contract, so it always exposes ``stay_id``,
+    relative ``charttime`` (except the stay-level demographics module), and
+    every requested concept in catalog order. Structurally unavailable concepts
+    remain typed all-null placeholders and are separately marked unavailable in
+    the manifest.
+    """
+    import numpy as np
+    import pandas as pd
+
+    if not isinstance(frame, pd.DataFrame):
+        raise TypeError("native export canonicalisation requires a DataFrame")
+    if frame.columns.duplicated().any():
+        raise ValueError("native export frame has duplicate physical columns")
+
+    candidates = [column for column in _NATIVE_EXPORT_ID_COLUMNS if column in frame]
+    if not candidates:
+        raise ValueError("native export frame has no ICU-stay identity column")
+    identity = "stay_id" if "stay_id" in candidates else candidates[0]
+
+    canonical = pd.DataFrame(index=frame.index)
+    identity_values = pd.to_numeric(frame[identity], errors="coerce")
+    if bool(identity_values.isna().any()):
+        raise ValueError(
+            f"native export identity '{identity}' contains missing or non-numeric values"
+        )
+    identity_float = identity_values.astype("float64")
+    if bool((identity_float != np.floor(identity_float)).any()):
+        raise ValueError(f"native export identity '{identity}' is not integer-valued")
+    canonical["stay_id"] = identity_float.astype("int64")
+
+    if module != "demographics":
+        if "charttime" in frame:
+            charttime = pd.to_numeric(frame["charttime"], errors="coerce")
+            invalid = frame["charttime"].notna() & charttime.isna()
+            if bool(invalid.any()):
+                raise ValueError(
+                    "native export charttime must be relative numeric ICU hours"
+                )
+            canonical["charttime"] = charttime.astype("float64")
+        else:
+            canonical["charttime"] = pd.Series(
+                np.nan, index=frame.index, dtype="float64"
+            )
+
+    for concept in requested_concepts:
+        kind = _native_export_storage_kind(concept, dictionary)
+        if concept not in frame:
+            if kind == "boolean":
+                canonical[concept] = pd.Series(
+                    pd.NA, index=frame.index, dtype="boolean"
+                )
+            elif kind == "string":
+                canonical[concept] = pd.Series(
+                    pd.NA, index=frame.index, dtype="string"
+                )
+            else:
+                canonical[concept] = pd.Series(
+                    np.nan, index=frame.index, dtype="float64"
+                )
+            continue
+
+        source = frame[concept]
+        if kind == "boolean":
+            if pd.api.types.is_bool_dtype(source.dtype):
+                canonical[concept] = source.astype("boolean")
+                continue
+            numeric = pd.to_numeric(source, errors="coerce")
+            invalid = source.notna() & numeric.isna()
+            invalid |= numeric.notna() & ~numeric.isin((0, 1))
+            if bool(invalid.any()):
+                raise ValueError(
+                    f"native export logical concept '{concept}' contains values "
+                    "outside {0, 1, missing}"
+                )
+            canonical[concept] = numeric.astype("boolean")
+        elif kind == "string":
+            canonical[concept] = source.astype("string")
+        else:
+            numeric = pd.to_numeric(source, errors="coerce")
+            invalid = source.notna() & numeric.isna()
+            if bool(invalid.any()):
+                raise ValueError(
+                    f"native export numeric concept '{concept}' contains non-numeric values"
+                )
+            canonical[concept] = numeric.astype("float64")
+
+    return canonical
+
+
+def _native_export_runtime_provenance() -> Dict[str, object]:
+    """Capture enough runtime identity to reproduce or diagnose an export."""
+    import hashlib
+    import importlib.metadata
+    import platform
+    import subprocess
+    import sys
+
+    import duckdb
+    import pyarrow
+
+    package_root = Path(__file__).resolve().parents[1]
+    repository_root = package_root.parents[1]
+    catalog_files = [
+        package_root / "data" / "concept-dict.json",
+        package_root / "data" / "sofa2-dict.json",
+    ]
+    digest = hashlib.sha256()
+    for path in catalog_files:
+        if path.is_file():
+            digest.update(path.name.encode("utf-8"))
+            digest.update(path.read_bytes())
+    try:
+        git_commit = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repository_root,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        ).stdout.strip()
+    except Exception:
+        git_commit = None
+    try:
+        git_status = subprocess.run(
+            ["git", "status", "--short", "--untracked-files=all"],
+            cwd=repository_root,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        ).stdout
+        git_diff = subprocess.run(
+            ["git", "diff", "--binary", "HEAD"],
+            cwd=repository_root,
+            check=True,
+            capture_output=True,
+            timeout=10,
+        ).stdout
+        git_dirty = bool(git_status.strip())
+        git_diff_sha256 = hashlib.sha256(git_diff).hexdigest() if git_dirty else None
+    except Exception:
+        git_dirty = None
+        git_diff_sha256 = None
+    try:
+        package_version = importlib.metadata.version("easyicu")
+    except importlib.metadata.PackageNotFoundError:
+        package_version = None
+    return {
+        "easyicu_version": package_version,
+        "easyicu_git_commit": git_commit,
+        "easyicu_git_dirty": git_dirty,
+        "easyicu_git_diff_sha256": git_diff_sha256,
+        "easyicu_import_path": str(package_root),
+        "concept_catalog_sha256": digest.hexdigest(),
+        "python_version": platform.python_version(),
+        "python_executable": sys.executable,
+        "platform": platform.platform(),
+        "pandas_version": pd.__version__,
+        "pyarrow_version": pyarrow.__version__,
+        "duckdb_version": duckdb.__version__,
+    }
 
 
 def _publish_native_export_v2(
@@ -1198,7 +1397,7 @@ def _publish_native_export_v2(
     partial extraction never gets a root native manifest.
     """
     import json
-    import time
+    from datetime import datetime, timezone
 
     from ..concept.export_metadata import (
         ExportMetadataError,
@@ -1248,11 +1447,12 @@ def _publish_native_export_v2(
         for module in modules
         if not (output_root / f"{module}.parquet").is_file()
     ]
-    published_modules = [
-        module for module in modules if (output_root / f"{module}.parquet").is_file()
-    ]
-    if not published_modules:
-        raise ValueError("native_export_v2 has no physical module output to seal")
+    # Native-v2 promises one physical parquet per requested module. A database
+    # may be structurally unable to produce an entire module (for example,
+    # Sepsis-3 in a source without infection timestamps). Seal that absence as
+    # a zero-row parquet with the same typed physical schema instead of making
+    # downstream code branch on missing files.
+    published_modules = list(modules)
 
     normalized_database = str(database).strip().lower()
     dictionary = load_dictionary(include_sofa2=True)
@@ -1269,14 +1469,32 @@ def _publish_native_export_v2(
     unavailable_concepts: List[Dict[str, str]] = []
     files: List[Dict[str, object]] = []
     file_bindings = []
+    temporary_module_files: List[tuple[Path, Path]] = []
 
     for module in published_modules:
         relative_path = f"{module}.parquet"
+        source_parquet = output_root / relative_path
+        whole_module_unavailable = not source_parquet.is_file()
         # This is an output validation pass, not a second scan of any raw table.
-        frame = pd.read_parquet(output_root / relative_path)
-        produced_concepts: Optional[set[str]] = None
+        # A structurally unavailable module starts from an empty identity frame;
+        # canonicalisation below adds charttime and every requested typed value
+        # column in catalog order.
+        if whole_module_unavailable:
+            frame = pd.DataFrame(
+                {"stay_id": pd.Series([], dtype="int64")}
+            )
+        else:
+            frame = pd.read_parquet(source_parquet)
+        original_columns = set(frame.columns)
+        produced_concepts: Optional[set[str]] = (
+            set() if whole_module_unavailable else None
+        )
         module_manifest_path = output_root / f"{module}.manifest.json"
-        if module_manifest_path.is_file() and not module_manifest_path.is_symlink():
+        if (
+            not whole_module_unavailable
+            and module_manifest_path.is_file()
+            and not module_manifest_path.is_symlink()
+        ):
             module_manifest = json.loads(
                 module_manifest_path.read_text(encoding="utf-8")
             )
@@ -1302,16 +1520,52 @@ def _publish_native_export_v2(
             for concept in requested_concept_plan[module]
             if concept not in structurally_unavailable
         ]
-        unavailable_concepts.extend(
-            {
-                "module": module,
-                "concept": concept,
-                "reason": "producer_returned_no_physical_column",
-            }
-            for concept in requested_concept_plan[module]
-            if concept in structurally_unavailable
-        )
+        if not whole_module_unavailable:
+            unavailable_concepts.extend(
+                {
+                    "module": module,
+                    "concept": concept,
+                    "reason": "producer_returned_no_physical_column",
+                }
+                for concept in requested_concept_plan[module]
+                if concept in structurally_unavailable
+            )
+        # A module manifest is the only producer-owned evidence that a concept
+        # is structurally unavailable. Without that evidence, a missing selected
+        # physical column is a publication error, not an all-null placeholder.
+        missing_selected_columns = [
+            concept
+            for concept in concept_plan[module]
+            if concept not in original_columns
+        ]
+        if missing_selected_columns:
+            for temporary, _destination in temporary_module_files:
+                temporary.unlink(missing_ok=True)
+            raise ValueError(
+                "native_export_v2 cannot seal selected concepts without a primary "
+                f"physical binding: {missing_selected_columns}"
+            )
+
+        temporary_parquet = None
         try:
+            frame = _canonicalise_native_export_frame(
+                frame,
+                module=module,
+                requested_concepts=requested_concept_plan[module],
+                dictionary=dictionary,
+            )
+            temporary_parquet = output_root / f".{module}.native-v2.tmp.parquet"
+            if temporary_parquet.exists() or temporary_parquet.is_symlink():
+                raise ValueError(
+                    f"native_export_v2 refuses stale temporary file: "
+                    f"{temporary_parquet}"
+                )
+            frame.to_parquet(
+                temporary_parquet,
+                index=False,
+                engine="pyarrow",
+                compression="snappy",
+            )
             binding = build_export_file_metadata_binding(
                 relative_path=relative_path,
                 module=module,
@@ -1322,17 +1576,57 @@ def _publish_native_export_v2(
                 dictionary=dictionary,
             )
         except ExportMetadataError as exc:
+            for temporary, _destination in temporary_module_files:
+                temporary.unlink(missing_ok=True)
+            if temporary_parquet is not None:
+                temporary_parquet.unlink(missing_ok=True)
             raise ValueError(
                 f"native_export_v2 cannot seal {relative_path}: {exc.error}"
             ) from exc
+        except Exception:
+            for temporary, _destination in temporary_module_files:
+                temporary.unlink(missing_ok=True)
+            if temporary_parquet is not None:
+                temporary_parquet.unlink(missing_ok=True)
+            raise
+        temporary_module_files.append(
+            (temporary_parquet, output_root / relative_path)
+        )
         file_bindings.append(binding)
+        concept_status = {}
+        for concept in requested_concept_plan[module]:
+            non_null = int(frame[concept].notna().sum())
+            if concept in structurally_unavailable:
+                availability = "structurally_unavailable_placeholder"
+            elif non_null == 0:
+                availability = "produced_all_null"
+            else:
+                availability = "available"
+            concept_status[concept] = {
+                "availability": availability,
+                "non_null": non_null,
+            }
+        import pyarrow.parquet as _pq
+
+        physical_schema = {
+            field.name: str(field.type)
+            for field in _pq.read_schema(temporary_parquet)
+        }
         files.append(
             {
                 "file": relative_path,
                 "module": module,
+                "availability": (
+                    "structurally_unavailable"
+                    if whole_module_unavailable
+                    else "available"
+                ),
                 "concepts": len(concept_plan[module]),
                 "concept_ids": concept_plan[module],
+                "physical_concept_ids": requested_concept_plan[module],
                 "rows": int(frame.shape[0]),
+                "physical_schema": physical_schema,
+                "concept_status": concept_status,
                 "column_metadata_columns": list(binding.columns),
             }
         )
@@ -1342,10 +1636,17 @@ def _publish_native_export_v2(
         file_bindings=file_bindings,
     )
     if missing_primary:
+        for temporary, _destination in temporary_module_files:
+            temporary.unlink(missing_ok=True)
         raise ValueError(
             "native_export_v2 cannot seal selected concepts without a primary "
             f"physical binding: {missing_primary}"
         )
+
+    # No final module is replaced until every file has passed canonical schema
+    # projection and typed metadata binding.
+    for temporary, destination in temporary_module_files:
+        os.replace(temporary, destination)
 
     sidecar = ColumnMetadataSidecar(
         source_database=normalized_database,
@@ -1354,14 +1655,28 @@ def _publish_native_export_v2(
         files=tuple(file_bindings),
     )
     sidecar_ref = write_content_addressed_sidecar(output_root, sidecar)
+    module_timings = {
+        module: float((result.get("modules", {}).get(module) or {}).get("elapsed") or 0)
+        for module in modules
+    }
     manifest = {
         "schema_version": _NATIVE_EXPORT_SCHEMA_V2,
         "database": normalized_database,
         "data_path": str(data_path),
         "format": "parquet",
         "max_patients": max_patients,
-        "generated": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "generated": datetime.now(timezone.utc).isoformat(),
         "export_kind": "grouped_module_extraction",
+        "canonical_physical_schema": {
+            "identity_column": "stay_id",
+            "time_column": "charttime",
+            "time_origin": "icu_admission",
+            "time_unit": "h",
+            "concept_order": "module_catalog",
+            "unavailable_representation": "typed_all_null_placeholder",
+        },
+        "module_timings_seconds": module_timings,
+        "runtime_provenance": _native_export_runtime_provenance(),
         "unavailable_modules": unavailable_modules,
         "unavailable_concepts": unavailable_concepts,
         "concept_selection": {
@@ -1394,7 +1709,7 @@ def extract_database(
     max_patients: Optional[int] = None,
     batch_size: Optional[int] = None,
     group_modules: bool = True,
-    native_export_v2: bool = False,
+    native_export_v2: Optional[bool] = None,
     stream_output_batches: bool = False,
     verbose: bool = True,
 ) -> Dict:
@@ -1434,9 +1749,10 @@ def extract_database(
             仅在需要覆盖默认策略时显式传值。
         group_modules: True(默认) = 共享源表的模块合并为分组子进程并复用
             keep_cache 缓存；False = 每模块一个子进程（旧行为）。
-        native_export_v2: True 时，在所有模块成功后基于刚写出的 parquet
-            文件建立 native-v2 typed metadata sidecar；不会重读原始表。若任何
-            模块或 metadata 绑定失败，不会发布根 ``_manifest.json``。
+        native_export_v2: 输出到磁盘时默认启用；基于刚写出的 parquet 建立
+            跨库统一 schema 与 typed metadata sidecar，不会重读原始表。传
+            False 可显式保留旧版未封装输出。若任何模块或 metadata 绑定失败，
+            不会发布根 ``_manifest.json``。
         stream_output_batches: 将显式患者批次直接追加写入模块 parquet，不在
             worker 内合并整模块 DataFrame。用于本地磁盘/内存受限且输出位于
             外置盘的完整导出；会牺牲部分源表复用以换取稳定的峰值内存。
@@ -1555,6 +1871,8 @@ def extract_database(
                 )
 
     # 创建输出目录
+    if native_export_v2 is None:
+        native_export_v2 = output_dir is not None
     if output_dir is not None:
         output_dir = str(output_dir)
         os.makedirs(output_dir, exist_ok=True)
@@ -1939,7 +2257,7 @@ def extract_all_databases(
     modules: Optional[List[str]] = None,
     max_patients: Optional[int] = None,
     batch_size: Optional[int] = None,
-    native_export_v2: bool = False,
+    native_export_v2: Optional[bool] = None,
     verbose: bool = True,
 ) -> Dict:
     """逐库逐模块子进程隔离提取所有数据库的全部特征。
@@ -1954,7 +2272,8 @@ def extract_all_databases(
         modules: 要提取的模块列表（None = 全部）
         max_patients: 每个库的患者数量限制
         batch_size: 子进程内患者分批大小
-        native_export_v2: 为每个完整数据库输出发布 native-v2 typed package
+        native_export_v2: 输出到磁盘时默认为每个完整数据库发布 native-v2
+            统一 schema 与 typed metadata package；False 显式关闭
         verbose: 是否打印进度
 
     Returns:
