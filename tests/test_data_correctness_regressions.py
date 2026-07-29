@@ -378,7 +378,10 @@ def test_inline_unit_conversion_resolves_configured_column_case_insensitively(
 
 def test_partitioned_arrow_projection_resolves_mimic_uppercase_columns(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
+    import pyarrow as pa
+
     partition = tmp_path / "inputevents_cv"
     partition.mkdir()
     pd.DataFrame(
@@ -393,6 +396,14 @@ def test_partitioned_arrow_projection_resolves_mimic_uppercase_columns(
         base_path=tmp_path,
         enable_cache=False,
     )
+    configured_thread_counts = []
+    monkeypatch.setenv("EASYICU_ARROW_THREADS", "3")
+    monkeypatch.setattr(pa, "cpu_count", lambda: 384)
+    monkeypatch.setattr(
+        pa,
+        "set_cpu_count",
+        lambda value: configured_thread_counts.append(value),
+    )
 
     frame = source._read_partitioned_data_optimized(
         partition,
@@ -406,8 +417,50 @@ def test_partitioned_arrow_projection_resolves_mimic_uppercase_columns(
     )
 
     assert list(frame.columns) == ["icustay_id", "itemid", "valuenum"]
+    assert configured_thread_counts == [3]
     assert frame.to_dict("records") == [
         {"icustay_id": 2, "itemid": 10, "valuenum": 2.0}
+    ]
+
+
+def test_partitioned_arrow_scan_ignores_invalid_thread_override(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    import pyarrow as pa
+
+    partition = tmp_path / "inputevents_cv"
+    partition.mkdir()
+    pd.DataFrame(
+        {
+            "ICUSTAY_ID": [1],
+            "ITEMID": [10],
+            "VALUENUM": [1.0],
+        }
+    ).to_parquet(partition / "part-0.parquet", index=False)
+    source = ICUDataSource(
+        load_src_cfg("mimic"),
+        base_path=tmp_path,
+        enable_cache=False,
+    )
+    configured_thread_counts = []
+    monkeypatch.setenv("EASYICU_ARROW_THREADS", "not-an-integer")
+    monkeypatch.setattr("os.cpu_count", lambda: 16)
+    monkeypatch.setattr(pa, "cpu_count", lambda: 384)
+    monkeypatch.setattr(
+        pa,
+        "set_cpu_count",
+        lambda value: configured_thread_counts.append(value),
+    )
+
+    frame = source._read_partitioned_data_optimized(
+        partition,
+        columns=["icustay_id", "itemid", "valuenum"],
+    )
+
+    assert configured_thread_counts == [8]
+    assert frame.to_dict("records") == [
+        {"icustay_id": 1, "itemid": 10, "valuenum": 1.0}
     ]
 
 
