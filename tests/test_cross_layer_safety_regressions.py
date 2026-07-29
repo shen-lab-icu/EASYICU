@@ -10,11 +10,15 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import threading
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
 
-from easyicu.concept import _drop_negative_source_end_durations
+from easyicu.concept import (
+    _drop_negative_source_end_durations,
+    _source_duration_is_end,
+)
 from easyicu.api import (
     MAX_WINDOW_EXPANSION_POINTS,
     SOFA_FIXED_CHUNK_SIZE,
@@ -192,6 +196,36 @@ def test_p0_2_known_source_end_before_start_is_quarantined(caplog):
 
     assert cleaned["stay_id"].tolist() == [1, 3]
     assert "dropping 1 raw end-before-start" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "column",
+    ["endtime", "stop", "drugstopoffset", "OffsetEnd"],
+)
+def test_p0_2_duration_end_semantics_come_from_schema_not_patient_sample(column):
+    source = SimpleNamespace(dur_var=column, params={})
+    assert _source_duration_is_end(source) is True
+
+
+def test_p0_2_explicit_duration_semantics_override_column_name():
+    assert (
+        _source_duration_is_end(
+            SimpleNamespace(
+                dur_var="drugstopoffset",
+                params={"dur_is_end": False},
+            )
+        )
+        is False
+    )
+    assert (
+        _source_duration_is_end(
+            SimpleNamespace(
+                dur_var="duration_minutes",
+                params={"dur_is_end": True},
+            )
+        )
+        is True
+    )
 
 
 def test_p0_2_missing_duration_is_dropped_not_zeroed(caplog):

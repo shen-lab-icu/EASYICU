@@ -150,8 +150,11 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=10_000,
-        help="bounded external-export batch size (default: 10000 stays)",
+        default=None,
+        help=(
+            "bounded external-export batch size; default auto-detects current "
+            "available memory (explicit values always win)"
+        ),
     )
     parser.add_argument(
         "--one-shot",
@@ -198,7 +201,9 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
         "database_order": databases,
         "batch_size": None if args.one_shot else args.batch_size,
         "extraction_mode": (
-            "one_shot_all_patients" if args.one_shot else "streamed_patient_batches"
+            "one_shot_all_patients"
+            if args.one_shot
+            else "memory_adaptive_streamed_patient_batches"
         ),
         "sources": {},
         "status": "running",
@@ -225,6 +230,7 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
                     "status": "verified",
                     "elapsed_sec": round(time.monotonic() - started, 1),
                     "num_patients": result["num_patients"],
+                    "effective_batch_size": result.get("batch_size"),
                     "native_manifest_sha256": _sha256(source_output / "_manifest.json"),
                     "column_metadata_sha256": package.column_metadata_sha256,
                     "typed_columns": len(package.concept_index),
