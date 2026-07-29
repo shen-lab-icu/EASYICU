@@ -49,7 +49,7 @@ from ...robustness.panel import (
     robustness_specs_sha,
     validate_robustness_specs,
 )
-from ...schema import AnalysisStep
+from ...schema import AnalysisStep, spec_backs_every_declared_product
 from ...contracts.host_scaffold import HostScaffoldedScript
 from .plausibility_receipt import render_standard_plausibility_receipt_code
 
@@ -88,10 +88,12 @@ ROBUSTNESS_REPLAY_OUTPUT_FILES: Mapping[str, str] = MappingProxyType(
 def robustness_replay_spec_is_emittable(step: AnalysisStep) -> bool:
     """Whether the step's typed replay declaration is one this runner can emit.
 
-    ``AnalysisStep`` has already enforced the declaration's internal
-    consistency (every declared product backed, every named product declared,
-    one product per output).  What is checked here is only the capability
-    question this module owns.
+    ``AnalysisStep`` has enforced what is malformed on its own terms (one
+    product per output, and no entry naming a product the step never declares).
+    Coverage is asked here instead, because a coverage shortfall has a safe
+    answer -- nobody claims the step -- while the same rule as a schema
+    validator made a real fresh run's own sealed plan unreadable and killed it
+    before its first step.
 
     Nothing about the step's ``method`` label or its product names is consulted,
     which is the entire point.  The runner's method allowlist is three strings;
@@ -106,7 +108,14 @@ def robustness_replay_spec_is_emittable(step: AnalysisStep) -> bool:
     spec = step.robustness_replay_spec
     if spec is None:
         return False
-    return all(item.output in ROBUSTNESS_REPLAY_OUTPUT_FILES for item in spec.products)
+    if not all(item.output in ROBUSTNESS_REPLAY_OUTPUT_FILES for item in spec.products):
+        return False
+    return spec_backs_every_declared_product(
+        step.expected_outputs,
+        spec=spec,
+        lookup="output_for",
+        allowed_kinds=frozenset({"table", "statistic", "log"}),
+    )
 
 
 _MATRIX_COLUMNS = [

@@ -175,13 +175,21 @@ def test_an_audit_the_host_cannot_compute_is_refused_at_the_contract() -> None:
 
 
 def test_a_declared_product_with_no_audit_is_refused() -> None:
-    with pytest.raises(ValueError, match="does not name"):
-        _step(
-            expected_outputs=[
-                "table:missingness_measurement_audit",
-                "table:some_other_table",
-            ]
-        )
+    """A declined step, not a rejected plan.
+
+    A product no entry backs would be produced by nobody while the step still
+    looked owned, so the host must not claim it -- but saying so in the schema
+    is what made a real run's sealed plan unreadable at re-parse.
+    """
+
+    step = _step(
+        expected_outputs=[
+            "table:missingness_measurement_audit",
+            "table:some_other_table",
+        ]
+    )
+
+    assert missingness_audit_executor_owns_step(step) is False
 
 
 def test_an_audit_naming_a_product_the_step_never_declares_is_refused() -> None:
@@ -200,13 +208,16 @@ def test_an_audit_naming_a_product_the_step_never_declares_is_refused() -> None:
 
 
 def test_a_non_table_product_is_refused_rather_than_quietly_uncovered() -> None:
-    with pytest.raises(ValueError, match=r"figure:missingness.*cannot back"):
-        _step(
-            expected_outputs=[
-                "table:missingness_measurement_audit",
-                "figure:missingness",
-            ]
-        )
+    """The audit emits tables; a figure product is a capability shortfall."""
+
+    step = _step(
+        expected_outputs=[
+            "table:missingness_measurement_audit",
+            "figure:missingness",
+        ]
+    )
+
+    assert missingness_audit_executor_owns_step(step) is False
 
 
 def test_a_prefixed_product_id_is_refused() -> None:

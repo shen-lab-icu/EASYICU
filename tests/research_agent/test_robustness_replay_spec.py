@@ -113,27 +113,28 @@ def test_the_plainest_possible_label_is_owned_once_declared() -> None:
 
 
 def test_a_declaration_cannot_make_the_replay_claim_a_figure_step() -> None:
-    """The replay emits no figure, and the contract refuses before ownership.
+    """The replay emits no figure, so a declaration cannot buy it one.
 
-    Checked at the layer that actually decides: a spec-carrying step declaring
-    a figure cannot be constructed at all, so the ownership function's own
-    figure guard is unreachable for such a step -- it still guards the steps
-    that carry no spec, which is asserted separately below.
+    This is a decline, not a rejected plan: the step is well formed, the host
+    simply cannot produce one of its products.  Rejecting it in the schema is
+    what made a real run's own sealed plan unreadable, so the answer moved to
+    the layer that is allowed to say "not mine".
     """
 
-    with pytest.raises(ValueError, match="which it cannot back"):
-        _step(
-            expected_outputs=[
-                "table:robustness_matrix",
-                "figure:robustness_plot",
-            ],
-            robustness_replay_spec={
-                "products": [
-                    {"product_id": "robustness_matrix", "output": "robustness_matrix"},
-                    {"product_id": "robustness_plot", "output": "robustness_summary"},
-                ]
-            },
-        )
+    step = _step(
+        expected_outputs=[
+            "table:robustness_matrix",
+            "figure:robustness_plot",
+        ],
+        robustness_replay_spec={
+            "products": [
+                {"product_id": "robustness_matrix", "output": "robustness_matrix"},
+                {"product_id": "robustness_plot", "output": "robustness_summary"},
+            ]
+        },
+    )
+
+    assert robustness_replay_spec_is_emittable(step) is False
 
     undeclared_figure_step = _step(
         declare=False,
@@ -193,23 +194,28 @@ def test_the_same_product_under_two_kinds_is_refused() -> None:
 
     assert "statistic:robustness_summary" in payload["expected_outputs"]
     assert "table:robustness_summary" in payload["expected_outputs"]
-    with pytest.raises(ValueError, match="same product under two kinds"):
-        AnalysisStep.model_validate(payload)
+    # The plan stays readable -- fresh21 proved that rejecting it here kills
+    # the run at re-parse, far from the cause -- and the host declines.
+    step = AnalysisStep.model_validate(payload)
+    assert robustness_replay_spec_is_emittable(step) is False
 
 
 def test_a_declared_product_with_no_output_is_refused() -> None:
-    with pytest.raises(ValueError, match="does not name"):
-        _step(
-            expected_outputs=[
-                "table:robustness_matrix",
-                "table:something_else",
-            ],
-            robustness_replay_spec={
-                "products": [
-                    {"product_id": "robustness_matrix", "output": "robustness_matrix"}
-                ]
-            },
-        )
+    """A product nothing backs would be produced by nobody while owned."""
+
+    step = _step(
+        expected_outputs=[
+            "table:robustness_matrix",
+            "table:something_else",
+        ],
+        robustness_replay_spec={
+            "products": [
+                {"product_id": "robustness_matrix", "output": "robustness_matrix"}
+            ]
+        },
+    )
+
+    assert robustness_replay_spec_is_emittable(step) is False
 
 
 def test_an_output_naming_a_product_the_step_never_declares_is_refused() -> None:

@@ -46,7 +46,7 @@ from types import MappingProxyType
 
 from ...authority.plausibility import FlagOnlyPlausibilityScope
 from ...icu_rules import companion_count_column_for_measured
-from ...schema import AnalysisStep
+from ...schema import AnalysisStep, spec_backs_every_declared_product
 from .plausibility_receipt import render_standard_plausibility_receipt_code
 
 __all__ = [
@@ -405,16 +405,25 @@ def declared_audit_spec_is_emittable(step: AnalysisStep) -> bool:
     string instead.  Both halves were string matching, and a step carrying this
     spec is subject to neither: the spec is the declaration that it is an audit.
 
-    ``AnalysisStep`` has already enforced the contract's internal consistency
-    (every declared product backed, every named product declared, one product
-    per audit).  What is checked here is only the capability question this
-    module owns: can this runner emit those audits?
+    ``AnalysisStep`` has enforced what is malformed on its own terms (one
+    product per audit, and no entry naming a product the step never declares).
+    Coverage is asked here rather than there, because "this declaration does
+    not account for every declared product" has a safe answer -- nobody claims
+    the step -- while a schema validator's only answer is to make the plan
+    unreadable.
     """
 
     spec = step.measurement_audit_spec
     if spec is None:
         return False
-    return all(item.audit in MEASUREMENT_AUDIT_KIND_FILES for item in spec.products)
+    if not all(item.audit in MEASUREMENT_AUDIT_KIND_FILES for item in spec.products):
+        return False
+    return spec_backs_every_declared_product(
+        step.expected_outputs,
+        spec=spec,
+        lookup="audit_for",
+        allowed_kinds=frozenset({"table"}),
+    )
 
 
 def _cohort_input_scope(step: AnalysisStep) -> tuple[bool, str | None]:

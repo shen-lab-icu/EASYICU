@@ -1,6 +1,6 @@
 {
   "_do_not_edit": "These are recorded Planner output. Editing them to make a test pass would make the test about a plan no engine ever produced.",
-  "_what": "Two real executed analysis plans, copied verbatim from the archived runs. Same benchmark case, same engine family, two hours apart: fresh17 declared one audit product in its missingness step and the host owned it (0 provider calls, ok); fresh19 declared three and no owner claimed any of them, so the whole step went to the LLM coder and was blocked. Nothing else about the science changed.  fresh20 is the first run whose Planner actually carried the typed declarations: its audit step declared measurement_audit_spec and was owned with 0 provider calls, while its primary-association step bundled table:adjusted_association_estimates with figure:primary_adjusted_association in one step and therefore lost the owner it would otherwise have had, and its robustness step declared robustness_summary under two kinds, which no replay declaration can back.",
+  "_what": "Two real executed analysis plans, copied verbatim from the archived runs. Same benchmark case, same engine family, two hours apart: fresh17 declared one audit product in its missingness step and the host owned it (0 provider calls, ok); fresh19 declared three and no owner claimed any of them, so the whole step went to the LLM coder and was blocked. Nothing else about the science changed.  fresh20 is the first run whose Planner actually carried the typed declarations: its audit step declared measurement_audit_spec and was owned with 0 provider calls, while its primary-association step bundled table:adjusted_association_estimates with figure:primary_adjusted_association in one step and therefore lost the owner it would otherwise have had, and its robustness step declared robustness_summary under two kinds, which no replay declaration can back.  fresh21 is the plan the host could not re-read: its Planner did carry robustness_replay_spec, but the step also declared robustness_summary under two kinds, and the schema validator that refused it turned the sealed plan into an unparseable record -- the run died before its first step reporting that the plan was not bound to immutable authority.",
   "plans": [
     {
       "label": "fresh17",
@@ -1841,6 +1841,583 @@
         },
         "rationale": "The question is an observational association study with a descriptive prevalence component: Sepsis-3 status is the authoritative primary exposure, operationalized through the typed sep3_sofa2 concept and its suspected-infection component rather than diagnosis-code timing, and death is the designated in-hospital mortality outcome. The primary denominator is all eligible ICU stays, with ICU stay—not patient—as the analysis unit because no patient identifier is available. The plan therefore includes cohort accounting, exposure-stratified baseline characteristics, prevalence and absolute mortality, measurement and event-timing audits, one primary adjusted logistic model, and explicitly separated landmark, non-readmission, and flexible-functional-form sensitivity analyses. Primary exposure and outcome values are not imputed; complete-case model attrition is reported. Deaths occurring during the first 24-hour exposure-classification window are retained in the full-cohort descriptive and primary estimands but are addressed transparently through the prespecified 24-hour landmark sensitivity. All effect estimates are interpreted as observational associations, not causal effects.",
         "revision": 3
+      }
+    },
+    {
+      "label": "fresh21",
+      "run_id": "run_20260729T140146_eb4845",
+      "source_path": "/Volumes/外置硬盘/easyicu_data/canonical9_runs/batch_20260729_luna_miiv_dev_1ab34d6_e1_fresh21/e1_sepsis3_prevalence_mortality/aware/run_20260729T140146_eb4845/analysis_plan.json",
+      "source_sha256": "8c0856f7cfab6b42723d9c1fb95a6bc62ff440175a44efdc1cebff7e5e65920f",
+      "plan": {
+        "research_question": "Estimate Sepsis-3 prevalence and its association with in-hospital mortality, with a transparent, reproducible cohort definition and visible denominator.",
+        "analysis_type": "association_study",
+        "steps": [
+          {
+            "step_id": "01_define_analysis_cohort",
+            "planned_analysis_role": "auxiliary",
+            "intent": "Define the primary analysis population as all available eligible ICU stays and report the stay-level denominator and attrition without claiming patient-level deduplication.",
+            "inputs": [],
+            "expected_outputs": [
+              "artifact:analysis_cohort",
+              "table:cohort_flow"
+            ],
+            "method": "cohort_definition",
+            "icu_rule_refs": [
+              "Use ICU stays as the analysis unit",
+              "The primary prevalence denominator is all eligible ICU stays"
+            ],
+            "model_requirements": [],
+            "input_consumption_contracts": [],
+            "table_one_spec": null,
+            "trajectory_stability_spec": null,
+            "exposure_outcome_distribution_spec": null,
+            "measurement_audit_spec": null,
+            "robustness_replay_spec": null
+          },
+          {
+            "step_id": "02_table_one_by_sepsis3",
+            "planned_analysis_role": "auxiliary",
+            "intent": "Describe the analytic ICU-stay cohort overall and by Sepsis-3 status, reporting per-group missingness, variable-appropriate tests, and standardized mean differences where supported by the table executor.",
+            "inputs": [
+              "artifact:analysis_cohort",
+              "sep3_sofa2_max",
+              "age",
+              "sex",
+              "charlson_first",
+              "lact_max",
+              "death"
+            ],
+            "expected_outputs": [
+              "table:table_one"
+            ],
+            "method": "descriptive",
+            "icu_rule_refs": [
+              "Sepsis-3 exposure is the typed sep3_sofa2 concept with susp_inf as its positive-only suspected-infection component",
+              "The exposure is the maximum first-24-hour Sepsis-3 indicator",
+              "Lactate is right-skewed and is summarized primarily with median and IQR"
+            ],
+            "model_requirements": [],
+            "input_consumption_contracts": [],
+            "table_one_spec": {
+              "schema_version": "easyicu.table_one/1",
+              "group_by": "sep3_sofa2_max",
+              "group_levels": [
+                0,
+                1
+              ],
+              "variables": [
+                {
+                  "name": "age",
+                  "variable_kind": "continuous",
+                  "summary": "median_iqr",
+                  "test": "mann_whitney_or_kruskal",
+                  "levels": []
+                },
+                {
+                  "name": "sex",
+                  "variable_kind": "categorical",
+                  "summary": "count_percent",
+                  "test": "chi_square_with_fisher_exact_for_sparse_2x2",
+                  "levels": [
+                    "__easyicu_level_1__",
+                    "__easyicu_level_2__"
+                  ]
+                },
+                {
+                  "name": "charlson_first",
+                  "variable_kind": "continuous",
+                  "summary": "median_iqr",
+                  "test": "mann_whitney_or_kruskal",
+                  "levels": []
+                },
+                {
+                  "name": "lact_max",
+                  "variable_kind": "continuous",
+                  "summary": "median_iqr",
+                  "test": "mann_whitney_or_kruskal",
+                  "levels": []
+                },
+                {
+                  "name": "death",
+                  "variable_kind": "categorical",
+                  "summary": "count_percent",
+                  "test": "chi_square_with_fisher_exact_for_sparse_2x2",
+                  "levels": [
+                    0,
+                    1
+                  ]
+                }
+              ],
+              "include_overall": true,
+              "missing_group_policy": "fail_closed",
+              "missingness_display": "n_percent_by_group",
+              "p_values_required": true,
+              "p_value_adjustment": "none_descriptive_table",
+              "standardized_difference_mode": "auto_binary_groups"
+            },
+            "trajectory_stability_spec": null,
+            "exposure_outcome_distribution_spec": null,
+            "measurement_audit_spec": null,
+            "robustness_replay_spec": null
+          },
+          {
+            "step_id": "03_prevalence_mortality_distribution",
+            "planned_analysis_role": "auxiliary",
+            "intent": "Estimate Sepsis-3 prevalence and absolute in-hospital mortality by Sepsis-3 status using all declared ICU stays as the denominator and exact typed binary levels.",
+            "inputs": [
+              "artifact:analysis_cohort",
+              "sep3_sofa2_max",
+              "death"
+            ],
+            "expected_outputs": [
+              "table:exposure_outcome_distribution"
+            ],
+            "method": "descriptive",
+            "icu_rule_refs": [
+              "Use the target outcome death, defined as in-hospital mortality",
+              "The primary prevalence denominator remains all eligible ICU stays",
+              "An absent or negative death indicator is a non-event; death_time is not required for the all-stay descriptive distribution"
+            ],
+            "model_requirements": [],
+            "input_consumption_contracts": [],
+            "table_one_spec": null,
+            "trajectory_stability_spec": null,
+            "exposure_outcome_distribution_spec": {
+              "schema_version": "easyicu.exposure_outcome_distribution/2",
+              "exposure": "sep3_sofa2_max",
+              "exposure_levels": [
+                0,
+                1
+              ],
+              "outcome": "death",
+              "outcome_levels": [
+                0,
+                1
+              ],
+              "outcome_positive_value": 1,
+              "level_match_policy": "exact_typed",
+              "denominator_policy": "all_declared_rows",
+              "missing_exposure_policy": "fail_closed",
+              "missing_outcome_policy": "structural_absence_is_non_event",
+              "undeclared_outcome_policy": "fail_closed",
+              "interval_method": "wilson",
+              "confidence_level": 0.95
+            },
+            "measurement_audit_spec": null,
+            "robustness_replay_spec": null
+          },
+          {
+            "step_id": "04_prevalence_mortality_figure",
+            "planned_analysis_role": "auxiliary",
+            "intent": "Display Sepsis-3 prevalence and absolute in-hospital mortality by exposure group before adjusted association results.",
+            "inputs": [
+              "table:exposure_outcome_distribution"
+            ],
+            "expected_outputs": [
+              "figure:prevalence_mortality"
+            ],
+            "method": "visualization",
+            "icu_rule_refs": [],
+            "model_requirements": [],
+            "input_consumption_contracts": [
+              {
+                "schema_version": "easyicu.artifact_consumption/1",
+                "input_key": "table:exposure_outcome_distribution",
+                "mode": "all_rows",
+                "role_column": null,
+                "expected_roles": []
+              }
+            ],
+            "table_one_spec": null,
+            "trajectory_stability_spec": null,
+            "exposure_outcome_distribution_spec": null,
+            "measurement_audit_spec": null,
+            "robustness_replay_spec": null
+          },
+          {
+            "step_id": "05_missingness_event_timing_audit",
+            "planned_analysis_role": "auxiliary",
+            "intent": "Audit measurement availability, value missingness, measurement process, and death-event timing, including negative death times and conditional applicability of death_time.",
+            "inputs": [
+              "artifact:analysis_cohort",
+              "sep3_sofa2_max",
+              "sep3_sofa2_n",
+              "sep3_sofa2_measured",
+              "susp_inf_max",
+              "susp_inf_n",
+              "susp_inf_measured",
+              "susp_inf_first_time",
+              "sep3_sofa2_first_time",
+              "sep3_sofa2_last_time",
+              "death",
+              "death_time",
+              "age",
+              "sex",
+              "charlson_first",
+              "lact_max"
+            ],
+            "expected_outputs": [
+              "table:missingness_measurement_audit",
+              "table:measurement_process_audit",
+              "table:event_timing_audit"
+            ],
+            "method": "measurement_missingness_audit",
+            "icu_rule_refs": [
+              "Treat an absent susp_inf row as no recorded suspected-infection event",
+              "death_time is applicable only when death=1 and is not ordinary missingness for survivors",
+              "Audit death_time against ICU admission and exclude negative event times from timing-based analyses",
+              "Measurement frequency and source availability may be informative in ICU data",
+              "Lactate is frequently clinically triggered and is separately audited for measurement availability"
+            ],
+            "model_requirements": [],
+            "input_consumption_contracts": [],
+            "table_one_spec": null,
+            "trajectory_stability_spec": null,
+            "exposure_outcome_distribution_spec": null,
+            "measurement_audit_spec": {
+              "schema_version": "easyicu.measurement_audit/1",
+              "products": [
+                {
+                  "product_id": "missingness_measurement_audit",
+                  "audit": "measurement_missingness"
+                },
+                {
+                  "product_id": "measurement_process_audit",
+                  "audit": "measurement_process"
+                },
+                {
+                  "product_id": "event_timing_audit",
+                  "audit": "event_timing"
+                }
+              ]
+            },
+            "robustness_replay_spec": null
+          },
+          {
+            "step_id": "06_primary_adjusted_association",
+            "planned_analysis_role": "primary",
+            "intent": "Estimate the observational association between first-24-hour Sepsis-3 status and in-hospital mortality using one prespecified adjusted binary logistic model and report the analytic population and uncertainty.",
+            "inputs": [
+              "artifact:analysis_cohort",
+              "sep3_sofa2_max",
+              "death",
+              "age",
+              "sex",
+              "charlson_first"
+            ],
+            "expected_outputs": [
+              "table:adjusted_association_estimates"
+            ],
+            "method": "adjusted_association_models",
+            "icu_rule_refs": [
+              "Do not include death events occurring inside the first-24-hour exposure-classification window as ordinary follow-up in the landmark sensitivity",
+              "Do not adjust for susp_inf or SOFA components because they are definitional components or upstream inputs of sep3_sofa2_max",
+              "Interpret estimates as observational associations, not causal effects"
+            ],
+            "model_requirements": [
+              {
+                "requirement_id": "primary_full_cohort_logistic",
+                "outcome": "death",
+                "outcome_type": "binary",
+                "method_family": "binary_logistic_regression",
+                "exposure_source": "sep3_sofa2_max",
+                "analysis_role": "primary",
+                "analysis_set": "source_aware",
+                "required_for_step_success": true,
+                "covariates": [
+                  "age",
+                  "sex",
+                  "charlson_first"
+                ]
+              }
+            ],
+            "input_consumption_contracts": [],
+            "table_one_spec": null,
+            "trajectory_stability_spec": null,
+            "exposure_outcome_distribution_spec": null,
+            "measurement_audit_spec": null,
+            "robustness_replay_spec": null
+          },
+          {
+            "step_id": "07_adjusted_association_figure",
+            "planned_analysis_role": "auxiliary",
+            "intent": "Visualize the primary adjusted association estimate with its confidence interval and exposure and outcome labels.",
+            "inputs": [
+              "table:adjusted_association_estimates"
+            ],
+            "expected_outputs": [
+              "figure:adjusted_association"
+            ],
+            "method": "visualization",
+            "icu_rule_refs": [],
+            "model_requirements": [],
+            "input_consumption_contracts": [
+              {
+                "schema_version": "easyicu.artifact_consumption/1",
+                "input_key": "table:adjusted_association_estimates",
+                "mode": "all_rows",
+                "role_column": null,
+                "expected_roles": []
+              }
+            ],
+            "table_one_spec": null,
+            "trajectory_stability_spec": null,
+            "exposure_outcome_distribution_spec": null,
+            "measurement_audit_spec": null,
+            "robustness_replay_spec": null
+          },
+          {
+            "step_id": "08_standard_robustness_sensitivity",
+            "planned_analysis_role": "secondary",
+            "intent": "Replay the locked cohort and missingness sensitivity specifications without changing the primary exposure, outcome, or estimand.",
+            "inputs": [
+              "artifact:analysis_cohort",
+              "sep3_sofa2_max",
+              "death",
+              "death_time",
+              "age",
+              "sex",
+              "charlson_first",
+              "icu_readmission"
+            ],
+            "expected_outputs": [
+              "statistic:primary_or",
+              "statistic:complete_case_n",
+              "table:robustness_summary",
+              "log:missingness_strategy_notes",
+              "table:robustness_matrix",
+              "statistic:robustness_summary"
+            ],
+            "method": "robustness_sensitivity",
+            "icu_rule_refs": [
+              "The 24-hour landmark requires survival to 24 hours and excludes negative death times",
+              "The non-readmission analysis is a stay-level sensitivity",
+              "Complete-case handling does not impute the primary exposure or outcome"
+            ],
+            "model_requirements": [],
+            "input_consumption_contracts": [],
+            "table_one_spec": null,
+            "trajectory_stability_spec": null,
+            "exposure_outcome_distribution_spec": null,
+            "measurement_audit_spec": null,
+            "robustness_replay_spec": {
+              "schema_version": "easyicu.robustness_replay/1",
+              "products": [
+                {
+                  "product_id": "robustness_matrix",
+                  "output": "robustness_matrix"
+                },
+                {
+                  "product_id": "robustness_summary",
+                  "output": "robustness_summary"
+                }
+              ]
+            }
+          },
+          {
+            "step_id": "08_standard_robustness_sensitivity_figure",
+            "planned_analysis_role": "auxiliary",
+            "intent": "Render the publication figure(s) declared by step '08_standard_robustness_sensitivity' (figure:robustness_plot). Treat this as a rendering-only step: first read the table/statistic outputs produced by '08_standard_robustness_sensitivity' from the registered evidence files or from that step's outputs directory. Do not redefine the cohort, exposure, outcome, missing-data policy, or model inside this figure step; if the upstream table cannot support the requested figure, write a step_summary.json explaining the missing source-data contract instead of re-analysing ``os.environ['COHORT_PARQUET']``. Save PNG and SVG copies of every figure with matching stems into ``os.environ['STEP_OUT_DIR']``. Always write a valid step_summary.json into ``STEP_OUT_DIR`` listing each produced file under ``figure_files`` even if rendering fails — use a try/except so the step never aborts before writing the summary.",
+            "inputs": [
+              "statistic:primary_or",
+              "statistic:complete_case_n",
+              "table:robustness_summary",
+              "table:robustness_matrix",
+              "statistic:robustness_summary"
+            ],
+            "expected_outputs": [
+              "figure:robustness_plot"
+            ],
+            "method": "visualization",
+            "icu_rule_refs": [
+              "The 24-hour landmark requires survival to 24 hours and excludes negative death times",
+              "The non-readmission analysis is a stay-level sensitivity",
+              "Complete-case handling does not impute the primary exposure or outcome",
+              "visualization_rule"
+            ],
+            "model_requirements": [],
+            "input_consumption_contracts": [
+              {
+                "schema_version": "easyicu.artifact_consumption/1",
+                "input_key": "table:robustness_summary",
+                "mode": "all_rows",
+                "role_column": null,
+                "expected_roles": []
+              },
+              {
+                "schema_version": "easyicu.artifact_consumption/1",
+                "input_key": "table:robustness_matrix",
+                "mode": "all_rows",
+                "role_column": null,
+                "expected_roles": []
+              }
+            ],
+            "table_one_spec": null,
+            "trajectory_stability_spec": null,
+            "exposure_outcome_distribution_spec": null,
+            "measurement_audit_spec": null,
+            "robustness_replay_spec": null
+          },
+          {
+            "step_id": "09_scientific_sensitivity_analyses",
+            "planned_analysis_role": "secondary",
+            "intent": "Produce the required scientific sensitivity table for the full cohort, 24-hour landmark, non-readmission, and flexible age and Charlson specifications, with one row per prespecified analysis.",
+            "inputs": [
+              "artifact:analysis_cohort",
+              "sep3_sofa2_max",
+              "death",
+              "death_time",
+              "age",
+              "sex",
+              "charlson_first",
+              "icu_readmission"
+            ],
+            "expected_outputs": [
+              "table:e1_scientific_sensitivity"
+            ],
+            "method": "scientific_sensitivity_analysis",
+            "icu_rule_refs": [
+              "The primary row uses the full eligible ICU-stay cohort",
+              "The landmark row requires survival to 24 hours and excludes negative death times",
+              "The repeated-stay sensitivity restricts to non-readmission ICU stays without claiming patient-level deduplication",
+              "The flexible-form sensitivity uses nonlinear age and Charlson terms",
+              "All rows report stay count, death count, odds ratio, and confidence interval"
+            ],
+            "model_requirements": [],
+            "input_consumption_contracts": [],
+            "table_one_spec": null,
+            "trajectory_stability_spec": null,
+            "exposure_outcome_distribution_spec": null,
+            "measurement_audit_spec": null,
+            "robustness_replay_spec": null
+          },
+          {
+            "step_id": "10_sensitivity_figure",
+            "planned_analysis_role": "auxiliary",
+            "intent": "Display adjusted association estimates across the prespecified sensitivity analyses and identify changes in analytic membership and functional form.",
+            "inputs": [
+              "table:e1_scientific_sensitivity",
+              "table:robustness_matrix"
+            ],
+            "expected_outputs": [
+              "figure:association_sensitivity"
+            ],
+            "method": "visualization",
+            "icu_rule_refs": [],
+            "model_requirements": [],
+            "input_consumption_contracts": [
+              {
+                "schema_version": "easyicu.artifact_consumption/1",
+                "input_key": "table:e1_scientific_sensitivity",
+                "mode": "all_rows",
+                "role_column": null,
+                "expected_roles": []
+              },
+              {
+                "schema_version": "easyicu.artifact_consumption/1",
+                "input_key": "table:robustness_matrix",
+                "mode": "all_rows",
+                "role_column": null,
+                "expected_roles": []
+              }
+            ],
+            "table_one_spec": null,
+            "trajectory_stability_spec": null,
+            "exposure_outcome_distribution_spec": null,
+            "measurement_audit_spec": null,
+            "robustness_replay_spec": null
+          }
+        ],
+        "cohort": {
+          "name": "primary",
+          "inclusion": [],
+          "exclusion": [],
+          "derived_from_named": null,
+          "locked_at": "not_locked",
+          "selection_mode": "all_input_rows"
+        },
+        "robustness_specs": [
+          {
+            "spec_id": "landmark_alive_at_24h",
+            "axis": "cohort",
+            "description": "Restrict the association analysis to ICU stays without death during the first 24 hours; timing-based analyses exclude negative death times.",
+            "cohort_override": {
+              "name": "alive_at_24h",
+              "inclusion": [],
+              "exclusion": [
+                {
+                  "concept_id": "death",
+                  "time_window": {
+                    "anchor": "icu_admission",
+                    "start_offset_hours": 0.0,
+                    "end_offset_hours": 24.0
+                  },
+                  "aggregation": "any",
+                  "op": "==",
+                  "value": 1
+                }
+              ],
+              "derived_from_named": null,
+              "locked_at": "not_locked",
+              "selection_mode": "predicate_filtered"
+            },
+            "missing_override": null,
+            "outcome_override": null
+          },
+          {
+            "spec_id": "non_readmission_icu_stays",
+            "axis": "cohort",
+            "description": "Restrict the analysis to ICU stays flagged as non-readmissions; this is a stay-level sensitivity because patient identity is unavailable.",
+            "cohort_override": {
+              "name": "non_readmission_icu_stays",
+              "inclusion": [
+                {
+                  "concept_id": "adm",
+                  "time_window": {
+                    "anchor": "icu_admission",
+                    "start_offset_hours": 0.0,
+                    "end_offset_hours": 1.0
+                  },
+                  "aggregation": "first",
+                  "op": "==",
+                  "value": "__easyicu_level_1__"
+                }
+              ],
+              "exclusion": [],
+              "derived_from_named": null,
+              "locked_at": "not_locked",
+              "selection_mode": "predicate_filtered"
+            },
+            "missing_override": null,
+            "outcome_override": null
+          },
+          {
+            "spec_id": "complete_case_required_variables",
+            "axis": "missing",
+            "description": "Use complete cases for the primary exposure, outcome, and prespecified adjustment variables without imputing the primary exposure or outcome.",
+            "cohort_override": null,
+            "missing_override": {
+              "strategy": "complete_case",
+              "variables": [
+                "sep3_sofa2_max",
+                "death",
+                "age",
+                "sex",
+                "charlson_first"
+              ]
+            },
+            "outcome_override": null
+          }
+        ],
+        "display_labels": {
+          "sep3_sofa2_max=0": "Sepsis-3 absent",
+          "sep3_sofa2_max=1": "Sepsis-3 present",
+          "death": "In-hospital mortality",
+          "death_time": "Time from ICU admission to death",
+          "table:e1_scientific_sensitivity": "Scientific sensitivity analyses"
+        },
+        "rationale": "This is an observational association study because the question asks for Sepsis-3 prevalence and its association with the designated target outcome death. The primary exposure is the typed first-24-hour sep3_sofa2_max indicator, operationalized using the typed Sepsis-3 criterion and susp_inf rather than an ICD-only proxy. The primary prevalence denominator is all eligible ICU stays, and the analysis unit remains the ICU stay because no patient identifier is available. The plan separates cohort accounting, baseline comparison, absolute prevalence and mortality, data-quality and event-timing audits, the primary adjusted logistic association, and separately owned figures. Missing primary exposure and outcome values are not imputed. The primary adjustment set is limited to age, sex, and charlson_first and excludes definitional or upstream components of the primary exposure. Sensitivities address the 24-hour landmark, negative event times, non-readmission ICU stays, complete-case handling, and flexible age and Charlson functional form. All results must be interpreted as observational associations rather than causal effects.",
+        "revision": 2
       }
     }
   ]
