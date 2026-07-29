@@ -283,22 +283,47 @@ def compare_fraction_scale_shadow(
     )
 
 
+def _blocking_message_causes(comparison: FractionScaleShadowComparison) -> str:
+    """The mismatch details, deduplicated, in the order they were recorded."""
+
+    seen: set[str] = set()
+    causes: list[str] = []
+    for mismatch in comparison.mismatches:
+        if mismatch.detail in seen:
+            continue
+        seen.add(mismatch.detail)
+        causes.append(mismatch.detail)
+    if not causes:
+        return "No mismatch detail was recorded."
+    return " ".join(causes)
+
+
 def fraction_scale_shadow_blocking_finding(
     *,
     validator_name: str,
     step_id: str,
     comparison: FractionScaleShadowComparison,
 ) -> ValidationFinding:
-    """Render one fail-closed bounded-metric migration finding."""
+    """Render one fail-closed bounded-metric migration finding.
+
+    The cause leads the message and the migration boilerplate trails it. Only
+    ``message`` reaches an LLM consumer -- ``detail`` is read by deterministic
+    repairs but is projected away before any prompt (``_compact_findings``
+    keeps validator / severity / message and clips the message to 240 chars
+    from the tail). A message that opened with boilerplate therefore delivered
+    a blocked step and no noun: the live E1 step ``06`` failure reported only
+    that a shadow "could not safely replace the legacy view", never that the
+    canonical normalizer had rejected a registered missingness partition.
+    """
 
     return ValidationFinding(
         validator=validator_name,
         severity="error",
         message=(
-            "Canonical bounded fraction/percentage shadow could not safely "
-            f"replace the legacy view for step {step_id}. Keep the legacy "
-            "consumer active until source, digest, normalization, scalar-tree, "
-            "and finding decisions agree exactly."
+            f"Bounded-metric shadow blocked step {step_id}. "
+            f"{_blocking_message_causes(comparison)} "
+            "Keep the legacy consumer active until source, digest, "
+            "normalization, scalar-tree and finding decisions agree exactly."
         ),
         detail={
             "step_id": step_id,
