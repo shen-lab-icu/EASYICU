@@ -129,6 +129,39 @@ def test_grouped_export_records_structural_unavailability_without_selecting_it(
     with open_export_package(tmp_path) as package:
         assert set(package.concept_index) == {"age"}
 
+    # Re-sealing an existing typed placeholder must preserve its structural
+    # unavailability rather than treating file existence as source evidence.
+    (tmp_path / "sepsis_shared.manifest.json").write_text(
+        json.dumps({"saved": {}, "errors": []}),
+        encoding="utf-8",
+    )
+    sidecar_file = manifest["column_metadata"]["file"]
+    (tmp_path / "_manifest.json").unlink()
+    (tmp_path / sidecar_file).unlink()
+    api._publish_native_export_v2(
+        database="miiv",
+        data_path="/raw/source-must-not-be-read",
+        output_dir=str(tmp_path),
+        modules=["demographics", "sepsis_shared"],
+        max_patients=None,
+        result={
+            "modules": {
+                "demographics": {"errors": []},
+                "sepsis_shared": {"errors": []},
+            }
+        },
+    )
+
+    republished = json.loads((tmp_path / "_manifest.json").read_text())
+    assert republished["unavailable_modules"] == manifest["unavailable_modules"]
+    assert next(
+        file
+        for file in republished["files"]
+        if file["module"] == "sepsis_shared"
+    )["availability"] == "structurally_unavailable"
+    with open_export_package(tmp_path) as package:
+        assert set(package.concept_index) == {"age"}
+
 
 def test_grouped_export_records_missing_concept_inside_physical_module(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

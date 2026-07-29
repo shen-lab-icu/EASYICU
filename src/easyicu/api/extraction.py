@@ -1830,15 +1830,7 @@ def _publish_native_export_v2(
     # source) is not an extraction failure. It has no physical file and must not
     # be silently given a typed binding; record it separately and select only
     # the files the producer actually materialized.
-    unavailable_modules = [
-        {
-            "module": module,
-            "reason": "producer_returned_no_physical_output",
-            "concept_ids": list(EXTRACT_MODULES[module]),
-        }
-        for module in modules
-        if not (output_root / f"{module}.parquet").is_file()
-    ]
+    unavailable_modules: List[Dict[str, object]] = []
     # Native-v2 promises one physical parquet per requested module. A database
     # may be structurally unable to produce an entire module (for example,
     # Sepsis-3 in a source without infection timestamps). Seal that absence as
@@ -1866,12 +1858,12 @@ def _publish_native_export_v2(
     for module in published_modules:
         relative_path = f"{module}.parquet"
         source_parquet = output_root / relative_path
-        whole_module_unavailable = not source_parquet.is_file()
+        physical_output_missing = not source_parquet.is_file()
         # This is an output validation pass, not a second scan of any raw table.
         # A structurally unavailable module starts from an empty identity frame;
         # canonicalisation below adds charttime and every requested typed value
         # column in catalog order.
-        if whole_module_unavailable:
+        if physical_output_missing:
             frame = pd.DataFrame(
                 {"stay_id": pd.Series([], dtype="int64")}
             )
@@ -1879,11 +1871,11 @@ def _publish_native_export_v2(
             frame = pd.read_parquet(source_parquet)
         original_columns = set(frame.columns)
         produced_concepts: Optional[set[str]] = (
-            set() if whole_module_unavailable else None
+            set() if physical_output_missing else None
         )
         module_manifest_path = output_root / f"{module}.manifest.json"
         if (
-            not whole_module_unavailable
+            not physical_output_missing
             and module_manifest_path.is_file()
             and not module_manifest_path.is_symlink()
         ):
@@ -1902,6 +1894,23 @@ def _publish_native_export_v2(
                             for concept in (record.get("concepts") or [])
                             if isinstance(concept, str)
                         )
+        # A sealed structural placeholder is a real zero-row parquet.  On a
+        # later metadata-only republish, file existence alone must not turn it
+        # into an "available" module.  The producer manifest's empty ``saved``
+        # mapping is the authoritative evidence that no physical concept was
+        # produced.  Preserve that status so native-v2 publication is
+        # idempotent.
+        whole_module_unavailable = physical_output_missing or (
+            frame.empty and produced_concepts == set()
+        )
+        if whole_module_unavailable:
+            unavailable_modules.append(
+                {
+                    "module": module,
+                    "reason": "producer_returned_no_physical_output",
+                    "concept_ids": list(EXTRACT_MODULES[module]),
+                }
+            )
         structurally_unavailable = {
             concept
             for concept in requested_concept_plan[module]
