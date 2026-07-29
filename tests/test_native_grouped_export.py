@@ -260,6 +260,27 @@ def test_native_schema_preserves_numeric_logical_and_categorical_families() -> N
     assert str(canonical["ecmo_indication"].dtype) == "string"
 
 
+def test_native_schema_accepts_multi_class_numeric_concept() -> None:
+    dictionary = api.load_dictionary(include_sofa2=True)
+    assert isinstance(dictionary["dex"].class_name, list)
+
+    canonical = api._canonicalise_native_export_frame(
+        pd.DataFrame(
+            {
+                "stay_id": [101],
+                "charttime": [0.5],
+                "dex": [0.7],
+            }
+        ),
+        module="medications",
+        requested_concepts=["dex"],
+        dictionary=dictionary,
+    )
+
+    assert canonical["dex"].dtype == "float64"
+    assert canonical["dex"].tolist() == [0.7]
+
+
 def test_grouped_export_reads_special_concept_from_saved_key(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
