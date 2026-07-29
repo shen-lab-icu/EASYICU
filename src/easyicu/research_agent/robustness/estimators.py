@@ -40,6 +40,88 @@ class EstimatorResult:
     notes: str = ""
 
 
+class _UncodeableDesign(Exception):
+    """A declared predictor cannot be coded without leaving the design.
+
+    Private to this module: it exists so the refusal reaches the caller as a
+    non-converged result instead of as a note nobody reads on a frame that then
+    raises `could not convert string to float` three lines later.
+    """
+
+
+def _encode_categorical_predictors(
+    x_df: Any, *, pd: Any
+) -> Tuple[Any, str, Dict[str, List[str]]]:
+    """Return the design with non-numeric predictors treatment-coded.
+
+    The design matrix is built here, so encoding belongs here: casting the
+    frame straight to float is what made a real run's primary adjusted
+    association die with ``could not convert string to float: 'Male'`` after
+    the host had claimed the step, on a plan whose adjustment set was exactly
+    the one it declared.  Doing it in one caller would leave the robustness
+    replay -- which fits the same models through this same function so that a
+    disagreement between them is a real disagreement -- with the old failure.
+
+    The reference level is the first observed level in sorted order, not
+    whatever order the rows happened to arrive in, and the retained columns are
+    named ``column=level`` so the contrast a coefficient reports is readable
+    rather than positional.
+
+    A predictor with one observed level is refused rather than encoded.  It
+    yields no contrast column at all, so it would leave the design without ever
+    reaching the rank guard that refuses to drop declared predictors -- that
+    guard can only see columns that exist.  Measured on the first draft of this
+    function: a constant column produced a converged fit whose adjustment set
+    was silently one predictor shorter than the plan declared.
+    """
+
+    categorical = [
+        column
+        for column in x_df.columns
+        if not pd.api.types.is_numeric_dtype(x_df[column])
+        and not pd.api.types.is_bool_dtype(x_df[column])
+    ]
+    if not categorical:
+        return x_df, "", {}
+
+    degenerate = sorted(
+        column
+        for column in categorical
+        if len({str(value) for value in x_df[column].tolist()}) < 2
+    )
+    if degenerate:
+        raise _UncodeableDesign(
+            "declared predictor(s) hold one observed level and cannot be "
+            "coded without dropping them from the declared adjustment set: "
+            + ", ".join(degenerate)
+        )
+
+    encoded: Dict[str, List[str]] = {}
+    frame = x_df
+    for column in categorical:
+        levels = sorted({str(value) for value in frame[column].tolist()})
+        reference = levels[0]
+        retained = [level for level in levels if level != reference]
+        names = [f"{column}={level}" for level in retained]
+        indicators = pd.DataFrame(
+            {
+                f"{column}={level}": (frame[column].astype(str) == level).astype(float)
+                for level in retained
+            },
+            index=frame.index,
+        )
+        frame = pd.concat([frame.drop(columns=[column]), indicators], axis=1)
+        encoded[column] = names
+
+    note = "; ".join(
+        f"{column} treatment-coded against "
+        f"{sorted({str(value) for value in x_df[column].tolist()})[0]!r}"
+        for column in categorical
+        if x_df[column].tolist()
+    )
+    return frame, note, encoded
+
+
 def _robust_design(x_const: Any, *, keep: Sequence[str]) -> Tuple[Any, List[str]]:
     """Drop degenerate predictors so the fit is not rank-deficient.
 
@@ -160,6 +242,33 @@ def fit_estimator(
         )
     x_df = combined.drop(columns=["__y__"])
     y_series = combined["__y__"]
+    try:
+        x_df, encoding_note, encoded_map = _encode_categorical_predictors(x_df, pd=pd)
+    except _UncodeableDesign as exc:
+        return EstimatorResult(
+            None, None, None, None, n, False, _join_notes(str(exc), cohort_note)
+        )
+    if term is not None and term in encoded_map:
+        # Do not quietly answer for one of its contrasts.  A caller asking for
+        # "sex" after sex became sex=Male is asking for something the design
+        # does not contain, and picking a contrast for them is the same
+        # positional guessing that `term` exists to remove.  Name the columns
+        # it became so the caller can ask for the exact contrast it means.
+        return EstimatorResult(
+            None,
+            None,
+            None,
+            None,
+            n,
+            False,
+            _join_notes(
+                f"requested term {term!r} is categorical and was encoded as "
+                + ", ".join(encoded_map[term])
+                + "; name the exact contrast to report",
+                cohort_note,
+            ),
+        )
+    cohort_note = _join_notes(cohort_note, encoding_note)
     if x_df.shape[1] == 0:
         return EstimatorResult(
             None,
