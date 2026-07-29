@@ -40,6 +40,7 @@ import shutil
 import stat
 import tempfile
 import threading
+import traceback
 from contextvars import copy_context
 from dataclasses import dataclass
 from enum import Enum
@@ -11799,6 +11800,56 @@ def run_execute_phase(
             total_steps = len(plan.steps)
             return remaining
 
+        def _record_step_exception(
+            step: AnalysisStep,
+            error: BaseException,
+        ) -> None:
+            """Seal a terminal record for a step that raised instead of returning.
+
+            The coordinator stops the run fail-closed; this only makes sure the
+            run says why. Before it existed, an escaping exception left no
+            manifest at all, so the operator saw a traceback and the run
+            directory held nothing that named the failing step.
+
+            The traceback is persisted deliberately. Not propagating the
+            exception is what keeps the run sealable, but there are ~2,900
+            raise sites behind this call, so the frames are the only thing that
+            says which one fired -- dropping them would trade one lost
+            diagnosis for another.
+            """
+
+            detail = f"{type(error).__name__}: {error}".strip()
+            crash_record: Dict[str, Any] = {
+                "step_id": step.step_id,
+                "status": "execution_raised",
+                "error": detail,
+                "error_type": type(error).__name__,
+                "traceback": "".join(
+                    traceback.format_exception(
+                        type(error), error, error.__traceback__
+                    )
+                ),
+            }
+            with shared_lock:
+                findings.append(
+                    ValidationFinding(
+                        validator="step_execution_exception",
+                        severity="error",
+                        message=(
+                            f"Step {step.step_id} raised {detail} instead of "
+                            "returning a step record, so the run stopped "
+                            "fail-closed before any later step."
+                        ),
+                        detail={
+                            "reason": "step_execution_raised",
+                            "step_id": step.step_id,
+                            "error_type": type(error).__name__,
+                        },
+                    )
+                )
+                _append_terminal_step_record(per_step_records, crash_record)
+                _flush_partial_manifest({"step_execution_raised": step.step_id})
+
         # ``steps_to_run`` carries the fail-closed preflight decision; recomputing
         # from the full plan here would revive
         # every step after a typed-DAG/trajectory contract ERROR and spend
@@ -11813,6 +11864,7 @@ def run_execute_phase(
             execute_step=_execute_one_step,
             resolve_transition=_resolve_run_transition,
             apply_revised_plan=_apply_revised_plan,
+            on_step_exception=_record_step_exception,
         )
     else:
 
