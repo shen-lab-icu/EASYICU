@@ -27,12 +27,39 @@ production caller; it was deleted rather than downgraded to a warning.
 
 ``test_the_repeat_changes_nothing_at_all`` is the load-bearing one: it is what
 makes deleting the check safe rather than merely convenient.
+
+The rule had TWO owners, and the first fix hit the copy that was not on the
+failing path. ``run_20260729T084225_cf05f9`` raised the same class again from
+``authority/typed_binding.py::_write_resolved_inputs_manifest``, which is what
+the execute phase actually calls. That traceback only exists because a step that
+raises is now recorded instead of ending the run silently -- before that, this
+crash produced no manifest and no line number, which is how a copy came to be
+fixed in place of the rule.
+
+That run also shows the host manufacturing the repeat itself, so blaming the
+Planner for it was wrong. Step ``05_missingness_event_timing_audit``:
+
+    revision 1 (Planner)                13 inputs, no ``lact_n``
+    revision 2 (host input closure)     18 inputs, ``lact_n`` appended
+    revision 3 (Replanner)              39 inputs, ``lact_n`` twice
+
+``close_measurement_companion_inputs`` appends registered ``_measured``/``_n``
+companions to a step's public inputs; the replan then rewrote that step's
+inputs, kept the appended tail verbatim, and re-declared one of the same names
+in its own expanded body. Neither side is wrong, which is the point: refusing
+the list turns an ordinary merge into a dead run.
 """
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
+from easyicu.research_agent.authority.typed_binding import (
+    _write_resolved_inputs_manifest,
+)
 from easyicu.research_agent.research_context.typed import (
     resolved_raw_input_contracts,
 )
@@ -125,3 +152,124 @@ def test_an_undeclared_name_still_fails_closed() -> None:
 
     with pytest.raises(ValueError, match="lacks a context descriptor"):
         resolved_raw_input_contracts(_context(), ("lact_n", "not_a_real_column"))
+
+
+# ---------------------------------------------------------------------------
+# The second owner: the one the execute phase actually calls.
+# ---------------------------------------------------------------------------
+
+# Step 05 of run_20260729T084225_cf05f9 exactly as revision 3 declared it. The
+# tail from ``charlson_measured`` on is what the host's input closure appended
+# to revision 2; ``lact_n`` at index 15 is the replan's own re-declaration.
+_REAL_STEP_05 = [
+    "artifact:analysis_cohort",
+    "sep3_sofa2_max",
+    "sep3_sofa2_measured",
+    "sep3_sofa2_n",
+    "sep3_sofa2_first_time",
+    "susp_inf_first_time",
+    "susp_inf_measured",
+    "susp_inf_n",
+    "death",
+    "death_time",
+    "age",
+    "sex",
+    "charlson_max",
+    "lact_first",
+    "lact_measured",
+    "lact_n",
+    "sofa2_measured",
+    "sofa2_n",
+    "charlson_measured",
+    "charlson_n",
+    "lact_n",
+]
+
+
+_COHORT_BINDING = {"evidence_id": "development_execution_cohort", "kind": "artifact"}
+
+
+def _write(tmp_path: Path, declared: list, *, bindings=None) -> dict:
+    if bindings is None:
+        bindings = {
+            name: _COHORT_BINDING
+            for name in dict.fromkeys(declared)
+            if isinstance(name, str) and ":" in name
+        }
+    path = _write_resolved_inputs_manifest(
+        run_dir=tmp_path,
+        step_id="05_missingness_event_timing_audit",
+        planner_declared_inputs=declared,
+        bindings=bindings,
+    )
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def test_the_real_step_05_declaration_writes_a_manifest(tmp_path: Path) -> None:
+    """The regression: this list ended the run nine steps early."""
+
+    payload = _write(tmp_path, _REAL_STEP_05)
+
+    assert payload["step_id"] == "05_missingness_event_timing_audit"
+
+
+def test_the_written_manifest_holds_each_name_once_in_declared_order(
+    tmp_path: Path,
+) -> None:
+    declared = _write(tmp_path, _REAL_STEP_05)["planner_declared_inputs"]
+
+    assert declared.count("lact_n") == 1
+    # First occurrence wins, so the replan's own ordering survives and only the
+    # closure's trailing repeat is dropped.
+    assert declared.index("lact_n") == _REAL_STEP_05.index("lact_n")
+    assert declared == [
+        name for i, name in enumerate(_REAL_STEP_05) if name not in _REAL_STEP_05[:i]
+    ]
+
+
+def test_the_manifest_now_satisfies_its_reader_by_construction(
+    tmp_path: Path,
+) -> None:
+    """The load-bearing one for this half.
+
+    ``authority/typed_input_receipt.py::_binding_for_input`` re-checks exactly
+    these two predicates on the written manifest and raises
+    ``TypedInputReceiptError`` if either fails. Deduplicating at the single
+    write point makes them true by construction, so that reader keeps its check
+    without a second policy having to agree with this one.
+    """
+
+    declared = _write(tmp_path, _REAL_STEP_05)["planner_declared_inputs"]
+
+    assert len(set(declared)) == len(declared)
+    assert all(declared.count(name) == 1 for name in declared)
+
+
+def test_a_repeat_does_not_change_the_manifest_at_all(tmp_path: Path) -> None:
+    """Same justification as the first owner: the repeat carried no payload.
+
+    The contrast that matters is the declaration the host would have written
+    had the replan not repeated the name -- not one with every copy removed,
+    which is a genuinely different declaration.
+    """
+
+    deduped = [
+        name for i, name in enumerate(_REAL_STEP_05) if name not in _REAL_STEP_05[:i]
+    ]
+
+    assert _write(tmp_path, _REAL_STEP_05) == _write(tmp_path, deduped)
+
+
+def test_an_empty_or_non_string_input_still_fails_closed(tmp_path: Path) -> None:
+    """Relaxing "declared twice" must not relax "not a name at all"."""
+
+    for bad in ("", "   ", None, 7):
+        with pytest.raises(ValueError, match="non-empty strings"):
+            _write(tmp_path, ["age", bad])
+
+
+def test_an_unbound_typed_input_still_fails_closed(tmp_path: Path) -> None:
+    """The check with real true positives is untouched."""
+
+    with pytest.raises(ValueError, match="exact Planner-declared typed inputs"):
+        _write(tmp_path, ["artifact:analysis_cohort", "age"], bindings={})

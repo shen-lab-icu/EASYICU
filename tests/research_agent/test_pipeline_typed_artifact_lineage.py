@@ -1073,10 +1073,13 @@ def test_resolved_inputs_manifest_rejects_missing_declared_typed_binding(
         )
 
 
+# A repeated name is deduplicated rather than refused -- it indexes the same
+# binding twice and the host's own input closure manufactures the repeat. See
+# test_repeated_raw_input_is_not_ambiguous.py, which owns that behaviour for
+# both writers of this list.
 @pytest.mark.parametrize(
     ("planner_declared_inputs", "message"),
     [
-        (["selected_first", "selected_first"], "must not contain duplicates"),
         ([""], "only non-empty strings"),
         ([1], "only non-empty strings"),
     ],
