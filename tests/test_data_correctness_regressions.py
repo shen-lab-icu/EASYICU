@@ -11,7 +11,13 @@ import pytest
 from easyicu import api
 from easyicu.api import concepts as concept_api
 from easyicu.api import extraction as extraction_api
-from easyicu.datasource import load_bucketed_table_aggregated
+from easyicu.config import load_src_cfg
+from easyicu.datasource import (
+    FilterOp,
+    FilterSpec,
+    ICUDataSource,
+    load_bucketed_table_aggregated,
+)
 from easyicu.io.data_converter import ConversionStatus, DataConverter
 from easyicu.table import ICUTable
 
@@ -368,6 +374,41 @@ def test_inline_unit_conversion_resolves_configured_column_case_insensitively(
     )
 
     assert result["value"].tolist() == pytest.approx([30.0, 40.0])
+
+
+def test_partitioned_arrow_projection_resolves_mimic_uppercase_columns(
+    tmp_path: Path,
+) -> None:
+    partition = tmp_path / "inputevents_cv"
+    partition.mkdir()
+    pd.DataFrame(
+        {
+            "ICUSTAY_ID": [1, 2, 2],
+            "ITEMID": [10, 10, 11],
+            "VALUENUM": [1.0, 2.0, 3.0],
+        }
+    ).to_parquet(partition / "part-0.parquet", index=False)
+    source = ICUDataSource(
+        load_src_cfg("mimic"),
+        base_path=tmp_path,
+        enable_cache=False,
+    )
+
+    frame = source._read_partitioned_data_optimized(
+        partition,
+        columns=["icustay_id", "itemid", "valuenum"],
+        patient_ids_filter=FilterSpec(
+            column="icustay_id",
+            op=FilterOp.IN,
+            value=[2],
+        ),
+        itemid_filter_config=("itemid", {10}),
+    )
+
+    assert list(frame.columns) == ["icustay_id", "itemid", "valuenum"]
+    assert frame.to_dict("records") == [
+        {"icustay_id": 2, "itemid": 10, "valuenum": 2.0}
+    ]
 
 
 def test_mimic_hospital_value_transform_carries_unit_through_rolling_cte(

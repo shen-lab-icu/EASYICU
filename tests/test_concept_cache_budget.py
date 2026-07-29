@@ -20,6 +20,8 @@ All tests use tiny synthetic frames and run without ``--run-real``.
 """
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import numpy as np
 import pandas as pd
 
@@ -54,6 +56,19 @@ def test_budget_env_pins_and_disables(monkeypatch):
     assert _resolve_cache_budget_bytes() is None
     monkeypatch.setenv("EASYICU_CACHE_BUDGET_MB", "-1")
     assert _resolve_cache_budget_bytes() is None
+
+
+def test_default_budget_is_conservative_on_16gb_host(monkeypatch):
+    import psutil
+
+    monkeypatch.delenv("EASYICU_CACHE_BUDGET_MB", raising=False)
+    monkeypatch.setattr(
+        psutil,
+        "virtual_memory",
+        lambda: SimpleNamespace(total=16 * 1024**3),
+    )
+
+    assert _resolve_cache_budget_bytes() == 512 * 1024**2
 
 
 def test_store_evicts_to_stay_within_budget(monkeypatch):

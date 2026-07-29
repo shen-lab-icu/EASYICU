@@ -2422,13 +2422,31 @@ class ICUDataSource:
                 partitioning=None,
                 exclude_invalid_files=True
             )
+            schema_names = list(dataset.schema.names)
+            schema_by_lower = {
+                str(name).lower(): str(name) for name in schema_names
+            }
+            requested_columns = list(columns) if columns else None
+            actual_columns = None
+            actual_to_requested = {}
+            if requested_columns is not None:
+                actual_columns = []
+                for requested in requested_columns:
+                    actual = schema_by_lower.get(str(requested).lower())
+                    if actual is None:
+                        continue
+                    if actual not in actual_columns:
+                        actual_columns.append(actual)
+                    actual_to_requested[actual] = str(requested)
             
             # 构建过滤表达式（支持多个条件）
             filter_exprs = []
             
             # 患者 ID 过滤
             if patient_ids_filter:
-                id_col = patient_ids_filter.column
+                id_col = schema_by_lower.get(
+                    str(patient_ids_filter.column).lower()
+                )
                 values = patient_ids_filter.value
                 if isinstance(values, (list, tuple, set)):
                     value_list = list(values)
@@ -2441,8 +2459,16 @@ class ICUDataSource:
                         value_list = [values]
 
                 if not value_list:
-                    wanted_cols = list(columns) if columns else dataset.schema.names
+                    wanted_cols = requested_columns or schema_names
                     return pd.DataFrame(columns=wanted_cols)
+                if id_col is None:
+                    logger.warning(
+                        "Partitioned read cannot apply patient filter: "
+                        "column %s is absent from %s",
+                        patient_ids_filter.column,
+                        directory,
+                    )
+                    return pd.DataFrame(columns=requested_columns or schema_names)
 
                 try:
                     filter_exprs.append(ds.field(id_col).isin(value_list))
@@ -2453,9 +2479,18 @@ class ICUDataSource:
             if itemid_filter_config:
                 try:
                     filter_col, filter_ids = itemid_filter_config
-                    filter_exprs.append(ds.field(filter_col).isin(list(filter_ids)))
+                    actual_filter_col = schema_by_lower.get(
+                        str(filter_col).lower()
+                    )
+                    if actual_filter_col is None:
+                        return pd.DataFrame(
+                            columns=requested_columns or schema_names
+                        )
+                    filter_exprs.append(
+                        ds.field(actual_filter_col).isin(list(filter_ids))
+                    )
                     if DEBUG_MODE:
-                        logger.info("Large-table optimization (PyArrow): filtering %s to %d IDs", filter_col, len(filter_ids))
+                        logger.info("Large-table optimization (PyArrow): filtering %s to %d IDs", actual_filter_col, len(filter_ids))
                 except Exception:
                     pass
             
@@ -2479,9 +2514,9 @@ class ICUDataSource:
             else:
                 thread_count = min((_os.cpu_count() or 4), 8)
             
-            if columns:
+            if requested_columns is not None:
                 table = dataset.to_table(
-                    columns=list(columns), 
+                    columns=actual_columns,
                     filter=filter_expr,
                     use_threads=thread_count  # 明确线程数
                 )
@@ -2492,7 +2527,11 @@ class ICUDataSource:
                 )
 
             # 转换为 pandas，使用 zero-copy 优化
-            return _arrow_to_pandas_compat(table, split_blocks=True)
+            frame = _arrow_to_pandas_compat(table, split_blocks=True)
+            if requested_columns is not None:
+                frame = frame.rename(columns=actual_to_requested)
+                frame = frame.reindex(columns=requested_columns)
+            return frame
             
         except Exception:
             # 回退到简单方式
