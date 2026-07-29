@@ -185,7 +185,7 @@ def test_native_assistant_labels_disambiguate_page_guide_guided_copilot_and_agen
     assert "Open Copilot" not in help_js
 
     assert "css/dock.css?v=20260625-stage99" in index_html
-    assert "js/app.js?v=20260729-one11" in index_html
+    assert "js/app.js?v=20260729-plain3" in index_html
     assert "js/copilot-dock.js?v=20260712-ux-fixes" in index_html
     assert "js/screens-extraction.js?v=20260712-ux-fixes" in index_html
     assert "js/screens-agent.js?v=20260712-ux-fixes" in index_html
@@ -328,7 +328,7 @@ def test_native_tutorial_screen_uses_active_language_without_mixed_copy() -> Non
     assert ">No tokens, no setup, no patient data. The demo generates" not in help_js
     assert "How a study moves through EasyICU</h2>" not in help_js
 
-    assert "js/app.js?v=20260729-one11" in index_html
+    assert "js/app.js?v=20260729-plain3" in index_html
     assert "js/screens-help.js?v=20260712-ux-fixes" in index_html
 
 
@@ -354,7 +354,7 @@ def test_native_guided_and_page_guide_messages_are_bilingual() -> None:
         "js/screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
         in index_html
     )
-    assert "js/screens-guided.js?v=20260729-one11" in index_html
+    assert "js/screens-guided.js?v=20260729-plain3" in index_html
     assert "js/copilot-dock.js?v=20260712-ux-fixes" in index_html
 
 
@@ -545,7 +545,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     guided_plan_css = _static_css("guided-idea-plan.css")
     redesign_css = _static_css("redesign.css")
 
-    assert "css/guided.css?v=20260729-one11" in index_html
+    assert "css/guided.css?v=20260729-plain3" in index_html
     assert "css/guided-idea-plan.css?v=20260627-ideas-feasibility-plan" in index_html
     assert "js/api.js?v=20260727-patient-demo2" in index_html
     assert (
@@ -643,7 +643,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert ".gdi-plan-details" in guided_plan_css
     assert ".gdi-feature-row.one" in guided_plan_css
     assert ".gdi-plan-details" not in redesign_css
-    assert "js/screens-guided.js?v=20260729-one11" in index_html
+    assert "js/screens-guided.js?v=20260729-plain3" in index_html
 
 
 def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
@@ -659,7 +659,7 @@ def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
     index_html = _static_html("index.html")
 
     assert "js/screens-agent.js?v=20260712-ux-fixes" in index_html
-    assert "css/agent.css?v=20260729-one11" in index_html
+    assert "css/agent.css?v=20260729-plain3" in index_html
     assert "css/agent-layout.css?v=20260702-agent-focus-layout" in index_html
     assert "css/agent-header.css?v=20260702-agent-compact-header" in index_html
     assert "css/agent-review.css?v=20260702-agent-review-compact" in index_html
@@ -804,7 +804,7 @@ def test_native_agent_research_blocks_are_project_owned() -> None:
     assert ".ag-wf-cell" in agent_css
     assert ".ag-lib-card" in agent_css
     assert ".ag-block-contract" in agent_css
-    assert "css/agent.css?v=20260729-one11" in index_html
+    assert "css/agent.css?v=20260729-plain3" in index_html
     assert "js/screens-agent.js?v=20260712-ux-fixes" in index_html
 
     assert "ag-block-grid" not in app_js
@@ -1452,7 +1452,7 @@ def test_native_idea_mining_is_first_class_route_and_backend_wired() -> None:
     assert "css/ideas.css?v=20260630-gate-first-ideas" in index_html
     assert "css/shell.css?v=20260626-owner" in index_html
     assert "js/icons.js?v=20260625-stage84" in index_html
-    assert "js/app.js?v=20260729-one11" in index_html
+    assert "js/app.js?v=20260729-plain3" in index_html
     assert "css/ideas-review.css?v=20260702-idea-review-handoff" in index_html
     assert "css/ideas-connectors.css?v=20260702-zotero-simple" in index_html
     assert "js/screens-ideas-zotero.js?v=20260702-zotero-origin" in index_html
@@ -2335,8 +2335,10 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert "openGuidedProjectMemory(row, localDraftEl, 'draft')" in guided_js
     assert "Memory is scoped to" in guided_js
     assert "Idea Mining and Agent Projects still own their own artifacts" in guided_js
-    assert "Pick a goal to start" in guided_js
-    assert "Project memory bound" in guided_js
+    # The folder strip reports where the study lives once there is one, instead
+    # of explaining storage to someone who has not started yet.
+    assert "Saved on this machine" in guided_js
+    assert "已存到本机" in guided_js
     assert "pendingGuidedGoal" in guided_js
     assert "requireGuidedProjectMemory(goal, label)" in guided_js
     assert "if (!force) return Promise.resolve(null);" in guided_js
@@ -2353,9 +2355,10 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert "Choose a goal" in guided_js
     assert "data-guided-goal" in guided_js
     assert "data-guided-handoff" in guided_js
-    assert (
-        "If no folder is bound yet, I set up a starter folder in one click" in guided_js
-    )
+    # No longer promised, because it no longer needs promising: picking a
+    # goal just does it. The reader is told after, with the path.
+    assert "Pick whichever is closest" in guided_js
+    assert "挑一个最接近的就行" in guided_js
     assert "Find a Study Idea" in guided_js
     assert "Prepare Data" in guided_js
     assert "Run a Research Project" in guided_js
@@ -2536,9 +2539,9 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
         "screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
         in index_html
     )
-    assert "screens-guided.js?v=20260729-one11" in index_html
-    assert "guided.css?v=20260729-one11" in index_html
-    assert "guided-rail.css?v=20260729-one11" in index_html
+    assert "screens-guided.js?v=20260729-plain3" in index_html
+    assert "guided.css?v=20260729-plain3" in index_html
+    assert "guided-rail.css?v=20260729-plain3" in index_html
     assert "gd-name\">${t('Guided Copilot', '研究引导')}</span>" in guided_js
     assert "Guided Copilot · local first · nothing leaves your machine" in guided_js
     assert "[t('Review Data', '审阅已有数据'), '@guidedGoal:review_data']" in guided_js
@@ -3431,13 +3434,21 @@ def test_guided_frontdoor_offers_one_click_starter_folder() -> None:
     # one-click token + handler + helper all present
     assert "@folderquick" in guided_js
     assert "function quickCreateGuidedStarterFolder(" in guided_js
-    # the require-folder gate leads with the one-click option (not only the dialog)
-    assert "Create a starter folder & continue" in guided_js
-    # quick-create resumes the goal the user already picked
+    # There is no longer a choice to lead with: picking a goal creates the
+    # folder and continues, because a reader who just answered "what do you
+    # want to study" was being asked about paths instead of being taken at
+    # their word. The one-click chip is gone because zero clicks replaced it.
+    assert "quickCreateGuidedStarterFolder();" in guided_js
+    assert "Create a starter folder & continue" not in guided_js
+    assert "只差一步快速设置" not in guided_js
+    # quick-create still resumes the goal the user already picked
     assert "continueGoal" in guided_js
-    # the frontdoor banner is reassuring, not a hard prerequisite wall
+    # ...and the write is still disclosed, with how to undo it
+    assert "Nothing leaves your computer, and you can delete it or move it later." in guided_js
+    # the frontdoor never demanded path setup up front, and now never mentions
+    # a folder until there is one to report
     assert "Start by binding a local study folder" not in guided_js
-    assert "Pick a goal to start" in guided_js
+    assert "每条对话都必须先绑定到本地研究文件夹" not in guided_js
 
 
 def test_science_workbench_framed_as_part_of_study() -> None:
