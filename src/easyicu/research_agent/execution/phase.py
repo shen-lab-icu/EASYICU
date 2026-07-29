@@ -97,6 +97,7 @@ from ..repairs.source import (
     _deterministic_summary_repair,
     deterministic_contract_repair,
 )
+from ..repairs.attempt_record import record_deterministic_runner_repair_attempt
 from .code_hygiene import reorder_forward_references
 from ..repairs.coordination import (
     RepairAuthorityBinding,
@@ -305,7 +306,9 @@ from ..gates.semantics import (
 )
 from ..providers.mocks import MockLLMClient
 from ..providers.prompt_budget import (
-    budgeted_coder_clients, budgeted_role_client, budgeted_vlm_client
+    budgeted_coder_clients,
+    budgeted_role_client,
+    budgeted_vlm_client,
 )
 from ..planning.cohort_contract import (
     CohortSchemaError,
@@ -970,7 +973,6 @@ def _planner_materialized_cohort_prompt_payload(
         sort_keys=True,
         separators=(",", ":"),
     )
-
 
 
 def _failed_contract_code_can_be_reused_before_coder(
@@ -5502,7 +5504,8 @@ def run_execute_phase(
             authority=coder_authority,
             locked_cohort_payload=(
                 _planner_locked_cohort_prompt_payload(plan)
-                if step_record.get("execution_cohort_role") == _RAW_UNIVERSE_EXECUTION_ROLE
+                if step_record.get("execution_cohort_role")
+                == _RAW_UNIVERSE_EXECUTION_ROLE
                 else None
             ),
             materialized_execution_payload=(
@@ -5799,7 +5802,9 @@ def run_execute_phase(
                 primary_cohort_execution_receipt=primary_cohort_execution_receipt,
             ),
         )
-        step_record["flag_only_plausibility_scope"] = plausibility_authority.scope.to_dict()
+        step_record["flag_only_plausibility_scope"] = (
+            plausibility_authority.scope.to_dict()
+        )
         resolved_inputs_path = _write_resolved_inputs_manifest(
             run_dir=run_dir,
             step_id=step.step_id,
@@ -6128,7 +6133,9 @@ def run_execute_phase(
                     step_record["step_authority_capsule_stage"] = (
                         step_attempt_state.selected_resume_capsule.capsule.stage
                     )
-                    selected_digest = step_attempt_state.selected_resume_capsule.capsule.candidate_code.sha256
+                    selected_digest = (
+                        step_attempt_state.selected_resume_capsule.capsule.candidate_code.sha256
+                    )
                     if (
                         step_attempt_state.selected_resume_capsule.capsule.concept_audit
                         is not None
@@ -7228,7 +7235,8 @@ def run_execute_phase(
             authority=ConceptAuditAuthority(
                 context=context,
                 step=step,
-                resolved_input_bindings=resolved_input_bindings, plausibility_scope=plausibility_authority.scope,
+                resolved_input_bindings=resolved_input_bindings,
+                plausibility_scope=plausibility_authority.scope,
                 environment_sha256=concept_audit_environment_sha256,
                 auditor_implementation_sha256=(
                     llm_concept_auditor_implementation_sha256
@@ -8533,7 +8541,9 @@ def run_execute_phase(
                     **run_input_authority_state.runner_bindings(),
                     timeout_seconds=execution_timeout_seconds,
                 )
-            execution_timeout_seconds = step_executor.runner_timeout(execution_runner, execution_timeout_seconds)
+            execution_timeout_seconds = step_executor.runner_timeout(
+                execution_runner, execution_timeout_seconds
+            )
             emit_progress(
                 "runner",
                 f"Running {run_label} for {step.step_id}.",
@@ -9633,7 +9643,9 @@ def run_execute_phase(
                 early_contract_findings = _demote_step_contract_for_primary_runner(
                     step_record, visual_step_summary, early_contract_findings
                 )
-                early_contract_findings += _fresh_plausibility_receipt_findings(visual_step_summary, step, code, plausibility_authority)
+                early_contract_findings += _fresh_plausibility_receipt_findings(
+                    visual_step_summary, step, code, plausibility_authority
+                )
                 early_contract_errors = [
                     f for f in early_contract_findings if f.severity == "error"
                 ]
@@ -10210,8 +10222,24 @@ def run_execute_phase(
                     ),
                     before_code=before_repair_code,
                 )
+                record_deterministic_runner_repair_attempt(
+                    step_record,
+                    code=before_repair_code,
+                    run_log=run_log,
+                    previous_repair=worker_progress.runner_repair_name,
+                    outcome=("applied" if runner_repair is not None else "declined"),
+                    repair_id=(runner_repair[0] if runner_repair is not None else None),
+                )
             else:
                 runner_repair = None
+                record_deterministic_runner_repair_attempt(
+                    step_record,
+                    code=code,
+                    run_log=run_log,
+                    previous_repair=worker_progress.runner_repair_name,
+                    outcome="disabled",
+                    repair_id=None,
+                )
             if runner_repair is not None:
                 worker_progress.runner_repair_name, code = runner_repair
                 step_record["runner_repair"] = worker_progress.runner_repair_name
@@ -10420,9 +10448,7 @@ def run_execute_phase(
         figure_role = (
             "publication_figure"
             if publication_step
-            else "analysis_figure"
-            if _step_expects_figure(step)
-            else None
+            else "analysis_figure" if _step_expects_figure(step) else None
         )
         if (
             publication_step
@@ -11116,7 +11142,8 @@ def run_execute_phase(
             step_record=step_record,
             completed_step_records=completed_records_snapshot,
             resolved_input_bindings=resolved_input_bindings,
-            plausibility_scope=plausibility_authority.scope, script_text=code,
+            plausibility_scope=plausibility_authority.scope,
+            script_text=code,
             attempt_id=attempt_id,
             checkpoint_id=review_checkpoint_id,
             stat_validator=stat_validator,
@@ -11825,9 +11852,7 @@ def run_execute_phase(
                 "error": detail,
                 "error_type": type(error).__name__,
                 "traceback": "".join(
-                    traceback.format_exception(
-                        type(error), error, error.__traceback__
-                    )
+                    traceback.format_exception(type(error), error, error.__traceback__)
                 ),
             }
             with shared_lock:
