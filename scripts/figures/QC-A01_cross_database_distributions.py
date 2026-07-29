@@ -749,6 +749,10 @@ def draw_payload(
             y = subset["density_smoothed"].to_numpy()
             label = f"{DATABASE_LABELS[database]} (n={int(subset['total_finite'].iloc[0]):,})"
             ax.plot(x, y, color=DATABASE_COLORS[database], lw=1.35, label=label)
+        # Dense multi-panel pages have limited horizontal room.  Cap the
+        # number of major ticks so decimal labels (for example 0.00--1.25)
+        # cannot collide in narrow panels.
+        ax.xaxis.set_major_locator(mpl.ticker.MaxNLocator(nbins=4, min_n_ticks=3))
         ax.set_xlabel(value_axis_label(payload))
         ax.set_ylabel("Density")
     elif payload.kind == "binary":
@@ -790,7 +794,7 @@ def draw_payload(
                 )
             else:
                 ax.text(
-                    0,
+                    label_pad * 0.45,
                     position,
                     "N/A",
                     ha="left",
