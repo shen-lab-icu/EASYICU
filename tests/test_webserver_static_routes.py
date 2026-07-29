@@ -3517,17 +3517,27 @@ def test_demo_mode_is_unmistakable_and_single_source_of_truth() -> None:
     i18n_js = _static_js("i18n.js")
     app_css = _static_css("app.css")
     guided_js = _static_js("screens-guided.js")
-    assert "demo-active" in app_js
+    # The control moved to the surface owner when the navigation shell went
+    # away. The guarantee did not move: it is still the one thing on screen
+    # that states demo vs real, and it is still derived in exactly one place.
+    one_js = _static_js("screens-one.js")
+    assert "demo-active" in one_js
     assert ".mode-seg.demo-active" in app_css
-    assert "官方公开去标识 Demo 数据集" in app_js
-    assert "明确标注的种子示例" in app_js
+    assert "官方公开去标识 Demo 数据集" in one_js
+    assert "明确标注的种子示例" in one_js
+    assert "所有数字都是种子示例" not in one_js
     assert "所有数字都是种子示例" not in app_js
+    # Single source of truth, asserted rather than assumed: the surface renders
+    # the control but must call app.js's derivation instead of repeating it.
+    assert "window.EU_DISPLAYED_DATA_MODE = displayedDataMode;" in app_js
+    assert "window.EU_DISPLAYED_DATA_MODE()" in one_js
+    assert "window.getDataMode" not in one_js
     assert "window.EU_DATA_MODE_CONTEXT = null;" in i18n_js
     assert "window.setDataModeContext = function" in i18n_js
     assert "window.getDataMode = function" in i18n_js
     assert "window.setDataModeContext(null);" in i18n_js
     assert "const dataMode = displayedDataMode();" in app_js
-    assert "t('Official demo', '官方演示')" in app_js
+    assert "t('Official demo', '官方演示')" in one_js
     assert (
         "if (window.EU_DATA === 'real' && dataMode !== 'real') dataMode = 'real';"
         in guided_js

@@ -128,6 +128,9 @@
       ? window.getDataMode()
       : (window.EU_DATA === 'real' ? 'real' : 'demo')
   );
+  /* The surface renders the data-mode control but must not re-derive the mode:
+     a second copy of this expression is how "demo" and "real" drift apart. */
+  window.EU_DISPLAYED_DATA_MODE = displayedDataMode;
 
   function syncShellAccessibility(root, fullScreen) {
     if (fullScreen && root.firstElementChild) {
@@ -178,33 +181,23 @@
     return { top, bottom };
   }
 
-  /* One surface. The conversation is always the middle column; `route` names
-     which panel is open beside it, so existing deep links (#patient, #crossdb)
-     keep resolving without a navigation menu existing. Panels render each
-     screen's own render() — no screen was rewritten to become one. */
+  /* One surface. The conversation ships its own three columns, so it IS the
+     surface — nothing wraps it. `route` names which panel is mounted into its
+     aside, so existing deep links (#patient, #crossdb) keep resolving without
+     a navigation menu existing. Panels render each screen's own render(). */
   function render(opts = {}) {
     const resetScroll = !!opts.resetScroll;
-    const priorChat = app.querySelector('.one-chat');
-    const priorTop = priorChat ? priorChat.scrollTop : 0;
     const one = window.EU_ONE;
     const chat = window.SCREENS.guided || screenOf(route);
     const panelId = one && one.isPanel(route) ? route : '';
-    const cls = ['one', panelId ? 'has-panel' : '', panelId && one.isWide(panelId) ? 'panel-wide' : ''];
-    app.innerHTML = `
-      <div class="${cls.filter(Boolean).join(' ')}">
-        ${one ? one.rail() : ''}
-        <main class="one-chat" aria-label="${t('Conversation', '对话')}">
-          <div class="content">
-            ${one ? one.quick(panelId) : ''}
-            ${chat.render()}
-          </div>
-        </main>
-        ${panelId && one ? one.panel(panelId) : ''}
-      </div>`;
-    if (one) one.load();
-    syncShellAccessibility(app, false);
-    const nextChat = app.querySelector('.one-chat');
-    if (nextChat) nextChat.scrollTop = resetScroll ? 0 : priorTop;
+    const priorBody = app.querySelector('.one-panelbody');
+    const priorTop = priorBody ? priorBody.scrollTop : 0;
+    app.innerHTML = chat.render();
+    if (chat.afterRender) chat.afterRender(app);
+    if (one) one.mount(app, panelId);
+    syncShellAccessibility(app, true);
+    const body = app.querySelector('.one-panelbody');
+    if (body) body.scrollTop = resetScroll ? 0 : priorTop;
   }
 
   window.__euRender = function (opts) { render(opts || {}); };
