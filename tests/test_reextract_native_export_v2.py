@@ -28,7 +28,7 @@ class _Package:
         return None
 
 
-def test_launcher_is_sequential_private_and_uses_bounded_external_streaming(
+def test_launcher_is_sequential_private_and_uses_adaptive_external_streaming(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     source = tmp_path / "source"
@@ -74,7 +74,7 @@ def test_launcher_is_sequential_private_and_uses_bounded_external_streaming(
             "database": "miiv",
             "data_path": str(source),
             "output_dir": tmp_path / "out" / "miiv",
-            "batch_size": 10_000,
+            "batch_size": None,
             "native_export_v2": True,
             "stream_output_batches": True,
             "verbose": True,

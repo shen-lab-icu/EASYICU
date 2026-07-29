@@ -144,6 +144,33 @@ def _drop_negative_source_end_durations(
     return frame.loc[~invalid].copy()
 
 
+def _source_duration_is_end(source) -> bool:
+    """Return whether a configured source duration column stores an end time.
+
+    This is schema semantics and must never be inferred from sampled patient
+    values.  The old ``head(100)``/80% heuristic made the same eICU
+    ``drugstopoffset`` column switch meaning when the patient batch boundary
+    changed, so 45k and 67k exports produced different D10 time grids.
+
+    Future dictionaries can declare ``params.dur_is_end`` explicitly.
+    Existing ricu-compatible sources use unambiguous end/stop column names.
+    """
+
+    params = getattr(source, "params", None) or {}
+    explicit = params.get("dur_is_end")
+    if isinstance(explicit, str):
+        normalized = explicit.strip().lower()
+        if normalized in {"true", "1", "yes"}:
+            return True
+        if normalized in {"false", "0", "no"}:
+            return False
+    elif explicit is not None:
+        return bool(explicit)
+
+    name = re.sub(r"[^a-z0-9]+", "", str(getattr(source, "dur_var", "")).lower())
+    return "end" in name or "stop" in name
+
+
 def resolve_window_aggregate(concept_name: str, agg_method):
     """套用概念级窗口聚合覆盖，返回最终的 agg_method（纯函数，便于单测）。
 
@@ -3904,32 +3931,29 @@ class ConceptResolver:
                         frame[duration_col] = (frame[source.dur_var] - frame[source_index_column]).dt.total_seconds() / 60
                     
                     # Case 2: 数值类型的 endtime (如 AUMC 的毫秒时间)
-                    # 检测：如果 dur_var 是数值且通常大于 index_var，说明是 endtime
+                    # 结束时间语义来自字典契约/列名，不从当前患者批次抽样猜测。
                     elif pd.api.types.is_numeric_dtype(frame[source.dur_var]) and \
                          pd.api.types.is_numeric_dtype(frame[source_index_column]):
-                        # 检查 dur_var 是否大于 index_var（表示它是 endtime）
-                        # 使用抽样检查以提高性能
-                        sample_size = min(100, len(frame))
-                        if sample_size > 0:
-                            sample = frame.head(sample_size)
-                            dur_vals = pd.to_numeric(sample[source.dur_var], errors='coerce')
-                            idx_vals = pd.to_numeric(sample[source_index_column], errors='coerce')
-                            valid_mask = dur_vals.notna() & idx_vals.notna()
-                            if valid_mask.sum() > 0:
-                                # 如果大部分 dur_var > index_var，则认为是 endtime
-                                ratio = (dur_vals[valid_mask] > idx_vals[valid_mask]).mean()
-                                if ratio > 0.8:  # 80% 以上的值满足 dur_var > index_var
-                                    dur_is_end = True
-                                    # 计算 duration = endtime - starttime (数值)
-                                    # 🔧 FIX 2025-02-14: R ricu keeps duration in MINUTES, NOT hours
-                                    # AUMC: 分钟（datasource.py 已将 ms 转为分钟）
-                                    # eICU: 分钟（offset 列本身就是分钟）
-                                    frame[duration_col] = frame[source.dur_var] - frame[source_index_column]
-                                    
-                                    if DEBUG_MODE:
-                                        db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
-                                        print(f"   🔧 {db_name} dur_is_end=True: {source.dur_var}={dur_vals.head(3).tolist()}, "
-                                              f"{source_index_column}={idx_vals.head(3).tolist()}")
+                        if _source_duration_is_end(source):
+                            dur_is_end = True
+                            # 计算 duration = endtime - starttime (数值)
+                            # 🔧 FIX 2025-02-14: R ricu keeps duration in MINUTES, NOT hours
+                            # AUMC: 分钟（datasource.py 已将 ms 转为分钟）
+                            # eICU: 分钟（offset 列本身就是分钟）
+                            frame[duration_col] = (
+                                frame[source.dur_var]
+                                - frame[source_index_column]
+                            )
+
+                            if DEBUG_MODE:
+                                db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
+                                print(
+                                    f"   🔧 {db_name} dur_is_end=True: "
+                                    f"{source.dur_var}="
+                                    f"{frame[source.dur_var].head(3).tolist()}, "
+                                    f"{source_index_column}="
+                                    f"{frame[source_index_column].head(3).tolist()}"
+                                )
                     
                     if dur_is_end and DEBUG_MODE:
                         print(f"   dur_var '{source.dur_var}' → duration '{duration_col}' (示例: {frame[duration_col].head(1).tolist()})")

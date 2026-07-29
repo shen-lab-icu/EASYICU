@@ -17,6 +17,7 @@ from easyicu.runtime.memory_manager import (
     _ceil_div,
 )
 from easyicu.api import EXTRACT_MODULES
+from easyicu.api.extraction import _resolve_stream_batch_size
 
 
 # 覆盖 6 个库的真实规模（含 eICU 最大 20 万），以及最宽 / 最重的模块。
@@ -85,3 +86,39 @@ def test_small_cohort_is_one_shot():
 
 def test_cap_constant_is_three():
     assert MAX_EXTRACT_CHUNKS == 3
+
+
+@pytest.mark.parametrize(
+    ("database", "total", "available_gb", "expected"),
+    [
+        ("eicu", 200_859, 32, 67_000),
+        ("eicu", 200_859, 16, 45_000),
+        ("eicu", 200_859, 14, 10_000),
+        ("eicu", 200_859, 8, 10_000),
+        ("miiv", 94_458, 16, 94_458),
+        ("miiv", 94_458, 8, 10_000),
+    ],
+)
+def test_stream_batch_uses_current_available_memory(
+    database, total, available_gb, expected
+):
+    assert (
+        _resolve_stream_batch_size(
+            database,
+            total,
+            available_memory_mb=available_gb * 1024,
+        )
+        == expected
+    )
+
+
+def test_explicit_stream_batch_size_always_wins():
+    assert (
+        _resolve_stream_batch_size(
+            "eicu",
+            200_859,
+            25_000,
+            available_memory_mb=4 * 1024,
+        )
+        == 25_000
+    )

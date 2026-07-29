@@ -212,6 +212,21 @@ def test_stream_batch_release_flushes_arrow_pool():
     assert released == [True]
 
 
+def test_stream_batch_clear_releases_implicit_global_loader(monkeypatch):
+    from easyicu.api import concepts as concept_api
+
+    calls = []
+    monkeypatch.setattr(
+        concept_api,
+        "clear_global_loader",
+        lambda: calls.append("clear_global_loader"),
+    )
+
+    api._clear_stream_loader_caches(None)
+
+    assert calls == ["clear_global_loader"]
+
+
 def test_streamed_vitals_loads_recursive_concepts_separately():
     calls = []
 

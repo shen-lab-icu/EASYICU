@@ -88,6 +88,57 @@ EXTRACT_MODULE_ORDER: List[str] = [
 ONESHOT_MAX_PATIENTS = 150_000
 
 
+def _resolve_stream_batch_size(
+    database: str,
+    num_patients: int,
+    requested_batch_size: Optional[int] = None,
+    *,
+    available_memory_mb: Optional[float] = None,
+) -> int:
+    """Choose a streamed-export batch from *currently available* memory.
+
+    Total RAM is not a sufficient safety signal on a laptop: a nominal 16 GB
+    machine may have only 8 GB available while an IDE, browser, or another
+    analysis is open.  Explicit user choices always win.  The automatic policy
+    otherwise keeps the established fast paths while failing safely under
+    memory pressure:
+
+    * server (>=24 GB available): eICU uses three ~67k batches;
+    * portable fast (>=15 GB available): eICU uses 45k batches;
+    * constrained (<12 GB available): every database uses 10k batches;
+    * the five smaller databases remain one-shot when >=12 GB is available.
+
+    The 12--15 GB eICU interval intentionally stays on the conservative 10k
+    path until an intermediate batch has a measured process-tree PSS baseline.
+    """
+
+    total = int(num_patients)
+    if total <= 0:
+        raise ValueError("num_patients must be positive")
+
+    if requested_batch_size is not None:
+        requested = int(requested_batch_size)
+        if requested <= 0:
+            raise ValueError("batch_size must be positive")
+        return min(requested, total)
+
+    if available_memory_mb is None:
+        from ..runtime.memory_manager import get_available_memory_mb
+
+        available_memory_mb = get_available_memory_mb()
+    available = max(0.0, float(available_memory_mb))
+
+    if available < 12 * 1024:
+        return min(10_000, total)
+    if database == "eicu" and total > ONESHOT_MAX_PATIENTS:
+        if available >= 24 * 1024:
+            return min(67_000, total)
+        if available >= 15 * 1024:
+            return min(45_000, total)
+        return min(10_000, total)
+    return total
+
+
 def _get_extraction_mp_context(mp_module, *, platform_name: Optional[str] = None):
     """Resolve the extraction worker context with a cross-platform safe default.
 
@@ -427,6 +478,15 @@ _VITAL_STREAM_DERIVED_CONCEPTS = (
 
 def _clear_stream_loader_caches(loader) -> None:
     if loader is None:
+        # Streamed exports disable module grouping, so this helper normally
+        # receives no explicitly shared loader.  ``load_concepts`` still owns
+        # a process-global loader cache, however.  Returning here retained
+        # cohort-scoped resolver state across patient batches; mixed
+        # window/point concepts such as eICU ``dex`` then produced different
+        # time grids for 45k versus 67k batches.
+        from .concepts import clear_global_loader
+
+        clear_global_loader()
         return
     try:
         loader.clear_cache()
@@ -2039,9 +2099,10 @@ def extract_database(
         modules: 要提取的模块列表（None = 全部 19 个模块）
         patient_ids: 患者 ID 列表或 dict（None = 全部患者）
         max_patients: 限制患者数量（与 patient_ids 互斥）
-        batch_size: 模块内患者分批大小。None(默认) = 五个较小数据库一次性
-            in-process 加载；完整 eICU 队列按稳定内存预算使用 1–3 个大批次。
-            仅在需要覆盖默认策略时显式传值。
+        batch_size: 模块内患者分批大小。None(默认) = 非流式提取时五个较小
+            数据库一次性、完整 eICU 按稳定内存预算使用 1–3 个大批次；流式
+            提取时按当前可用内存自动选择 server / portable-fast / constrained
+            档。仅在需要覆盖默认策略时显式传值。
         group_modules: True(默认) = 自动选择：内存充足的服务器将共享源表的
             模块合并为分组子进程；≤24GB 主机或 ≤4GB 显式缓存预算自动切换
             为每模块一个隔离子进程。False = 始终逐模块隔离。可用
@@ -2145,10 +2206,14 @@ def extract_database(
     # 让较小数据库单次扫表完成；eICU 的 worker 会应用三批上限。仅在特殊
     # 机器/存储条件下由用户显式传 batch_size 覆盖。
     if stream_output_batches:
-        # The bounded writer needs real batches.  10K stays keeps the largest
-        # MIMIC-IV chart-event module below the host-memory/swap cliff while
-        # still avoiding tiny, pathological per-patient reads.
-        batch_size = int(batch_size or min(10_000, num_patients))
+        # The bounded writer needs a concrete batch.  Resolve it from current
+        # available memory rather than nominal total RAM: a 16 GB laptop with
+        # only 8 GB free must not inherit the portable-fast profile.
+        batch_size = _resolve_stream_batch_size(
+            database,
+            num_patients,
+            batch_size,
+        )
         _auto_one_shot = False
     elif batch_size is None:
         batch_size = max(num_patients + 1, 2_000_000)
@@ -2205,6 +2270,8 @@ def extract_database(
     result = {
         "database": database,
         "num_patients": num_patients,
+        "batch_size": batch_size,
+        "stream_output_batches": stream_output_batches,
         "modules": {},
         "total_elapsed": 0,
         "output_dir": output_dir,
