@@ -70,6 +70,84 @@ class StructuredAttempt:
     error_message: Optional[str]
 
 
+def summarise_attempt_history(
+    attempts: Sequence[StructuredAttempt],
+    *,
+    role: str,
+    per_failure_chars: int = 300,
+) -> str:
+    """Describe the *shape* of a retry history, not just its last entry.
+
+    Whether the retries all failed the same way or each failed differently
+    is the first thing an operator needs, and the two mean opposite things:
+    identical failures say the feedback loop changed nothing, which points
+    at the host or the contract; differing failures say the model was
+    converging or thrashing. Reporting only the final message hides that
+    distinction, and hid it twice in one evening -- once when five Planner
+    attempts were rejected by a host check the model could not satisfy, and
+    once when a transport error aborted the loop and took two already
+    recorded parse failures with it.
+    """
+
+    failures = [attempt for attempt in attempts if attempt.error_class is not None]
+    if not failures:
+        if not attempts:
+            return f"no {role} response was received before this failure"
+        return f"{len(attempts)} {role} response(s) parsed cleanly"
+
+    distinct: List[tuple] = []
+    for attempt in failures:
+        signature = (attempt.error_class, attempt.error_message or "")
+        if signature not in distinct:
+            distinct.append(signature)
+
+    if len(distinct) == 1:
+        error_class, message = distinct[0]
+        if len(failures) == 1:
+            return f"1 {role} attempt failed ({error_class}: {message})"
+        return (
+            f"all {len(failures)} {role} attempts failed identically "
+            f"({error_class}: {message}) -- the retry feedback did not change "
+            "the outcome"
+        )
+
+    rendered = "; ".join(
+        f"[{index}] {error_class}: {message[:per_failure_chars]}"
+        for index, (error_class, message) in enumerate(distinct)
+    )
+    return (
+        f"{len(failures)} {role} attempt(s) failed in {len(distinct)} "
+        f"distinct ways: {rendered}"
+    )
+
+
+def annotate_with_attempt_history(
+    exc: BaseException,
+    attempts: Sequence[StructuredAttempt],
+    *,
+    role: str,
+) -> None:
+    """Attach a retry history to an exception that is about to abort the loop.
+
+    A transport failure escapes the parser ``try`` entirely, so the attempts
+    recorded before it would otherwise be discarded along with the loop. The
+    operator then sees only the transport error and cannot tell that earlier
+    responses had already been rejected -- which is a different problem with
+    a different fix. The note rides along on the existing exception, so the
+    type callers catch is unchanged.
+    """
+
+    if not attempts:
+        return
+    add_note = getattr(exc, "add_note", None)
+    if not callable(add_note):  # pragma: no cover - Python < 3.11
+        return
+    add_note(
+        "structured-retry history before this failure: "
+        + summarise_attempt_history(attempts, role=role)
+    )
+
+
 class StructuredResponseFailure(RuntimeError):
     """All retries exhausted without producing a parseable structured response.
 
@@ -82,11 +160,10 @@ class StructuredResponseFailure(RuntimeError):
     def __init__(self, attempts: Sequence[StructuredAttempt], role: str) -> None:
         self.attempts = list(attempts)
         self.role = role
-        last = self.attempts[-1] if self.attempts else None
-        last_msg = (last.error_message if last else None) or "(no attempts recorded)"
         super().__init__(
             f"StructuredResponseFailure[role={role}, "
-            f"n_attempts={len(self.attempts)}]: {last_msg}"
+            f"n_attempts={len(self.attempts)}]: "
+            + summarise_attempt_history(self.attempts, role=role)
         )
 
 
@@ -163,9 +240,16 @@ def call_llm_with_structured_retry(
     current: List[LLMMessage] = list(base_messages)
     last_exc: Optional[BaseException] = None
     for i in range(max_retries + 1):
-        raw = authorized_complete(
-            llm, current, max_tokens=max_tokens, temperature=temperature
-        )
+        try:
+            raw = authorized_complete(
+                llm, current, max_tokens=max_tokens, temperature=temperature
+            )
+        except BaseException as exc:
+            # Transport failures abort the loop here, outside the parser
+            # guard below. Carry the attempts recorded so far out with the
+            # exception rather than letting them die with the frame.
+            annotate_with_attempt_history(exc, attempts, role=role)
+            raise
         head = (raw or "").strip().replace("\n", " ⏎ ")[:400]
         try:
             value = parser(raw)
@@ -204,9 +288,7 @@ def call_llm_with_structured_retry(
                     retry_messages.append(
                         LLMMessage(role="assistant", content=failed_response)
                     )
-            retry_messages.append(
-                LLMMessage(role="user", content=feedback_message)
-            )
+            retry_messages.append(LLMMessage(role="user", content=feedback_message))
             current = base_messages + retry_messages
             continue
         else:
@@ -230,5 +312,7 @@ def call_llm_with_structured_retry(
 __all__ = [
     "StructuredAttempt",
     "StructuredResponseFailure",
+    "annotate_with_attempt_history",
     "call_llm_with_structured_retry",
+    "summarise_attempt_history",
 ]
