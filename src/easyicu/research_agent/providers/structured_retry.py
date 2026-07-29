@@ -70,6 +70,21 @@ class StructuredAttempt:
     error_message: Optional[str]
 
 
+def distinct_failures(
+    attempts: Sequence[StructuredAttempt],
+) -> List[tuple]:
+    """The distinct ``(error_class, message)`` rejections, in first-seen order."""
+
+    seen: List[tuple] = []
+    for attempt in attempts:
+        if attempt.error_class is None:
+            continue
+        signature = (attempt.error_class, attempt.error_message or "")
+        if signature not in seen:
+            seen.append(signature)
+    return seen
+
+
 def summarise_attempt_history(
     attempts: Sequence[StructuredAttempt],
     *,
@@ -95,11 +110,7 @@ def summarise_attempt_history(
             return f"no {role} response was received before this failure"
         return f"{len(attempts)} {role} response(s) parsed cleanly"
 
-    distinct: List[tuple] = []
-    for attempt in failures:
-        signature = (attempt.error_class, attempt.error_message or "")
-        if signature not in distinct:
-            distinct.append(signature)
+    distinct = distinct_failures(attempts)
 
     if len(distinct) == 1:
         error_class, message = distinct[0]
@@ -276,6 +287,33 @@ def call_llm_with_structured_retry(
                 "",
                 feedback_instructions,
             ]
+            # Only the newest rejection used to be shown, so each attempt
+            # satisfied the last complaint and re-broke an earlier one: three
+            # consecutive real Planner runs burned all five attempts on three
+            # to five *different* violations and never converged. Carrying the
+            # earlier distinct rejections forward states the whole constraint
+            # set at once. Bounded by construction -- distinct messages only,
+            # each truncated -- so it cannot grow with the attempt count the
+            # way retaining every full response would.
+            earlier = [
+                signature
+                for signature in distinct_failures(attempts[:-1])
+                if signature != (exc.__class__.__name__, str(exc)[:600])
+            ]
+            if earlier:
+                feedback_parts.extend(
+                    [
+                        "",
+                        "Earlier attempts were rejected for these other "
+                        "reasons. They are not repeated above, and a response "
+                        "that fixes only the latest one will be rejected "
+                        "again. Satisfy all of them together:",
+                        *(
+                            f"  - {error_class}: {message[:250]}"
+                            for error_class, message in earlier
+                        ),
+                    ]
+                )
             if format_reminder:
                 feedback_parts.extend(["", format_reminder])
             feedback_message = "\n".join(feedback_parts)
@@ -314,5 +352,6 @@ __all__ = [
     "StructuredResponseFailure",
     "annotate_with_attempt_history",
     "call_llm_with_structured_retry",
+    "distinct_failures",
     "summarise_attempt_history",
 ]

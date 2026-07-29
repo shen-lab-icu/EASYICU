@@ -122,6 +122,90 @@ def test_a_transport_failure_carries_out_the_parse_failures_it_aborted(
     assert "did not return parseable JSON" in joined
 
 
+def test_feedback_carries_forward_the_constraints_already_violated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The thrashing shape: fix the newest complaint, re-break an older one.
+
+    Three consecutive real Planner runs spent all five attempts on three to
+    five *different* violations. Showing only the newest rejection lets the
+    model treat the constraint set as one item long.
+    """
+
+    prompts: list = []
+    complaints = [
+        "spec columns must be explicit step inputs",
+        "robustness axis must be one of the closed set",
+        "plan is missing required role: data_quality",
+        "spec columns must be explicit step inputs",
+    ]
+
+    def _fake_authorized_complete(_llm, messages, **_kwargs):
+        prompts.append(messages)
+        return "not json"
+
+    monkeypatch.setattr(
+        "easyicu.research_agent.providers.structured_retry.authorized_complete",
+        _fake_authorized_complete,
+    )
+
+    calls = {"n": 0}
+
+    def _parser(_raw: str):
+        index = min(calls["n"], len(complaints) - 1)
+        calls["n"] += 1
+        raise ValueError(complaints[index])
+
+    with pytest.raises(StructuredResponseFailure):
+        call_llm_with_structured_retry(
+            object(),
+            [],
+            parser=_parser,
+            role="planner",
+            max_retries=3,
+        )
+
+    # The final request must restate every distinct constraint seen so far,
+    # not merely the one that rejected the previous response.
+    final = "\n".join(str(message.content) for message in prompts[-1])
+    assert "missing required role: data_quality" in final
+    assert "robustness axis must be one of the closed set" in final
+    assert "spec columns must be explicit step inputs" in final
+
+    # The newest complaint is stated once, in the preamble -- not duplicated
+    # into the carried-forward list.
+    assert final.count("plan is missing required role: data_quality") == 1
+
+
+def test_a_repeated_complaint_is_not_listed_twice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Identical rejections stay one line; the note must not grow per attempt."""
+
+    prompts: list = []
+
+    def _fake_authorized_complete(_llm, messages, **_kwargs):
+        prompts.append(messages)
+        return "not json"
+
+    monkeypatch.setattr(
+        "easyicu.research_agent.providers.structured_retry.authorized_complete",
+        _fake_authorized_complete,
+    )
+
+    def _parser(_raw: str):
+        raise ValueError("the one and only complaint")
+
+    with pytest.raises(StructuredResponseFailure):
+        call_llm_with_structured_retry(
+            object(), [], parser=_parser, role="planner", max_retries=3
+        )
+
+    final = "\n".join(str(message.content) for message in prompts[-1])
+    assert final.count("the one and only complaint") == 1
+    assert "Earlier attempts were rejected" not in final
+
+
 def test_a_clean_first_call_is_not_described_as_a_failure() -> None:
     exc = RuntimeError("boom")
     annotate_with_attempt_history(
