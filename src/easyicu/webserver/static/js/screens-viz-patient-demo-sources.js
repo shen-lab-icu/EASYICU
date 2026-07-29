@@ -31,11 +31,36 @@
     return `${source.title || source.id} v${source.version || ''}`.trim();
   }
 
+  /* Is this registry row THIS official demo?
+
+     Anchored on the source id inside the path, because the path is where the
+     app installed the demo and the id is the source's own identity. It used to
+     be `row.label === registryLabel(source)` — a DISPLAY STRING, which anything
+     that registers a source can rewrite. Registering the MIMIC-IV demo through
+     Guided Copilot did exactly that (first to 'Guided selected export', then,
+     with no label supplied, to the backend's derived 'MIIV'), and the demo
+     stopped being recognised as official: cross-database comparison fell to
+     「1 / 2 已就绪」 while both rows still read 已就绪, and the pair would not
+     run. Restoring the label by hand restored the pair — which is what proved
+     the label was carrying the identity.
+
+     Label equality stays as a fallback so a row registered before this change,
+     or under a different install layout, still matches. */
+  function isSourceRow(row, source) {
+    if (!row || !row.ok || !row.path) return false;
+    const id = String((source && source.id) || '').trim();
+    if (id) {
+      const path = String(row.path).replace(/\\/g, '/');
+      if (path.indexOf('/demo_sources/' + id + '/') >= 0 || path.endsWith('/demo_sources/' + id)) return true;
+    }
+    return row.label === registryLabel(source);
+  }
+
   function registeredSources(registryRows) {
     const rows = Array.isArray(registryRows) ? registryRows : [];
     return ((state.catalog && state.catalog.sources) || []).map(source => {
       const label = registryLabel(source);
-      const registry = rows.find(row => row && row.ok && row.path && row.label === label);
+      const registry = rows.find(row => isSourceRow(row, source));
       return registry ? {
         database: source.database || registry.database || '',
         label,
