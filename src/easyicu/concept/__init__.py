@@ -7237,11 +7237,7 @@ class ConceptResolver:
         id_columns: Optional[List[str]] = None
 
         for name, table in tables.items():
-            # Keep the source table immutable, but avoid eagerly copying every
-            # concept frame before projection.  A 49-concept chemistry module
-            # otherwise holds the resolver outputs, full copies, indexed
-            # copies, and the final outer-join result at the same time.
-            frame = table.data
+            frame = table.data.copy()
 
             # Handle both ICUTable and WinTbl
             if isinstance(table, WinTbl):
@@ -7334,47 +7330,10 @@ class ConceptResolver:
         if len(all_frames) == 1:
             merged = all_frames[0].reset_index()
         else:
-            # Build the outer key union once, then align one value column at a
-            # time.  ``pd.concat(all_frames, axis=1)`` first reindexed every
-            # narrow concept frame to the full union and retained all aligned
-            # intermediates until concatenation completed.  For an eICU
-            # chemistry batch (49 concepts) that path peaked above 18 GiB even
-            # with one concept worker.  The union-first representation keeps
-            # only the final-width columns plus one temporary aligned Series.
+            # 🚀 优化: 用 pd.concat(axis=1) 替代 sequential join
+            # 单次操作完成所有概念的 outer join，避免 N-1 次 _get_indexer
             try:
-                index_names = list(all_frames[0].index.names)
-                key_parts = [
-                    frame.index.to_frame(index=False) for frame in all_frames
-                ]
-                union_keys = pd.concat(key_parts, ignore_index=True)
-                union_keys = union_keys.drop_duplicates(ignore_index=True)
-                del key_parts
-
-                if len(index_names) == 1:
-                    union_index = pd.Index(
-                        union_keys.iloc[:, 0],
-                        name=index_names[0],
-                    )
-                else:
-                    union_index = pd.MultiIndex.from_frame(
-                        union_keys,
-                        names=index_names,
-                    )
-
-                merged_columns = {
-                    column: union_keys.iloc[:, position].array
-                    for position, column in enumerate(union_keys.columns)
-                }
-                seen_columns = set(merged_columns)
-                for frame in all_frames:
-                    for column in frame.columns:
-                        if column in seen_columns:
-                            continue
-                        merged_columns[column] = (
-                            frame[column].reindex(union_index).array
-                        )
-                        seen_columns.add(column)
-                merged = pd.DataFrame(merged_columns, copy=False)
+                merged = pd.concat(all_frames, axis=1).reset_index()
             except Exception:
                 # Fallback: sequential join for edge cases (mismatched index levels)
                 merged = all_frames[0]
