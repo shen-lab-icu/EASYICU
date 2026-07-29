@@ -133,13 +133,44 @@
 
   /* ---- destination nav, mounted into the conversation's own rail ---- */
 
+  /* The study the whole surface is about. It lives in EU_STUDY_CONTEXT, the
+     cross-module store that extraction, review and the agent already register
+     with — and until now nothing on screen showed it, which is most of why the
+     surface felt like separate apps sharing a window. */
+  function studyHeadHtml() {
+    const sc = window.EU_STUDY_CONTEXT;
+    const study = sc && sc.active ? sc.active() : null;
+    if (!study) return '';
+    const untitled = !study.title || /^untitled/i.test(study.title);
+    const name = untitled ? t('Untitled study', '未命名研究') : study.title;
+    const stage = study.current_stage
+      ? String(study.current_stage).replace(/_/g, ' ')
+      : t('not started', '尚未开始');
+    return `
+      <div class="one-study" title="${esc(t('The study every destination on this surface shares', '本界面所有目的地共用的这项研究'))}">
+        <span class="lb">${esc(name)}</span>
+        <span class="st">${esc(stage)}</span>
+      </div>`;
+  }
+
+  const LINES = [
+    { key: 'main', label: ['Main line', '主线'], hint: ['each step advances the study', '每一步推进这项研究'] },
+    { key: 'review', label: ['Look at the data', '查阅数据'], hint: ['reads it, never changes it', '只读,不改变研究设计'] },
+    { key: 'tool', label: ['Reference', '工具'], hint: ['independent of any study', '与具体研究无关'] },
+  ];
+
   function railNavHtml(active) {
     const list = destinations();
-    const items = list.map((d) => `
+    const items = LINES.map((line) => {
+      const inLine = list.filter((d) => d.line === line.key);
+      if (!inLine.length) return '';
+      return `<div class="one-navsec" title="${esc(t(line.hint[0], line.hint[1]))}">${esc(t(line.label[0], line.label[1]))}</div>`
+        + inLine.map((d) => `
       <button type="button" class="one-navitem ${active === d.id ? 'on' : ''}"
         data-panel="${d.id}"${active === d.id ? ' aria-current="page"' : ''}>
         <span class="ico">${icon(d.ico, 15)}</span><span class="lb">${esc(d.label)}</span>
       </button>`).join('');
+    }).join('');
     /* The orientation hint the entry screen used to carry. It names two
        destinations, so each name IS the control that opens it — prose pointing
        at a menu that no longer exists would just be a dead end. */
@@ -151,10 +182,10 @@
     };
     return `
       <nav class="one-railnav" aria-label="${t('Destinations', '目的地')}">
+        ${studyHeadHtml()}
         <button type="button" class="one-navitem chat ${active ? '' : 'on'}" data-panel=""${active ? '' : ' aria-current="page"'}>
           <span class="ico">${icon('spark', 15)}</span><span class="lb">${esc(crumb('Guided Copilot'))}</span>
         </button>
-        <div class="one-navsec">${t('Open beside the conversation', '在对话旁打开')}</div>
         ${items}
         <p class="one-starthint">${t('Starting from a paper? Open', '有文章，从')}${named('ideas')}${t('. Have a clear question? Just say it here. Already have data? Open', '开始；有明确问题，直接在这里说；已经有数据，打开')}${named('extraction')}${t('.', '。')}</p>
       </nav>`;
@@ -298,6 +329,33 @@
     const id = el.getAttribute('data-panel');
     e.preventDefault();
     if (!id) { location.hash = '#guided'; return; }
-    if (window.SCREENS[id]) location.hash = '#' + id;
+    if (!window.SCREENS[id]) return;
+    /* Opening a main-line destination is a handoff, not a jump: it snapshots
+       what the conversation has collected into the shared study and records the
+       transition, so the destination arrives already knowing the cohort, the
+       outcome, the export target. Review and reference destinations
+       deliberately do NOT — looking a concept up in the dictionary is not a
+       step in anyone's study, and writing one into the record would be a lie
+       about what the study did. */
+    const hit = destinations().find((d) => d.id === id);
+    /* Through guided's own adapter, not EU_STUDY_CONTEXT.handoff directly. The
+       adapter is the owner's door and carries two things the raw call does not:
+       continueExisting (without it a handoff can mint a new study instead of
+       advancing this one) and a real scientific guard that refuses to hand a
+       Cross-DB plan to Agent Projects until it is reframed as a single-export
+       question. Reaching past it to the store would silently drop both. */
+    const guided = window.EU_GUIDED_STUDY_CONTEXT;
+    if (hit && hit.line === 'main' && guided && guided.handoff) {
+      try {
+        const r = guided.handoff(id);
+        if (r && r.persisted && r.persisted.catch) {
+          r.persisted.catch((err) => console.warn('[EasyICU] study handoff refused or stayed local:', err));
+        }
+      } catch (err) {
+        /* A study that cannot be handed over must not strand the reader. */
+        console.warn('[EasyICU] study handoff failed:', err);
+      }
+    }
+    location.hash = '#' + id;
   });
 }());

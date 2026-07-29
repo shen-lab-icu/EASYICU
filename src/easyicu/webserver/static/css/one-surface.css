@@ -103,6 +103,29 @@
 .one-navitem.chat { font-weight: 600; }
 
 .one-navsec { padding: 12px 9px 4px; font-size: 11px; color: var(--o-ink-2); }
+.one-navsec:first-child { padding-top: 2px; }
+
+/* The one study every destination shares. It was invisible before, which is
+   most of why the columns read as unrelated apps. */
+.one-study {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0 1px 8px;
+  padding: 7px 9px;
+  border-radius: var(--o-r);
+  background: var(--o-muted);
+}
+
+.one-study .lb {
+  font: 600 12.5px/17px inherit;
+  color: var(--o-ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.one-study .st { font-size: 10.5px; color: var(--o-ink-2); }
 
 .one-starthint { margin: 10px 9px 2px; font-size: 11px; line-height: 1.6; color: var(--o-ink-2); }
 
@@ -287,6 +310,14 @@ body:has(.gd-shell) #cpFab { display: none; }
   overflow: auto;
   padding: 0 16px 24px;
   min-width: 0;
+  /* Named container so a screen can respond to the width of the column it was
+     given, rather than to the window. Screens were written for a full page; in
+     a 560px panel their fixed multi-column grids crush — agent's term strip was
+     measured at three 40px tracks holding 18px of text, i.e. one Chinese
+     character per line, 12 elements deep. The rules that fix that belong to
+     each screen's own owner CSS (see agent.css), not to this file. */
+  container-type: inline-size;
+  container-name: onepanel;
 }
 
 .one-panelbody .content { padding: 0; overflow: visible; }
