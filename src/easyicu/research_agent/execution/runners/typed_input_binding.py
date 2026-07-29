@@ -345,15 +345,37 @@ def load_typed_input(
             f"{evidence_kind!r}, not {expected_evidence_kind!r}",
         )
     product = str(binding.get("product") or "")
-    key_kind, separator, key_product = input_key.partition(":")
-    if separator:
-        if declared_kind and declared_kind != key_kind:
+    # Compare canonical identity to canonical identity.  ``declared_kind`` was
+    # written by the binding registry, which canonicalises the Planner's alias
+    # (`cohort:` is recorded as `dataset:`, deliberately, so plan DAG, declared
+    # output validation and runtime binding share one identity).  Partitioning
+    # the key here yields the Planner's *raw* prefix, so a plan that spelled its
+    # cohort `cohort:analysis_set` -- one of the four spellings the planner
+    # prompt lists as legal -- could never satisfy this check, and every typed
+    # executor downstream failed on a `product_identity_mismatch`.
+    #
+    # It was worse than a refusal: the repair the message invites is to rewrite
+    # the key to `dataset:analysis_set`, which is the canonical spelling, and
+    # bindings are filed under the plan's spelling -- so that attempt failed as
+    # `binding_absent`.  Both spellings failed, for opposite reasons, and the
+    # step spent its whole repair budget discovering there was no third one.
+    # Measured on a real run: four steps died this way in one plan.
+    from ...contracts.declared_product import typed_product as _typed_product
+
+    canonical_key = _typed_product(input_key)
+    canonical_binding = (
+        _typed_product(f"{declared_kind}:{product}")
+        if declared_kind and product
+        else None
+    )
+    if canonical_key is not None and canonical_binding is not None:
+        if canonical_binding[0] != canonical_key[0]:
             raise TypedInputBindingError(
                 "product_identity_mismatch",
                 f"Typed binding kind {declared_kind!r} does not match the input "
                 f"key {input_key!r}",
             )
-        if product and product != key_product:
+        if canonical_binding[1] != canonical_key[1]:
             raise TypedInputBindingError(
                 "product_identity_mismatch",
                 f"Typed binding product {product!r} does not match the input "
