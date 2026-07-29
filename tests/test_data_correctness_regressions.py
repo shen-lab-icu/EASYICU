@@ -321,6 +321,122 @@ def test_transformed_bounds_are_applied_before_hourly_aggregation(tmp_path):
     }
 
 
+def test_inline_unit_conversion_resolves_configured_column_case_insensitively(
+    tmp_path,
+):
+    """MIMIC-III parquet columns are uppercase while config names are lowercase."""
+    pd.DataFrame(
+        {
+            "patientunitstayid": [1, 1],
+            "labresultoffset": [0, 60],
+            "labname": ["CRP", "CRP"],
+            "value": [30.0, 4.0],
+            "VALUEUOM": ["mg/L", "mg/dL"],
+        }
+    ).to_parquet(tmp_path / "lab.parquet", index=False)
+
+    defaults = SimpleNamespace(
+        index_var="labresultoffset", sub_var="labname", unit_var="valueuom"
+    )
+    config = SimpleNamespace(
+        name="eicu", get_table=lambda name: SimpleNamespace(defaults=defaults)
+    )
+
+    source = SimpleNamespace(
+        config=config,
+        base_path=tmp_path,
+        _resolve_bucket_directory=lambda name: None,
+        _resolve_flat_parquet_directory=lambda name: tmp_path,
+        _get_parquet_columns_for_files=lambda files: {
+            "patientunitstayid",
+            "labresultoffset",
+            "labname",
+            "value",
+            "VALUEUOM",
+        },
+    )
+
+    result = load_bucketed_table_aggregated(
+        source,
+        "lab",
+        "value",
+        ["CRP"],
+        patient_ids=[1],
+        convert_unit_op="*",
+        convert_unit_factor=10,
+        convert_unit_filter="mg/dl",
+    )
+
+    assert result["value"].tolist() == pytest.approx([30.0, 40.0])
+
+
+def test_mimic_hospital_value_transform_carries_unit_through_rolling_cte(
+    tmp_path,
+):
+    """FEU exclusion must still see valueuom after hadm-to-stay assignment."""
+    labevents_dir = tmp_path / "labevents"
+    labevents_dir.mkdir()
+    pd.DataFrame(
+        {
+            "subject_id": [1, 1],
+            "hadm_id": [10, 10],
+            "itemid": [50915, 50915],
+            "charttime": [
+                pd.Timestamp("2026-01-01T00:00:00"),
+                pd.Timestamp("2026-01-01T01:00:00"),
+            ],
+            "valuenum": [100.0, 200.0],
+            "valueuom": ["ng/mL", "ng/mL FEU"],
+        }
+    ).to_parquet(labevents_dir / "part.parquet", index=False)
+    stays = pd.DataFrame(
+        {
+            "icustay_id": [7],
+            "hadm_id": [10],
+            "intime": [pd.Timestamp("2026-01-01T00:00:00")],
+            "outtime": [pd.Timestamp("2026-01-02T00:00:00")],
+        }
+    )
+    stays.to_parquet(tmp_path / "icustays.parquet", index=False)
+
+    defaults = SimpleNamespace(
+        index_var="charttime", sub_var="itemid", unit_var="valueuom"
+    )
+    config = SimpleNamespace(
+        name="mimic", get_table=lambda name: SimpleNamespace(defaults=defaults)
+    )
+
+    def load_table(name, columns=None, filters=None, verbose=False):
+        assert name == "icustays"
+        return SimpleNamespace(dataframe=lambda: stays)
+
+    source = SimpleNamespace(
+        config=config,
+        base_path=tmp_path,
+        load_table=load_table,
+        _resolve_bucket_directory=lambda name: None,
+        _resolve_flat_parquet_directory=lambda name: labevents_dir,
+        _get_parquet_columns_for_files=lambda files: set(
+            pd.read_parquet(files[0]).columns
+        ),
+    )
+    value_transform = (
+        'CASE WHEN regexp_matches(COALESCE(CAST("valueuom" AS VARCHAR), \'\'), '
+        "'(?i)FEU') THEN NULL ELSE TRY_CAST(\"valuenum\" AS DOUBLE) END"
+    )
+
+    result = load_bucketed_table_aggregated(
+        source,
+        "labevents",
+        "valuenum",
+        [50915],
+        patient_ids=[7],
+        value_transform=value_transform,
+    )
+
+    assert result.loc[result["valuenum"].notna(), "valuenum"].tolist() == [100.0]
+
+
 def test_transformed_bounds_retry_unbounded_when_all_values_are_unit_suspect(tmp_path):
     pd.DataFrame(
         {
