@@ -84,6 +84,20 @@ RESOLUTION_UPDATES: dict[str, dict[str, str]] = {
         "status": "confirmed structural source absence for the ICU-linked cohort",
         "required_action": "Retain typed all-null output plus structural-availability metadata.",
     },
+    "EICU-QC-P1-011": {
+        "status": "fixed by the ICU-episode time-window contract",
+        "required_action": (
+            "Retain the 24-hour pre/post allowance, quarantine invalid source intervals "
+            "before expansion and require zero time-axis violations in publication exports."
+        ),
+    },
+    "EICU-QC-P1-012": {
+        "status": "fixed and validated against the official HiRID rate semantics",
+        "required_action": (
+            "Keep OUTurine/h as mL/h, backfill each observed rate only over its preceding "
+            "observation interval and require complete 6/12/24-hour coverage for KDIGO."
+        ),
+    },
 }
 
 
@@ -373,6 +387,29 @@ def _load_root_manifests(export_root: Path) -> dict[str, dict[str, Any]]:
             continue
         manifests[database] = json.loads(path.read_text(encoding="utf-8"))
     return manifests
+
+
+def _expected_runtime_commit(
+    run_metadata: dict[str, Any],
+    database: str,
+) -> str | None:
+    """Return the declared source commit for one database package.
+
+    A normal extraction has one ``easyicu_commit``. A curated publication
+    package may replace one database after a source-specific correction, so it
+    declares ``database_commits`` instead of pretending that all six exports
+    came from one checkout.
+    """
+
+    database_commits = run_metadata.get("database_commits")
+    if isinstance(database_commits, dict):
+        value = database_commits.get(database)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    value = run_metadata.get("easyicu_commit")
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
 
 
 def _derive_module_concepts(
@@ -937,8 +974,9 @@ def _build_report_artifact(
                     "## 解释边界\n\n"
                     "记录级密度受同一 ICU stay 内测量频率影响，适合提取 QC 和数据漂移检查，不能解释为"
                     "独立患者分布或数据库等价性证明。严格 Arrow 类型审计用于定义 Agent 输入合同，"
-                    "不表示所有分布差异都会造成统计偏倚。HiRID 尿量窗口与其他自动分布异常仍需逐 stay "
-                    "或原始字典核验，不能仅凭曲线宣称为转换错误。"
+                    "不表示所有分布差异都会造成统计偏倚。HiRID 尿量已按官方 mL/h 速率语义和每条记录"
+                    "之前的观察区间完成源级复核；修复后仍存在的跨库差异应结合病例组合、记录实践和可观测性解释，"
+                    "不能仅凭曲线再次宣称为转换错误。"
                 ),
             },
             {
@@ -946,8 +984,8 @@ def _build_report_artifact(
                 "type": "markdown",
                 "body": (
                     "## 投稿和 Agent 使用前的 P0 验收门槛\n\n"
-                    "1. 修复 eICU ETCO₂ 二次正则、MIMIC-III CRP 混合单位、AUMC D-dimer/HbA1c/"
-                    "`adh_rate` 以及 neut/lymph 定义冲突，并加入小型跨平台回归测试。\n"
+                    "1. 保留 eICU ETCO₂、MIMIC-III CRP、AUMC D-dimer/HbA1c/`adh_rate`、"
+                    "HiRID 尿量/MCHC 和 neut/lymph 定义的跨平台回归测试。\n"
                     "2. 从固定 Git SHA 重新跑六库；运行 manifest 必须记录 `easyicu.__file__`、版本、"
                     "Git SHA、catalog checksum、操作系统、Python/Arrow/DuckDB 版本和峰值 RSS。\n"
                     "3. 发布强类型输出合同：统一 `stay_id`、`charttime`、列集合/顺序/类型、规范单位、"
@@ -963,7 +1001,8 @@ def _build_report_artifact(
                 "type": "markdown",
                 "body": (
                     "## 仍需回答的问题\n\n"
-                    "- HiRID 尿量积分后的 6/12/24 小时值为何系统性偏高，是否由采样间隔或重复累计造成？\n"
+                    "- HiRID 修复后的 KDIGO 尿量率仍略高于部分数据库时，病例组合、记录实践和体重"
+                    "可观测性分别解释多少差异？\n"
                     "- AUMC 直接胆红素的源字典、量级和换算是否与其他数据库指向同一检验？\n"
                     "- native-v2 当前能提供 typed metadata，但是否还需要对物理 Parquet 做统一 ID、"
                     "列顺序和类型的二次封装？\n"
@@ -1042,6 +1081,10 @@ def main() -> None:
 
             manifest = root_manifests[database]
             runtime = manifest.get("runtime_provenance") or {}
+            expected_runtime_commit = _expected_runtime_commit(
+                run_metadata,
+                database,
+            )
             manifest_files = {
                 entry.get("module"): entry
                 for entry in manifest.get("files", [])
@@ -1085,10 +1128,12 @@ def main() -> None:
                     + int("charttime" in names),
                     "manifest_schema_matches_parquet": recorded_schema == types,
                     "runtime_commit": runtime.get("easyicu_git_commit"),
+                    "expected_runtime_commit": expected_runtime_commit,
                     "runtime_commit_matches_run": bool(
                         runtime.get("easyicu_git_commit")
+                        and expected_runtime_commit
                         and runtime.get("easyicu_git_commit")
-                        == run_metadata.get("easyicu_commit")
+                        == expected_runtime_commit
                     ),
                     "runtime_git_dirty": runtime.get("easyicu_git_dirty"),
                     "sidecar_file": sidecar_name,
@@ -1221,6 +1266,10 @@ def main() -> None:
     summary = {
         "run_id": run_metadata.get("run_id"),
         "audited_easyicu_commit": run_metadata.get("easyicu_commit"),
+        "audited_easyicu_commits": {
+            database: _expected_runtime_commit(run_metadata, database)
+            for database in DATABASES
+        },
         "databases": list(DATABASES),
         "module_count": len(module_concepts),
         "concept_panel_count": int(len(availability)),

@@ -168,7 +168,22 @@ def load_catalog(path: Path) -> dict[str, dict[str, Any]]:
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
         raise TypeError("Concept catalog must be a JSON object keyed by concept name")
-    return {str(k): v for k, v in data.items() if isinstance(v, dict)}
+    catalog = {str(k): v for k, v in data.items() if isinstance(v, dict)}
+
+    # The JSON catalog is the source of truth for directly extracted concepts.
+    # Derived concepts (for example, rolling urine-output rates) are registered
+    # in the runtime catalog, so use it only to fill metadata absent from JSON.
+    from easyicu.concept.catalog import CONCEPT_DICTIONARY
+
+    for concept, metadata in CONCEPT_DICTIONARY.items():
+        if concept in catalog:
+            continue
+        description, _, unit = metadata
+        catalog[concept] = {
+            "description": description,
+            "unit": unit or None,
+        }
+    return catalog
 
 
 def concept_metadata(
@@ -1123,7 +1138,10 @@ def render_from_source(
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         manifest["last_rendered_at_utc"] = datetime.now(UTC).isoformat()
         manifest["render_layout"] = "adaptive_module_atlas"
-        manifest["rendered_modules"] = list(selected_modules)
+        rendered_modules = set(manifest.get("modules") or [])
+        rendered_modules.update(manifest.get("rendered_modules") or [])
+        rendered_modules.update(selected_modules)
+        manifest["rendered_modules"] = sorted(rendered_modules)
         manifest["render_dpi"] = dpi
         manifest["panels_per_page"] = panels_per_page
         manifest_path.write_text(
@@ -1330,6 +1348,7 @@ def run() -> int:
         "modules": list(modules),
         "module_count": len(modules),
         "module_figure_count": module_figure_count,
+        "rendered_modules": list(modules),
         "variable_panel_count": variable_panel_count,
         "plot_kind_counts": dict(sorted(kind_counts.items())),
         "failure_count": len(failures),
