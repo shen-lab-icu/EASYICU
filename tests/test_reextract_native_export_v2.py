@@ -48,6 +48,62 @@ def test_nested_workset_budget_scales_with_current_available_memory(
     )
 
 
+@pytest.mark.parametrize(
+    ("available_memory_mb", "cpu_count", "expected"),
+    [
+        (
+            16 * 1024,
+            8,
+            {
+                "duckdb_threads": "1",
+                "duckdb_memory_limit": "1GB",
+                "parallel_max_workers": "1",
+                "cache_budget_mb": "256",
+            },
+        ),
+        (
+            24 * 1024,
+            8,
+            {
+                "duckdb_threads": "2",
+                "duckdb_memory_limit": "2GB",
+                "parallel_max_workers": "2",
+                "cache_budget_mb": "2048",
+            },
+        ),
+        (
+            32 * 1024,
+            8,
+            {
+                "duckdb_threads": "4",
+                "duckdb_memory_limit": "4GB",
+                "parallel_max_workers": "4",
+                "cache_budget_mb": "6144",
+            },
+        ),
+        (
+            256 * 1024,
+            384,
+            {
+                "duckdb_threads": "8",
+                "duckdb_memory_limit": "8GB",
+                "parallel_max_workers": "8",
+                "cache_budget_mb": "8192",
+            },
+        ),
+    ],
+)
+def test_one_shot_runtime_scales_without_weakening_laptop_floor(
+    available_memory_mb: float,
+    cpu_count: int,
+    expected: dict[str, str],
+) -> None:
+    assert (
+        launcher._one_shot_runtime_limits(available_memory_mb, cpu_count)
+        == expected
+    )
+
+
 def test_launcher_is_sequential_private_and_uses_adaptive_external_streaming(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -130,6 +186,16 @@ def test_one_shot_launcher_keeps_external_runtime_but_disables_auto_batches(
     source.mkdir()
     calls: list[dict[str, object]] = []
     monkeypatch.setattr(launcher, "DEFAULT_DATA_PATHS", {"miiv": str(source)})
+    monkeypatch.setattr(
+        launcher,
+        "_one_shot_runtime_limits",
+        lambda: {
+            "duckdb_threads": "8",
+            "duckdb_memory_limit": "8GB",
+            "parallel_max_workers": "8",
+            "cache_budget_mb": "8192",
+        },
+    )
 
     def fake_extract(database, **kwargs):
         calls.append({"database": database, **kwargs})
@@ -138,6 +204,10 @@ def test_one_shot_launcher_keeps_external_runtime_but_disables_auto_batches(
             tmp_path / "out" / ".runtime_spill"
         )
         assert "EASYICU_ONESHOT_BUDGET_MB" not in os.environ
+        assert os.environ["EASYICU_DUCKDB_THREADS"] == "8"
+        assert os.environ["EASYICU_DUCKDB_MEMORY_LIMIT"] == "8GB"
+        assert os.environ["EASYICU_PARALLEL_MAX_WORKERS"] == "8"
+        assert os.environ["EASYICU_CACHE_BUDGET_MB"] == "8192"
         out = Path(kwargs["output_dir"])
         out.mkdir(mode=0o700)
         (out / "_manifest.json").write_text(
@@ -157,6 +227,13 @@ def test_one_shot_launcher_keeps_external_runtime_but_disables_auto_batches(
     manifest = launcher.run(args)
 
     assert manifest["extraction_mode"] == "one_shot_all_patients"
+    assert manifest["runtime_limits"] == {
+        "duckdb_threads": 8,
+        "duckdb_memory_limit": "8GB",
+        "parallel_max_workers": 8,
+        "cache_budget_mb": 8192,
+        "nested_workset_budget_mb": None,
+    }
     assert calls == [
         {
             "database": "miiv",

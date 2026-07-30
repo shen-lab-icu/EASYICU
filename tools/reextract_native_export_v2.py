@@ -98,6 +98,48 @@ def _adaptive_oneshot_budget_mb(
     return max(quantum_mb, min(8 * 1024, budget))
 
 
+def _one_shot_runtime_limits(
+    available_memory_mb: float | None = None,
+    cpu_count: int | None = None,
+) -> Dict[str, str]:
+    """Scale an explicitly requested one-shot run to the current host.
+
+    The streamed/default path stays at the cross-platform 1-thread safety
+    baseline. ``--one-shot`` is an explicit request to process a whole module
+    at once, so a large server should not be silently throttled to laptop
+    resources. Keep the existing conservative profile below 24 GiB available,
+    then scale in bounded tiers up to 8 workers and 8 GiB.
+    """
+
+    if available_memory_mb is None:
+        try:
+            import psutil
+
+            available_memory_mb = psutil.virtual_memory().available / (1024**2)
+        except Exception:
+            available_memory_mb = 0.0
+    if cpu_count is None:
+        cpu_count = os.cpu_count() or 1
+
+    available = max(0.0, float(available_memory_mb))
+    cpus = max(1, int(cpu_count))
+    if available >= 64 * 1024:
+        workers, memory_gb, cache_mb = min(8, cpus), 8, 8 * 1024
+    elif available >= 32 * 1024:
+        workers, memory_gb, cache_mb = min(4, cpus), 4, 6 * 1024
+    elif available >= 24 * 1024:
+        workers, memory_gb, cache_mb = min(2, cpus), 2, 2 * 1024
+    else:
+        workers, memory_gb, cache_mb = 1, 1, 256
+
+    return {
+        "duckdb_threads": str(workers),
+        "duckdb_memory_limit": f"{memory_gb}GB",
+        "parallel_max_workers": str(workers),
+        "cache_budget_mb": str(cache_mb),
+    }
+
+
 def _configure_external_runtime(
     root: Path, *, one_shot: bool
 ) -> tuple[Dict[str, str | None], str | None]:
@@ -128,13 +170,26 @@ def _configure_external_runtime(
     os.environ["TMP"] = str(runtime_tmp)
     os.environ["TEMP"] = str(runtime_tmp)
     os.environ["EASYICU_DUCKDB_TEMP_DIR"] = str(runtime_spill)
-    # Keep DuckDB spill and its process topology bounded in both modes.  The
-    # explicit one-shot option still gets a full patient set per module, but
-    # cannot silently redirect temporary state to the internal APFS volume.
-    os.environ["EASYICU_DUCKDB_THREADS"] = "1"
-    os.environ["EASYICU_DUCKDB_MEMORY_LIMIT"] = "1GB"
-    os.environ["EASYICU_PARALLEL_MAX_WORKERS"] = "1"
-    os.environ["EASYICU_CACHE_BUDGET_MB"] = "256"
+    # Keep the default streamed path at the portable safety baseline. An
+    # explicit one-shot run may scale within bounded tiers on a large server.
+    runtime_limits = (
+        _one_shot_runtime_limits()
+        if one_shot
+        else {
+            "duckdb_threads": "1",
+            "duckdb_memory_limit": "1GB",
+            "parallel_max_workers": "1",
+            "cache_budget_mb": "256",
+        }
+    )
+    os.environ["EASYICU_DUCKDB_THREADS"] = runtime_limits["duckdb_threads"]
+    os.environ["EASYICU_DUCKDB_MEMORY_LIMIT"] = runtime_limits[
+        "duckdb_memory_limit"
+    ]
+    os.environ["EASYICU_PARALLEL_MAX_WORKERS"] = runtime_limits[
+        "parallel_max_workers"
+    ]
+    os.environ["EASYICU_CACHE_BUDGET_MB"] = runtime_limits["cache_budget_mb"]
     if one_shot:
         # Do not let the export launcher silently turn an explicitly requested
         # all-patient module into auto-batches because of its safety profile.
