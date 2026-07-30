@@ -29,6 +29,7 @@ from ..canonical_json import (
 from ..contracts.method_packages import (
     BASELINE_PACKAGES,
     CURATED_METHOD_PACKAGES,
+    FINGERPRINT_ONLY_DISTRIBUTIONS,
     OPTIONAL_BASELINE_PACKAGES,
 )
 from ..contracts.execution_result import RunResult
@@ -592,9 +593,7 @@ def current_execution_runtime_sha256() -> str:
         for package in (*BASELINE_PACKAGES, *OPTIONAL_BASELINE_PACKAGES)
     }
     distribution_names.update(package.pip_name for package in CURATED_METHOD_PACKAGES)
-    # statsmodels formula processing depends on patsy even though Coders are not
-    # invited to import it directly.
-    distribution_names.add("patsy")
+    distribution_names.update(FINGERPRINT_ONLY_DISTRIBUTIONS)
     package_versions: dict[str, str] = {}
     for package in sorted(distribution_names):
         try:

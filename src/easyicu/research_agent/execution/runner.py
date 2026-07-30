@@ -54,6 +54,7 @@ from .code_hygiene import reorder_forward_references
 from ..contracts.method_packages import (
     BASELINE_PACKAGES,
     CURATED_METHOD_PACKAGES,
+    FINGERPRINT_ONLY_DISTRIBUTIONS,
     OPTIONAL_BASELINE_PACKAGES,
 )
 from ..contracts.runtime import RunResult
@@ -796,7 +797,7 @@ class CodeRunner:
             distributions.update(
                 package.pip_name for package in CURATED_METHOD_PACKAGES
             )
-            distributions.add("patsy")
+            distributions.update(FINGERPRINT_ONLY_DISTRIBUTIONS)
             probe = (
                 "import json, platform, sys\n"
                 "from importlib import metadata\n"
