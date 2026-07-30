@@ -43,6 +43,7 @@ from ..planning.analysis_types import (
     canonical_analysis_family,
     infer_analysis_type,
     locked_analysis_type_guide,
+    CATALOG_DETAIL_LADDER,
     planner_analysis_type_guide,
 )
 from ..planning.primary_result_contract import (
@@ -429,8 +430,13 @@ def _build_planner_user_prompt(
     *,
     know_how_context: str = "",
     planning_contract_context: str = "",
+    catalog_detail: str = "full",
 ) -> str:
-    """Build the planner user prompt with runtime concept-id grounding."""
+    """Build the planner user prompt with runtime concept-id grounding.
+
+    ``catalog_detail`` is chosen by :func:`_planner_prompt_within_budget` from
+    the byte budget alone.  Do not vary it on anything else.
+    """
 
     planner_context = scoped_planner_context(context)
 
@@ -691,7 +697,7 @@ def _build_planner_user_prompt(
         "Variants must not change the primary analysis.\n\n"
         + locked_analysis_type_guide(infer_analysis_type(context))
         + "\n\n"
-        + planner_analysis_type_guide()
+        + planner_analysis_type_guide(detail=catalog_detail)
         + "\n\n"
         + trajectory_planner_contract_guide(
             context=context,
@@ -898,6 +904,56 @@ _PLANNER_PROMPT_BYTE_LIMIT = 80_000
 _PLANNER_RETRY_PROJECTION_BYTE_LIMIT = 9_000
 
 
+def _planner_prompt_within_budget(
+    context: ResearchContext,
+    *,
+    know_how_context: str = "",
+    planning_contract_context: str = "",
+) -> Tuple[str, str]:
+    """Return ``(user_prompt, catalog_detail)``, shortening the menu before failing.
+
+    MEASURED 2026-07-30 across the nine canonical tasks: the four that planned
+    successfully sat at 85.8%, 92.9%, 94.5% and **97.8%** of the 80,000-byte
+    limit; ``m2_mortality_prediction`` and ``h2_vasopressor_causal`` came to
+    83,622 and were refused outright, producing zero steps.  The failing two are
+    not outliers -- they are 6.9% larger than the largest success.  With both
+    context segments marked ``required=True`` the assembler had nothing to evict,
+    so a 4.5% overflow cost two entire tasks.
+
+    The only part of that prompt that is pure menu is the analysis-type catalog:
+    47% is this task's typed context (drop it and the Planner invents columns),
+    32% is the plan schema (drop it and the Planner cannot fill the form -- three
+    other tasks already died that way), and the catalog's remaining share is the
+    same 8,046 bytes for every task.  Shortening it costs detail on families the
+    Planner might switch to; the inferred family's modules and guardrails are
+    restated in full by ``locked_analysis_type_guide`` either way.
+
+    So the ladder is descended only under budget pressure, never as a routing
+    decision -- a catalog that varied with an inferred family would put a hidden
+    guess between the Planner and its options, and the inference is known to
+    disagree with the Planner's own declaration.  The chosen rung is returned so
+    the caller can record it; a shortened menu must never be silent.
+    """
+
+    prompt = ""
+    for detail in CATALOG_DETAIL_LADDER:
+        prompt = _build_planner_user_prompt(
+            context,
+            know_how_context=know_how_context,
+            planning_contract_context=planning_contract_context,
+            catalog_detail=detail,
+        )
+        total = len((_SYSTEM_GUIDE + _PRINCIPLES_GUIDE).encode("utf-8")) + len(
+            prompt.encode("utf-8")
+        )
+        if total <= _PLANNER_PROMPT_BYTE_LIMIT:
+            return prompt, detail
+    # Still over at the shortest rung: return it and let the budget check raise,
+    # so an over-budget request stays an explicit failure rather than a silent
+    # truncation of the typed context.
+    return prompt, CATALOG_DETAIL_LADDER[-1]
+
+
 class PlannerPromptBudgetError(RuntimeError):
     """The complete Planner request exceeds its bounded transport envelope."""
 
@@ -1087,16 +1143,14 @@ class PlannerAgent:
         planning_contract_context: str = "",
     ) -> list[LLMMessage]:
         """Build the exact initial Planner request used by ``run``."""
+        user_prompt, _ = _planner_prompt_within_budget(
+            context,
+            know_how_context=know_how_context,
+            planning_contract_context=planning_contract_context,
+        )
         return [
             LLMMessage(role="system", content=_SYSTEM_GUIDE + _PRINCIPLES_GUIDE),
-            LLMMessage(
-                role="user",
-                content=_build_planner_user_prompt(
-                    context,
-                    know_how_context=know_how_context,
-                    planning_contract_context=planning_contract_context,
-                ),
-            ),
+            LLMMessage(role="user", content=user_prompt),
         ]
 
     @classmethod
@@ -1107,17 +1161,24 @@ class PlannerAgent:
         know_how_context: str = "",
         planning_contract_context: str = "",
     ) -> Dict[str, Any]:
+        _, catalog_detail = _planner_prompt_within_budget(
+            context,
+            know_how_context=know_how_context,
+            planning_contract_context=planning_contract_context,
+        )
         try:
-            return bounded_request_metrics(
+            metrics = bounded_request_metrics(
                 system_content=_SYSTEM_GUIDE + _PRINCIPLES_GUIDE,
                 base_user_content=_build_planner_user_prompt(
                     context,
                     planning_contract_context=planning_contract_context,
+                    catalog_detail=catalog_detail,
                 ),
                 full_user_content=_build_planner_user_prompt(
                     context,
                     know_how_context=know_how_context,
                     planning_contract_context=planning_contract_context,
+                    catalog_detail=catalog_detail,
                 ),
                 max_bytes=_PLANNER_PROMPT_BYTE_LIMIT,
             )
@@ -1125,6 +1186,10 @@ class PlannerAgent:
             raise PlannerPromptBudgetError(
                 f"Planner prompt transport budget exceeded: {exc}"
             ) from exc
+        # A shortened menu is recorded, never silent: the run artifact must say
+        # which rung produced the plan it carries.
+        metrics["analysis_type_catalog_detail"] = catalog_detail
+        return metrics
 
     def run(
         self,
