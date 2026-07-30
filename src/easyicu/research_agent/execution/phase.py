@@ -142,6 +142,7 @@ from ..gates.concept import (
 )
 from ..gates.plausibility_receipt import plausibility_audit_receipt_findings
 from ..gates.owner_declaration import (
+    execution_declaration_refusal,
     owner_declaration_plan_findings,
     owner_declaration_replan_directive,
 )
@@ -6860,6 +6861,78 @@ def run_execute_phase(
                 ),
             )
         )
+        # ...and "silently" is the part that is not acceptable when the owner is
+        # only waiting on a field.  The plan-time gate already asked for it and
+        # spent a forced replan on the answer; arriving here means the Planner
+        # did not fill it in.  Handing the step to the Coder anyway is a
+        # fail-open at a declaration boundary: it produces a number for the
+        # paper's primary result whose model nobody declared, by the one actor
+        # whose accumulated repair guidance records it going wrong.
+        #
+        # Blocked per step, not per run.  The sibling plan-DAG blocks set
+        # ``steps_to_run = []`` and kill everything; a step the host merely
+        # cannot claim should not take the table-one and missingness steps down
+        # with it.  The manuscript still cannot be authorised without its
+        # primary result -- that is a different gate's job, and it already
+        # holds.
+        #
+        # What counts as under-declared is decided in one place, shared with the
+        # plan-time gate that already asked for the field.  The verdicts come
+        # from the selector's own trace, never from re-running its predicates
+        # here -- a second evaluation cannot see the gates the selector applies
+        # after a contract matches.
+        owner_declaration_gaps = execution_declaration_refusal(
+            claimed_by=standard_executor,
+            trace=standard_executor_trace,
+        )
+        if owner_declaration_gaps:
+            missing_by_owner = {
+                candidate.analysis_kind: list(candidate.missing_declarations)
+                for candidate in owner_declaration_gaps
+            }
+            step_record.update(
+                {
+                    "status": "blocked_owner_declaration_incomplete",
+                    "diagnostic_only": True,
+                    "generation_mode": "system",
+                    "owner_declaration_missing": missing_by_owner,
+                }
+            )
+            declaration_finding = ValidationFinding(
+                validator="execution_owner_declaration",
+                severity="error",
+                message=(
+                    f"Step {step.step_id} was refused rather than generated: the "
+                    "host has a deterministic owner for its declared product and "
+                    "the plan still does not declare "
+                    + "; ".join(
+                        f"{kind}: {', '.join(repr(name) for name in names)}"
+                        for kind, names in sorted(missing_by_owner.items())
+                    )
+                    + ". The plan-time gate asked for these fields and the replan "
+                    "did not supply them. Generating this step would answer the "
+                    "question with a model the plan never specified."
+                ),
+                detail={
+                    "reason": "owner_declaration_incomplete_at_execution",
+                    "step_id": step.step_id,
+                    "missing_declarations_by_owner": missing_by_owner,
+                },
+            )
+            with shared_lock:
+                findings.append(declaration_finding)
+                _append_terminal_step_record(per_step_records, step_record)
+                _flush_partial_manifest()
+            emit_progress(
+                "audit",
+                f"Blocked {step.step_id}; its declared model is incomplete.",
+                status="error",
+                run_id=run_id,
+                step_id=step.step_id,
+                current_step=step_current,
+                total_steps=total_steps,
+            )
+            return step_record
         preflight_figure_code = (
             None
             if preflight_standard_code is not None
