@@ -1346,6 +1346,7 @@ class PlannerAgent:
         if enforce_article_contract:
             from ..reporting.article_contract import (
                 build_article_analysis_contract,
+                empty_primary_lineage_reason,
                 validate_plan_against_article_contract,
             )
 
@@ -1411,6 +1412,20 @@ class PlannerAgent:
                     else ""
                 )
                 if missing_headline:
+                    # Cause before advice. While the lineage is empty no
+                    # declaration anywhere can credit a headline role, so the
+                    # generic "declare it in the primary step" is work the
+                    # Planner may already have done -- canary5 spent 2 of 5
+                    # attempts on exactly that.
+                    lineage_reason = empty_primary_lineage_reason(plan)
+                    if lineage_reason:
+                        hint_text += (
+                            " The reason none of these can be credited is "
+                            "structural, not a missing product: "
+                            + lineage_reason
+                            + ". Fix that first; declaring the product "
+                            "elsewhere cannot help until it is fixed."
+                        )
                     hint_text += (
                         " These are headline_owned and are credited only on the "
                         "primary lineage: "

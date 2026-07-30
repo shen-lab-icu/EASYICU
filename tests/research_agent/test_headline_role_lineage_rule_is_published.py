@@ -429,3 +429,133 @@ def test_a_plan_missing_only_ordinary_roles_gets_no_lineage_note() -> None:
     # A flag on every line is a flag on nothing: the roles still missing here
     # are the ordinary ones, and none of them is credited by lineage.
     assert "(headline_owned)" not in message
+
+
+# ---------------------------------------------------------------------------
+# Cause before advice: while the lineage is empty, nothing can be credited.
+
+
+def test_a_plan_with_no_primary_step_is_told_that_is_the_cause() -> None:
+    """The one structural reason the plan schema still lets through.
+
+    ``_declared_primary_lineage_step_ids`` returns the empty set for three
+    reasons and two of them cannot reach the article contract at all --
+    ``test_a_second_primary_step_is_refused_by_the_plan_schema`` and
+    ``test_a_primary_step_of_only_displays_is_refused_too`` above are the proof.
+    A plan with NO primary step is permitted, and then every headline role is
+    uncreditable wherever its product is declared. Told only "role X is
+    missing", the Planner re-declares the product and is rejected again.
+    """
+
+    from easyicu.research_agent.reporting.article_contract import (
+        empty_primary_lineage_reason,
+    )
+
+    plan = AnalysisPlan.model_validate(
+        {
+            "research_question": "Estimate survival after ventilation.",
+            "analysis_type": "survival",
+            "steps": [
+                {
+                    "step_id": "07_km",
+                    "planned_analysis_role": "secondary",
+                    "intent": "Show absolute risk over follow-up.",
+                    "inputs": ["artifact:analysis_cohort"],
+                    "expected_outputs": ["table:survival_curve"],
+                    "method": "kaplan_meier_survival",
+                }
+            ],
+        }
+    )
+
+    reason = empty_primary_lineage_reason(plan)
+
+    assert reason is not None
+    assert "no step declares planned_analysis_role='primary'" in reason
+    assert "wherever its product is declared" in reason
+
+
+def test_a_plan_that_has_a_primary_step_reports_no_lineage_cause() -> None:
+    """Silence when the lineage exists: the missing role is then a real gap."""
+
+    from easyicu.research_agent.reporting.article_contract import (
+        empty_primary_lineage_reason,
+    )
+
+    plan = AnalysisPlan.model_validate(
+        {
+            "research_question": "Estimate survival after ventilation.",
+            "analysis_type": "survival",
+            "steps": [
+                {
+                    "step_id": "06_cox",
+                    "planned_analysis_role": "primary",
+                    "intent": "Estimate the adjusted hazard ratio.",
+                    "inputs": ["artifact:analysis_cohort"],
+                    "expected_outputs": ["table:survival_effect_estimates"],
+                    "method": "cox_proportional_hazards",
+                }
+            ],
+        }
+    )
+
+    assert empty_primary_lineage_reason(plan) is None
+
+
+def test_the_rejection_names_the_empty_lineage_before_the_generic_advice() -> None:
+    """Wiring, and the order: cause first, then what to declare.
+
+    A plan with no primary step used to be told only which role was missing
+    and to declare it in the primary step -- of which it has none.
+    """
+
+    from easyicu.research_agent.agents.core import (
+        PlannerAgent,
+        PlannerArticleContractError,
+    )
+
+    context = _survival_context()
+    plan_json = json.dumps(
+        {
+            "research_question": context.research_question,
+            "analysis_type": "survival",
+            "cohort": None,
+            "robustness_specs": [],
+            "rationale": "Every step auxiliary; no headline declared.",
+            "steps": [
+                {
+                    "step_id": "06_cox",
+                    "planned_analysis_role": "secondary",
+                    "intent": "Estimate the adjusted hazard ratio.",
+                    "inputs": ["artifact:analysis_cohort"],
+                    "expected_outputs": ["table:survival_effect_estimates"],
+                    "method": "cox_proportional_hazards",
+                    "icu_rule_refs": [],
+                },
+                {
+                    "step_id": "07_km",
+                    "planned_analysis_role": "secondary",
+                    "intent": "Show absolute risk over follow-up by exposure.",
+                    "inputs": ["artifact:analysis_cohort"],
+                    "expected_outputs": ["table:survival_curve"],
+                    "method": "kaplan_meier_survival",
+                    "icu_rule_refs": [],
+                },
+            ],
+        }
+    )
+
+    with pytest.raises(PlannerArticleContractError) as excinfo:
+        PlannerAgent(llm=object())._parse(
+            plan_json,
+            context,
+            enforce_article_contract=True,
+            article_contract_context=context,
+        )
+
+    message = str(excinfo.value)
+    assert "structural, not a missing product" in message
+    assert "no step declares planned_analysis_role='primary'" in message
+    assert message.index("structural, not a missing product") < message.index(
+        "credited only on the primary lineage"
+    )

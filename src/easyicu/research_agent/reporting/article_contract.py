@@ -377,6 +377,37 @@ def _has_scientific_result_product(products: Set[tuple[str, str]]) -> bool:
     )
 
 
+def empty_primary_lineage_reason(plan: AnalysisPlan) -> Optional[str]:
+    """Why no step is on the primary lineage, in the plan's own terms, or None.
+
+    ``_declared_primary_lineage_step_ids`` returns the empty set for three
+    structural reasons, and while it does, a headline-owned role cannot be
+    credited *anywhere* -- declaring its product in any step changes nothing.
+    The host reported only the symptom ("missing role X") and advised declaring
+    the product in the primary step, which the Planner may already have done.
+    canary5 spent 2 of its 5 attempts there.
+
+    Only ONE of its three reasons is reachable here, which is why this is four
+    lines rather than three branches.  ``AnalysisPlan`` already refuses the
+    other two outright -- more than one primary step, and a primary step whose
+    outputs are all displays -- so a plan holding either never reaches the
+    article contract at all.  Both were written and deleted after construction
+    showed the plan cannot be built; canary5's "four primary steps" rejection
+    was a *different* attempt from its missing-role ones.
+
+    What remains is a plan with NO primary step, which ``AnalysisPlan`` permits
+    and which silently makes every headline role uncreditable.
+    """
+
+    if any(step.planned_analysis_role == "primary" for step in plan.steps):
+        return None
+    return (
+        "no step declares planned_analysis_role='primary', so the primary "
+        "lineage is empty and no headline-owned role can be credited in any "
+        "step, wherever its product is declared"
+    )
+
+
 def _declared_primary_lineage_step_ids(plan: AnalysisPlan) -> Set[str]:
     """Return Planner-declared primary result descendants.
 
@@ -1140,6 +1171,7 @@ __all__ = [
     "ArticleDisplayRequirement",
     "augment_plan_for_article_contract",
     "build_article_analysis_contract",
+    "empty_primary_lineage_reason",
     "render_article_analysis_contract_for_prompt",
     "roles_covered_by_artifacts",
     "roles_covered_by_plan",
