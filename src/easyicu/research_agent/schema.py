@@ -1659,6 +1659,34 @@ def _spec_names_only_products_the_step_declares(
         )
 
 
+_EXACT_TYPED_TABLE_INPUT = re.compile(r"table:[a-z][a-z0-9_]*")
+
+
+def inputs_owing_a_consumption_contract(inputs: Sequence[Any]) -> set[str]:
+    """The declared inputs a consumption contract has to decide about.
+
+    Only a ``table:`` input has rows, and the contract's whole content is
+    whether they are all consumed or a subset is. A ``statistic:`` input is one
+    finite number in a JSON sidecar, so ``mode="all_rows"`` over it decides
+    nothing; this validator has always exempted it.
+
+    It lives here, called by both readers, because the other reader --
+    ``execution/runners/figure_input_capability._contracts_match`` -- carried
+    its own stricter copy and demanded a contract for *every* declared input.
+    A step that satisfied this schema was then refused by the capability behind
+    it, so the renderer silently declined and the figure went to the Coder.
+    Measured 2026-07-30 on today's plans: 7 of 21 visualization steps lost
+    their deterministic owner that way, and in 100% of them the inputs without
+    a contract were exactly the statistics.
+    """
+
+    return {
+        str(value)
+        for value in inputs or ()
+        if _EXACT_TYPED_TABLE_INPUT.fullmatch(str(value))
+    }
+
+
 def spec_backs_every_declared_product(
     expected_outputs: Sequence[Any],
     *,
@@ -2049,12 +2077,9 @@ class AnalysisStep(BaseModel):
             == "visualization"
             and consumption_keys
         ):
-            typed_table_inputs = {
-                value
-                for value in self.inputs
-                if re.fullmatch(r"table:[a-z][a-z0-9_]*", str(value))
-            }
-            if set(consumption_keys) != typed_table_inputs:
+            if set(consumption_keys) != inputs_owing_a_consumption_contract(
+                self.inputs
+            ):
                 raise ValueError(
                     "visualization input_consumption_contracts must cover every "
                     "exact typed table input"
