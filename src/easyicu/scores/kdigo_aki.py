@@ -205,6 +205,8 @@ def kdigo_uo(
     time_col: Optional[str] = None,
     urine_col: str = 'urine',
     weight_col: str = 'weight',
+    source_is_rate: bool = False,
+    interval: Optional[pd.Timedelta] = None,
 ) -> pd.DataFrame:
     """Calculate urine output-based AKI staging using KDIGO criteria.
     
@@ -221,12 +223,16 @@ def kdigo_uo(
     - Stage 0: No AKI
     
     Args:
-        urine_df: DataFrame with urine output values (mL)
+        urine_df: DataFrame with urine output values (mL), or hourly-equivalent
+            values when ``source_is_rate`` is true
         weight_df: DataFrame with patient weight (kg)
         id_col: Column name for patient ID (auto-detected if None)
         time_col: Column name for time (auto-detected if None)
         urine_col: Column name for urine output values
         weight_col: Column name for weight values
+        source_is_rate: Treat urine values as a directly recorded rate source.
+            HiRID variable 10020000 requires this path.
+        interval: Extraction-bin width represented by each rate-source value.
         
     Returns:
         DataFrame with uo rates and aki_stage_uo
@@ -245,7 +251,9 @@ def kdigo_uo(
     result = _calculate_uo_rates_simple(
         urine_df, weight_df, 
         id_col, time_col, 
-        urine_col, weight_col
+        urine_col, weight_col,
+        source_is_rate=source_is_rate,
+        interval=interval,
     )
     
     if result.empty:
@@ -302,6 +310,8 @@ def _calculate_uo_rates_simple(
     time_col: str,
     urine_col: str = 'urine',
     weight_col: str = 'weight',
+    source_is_rate: bool = False,
+    interval: Optional[pd.Timedelta] = None,
 ) -> pd.DataFrame:
     """Calculate urine output rates using simplified time-windowed averages.
     
@@ -309,18 +319,62 @@ def _calculate_uo_rates_simple(
     seconds (SICdb) time columns automatically.
     
     Args:
-        urine_df: DataFrame with urine output values (mL)
+        urine_df: DataFrame with urine output values (mL), or hourly-equivalent
+            rate values when ``source_is_rate`` is true
         weight_df: DataFrame with patient weight (kg)
         id_col: Column name for patient ID
         time_col: Column name for time
         urine_col: Column name for urine output values
         weight_col: Column name for weight values
+        source_is_rate: Use time-weighted observed-interval rate coverage
+            instead of event-volume summation.
+        interval: Extraction-bin width represented by each rate-source value.
         
     Returns:
         DataFrame with columns: id_col, time_col, uo_rt_6hr, uo_rt_12hr, uo_rt_24hr
     """
     if urine_df.empty or weight_df.empty:
         return pd.DataFrame()
+
+    if source_is_rate:
+        # HiRID 10020000 is OUTurine/h (mL/h), whereas the other databases
+        # expose voided volume events. Reusing the event-volume denominator
+        # here would divide a rate by charting gaps and create false oliguria.
+        # KDIGO staging requires the complete 6/12/24-hour duration, so its
+        # thresholds are stricter than the descriptive UO concepts.
+        from easyicu.callbacks import _urine_rate_window_avg_multi
+
+        rate_urine = urine_df.copy()
+        rate_weight = weight_df.copy()
+        if urine_col != "urine" and urine_col in rate_urine.columns:
+            rate_urine = rate_urine.rename(columns={urine_col: "urine"})
+        if weight_col != "weight" and weight_col in rate_weight.columns:
+            rate_weight = rate_weight.rename(columns={weight_col: "weight"})
+
+        windowed = _urine_rate_window_avg_multi(
+            rate_urine,
+            rate_weight,
+            windows=[(6, 6), (12, 12), (24, 24)],
+            interval=interval,
+        )
+        result = windowed["uo_6h"].merge(
+            windowed["uo_12h"],
+            on=[id_col, time_col],
+            how="outer",
+            sort=False,
+        ).merge(
+            windowed["uo_24h"],
+            on=[id_col, time_col],
+            how="outer",
+            sort=False,
+        )
+        return result.rename(
+            columns={
+                "uo_6h": "uo_rt_6hr",
+                "uo_12h": "uo_rt_12hr",
+                "uo_24h": "uo_rt_24hr",
+            }
+        )
     
     # Copy data
     urine = urine_df.copy()
@@ -548,6 +602,8 @@ def kdigo_stages(
     crea_col: str = 'crea',
     urine_col: str = 'urine',
     weight_col: str = 'weight',
+    urine_source_is_rate: bool = False,
+    interval: Optional[pd.Timedelta] = None,
 ) -> pd.DataFrame:
     """Calculate combined KDIGO AKI staging using creatinine and urine output.
     
@@ -568,6 +624,8 @@ def kdigo_stages(
         crea_col: Column name for creatinine values
         urine_col: Column name for urine values
         weight_col: Column name for weight values
+        urine_source_is_rate: Treat urine as a direct rate source (HiRID).
+        interval: Extraction-bin width represented by each rate-source value.
         
     Returns:
         DataFrame with combined AKI staging including:
@@ -594,7 +652,16 @@ def kdigo_stages(
     # Calculate urine output-based staging if data available
     if urine_df is not None and weight_df is not None and not urine_df.empty:
         try:
-            uo_staging = kdigo_uo(urine_df, weight_df, id_col, time_col, urine_col, weight_col)
+            uo_staging = kdigo_uo(
+                urine_df,
+                weight_df,
+                id_col,
+                time_col,
+                urine_col,
+                weight_col,
+                source_is_rate=urine_source_is_rate,
+                interval=interval,
+            )
 
             if not uo_staging.empty:
                 # 2026-05-20 fix: kdigo_uo auto-detects its own time column
@@ -747,7 +814,9 @@ def load_kdigo_aki(
         time_col=time_col,
         crea_col='crea',
         urine_col='urine',
-        weight_col='weight'
+        weight_col='weight',
+        urine_source_is_rate=str(database).lower() == 'hirid',
+        interval=pd.Timedelta(hours=1),
     )
     
     if verbose and not result.empty:

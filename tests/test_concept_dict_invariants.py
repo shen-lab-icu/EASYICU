@@ -145,6 +145,15 @@ def test_aumc_hba1c_scales_are_harmonised_before_pooling(concept_dict):
     assert concept_dict["hba1c"]["max"] == 25
 
 
+def test_hirid_mchc_is_converted_from_g_per_litre_to_g_per_dl(concept_dict):
+    source = concept_dict["mchc"]["sources"]["hirid"][0]
+
+    assert source["ids"] == 24000170
+    assert source["callback"] == (
+        "convert_unit(binary_op(`*`, 0.1), 'g/dL')"
+    )
+
+
 def test_vasopressor_durations_are_non_negative_hours(concept_dict):
     """Export one explicit duration contract across all databases.
 

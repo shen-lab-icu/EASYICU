@@ -75,9 +75,13 @@ def _adaptive_oneshot_budget_mb(
     """Size nested concept worksets from memory that is available *now*.
 
     The streamed patient batch is already the primary peak-RAM boundary.  A
-    fixed 512 MB nested budget is appropriate when a 16 GB laptop has only
-    about 8 GB free, but on a server it needlessly splits those already-bounded
-    worksets into 3,000-patient fragments and repeatedly scans the same table.
+    fixed 512 MB budget below 12 GB available was too conservative: on an
+    8 GB-available laptop it split an already-bounded outer batch into tiny
+    nested fragments and repeatedly scanned the same source tables.
+
+    Use one third of memory available at launch, rounded down to 512 MiB, with
+    a 512 MiB floor and 8 GiB ceiling.  This gives 2.5 GiB at 8 GiB available,
+    while retaining the established 8 GiB server cap.
     """
 
     if available_memory_mb is None:
@@ -89,11 +93,9 @@ def _adaptive_oneshot_budget_mb(
             # Fail conservatively when system memory cannot be inspected.
             available_memory_mb = 0.0
     available = max(0.0, float(available_memory_mb))
-    if available < 12 * 1024:
-        return 512
-    if available < 24 * 1024:
-        return 4 * 1024
-    return 8 * 1024
+    quantum_mb = 512
+    budget = int(available / 3.0 / quantum_mb) * quantum_mb
+    return max(quantum_mb, min(8 * 1024, budget))
 
 
 def _configure_external_runtime(

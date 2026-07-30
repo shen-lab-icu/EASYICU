@@ -1639,7 +1639,7 @@ def _apply_callback(
             expand_to_hourly=False,  # Return win_tbl format, not expanded ts_tbl
         )
 
-    # Handle hirid_urine callback - convert cumulative urine to incremental
+    # Handle HiRID's directly recorded hourly urine-rate source.
     if expr == "hirid_urine":
         from ..utils.callback_utils import hirid_urine
         
@@ -1651,6 +1651,7 @@ def _apply_callback(
             concept_name=concept_name,
             val_col=val_var,
             unit_col=unit_var,
+            interval=interval,
         )
 
     # Handle hirid_rate_kg callback - HiRID dose rate per kg
