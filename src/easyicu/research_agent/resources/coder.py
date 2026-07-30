@@ -280,6 +280,14 @@ def _software_resources(
                     "import_name": kernel.import_path,
                     "entrypoints": list(kernel.entrypoints),
                     "capability": kernel.capability,
+                    # The kernel's own imports travel INSIDE its projection
+                    # rather than competing for one of the three software
+                    # slots. Measured: without this, a Cox step selected
+                    # ph_schoenfeld / rmst / temporal_features and lifelines --
+                    # the library needed to fit the model at all -- was ranked
+                    # out. Offering a wrapper while hiding what it wraps is
+                    # worse than offering neither.
+                    "requires": list(kernel.requires),
                     "fallback": kernel.fallback,
                     "availability": "verified_in_runner_source_digest",
                     "runtime_install_allowed": False,
