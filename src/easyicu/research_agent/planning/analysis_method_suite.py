@@ -175,22 +175,33 @@ _PREDICTION = MethodSuite(
             name="DeLong CI / test on AUROC",
             purpose="Confidence interval on discrimination and formal comparison of two models' AUROCs.",
             tier="standard_supporting",
-            implementation="planned",
+            implementation="llm_coded",
             produces="auroc_delong.csv (auroc, ci_low, ci_high [, comparison p])",
             runner=None,
             reporting_items=("TRIPOD+AI 15",),
-            notes="Deterministic supporting runner PLANNED (WS5). Until then discrimination CI is LLM-coded if the plan asks.",
+            notes=(
+                "`methods.delong_auc` (delong_auc_ci / delong_test) is a "
+                "reviewed, tested kernel offered to the Coder via "
+                "CURATED_METHOD_KERNELS; the Coder calls it instead of "
+                "re-deriving the DeLong variance. A deterministic host runner "
+                "that OWNS the step is still planned."
+            ),
         ),
         AnalysisMethod(
             key="decision_curve",
             name="Decision-curve analysis / net benefit (DCA)",
             purpose="Clinical utility across threshold probabilities vs treat-all / treat-none.",
             tier="standard_supporting",
-            implementation="planned",
+            implementation="llm_coded",
             produces="decision_curve.csv (threshold, net_benefit, net_benefit_all)",
             runner=None,
             reporting_items=("TRIPOD+AI 19",),
-            notes="Already a TRIPOD+AI checklist item; deterministic DCA runner + panel PLANNED (WS5).",
+            notes=(
+                "`methods.decision_curve` (net_benefit_curve / "
+                "summarize_decision_curve) is a reviewed, tested kernel offered "
+                "to the Coder via CURATED_METHOD_KERNELS. A deterministic host "
+                "runner + panel that OWN the step are still planned."
+            ),
             figure_source_contracts=(
                 ("figure:decision_curve", ("prediction:decision",)),
             ),
@@ -241,9 +252,15 @@ _PREDICTION = MethodSuite(
             name="Conformal prediction intervals",
             purpose="Distribution-free per-patient predictive uncertainty with coverage guarantees.",
             tier="exploratory",
-            implementation="deterministic",
+            implementation="llm_coded",
             produces="conformal coverage table",
-            runner="conformal",  # research_agent/methods/conformal.py
+            runner=None,
+            notes=(
+                "Corrected 2026-07-30: this was declared deterministic, but no "
+                "host code calls methods/conformal.py -- the old guard accepted "
+                "'the module is importable' as proof of production. It is now a "
+                "reviewed kernel offered to the Coder via CURATED_METHOD_KERNELS."
+            ),
         ),
         AnalysisMethod(
             key="external_validation",
@@ -312,11 +329,18 @@ _SURVIVAL = MethodSuite(
             name="Proportional-hazards check (Schoenfeld residuals / PH test)",
             purpose="Test the core Cox assumption; a violated PH makes a single HR misleading.",
             tier="standard_supporting",
-            implementation="planned",
+            implementation="llm_coded",
             produces="schoenfeld_test.csv (covariate, chi2, p) + schoenfeld_plot (diagnostics panel slot)",
             runner=None,
             reporting_items=("STROBE 12a",),
-            notes="The survival figure already has a diagnostics panel that ACCEPTS a schoenfeld_plot; a deterministic PH-test runner to FILL it is PLANNED (WS5).",
+            notes=(
+                "`methods.ph_schoenfeld` (ph_test / run_ph_test, over "
+                "lifelines.statistics.proportional_hazard_test) is a reviewed, "
+                "tested kernel offered to the Coder via CURATED_METHOD_KERNELS. "
+                "The survival figure's diagnostics panel already ACCEPTS a "
+                "schoenfeld_plot; a deterministic runner that OWNS filling it "
+                "is still planned."
+            ),
         ),
         AnalysisMethod(
             key="subgroup_hr",
@@ -333,9 +357,17 @@ _SURVIVAL = MethodSuite(
             name="Restricted mean survival time (RMST)",
             purpose="Difference in mean event-free time up to a horizon — interpretable when PH is dubious.",
             tier="standard_supporting",
-            implementation="planned",
+            implementation="llm_coded",
             produces="rmst.csv (group, rmst, ci) + difference",
             runner=None,
+            notes=(
+                "`methods.rmst` (rmst / rmst_difference) is a reviewed, tested "
+                "kernel offered to the Coder via CURATED_METHOD_KERNELS. It "
+                "computes the integral-form sampling SE deliberately: "
+                "lifelines' restricted_mean_survival_time(return_variance=True) "
+                "returns the population variance, which inflates the CI by "
+                "~sqrt(n). A deterministic host runner is still planned."
+            ),
         ),
         AnalysisMethod(
             key="competing_risks_cif",
@@ -400,11 +432,19 @@ _CAUSAL = MethodSuite(
             name="E-value (sensitivity to unmeasured confounding)",
             purpose="How strong an unmeasured confounder would have to be to explain away the effect.",
             tier="standard_supporting",
-            implementation="planned",
-            produces="evalue.csv (point_estimate, evalue, evalue_ci)",
-            runner=None,
+            implementation="deterministic",
+            produces="e_values.csv (term, odds_ratio, ci, e_value, e_value_lower_bound)",
+            runner="sensitivity",  # methods/sensitivity.py::compute_e_value
             reporting_items=("STROBE 12e",),
-            notes="Deterministic E-value runner PLANNED (WS5); shared with the association family.",
+            notes=(
+                "Produced by the host in orchestration/finalize.py over every "
+                "primary-effect row; shared with the association family. "
+                "CAVEAT a reviewer must see: converting an OR to an RR needs a "
+                "baseline event prevalence. The run supplies one when an "
+                "outcome-rate product exists; otherwise compute_e_value "
+                "ASSUMES 0.1 and records that assumption in the row's note. "
+                "The assumed value moves the reported E-value."
+            ),
         ),
         AnalysisMethod(
             key="negative_control",
@@ -518,10 +558,14 @@ _ASSOCIATION = MethodSuite(
             name="E-value (sensitivity to unmeasured confounding)",
             purpose="Robustness of an observational association to an unmeasured confounder.",
             tier="standard_supporting",
-            implementation="planned",
-            produces="evalue.csv",
-            runner=None,
+            implementation="deterministic",
+            produces="e_values.csv",
+            runner="sensitivity",  # methods/sensitivity.py::compute_e_value
             reporting_items=("STROBE 12e",),
+            notes=(
+                "Same host-produced artifact as the causal family's entry, "
+                "including its baseline-prevalence caveat."
+            ),
         ),
         AnalysisMethod(
             key="robustness_panel",
