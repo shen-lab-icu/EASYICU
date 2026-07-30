@@ -32,12 +32,19 @@ Two boundaries it keeps:
 * A step whose selection *raises* is reported as unevaluated rather than
   passed.  A gate that answers in the permissive direction for a fact it lacks
   is worse than no gate: it reads as "checked, fine".
+* What the replan is forbidden to change is **computed from the findings**, not
+  written down.  The literal list here used to contain ``covariate`` while the
+  only gap this gate has ever reported is ``model_requirements[0].covariates``,
+  so the finding and the directive travelled to the Planner together saying
+  "declare the adjustment set" and "do not choose a covariate".  A demand that
+  forbids itself is not strict, it is unsatisfiable, and doing nothing is a
+  defensible reading of it.
 """
 
 from __future__ import annotations
 
 import json
-from typing import Any, List, Sequence
+from typing import Any, Iterable, List, Sequence, Tuple
 
 from ..execution.runners.selection import (
     StandardExecutorCandidate,
@@ -51,6 +58,75 @@ __all__ = [
 ]
 
 _VALIDATOR = "plan_owner_declaration"
+
+#: The scientific choices a replan must not *make* in order to satisfy this
+#: gate.  The gap is a missing declaration of something the plan already chose,
+#: so a replanner that closes it by picking a different exposure or a new cohort
+#: has changed the science to satisfy a bookkeeping check -- worse than the
+#: fall-through this gate exists to prevent.
+#:
+#: It is a starting set, not the emitted list: see :func:`_prohibited_choices`.
+_SCIENTIFIC_CHOICES: Tuple[str, ...] = (
+    "exposure",
+    "outcome",
+    "cohort",
+    "covariate",
+    "estimand",
+    "method",
+)
+
+
+def _declared_choice(name: str) -> str:
+    """``model_requirements[0].covariates`` -> ``covariate``.
+
+    The containing path and the index say *where* the field lives; only the
+    leaf says *which* choice it declares.  The trailing ``s`` comes off so a
+    field named for a set (``covariates``) matches the singular choice it is
+    the declaration of.
+
+    Matching is exact on that normalised leaf, never a substring: an owner
+    reporting ``outcome_levels`` has not been handed permission to choose the
+    ``outcome``, and a substring test would silently grant it.
+    """
+
+    leaf = str(name or "").split(".")[-1].split("[")[0].strip().casefold()
+    return leaf[:-1] if leaf.endswith("s") else leaf
+
+
+def _prohibited_choices(missing: Iterable[str]) -> Tuple[str, ...]:
+    """The choices to forbid, minus the ones this gate is asking to be declared.
+
+    A fixed prohibition list is the defect this function exists to remove.  It
+    contained ``covariate`` while the only field the gate ever reports missing
+    is ``model_requirements[0].covariates`` -- measured 2026-07-30, 74 of the 81
+    recorded declarations of the primary product decline for exactly that field
+    -- so one replan message demanded the adjustment set and forbade choosing
+    one in the same breath.  A directive that contradicts itself is not a strict
+    directive but an unsatisfiable one, and the safest reading of it is to do
+    nothing.
+
+    Deriving the prohibition from the findings makes that shape impossible for
+    every future owner rather than for this one field, which is the point:
+    editing the literal would fix today's contradiction and leave the next
+    owner's missing field to collide with it again.
+    """
+
+    demanded = {_declared_choice(name) for name in missing}
+    return tuple(choice for choice in _SCIENTIFIC_CHOICES if choice not in demanded)
+
+
+def _english_list(items: Sequence[str]) -> str:
+    """``(a, b, c)`` -> ``"a, b, or c"``; the empty case names itself."""
+
+    values = [str(item) for item in items if str(item).strip()]
+    if not values:
+        # Reached only if a finding demands every choice in the starting set,
+        # which would mean the plan declared nothing at all.  Saying so beats
+        # emitting "Do not change the  to satisfy this".
+        return "any scientific choice already declared elsewhere in the plan"
+    if len(values) == 1:
+        return values[0]
+    return ", ".join(values[:-1]) + f", or {values[-1]}"
 
 
 def _declaration_gaps(step: Any, plan: Any) -> tuple[StandardExecutorCandidate, ...]:
@@ -97,6 +173,11 @@ def owner_declaration_plan_findings(*, plan: Any) -> List[ValidationFinding]:
             continue
         for gap in gaps:
             missing = ", ".join(repr(name) for name in gap.missing_declarations)
+            # One owner for the prohibition, shared with the directive: when
+            # the two were written separately they drifted, and the pair that
+            # reached the Planner together said "declare the covariates" and
+            # "do not choose a covariate".
+            prohibited = _english_list(_prohibited_choices(gap.missing_declarations))
             # Cause first: only ``message`` reaches a prompt, and the prompt
             # projection clips it from the tail.
             findings.append(
@@ -107,9 +188,9 @@ def owner_declaration_plan_findings(*, plan: Any) -> List[ValidationFinding]:
                         f"Step {step_id} does not declare {missing}, so the host's "
                         f"deterministic {gap.analysis_kind} owner cannot claim it "
                         f"({gap.decline_reason}). Declare the missing field(s) on "
-                        "the step that already exists. Do not change the exposure, "
-                        "outcome, cohort, estimand, or method to satisfy this, and "
-                        "do not split or add a step."
+                        f"the step that already exists. Do not change the "
+                        f"{prohibited} to satisfy this, and do not split or add "
+                        "a step."
                     ),
                     detail={
                         "reason": "owner_declaration_incomplete",
@@ -132,21 +213,34 @@ def owner_declaration_replan_directive(
     inside an 8,000-line function where the next reader cannot tell which gate
     each belongs to.
 
-    Every prohibition here is load-bearing.  The gap is a missing *declaration*
-    of something the plan already chose, so a replanner that "fixes" it by
-    picking a covariate set, splitting the step, or deleting it has changed the
-    science to satisfy a bookkeeping check -- which is worse than the fall-back
-    this gate exists to prevent.
+    Every prohibition here is load-bearing, and for that reason it is computed
+    rather than written down.  The gap is a missing *declaration* of something
+    the plan already chose, so a replanner that "fixes" it by splitting the
+    step or deleting it has changed the science to satisfy a bookkeeping check.
+    But the fields the findings name are the ones the Planner is being told to
+    fill in, and a literal list that happened to contain one of them -- as this
+    one contained ``covariate`` while the only reported gap was
+    ``model_requirements[0].covariates`` -- demands and forbids the same act.
+    ``_prohibited_choices`` subtracts what is demanded, so no future owner's
+    missing field can collide with the prohibition either.
     """
 
     if not findings:
         return None
+    demanded: List[str] = []
+    for finding in findings:
+        detail = getattr(finding, "detail", None)
+        if isinstance(detail, dict):
+            demanded.extend(
+                str(name) for name in (detail.get("missing_declarations") or [])
+            )
+    prohibited = _english_list(_prohibited_choices(demanded))
     return (
         "Complete the declaration on steps the host can already compute "
         "deterministically, without changing any scientific choice. Each "
         "finding names a step and the exact field(s) it left undeclared; add "
-        "those to the step that already exists. Do not choose an exposure, "
-        "outcome, cohort, covariate, estimand, or method to satisfy this, do "
+        f"those to the step that already exists. Do not choose a different "
+        f"{prohibited} to satisfy this, do "
         "not split or merge steps, and do not delete a step you cannot "
         "complete. Contract findings: "
         + json.dumps(
