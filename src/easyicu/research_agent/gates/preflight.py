@@ -6904,16 +6904,26 @@ def _notna_gated_domain_checks(
     return list(dict.fromkeys(checks))
 
 
+# ``audit_publication_exports_json`` is the JSON-primitive form of
+# ``audit_publication_exports`` and takes the identical signature, so the two
+# share one contract object rather than repeating the literal -- a drifted copy
+# is how this registry has produced wrong blocks before.
+_PUBLICATION_EXPORT_AUDIT_CALL_CONTRACT: dict[str, object] = {
+    "max_positional": 1,
+    "positional_parameter": "paths",
+    "required_keywords": (),
+    "allowed_keywords": ("paths", "min_bytes", "require_svg_text"),
+}
+
 _HOST_HELPER_CALL_CONTRACTS: dict[tuple[str, str], dict[str, object]] = {
     (
         "easyicu.research_agent.figures.publication",
         "audit_publication_exports",
-    ): {
-        "max_positional": 1,
-        "positional_parameter": "paths",
-        "required_keywords": (),
-        "allowed_keywords": ("paths", "min_bytes", "require_svg_text"),
-    },
+    ): _PUBLICATION_EXPORT_AUDIT_CALL_CONTRACT,
+    (
+        "easyicu.research_agent.figures.publication",
+        "audit_publication_exports_json",
+    ): _PUBLICATION_EXPORT_AUDIT_CALL_CONTRACT,
     (
         "easyicu.research_agent.methods.descriptive_inputs",
         "closed_categorical_counts",
