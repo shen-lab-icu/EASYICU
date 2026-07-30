@@ -26,6 +26,7 @@ from ..authority.typed_binding import (
 from ..gates.plausibility_receipt import (
     render_plausibility_receipt_scope_guidance,
 )
+from ..contracts.method_kernels import CURATED_METHOD_KERNELS
 from ..contracts.method_packages import (
     BASELINE_PACKAGES,
     CURATED_METHOD_PACKAGES,
@@ -262,6 +263,35 @@ def _software_resources(
                     package.pip_name,
                     package.capability,
                     *package.families,
+                ),
+            )
+        )
+    # In-tree reviewed kernels. Unlike the packages above these need no runtime
+    # snapshot check: DockerRunner byte-verifies every .py under
+    # research_agent/ against the host tree before the step runs, so if the step
+    # runs at all these modules are present and identical. Offering them is what
+    # stops a Coder re-deriving a Schoenfeld test inside a generated script.
+    for kernel in CURATED_METHOD_KERNELS:
+        resources.append(
+            _descriptor(
+                resource_id=f"software:{_slug(kernel.import_path)}",
+                kind="software",
+                projection={
+                    "import_name": kernel.import_path,
+                    "entrypoints": list(kernel.entrypoints),
+                    "capability": kernel.capability,
+                    "fallback": kernel.fallback,
+                    "availability": "verified_in_runner_source_digest",
+                    "runtime_install_allowed": False,
+                },
+                analysis_families=kernel.families,
+                permissions=("coder_context", "sandbox_import"),
+                search_terms=(
+                    kernel.module,
+                    kernel.import_path,
+                    kernel.capability,
+                    *kernel.entrypoints,
+                    *kernel.families,
                 ),
             )
         )

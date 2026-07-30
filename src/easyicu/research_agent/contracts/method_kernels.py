@@ -1,0 +1,232 @@
+"""Tested in-tree statistical kernels the Coder may import instead of re-deriving.
+
+Why this module exists
+----------------------
+Measured 2026-07-30: six modules under ``research_agent/methods/`` -- 1,430
+lines, 49 passing tests -- had **zero importers anywhere outside their own test
+files**.  Not in ``src/``, not in ``tools/``, not in ``benchmarks/``.  Five of
+them were simultaneously declared ``implementation="planned"`` in
+``planning/analysis_method_suite.py``, which is the surface the Planner reads.
+The map said "not implemented", so nothing ever routed to them, so a Coder
+asked for a DeLong interval re-derived the variance by hand.
+
+The cause is structural, not clerical.  Every drift guard in
+``test_analysis_method_suite.py`` iterates *the map* and checks reality matches
+it (``for suite, m in _ALL_METHODS``).  That direction catches claiming MORE
+than we have.  Nothing iterated the *code* and checked the map mentions it, so
+claiming LESS than we have -- dead code -- was invisible by construction.
+
+This module closes the other direction.  It is the declared inventory of
+kernels that are reachable *through the Coder* rather than through a host
+runner, and ``tests/research_agent/test_method_kernel_reachability.py`` asserts
+that every module under ``methods/`` is reachable by exactly one of the two
+routes:
+
+* a non-test importer inside ``src/`` (the host calls it), or
+* an entry in :data:`CURATED_METHOD_KERNELS` (the Coder may call it).
+
+A module in neither is dead, and the test fails naming it.  That is the
+long-lived map: not a document someone must remember to update, but a check
+that fails when the code and the declaration disagree.
+
+Why the Coder and not a host runner
+-----------------------------------
+Wiring one of these the way ``finalize.py`` wires ``compute_e_value`` costs
+~110 lines of bespoke CSV plumbing per method, including column-name guessing
+(``"odds_ratio", "or", "OR"``).  Five of those is 550 new lines of the exact
+shape this project keeps paying for.  These kernels are already inside the
+runner image and already byte-verified by it: ``DockerRunner`` hashes every
+``.py`` under ``research_agent/`` and refuses to run if it does not match the
+host tree.  So the import already works; only the *declaration* was missing.
+
+This does not make the kernels deterministic.  The Coder still writes the call,
+so the result is still value-verified like any Coder output.  What changes is
+that it calls 335 reviewed, tested lines instead of re-deriving Schoenfeld
+residuals inside a generated script.
+
+Deliberately data-only, mirroring ``method_packages.py``: authority code binds
+the declared set into a reproducibility fingerprint without importing execution.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Tuple
+
+__all__ = [
+    "MethodKernel",
+    "CURATED_METHOD_KERNELS",
+    "KERNEL_MODULE_NAMES",
+    "UnreachableKernel",
+    "DECLARED_UNREACHABLE_KERNELS",
+    "UNREACHABLE_MODULE_NAMES",
+]
+
+_KERNEL_PACKAGE = "easyicu.research_agent.methods"
+
+
+@dataclass(frozen=True)
+class MethodKernel:
+    """One reviewed in-tree kernel offered to Coder-generated analysis code."""
+
+    module: str  # module name under research_agent.methods
+    entrypoints: Tuple[str, ...]  # public callables; existence is asserted
+    capability: str  # what it computes, in the Coder's vocabulary
+    families: Tuple[str, ...]  # analysis families it applies to
+    fallback: str  # what the Coder must do if it is unavailable
+
+    @property
+    def import_path(self) -> str:
+        return f"{_KERNEL_PACKAGE}.{self.module}"
+
+
+CURATED_METHOD_KERNELS: Tuple[MethodKernel, ...] = (
+    MethodKernel(
+        module="ph_schoenfeld",
+        entrypoints=("ph_test", "run_ph_test", "PHTestResult"),
+        capability=(
+            "proportional-hazards check for a fitted Cox model — Schoenfeld "
+            "residual test per covariate and globally, returning chi2 and p"
+        ),
+        families=("time_to_event", "survival"),
+        fallback=(
+            "lifelines.statistics.proportional_hazard_test directly (this "
+            "kernel wraps it and normalises the result shape)"
+        ),
+    ),
+    MethodKernel(
+        module="delong_auc",
+        entrypoints=(
+            "delong_auc_ci",
+            "delong_auc_variance",
+            "delong_test",
+            "AUCResult",
+        ),
+        capability=(
+            "DeLong confidence interval on an AUROC, and the DeLong test "
+            "comparing two correlated AUROCs on the same cases"
+        ),
+        families=("prediction", "prediction_model", "dynamic_prediction"),
+        fallback=(
+            "bootstrap percentile CI on the AUROC — scikit-learn has no DeLong "
+            "implementation, so hand-deriving the variance is the alternative"
+        ),
+    ),
+    MethodKernel(
+        module="rmst",
+        entrypoints=("rmst", "rmst_difference", "RMSTResult"),
+        capability=(
+            "restricted mean survival time up to a horizon, and the between-"
+            "group RMST difference with its sampling standard error"
+        ),
+        families=("time_to_event", "survival"),
+        fallback=(
+            "NOT lifelines.utils.restricted_mean_survival_time(return_variance"
+            "=True) — that returns the population variance of the restricted "
+            "survival time, not the estimator's sampling SE, and inflates the "
+            "CI by ~sqrt(n). This kernel computes the integral-form variance."
+        ),
+    ),
+    MethodKernel(
+        module="decision_curve",
+        entrypoints=(
+            "net_benefit_curve",
+            "net_benefit_at",
+            "summarize_decision_curve",
+            "DecisionCurveResult",
+        ),
+        capability=(
+            "decision-curve analysis — net benefit across threshold "
+            "probabilities against treat-all and treat-none"
+        ),
+        families=("prediction", "prediction_model", "dynamic_prediction"),
+        fallback="hand-computed net benefit at each threshold",
+    ),
+    MethodKernel(
+        module="temporal_features",
+        entrypoints=("onset_times", "incident_outcome_cohort", "landmark_cohort"),
+        capability=(
+            "timing primitives over the long trajectory (TRAJECTORY_PARQUET): "
+            "first time a concept crosses a threshold; prevalent / incident / "
+            "event-free classification relative to an index event; and the "
+            "at-risk set plus follow-up clock from a landmark time"
+        ),
+        families=(
+            "time_to_event",
+            "survival",
+            "causal_emulation",
+            "association",
+            "dynamic_prediction",
+        ),
+        fallback=(
+            "re-deriving onsets from the trajectory inside the analysis script "
+            "— the failure this module was written for, where a 'measured but "
+            "event-absent' row (e.g. a stage-0 record) was counted as an onset"
+        ),
+    ),
+    MethodKernel(
+        module="conformal",
+        entrypoints=(
+            "conformal_calibrate",
+            "conformal_predict_sets",
+            "conformal_evaluate",
+            "ConformalResult",
+        ),
+        capability=(
+            "split-conformal prediction sets with marginal (and Mondrian "
+            "class-conditional) coverage guarantees"
+        ),
+        families=("prediction", "prediction_model"),
+        fallback="no distribution-free coverage guarantee",
+    ),
+)
+
+
+KERNEL_MODULE_NAMES: frozenset = frozenset(k.module for k in CURATED_METHOD_KERNELS)
+
+
+@dataclass(frozen=True)
+class UnreachableKernel:
+    """A kernel module deliberately reachable by neither route, and why.
+
+    This is NOT an escape hatch for "wire it later".  It exists because the
+    reachability guard has exactly two honest answers -- the host calls it, or
+    the Coder may call it -- and a third state is real: code whose resolution is
+    a decision someone must take, not a wiring task.  Making that state explicit
+    and reason-bearing is what keeps it from silently becoming the default.
+
+    An entry costs a written reason and a named pending decision, so adding one
+    is visible in review; leaving a module out of all three lists fails the
+    guard.
+    """
+
+    module: str
+    reason: str  # why it is not reachable today; asserted non-empty
+    pending_decision: str  # what must be decided; asserted non-empty
+
+
+DECLARED_UNREACHABLE_KERNELS: Tuple[UnreachableKernel, ...] = (
+    UnreachableKernel(
+        module="evalue",
+        reason=(
+            "Second E-value implementation. It agrees with the wired "
+            "sensitivity.compute_e_value exactly on RR and HR, but the two use "
+            "DIFFERENT odds-ratio conversions: this module takes an explicit "
+            "'or_rare' / 'or_common' declaration (OR=2.0 -> 3.414 / 2.180), "
+            "while compute_e_value converts through a baseline prevalence and "
+            "defaults to 0.1 when none is supplied (OR=2.0 -> 3.038). Deleting "
+            "either one silently picks a convention, and the numbers differ."
+        ),
+        pending_decision=(
+            "Which OR->RR convention the reported E-value uses. That is a "
+            "scientific choice, not a refactor: the wired default of a 10% "
+            "baseline prevalence is a guessed parameter that moves a reported "
+            "number. Resolve the convention first, then delete the loser."
+        ),
+    ),
+)
+
+
+UNREACHABLE_MODULE_NAMES: frozenset = frozenset(
+    k.module for k in DECLARED_UNREACHABLE_KERNELS
+)
