@@ -6638,7 +6638,14 @@ def test_outbound_opaque_levels_bind_to_digest_verified_local_context(ra):
         expected_outputs=["table:cohort_summary"],
         method="descriptive_summary",
     )
+    # The two prologue lines are part of the fixture, not decoration: the gate
+    # runs on the assembled script, and a module-level read of a name nothing
+    # binds -- `context` here -- is itself a blocking finding.
     code = """\
+import json
+import pathlib
+
+context = json.loads(pathlib.Path("research_context.json").read_text())
 sex_metadata = next(
     variable for variable in context["variables"] if variable["name"] == "sex"
 )

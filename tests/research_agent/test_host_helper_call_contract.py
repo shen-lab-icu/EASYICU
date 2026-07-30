@@ -703,8 +703,13 @@ def summarize(closed_categorical_counts, sex):
 
 
 def test_table_one_sdk_repairs_local_schema_to_exact_planner_spec(ra):
+    # The prologue binding `frame` is part of the fixture, not decoration: the
+    # gate runs on the assembled script, and a module-level read of a name
+    # nothing binds is itself a blocking finding.
     script = """
+import pandas as pd
 from easyicu.research_agent.methods.table_one import build_grouped_table_one
+frame = pd.DataFrame({"age": [61.0], "death": [0]})
 table_one_spec = {
     "group_by": "death",
     "group_levels": [0, 1],
@@ -738,8 +743,10 @@ def test_table_one_sdk_accepts_exact_planner_spec(ra):
     step = _table_step(ra)
     spec = step.table_one_spec.model_dump(mode="python")
     script = (
+        "import pandas as pd\n"
         "from easyicu.research_agent.methods.table_one import "
         "build_grouped_table_one\n"
+        'frame = pd.DataFrame({"age": [61.0], "death": [0]})\n'
         f"table_one_spec = {spec!r}\n"
         "result = build_grouped_table_one(frame, table_one_spec)\n"
     )

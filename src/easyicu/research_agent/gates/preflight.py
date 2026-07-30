@@ -4409,6 +4409,122 @@ def _undefined_direct_call_findings(tree: ast.Module) -> list[ValidationFinding]
     ]
 
 
+_MODULE_DUNDERS = frozenset(
+    {
+        "__name__",
+        "__file__",
+        "__doc__",
+        "__package__",
+        "__spec__",
+        "__loader__",
+        "__builtins__",
+    }
+)
+
+
+def module_level_unbound_names(tree: ast.Module) -> list[tuple[str, int]]:
+    """Names read while the module body runs that nothing in the program binds.
+
+    ``compile()`` accepts these: a module-level ``NameError`` is a runtime
+    event, so the syntax check is happy and the container is not.  The name is
+    reported with the first line that reads it.
+
+    Scope is deliberately asymmetric and narrow.  Only loads that execute on
+    import are collected -- a name read inside a function body may legitimately
+    be bound by the time that function is called, and on the recorded corpus
+    those reads were where the false positives lived.  Bindings, by contrast,
+    are collected from the whole program: a name assigned anywhere is bound.
+
+    Definition bodies (``def`` / ``async def`` / ``lambda`` / ``class``) are
+    skipped wholesale, so a decorator or a default argument that reads an
+    unbound name is not reported.  Generated analysis scripts do not use those
+    shapes; a branch for them would never fire.
+
+    A ``match`` statement binds names that are not ``Name`` stores, so a module
+    containing one is abstained on rather than guessed at.  Over the 408
+    recorded generated scripts there is not one, and a wrong flag here would
+    cost a healthy step a repair -- the expensive direction to be wrong in.
+    """
+
+    bound: set[str] = set(dir(builtins)) | set(_MODULE_DUNDERS)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Match):
+            return []
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                bound.add(alias.asname or alias.name.split(".", 1)[0])
+        elif isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                bound.add(alias.asname or alias.name)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            bound.add(node.name)
+        elif isinstance(node, ast.arg):
+            bound.add(node.arg)
+        elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            bound.add(node.id)
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            bound.add(node.name)
+
+    loaded: dict[str, int] = {}
+
+    def _collect(node: ast.AST) -> None:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(
+                child,
+                (
+                    ast.FunctionDef,
+                    ast.AsyncFunctionDef,
+                    ast.ClassDef,
+                    ast.Lambda,
+                ),
+            ):
+                continue
+            if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Load):
+                loaded.setdefault(child.id, int(child.lineno))
+            _collect(child)
+
+    _collect(tree)
+    return sorted(
+        (name, line) for name, line in loaded.items() if name not in bound
+    )
+
+
+def _module_level_unbound_findings(tree: ast.Module) -> list[ValidationFinding]:
+    """Reject a module-level read of a name nothing in the program binds.
+
+    fresh22 died this way on ``hashlib``, and the H1 canary died twice on the
+    same class in one step: ``manifest`` in the generated draft, then
+    ``table_one_spec`` in the repair that replaced it.  Each death cost an
+    execution slot and a repair before anything scientific was attempted.
+
+    ``_undefined_direct_call_findings`` overlaps on exactly one shape -- a bare
+    call at module level -- and keeps its own wider scope over calls inside
+    functions.  A name both reject is reported twice, and both reports are
+    true; neither is allowed to assume the other ran.
+    """
+
+    unbound = module_level_unbound_names(tree)
+    if not unbound:
+        return []
+    return [
+        ValidationFinding(
+            validator="mechanical_code_preflight",
+            severity="error",
+            message=(
+                "Module-level code reads names that nothing in the script "
+                "binds, so it raises NameError before any analysis runs: "
+                + ", ".join(f"{name} (line {line})" for name, line in unbound)
+                + ". Bind each name -- import it, or compute it earlier in "
+                "the module -- instead of assuming the host provides it."
+            ),
+            detail={
+                "reason": "module_level_unbound_name",
+                "names": [{"name": name, "line": line} for name, line in unbound],
+            },
+        )
+    ]
+
+
 def _local_call_signature_findings(tree: ast.Module) -> list[ValidationFinding]:
     """Reject direct local-helper calls that Python can prove are invalid."""
 
@@ -8589,6 +8705,7 @@ def audit_mechanical_code_contracts(
     findings.extend(_finalized_exposure_reconciliation_findings(tree, step))
     findings.extend(_typed_dataframe_erasure_findings(tree, step))
     findings.extend(_undefined_direct_call_findings(tree))
+    findings.extend(_module_level_unbound_findings(tree))
     findings.extend(_local_call_signature_findings(tree))
     findings.extend(_local_read_before_assignment_findings(tree))
     findings.extend(_branch_local_unbound_findings(tree))
@@ -8619,4 +8736,4 @@ def audit_mechanical_code_contracts(
     return findings
 
 
-__all__ = ["audit_mechanical_code_contracts"]
+__all__ = ["audit_mechanical_code_contracts", "module_level_unbound_names"]
