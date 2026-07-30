@@ -248,6 +248,7 @@ def _base_row(
     denominator_n: int,
     nonmissing_n: int,
     missing_n: int,
+    group_missing_excluded_n: int,
     p_value: float | None,
     test_name: str,
     contract_sha256: str,
@@ -256,8 +257,12 @@ def _base_row(
     comparison_group: str | None,
 ) -> dict[str, Any]:
     return {
-        "schema_version": "easyicu.table_one_result/2",
+        "schema_version": "easyicu.table_one_result/3",
         "contract_sha256": contract_sha256,
+        # Rows the grouping variable could not place, removed from this table
+        # before any denominator was taken.  Carried on every row so that no
+        # consumer can read the table without also reading what is not in it.
+        "group_missing_excluded_n": group_missing_excluded_n,
         "variable_order": variable_order,
         "variable": variable.name,
         "variable_type": variable.variable_kind,
@@ -374,11 +379,21 @@ def build_grouped_table_one(
         raise TableOneContractError(
             f"Table 1 input columns are missing: {missing_columns}"
         )
+    ungrouped = frame[contract.group_by].isna()
+    group_missing_excluded_n = int(ungrouped.sum())
+    if group_missing_excluded_n:
+        if contract.missing_group_policy == "fail_closed":
+            raise TableOneContractError(
+                "Table 1 grouping variable contains missing values under "
+                f"fail_closed policy: {group_missing_excluded_n} of "
+                f"{len(frame)} rows have no {contract.group_by!r} value"
+            )
+        # One filtered frame feeds Overall and every group, so the denominator
+        # and its parts keep describing the same rows.  Filtering per group and
+        # leaving Overall on the full frame is the same defect as counting
+        # events on rows a model never fitted.
+        frame = frame.loc[~ungrouped]
     group_series = frame[contract.group_by]
-    if bool(group_series.isna().any()):
-        raise TableOneContractError(
-            "Table 1 grouping variable contains missing values under fail_closed policy"
-        )
     group_masks = _closed_masks(
         group_series, contract.group_levels, label=contract.group_by
     )
@@ -396,6 +411,14 @@ def build_grouped_table_one(
     for variable_order, variable in enumerate(contract.variables, start=1):
         p_value, test_name = _p_value(frame, group_masks, variable)
         series = frame[variable.name]
+        if variable.summary != "count_percent" and variable.levels:
+            # An ordinal row summarised numerically may still declare its
+            # closed set (a SOFA component, a KDIGO stage).  Declaring it has
+            # to mean something, or the plan promises a check nobody runs:
+            # a value outside the set stops the step here, exactly as an
+            # undeclared grouping value does above.  ``_closed_masks`` raises
+            # on the unexpected value; the masks it returns are unused.
+            _closed_masks(series, variable.levels, label=variable.name)
         reference_group = (
             str(_python_scalar(contract.group_levels[0]))
             if len(contract.group_levels) == 2
@@ -429,6 +452,7 @@ def build_grouped_table_one(
                 denominator_n=denominator_n,
                 nonmissing_n=nonmissing_n,
                 missing_n=missing_n,
+                group_missing_excluded_n=group_missing_excluded_n,
                 p_value=p_value,
                 test_name=test_name,
                 contract_sha256=contract_sha256,

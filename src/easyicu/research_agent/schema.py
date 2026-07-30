@@ -1268,7 +1268,25 @@ class ArtifactConsumptionContract(BaseModel):
 
 
 class TableOneVariableSpec(BaseModel):
-    """Planner-owned summary and comparison rule for one Table 1 variable."""
+    """Planner-owned summary and comparison rule for one Table 1 variable.
+
+    An ordinal row may declare ``levels`` even when it is summarised
+    numerically. It once could not, and that refusal killed a whole task before
+    a single step ran: five consecutive planning attempts were rejected on
+    ``steps.2.table_one_spec.variables.2`` for declaring the level set of an
+    ordinal clinical score. Every such score -- a SOFA component 0-4, a KDIGO
+    stage 0-3, a GCS -- has a real closed set, the directive asks each variable
+    for its "closed levels" without qualification, and the observed set is
+    something the host itself now supplies in the variable catalog. Refusing
+    the one declaration a Planner would naturally write, for the one variable
+    kind whose set is genuinely closed, is not a safeguard.
+
+    A declared set that nothing checks would be worse than none, because it
+    reads as a guarantee. So the executor enforces it exactly as it enforces
+    ``group_levels``: a value observed outside the declared set stops the step
+    rather than being summarised as though it had been anticipated. Continuous
+    rows keep the ban -- a measurement has no closed set to declare.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -1319,9 +1337,10 @@ class TableOneVariableSpec(BaseModel):
                     "only ordinal variables may use a numeric Table 1 summary/test "
                     "outside the continuous variable kind"
                 )
-            if self.levels:
+            if len(self.levels) == 1:
                 raise ValueError(
-                    "numeric ordinal Table 1 summaries must not declare category levels"
+                    "an ordinal Table 1 variable declares either no closed levels "
+                    "or at least two; one value is not a set"
                 )
         return self
 
@@ -1332,6 +1351,26 @@ class TableOneSpec(BaseModel):
     The host executes this declaration but never selects the grouping variable,
     variable roles, summary family, or inferential test. For exactly two
     declared groups, the host also emits comparison-minus-reference SMDs.
+
+    ``missing_group_policy`` decides what a row whose grouping value is missing
+    means -- the same question ``ExposureOutcomeDistributionSpec`` asks about an
+    unobserved outcome, and it is answered the same way: by the Planner, in the
+    declaration, never by the executor at run time. It once had a single legal
+    value, and a single legal value is not a policy. Every recorded Table 1 that
+    grouped on a fully observed column (an outcome flag, a discharge status) was
+    unaffected; a Table 1 grouped on a measurement-derived clinical score could
+    not be built at all, by any plan, because such a score is never observed on
+    every stay. A real run measured that: KDIGO stage was absent for 696 of
+    94,458 stays, 0.74%, and the step died inside its container with no legal
+    declaration that could have saved it.
+
+    ``exclude_and_report`` removes those rows from the whole table -- the
+    grouped columns *and* Overall, from one filtered frame -- so that Overall
+    stays equal to the sum of its groups. Splitting them is how a denominator
+    and its parts come to describe two different row sets. The count removed
+    travels in the emitted table itself, on every row, because that table is
+    what the output gate reads and what the manuscript binds; a number kept
+    anywhere else can be dropped on the way.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -1341,7 +1380,7 @@ class TableOneSpec(BaseModel):
     group_levels: List[Any] = Field(min_length=2)
     variables: List[TableOneVariableSpec] = Field(min_length=1)
     include_overall: Literal[True] = True
-    missing_group_policy: Literal["fail_closed"] = "fail_closed"
+    missing_group_policy: Literal["fail_closed", "exclude_and_report"] = "fail_closed"
     missingness_display: Literal["n_percent_by_group"] = "n_percent_by_group"
     p_values_required: Literal[True] = True
     p_value_adjustment: Literal["none_descriptive_table"] = "none_descriptive_table"
