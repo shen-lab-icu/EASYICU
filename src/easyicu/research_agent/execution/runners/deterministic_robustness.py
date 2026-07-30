@@ -49,6 +49,7 @@ from ...robustness.panel import (
     robustness_specs_sha,
     validate_robustness_specs,
 )
+from ...contracts.ownership_verdict import OwnershipVerdict
 from ...schema import AnalysisStep, spec_backs_every_declared_product
 from ...contracts.host_scaffold import HostScaffoldedScript
 from .plausibility_receipt import render_standard_plausibility_receipt_code
@@ -56,6 +57,9 @@ from .plausibility_receipt import render_standard_plausibility_receipt_code
 __all__ = [
     "ROBUSTNESS_REPLAY_OUTPUT_FILES",
     "replay_locked_memberships",
+    "ROBUSTNESS_REPLAY_ANALYSIS_KIND",
+    "ROBUSTNESS_REPLAY_OUTPUT_KINDS",
+    "robustness_replay_declaration_verdict",
     "robustness_replay_spec_is_emittable",
     "robustness_sensitivity_preflight_code",
     "robustness_sensitivity_preflight_scaffold",
@@ -71,6 +75,17 @@ __all__ = [
 # The copies therefore stay.  What does not stay is the possibility of promising
 # a reader two products and satisfying it with one answer twice: a declaration
 # keyed here cannot name the same output for two products.
+#: This owner's one name, in its verdict and in the selector trace.  A
+#: retyped kind literal is how two layers end up disagreeing about which
+#: owner produced an artifact (task #95/N6).
+ROBUSTNESS_REPLAY_ANALYSIS_KIND = "robustness_replay"
+
+#: The product kinds this replay writes.  One declaration, read by both the
+#: emittability check and the declaration-gap verdict, so the two can never
+#: disagree about what this runner can produce -- and so ``figure`` staying out
+#: of it is a single fact rather than two places that must be edited together.
+ROBUSTNESS_REPLAY_OUTPUT_KINDS: frozenset = frozenset({"table", "statistic", "log"})
+
 ROBUSTNESS_REPLAY_OUTPUT_FILES: Mapping[str, str] = MappingProxyType(
     {
         "robustness_matrix": "robustness_matrix.csv",
@@ -114,7 +129,77 @@ def robustness_replay_spec_is_emittable(step: AnalysisStep) -> bool:
         step.expected_outputs,
         spec=spec,
         lookup="output_for",
-        allowed_kinds=frozenset({"table", "statistic", "log"}),
+        allowed_kinds=ROBUSTNESS_REPLAY_OUTPUT_KINDS,
+    )
+
+
+def robustness_replay_declaration_verdict(step: AnalysisStep) -> OwnershipVerdict:
+    """Report a step this replay could execute if the Planner declared it.
+
+    Measured 2026-07-30 over the recorded plans (623 distinct step shapes): 20
+    declare a product this runner is the registered emitter of and fill no
+    ``robustness_replay_spec`` at all, so every one goes to the Coder to invent
+    a sensitivity grid.  An unspecified grid is not a weaker sensitivity
+    analysis; it is an undeclared one, and which specifications a paper reports
+    is a pre-specified choice rather than something code decides at run time.
+
+    The gap is keyed on the products the step promises, never on its ``method``
+    label -- see :func:`robustness_replay_spec_is_emittable`, which already
+    settled that question and must not be reopened: widening a label allowlist
+    would hand a *differently-scienced* sensitivity analysis to a runner that
+    replays an already-locked grid.
+
+    Two boundaries, both measured rather than assumed:
+
+    * The kinds come from :data:`ROBUSTNESS_REPLAY_OUTPUT_KINDS`, the same
+      constant emittability uses.  Including ``figure:`` would over-claim --
+      ``figure:robustness_summary`` is the *sole* trigger on 5 recorded steps
+      and this runner writes no figures.
+    * A step that already carries a spec is never reported here, even when the
+      spec does not back every declared product (4 recorded steps).  The
+      Planner did answer; whether a coverage shortfall should also become a
+      refusal is a separate question, and the existing design deliberately gave
+      it the safe answer of leaving the step unowned.
+
+    This owner does not claim.  No recorded step is emittable today, so a claim
+    path could not be exercised by any real plan, and the runner is already
+    reachable as a preflight substitute before the Coder is asked.  Reporting
+    the gap is what the plan-time gate needs; moving the routing is a separate,
+    characterised change for when a real run first produces an emittable spec.
+    """
+
+    if step.robustness_replay_spec is not None:
+        return OwnershipVerdict.wrong_shape(
+            ROBUSTNESS_REPLAY_ANALYSIS_KIND,
+            reason=(
+                "the step already declares a robustness replay spec; whether it "
+                "backs every declared product is emittability's question"
+            ),
+        )
+    promised = sorted(
+        value
+        for value in (str(item or "").strip() for item in step.expected_outputs or [])
+        if value.partition(":")[0] in ROBUSTNESS_REPLAY_OUTPUT_KINDS
+        and value.partition(":")[2] in ROBUSTNESS_REPLAY_OUTPUT_FILES
+    )
+    if not promised:
+        return OwnershipVerdict.wrong_shape(
+            ROBUSTNESS_REPLAY_ANALYSIS_KIND,
+            reason=(
+                "the step promises no product this replay is the registered "
+                "emitter of"
+            ),
+        )
+    return OwnershipVerdict.incomplete_declaration(
+        ROBUSTNESS_REPLAY_ANALYSIS_KIND,
+        missing=("robustness_replay_spec",),
+        reason=(
+            "the step promises "
+            + ", ".join(repr(name) for name in promised)
+            + ", which this replay emits, but declares no robustness_replay_spec "
+            "-- so the specification grid it would report is undeclared and the "
+            "Coder would have to choose one"
+        ),
     )
 
 

@@ -7,6 +7,10 @@ from typing import Any, Mapping
 
 from ...authority.plausibility import FlagOnlyPlausibilityScope
 from ...contracts.ownership_verdict import OwnershipVerdict
+from .deterministic_robustness import (
+    ROBUSTNESS_REPLAY_ANALYSIS_KIND,
+    robustness_replay_declaration_verdict,
+)
 from ...schema import AnalysisPlan, AnalysisStep
 from .adjusted_association_executor import (
     ADJUSTED_ASSOCIATION_ANALYSIS_KIND,
@@ -408,4 +412,19 @@ def select_standard_executor(
             )
         )
     _declined(adjusted_association_verdict)
+    # Consulted for its declaration gap only, and deliberately never claimed
+    # here.  The robustness replay is already reachable as a preflight
+    # substitute *before* the Coder is asked, and no recorded step carries an
+    # emittable spec -- so a claim path in this function could not be exercised
+    # by any real plan, which is the opposite of what deterministic ownership is
+    # for.  What the plan-time gate needs is the gap: measured 2026-07-30, 20
+    # recorded steps promise a product this replay is the registered emitter of
+    # and declare no spec at all, so the Coder invents the specification grid.
+    # Moving the routing into this function is a separate, characterised change
+    # for when a real run first produces an emittable spec.
+    robustness_declaration_verdict = robustness_replay_declaration_verdict(step)
+    if robustness_declaration_verdict.missing_declarations:
+        _declined(robustness_declaration_verdict)
+    else:
+        _missed(ROBUSTNESS_REPLAY_ANALYSIS_KIND)
     return None
