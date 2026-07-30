@@ -7045,25 +7045,7 @@ def _deterministic_runner_repair(
         repair_name = "inline_missing_to_jsonable_utils_v1"
         if previous_repair != repair_name:
             helper = textwrap.dedent("""
-                def to_jsonable(x):
-                    import math
-                    import numpy as np
-                    import pandas as pd
-                    if isinstance(x, (np.integer,)):
-                        return int(x)
-                    if isinstance(x, (np.floating,)):
-                        value = float(x)
-                        return value if math.isfinite(value) else None
-                    if isinstance(x, (np.bool_,)):
-                        return bool(x)
-                    if isinstance(x, np.ndarray):
-                        return x.tolist()
-                    try:
-                        if pd.isna(x):
-                            return None
-                    except Exception:
-                        pass
-                    return str(x)
+                from easyicu.research_agent.script_runtime import to_jsonable
                 """).strip()
             repaired = code.replace(
                 "from easyicu.research_agent.utils import to_jsonable",
@@ -7170,22 +7152,7 @@ def _deterministic_runner_repair(
                 import numpy as np
                 import pandas as pd
 
-                def to_jsonable(x):
-                    if isinstance(x, (np.integer,)):
-                        return int(x)
-                    if isinstance(x, (np.floating,)):
-                        value = float(x)
-                        return value if math.isfinite(value) else None
-                    if isinstance(x, (np.bool_,)):
-                        return bool(x)
-                    if isinstance(x, np.ndarray):
-                        return x.tolist()
-                    try:
-                        if pd.isna(x):
-                            return None
-                    except Exception:
-                        pass
-                    return str(x)
+                from easyicu.research_agent.script_runtime import to_jsonable
 
                 cohort_path = os.environ["COHORT_PARQUET"]
                 out_dir = os.environ["STEP_OUT_DIR"]
@@ -7281,22 +7248,7 @@ def _deterministic_runner_repair(
                 import matplotlib.pyplot as plt
                 from statsmodels.stats.proportion import proportion_confint
 
-                def to_jsonable(x):
-                    if isinstance(x, (np.integer,)):
-                        return int(x)
-                    if isinstance(x, (np.floating,)):
-                        value = float(x)
-                        return value if math.isfinite(value) else None
-                    if isinstance(x, (np.bool_,)):
-                        return bool(x)
-                    if isinstance(x, np.ndarray):
-                        return x.tolist()
-                    try:
-                        if pd.isna(x):
-                            return None
-                    except Exception:
-                        pass
-                    return str(x)
+                from easyicu.research_agent.script_runtime import to_jsonable
 
                 cohort_path = os.environ["COHORT_PARQUET"]
                 out_dir = os.environ["STEP_OUT_DIR"]
@@ -7396,15 +7348,7 @@ def _deterministic_runner_repair(
                 import pandas as pd
                 from sklearn.model_selection import train_test_split
 
-                def to_jsonable(x):
-                    if isinstance(x, (np.integer,)):
-                        return int(x)
-                    if isinstance(x, (np.floating,)):
-                        value = float(x)
-                        return value if np.isfinite(value) else None
-                    if isinstance(x, (np.bool_,)):
-                        return bool(x)
-                    return x
+                from easyicu.research_agent.script_runtime import to_jsonable
 
                 df = pd.read_parquet(os.environ["COHORT_PARQUET"])
                 out = os.environ["STEP_OUT_DIR"]
@@ -7533,15 +7477,7 @@ def _deterministic_runner_repair(
                     save_publication_figure,
                 )
 
-                def to_jsonable(x):
-                    if isinstance(x, (np.integer,)):
-                        return int(x)
-                    if isinstance(x, (np.floating,)):
-                        value = float(x)
-                        return value if np.isfinite(value) else None
-                    if isinstance(x, (np.bool_,)):
-                        return bool(x)
-                    return x
+                from easyicu.research_agent.script_runtime import to_jsonable
 
                 step_out_dir = os.environ["STEP_OUT_DIR"]
                 cohort_path = os.environ["COHORT_PARQUET"]

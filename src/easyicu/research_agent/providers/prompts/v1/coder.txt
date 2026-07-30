@@ -593,31 +593,21 @@ JSON SERIALISATION — MANDATORY:
 - Every dict you write to disk must contain only Python primitives
   (int, float, str, bool, list, dict, None). numpy scalars and
   pandas missing values are NOT JSON-serialisable.
-- Define this helper near the top of EVERY script that writes JSON,
-  and ALWAYS pass it as `default=to_jsonable`:
-
-    def to_jsonable(x):
-        import math
-        import numpy as np
-        import pandas as pd
-        if isinstance(x, (np.integer,)):
-            return int(x)
-        if isinstance(x, (np.floating,)):
-            v = float(x)
-            return v if math.isfinite(v) else None
-        if isinstance(x, (np.bool_,)):
-            return bool(x)
-        if isinstance(x, np.ndarray):
-            return x.tolist()
-        try:
-            if pd.isna(x):
-                return None
-        except (TypeError, ValueError):
-            pass
-        return str(x)
-
-  Then call ALWAYS: `json.dump(payload, f, indent=2,
+- Do NOT write this coercion yourself. Import it:
+  `from easyicu.research_agent.script_runtime import to_jsonable`
+  and ALWAYS call `json.dump(payload, f, indent=2,
   default=to_jsonable, ensure_ascii=False)`.
+  `write_json(path, payload)` from the same module does both in one
+  call and creates the parent directory.
+- Likewise, do NOT hand-write file hashing or cohort loading:
+  `from easyicu.research_agent.authority.provenance import sha256_file`
+  and
+  `from easyicu.research_agent.execution.runners.typed_input_binding
+   import load_typed_cohort`.
+  These are the host's own implementations, so a receipt you produce
+  with them matches the one the host verifies. A local reimplementation
+  is not more portable -- it is one more thing that can be wrong, and
+  it is where past runs actually died.
 
 CSV CELL VALUES — MANDATORY:
 - Every CSV cell must be a SCALAR (one number or one short string).
