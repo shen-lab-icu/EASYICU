@@ -829,6 +829,23 @@ def _first_float(summary: Dict[str, Any], keys: Sequence[str]) -> Optional[float
     return None
 
 
+def unexecuted_locked_spec_ids(panel: "RobustnessPanel") -> list[str]:
+    """Return the locked specifications the run never actually estimated.
+
+    A blank variant row is not a small result, it is the absence of one: the
+    protocol pre-specified the analysis and nothing carried it out.  Keyed on
+    the panel's own spec ids and its declared primary, so no method label or
+    product name decides whether the hole is visible.
+    """
+
+    return sorted(
+        row.spec_id
+        for row in panel.rows
+        if row.spec_id != panel.primary_spec_id
+        and (row.point_estimate is None or not row.converged)
+    )
+
+
 __all__ = [
     "MIN_AXIS_COUNTS",
     "PANEL_FILENAME",
@@ -845,6 +862,7 @@ __all__ = [
     "load_robustness_panel",
     "numeric_digest_for_panel",
     "robustness_specs_for_execution",
+    "unexecuted_locked_spec_ids",
     "validate_robustness_specs",
     "worst_rows_by_axis",
     "write_locked_robustness_specs",

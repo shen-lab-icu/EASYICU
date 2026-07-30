@@ -372,6 +372,7 @@ from ..robustness.panel import (
     build_robustness_panel_from_records,
     robustness_specs_for_execution,
     robustness_specs_sha,
+    unexecuted_locked_spec_ids,
     write_robustness_panel,
 )
 from ..trajectory.bundle import trajectory_bundle_findings
@@ -11999,6 +12000,38 @@ def run_execute_phase(
             evidence=evidence,
             prompt_pack_version=prompt_version,
         )
+        # A specification the run LOCKED and then never estimated is a hole in
+        # the protocol, not a blank cell.  The panel already records it as
+        # ``converged: false`` with an explanatory note, and a real E1 run
+        # finished with exactly that -- the pre-specified complete-case variant
+        # unexecuted -- while every error the run reported was about something
+        # else, so the sensitivity analysis read as done.  Keyed on the locked
+        # spec ids themselves, so no method or product allowlist decides
+        # whether the hole is noticed.
+        unexecuted_locked_specs = unexecuted_locked_spec_ids(robustness_panel)
+        if unexecuted_locked_specs:
+            findings.append(
+                ValidationFinding(
+                    validator="robustness_panel",
+                    severity="error",
+                    message=(
+                        "The run locked robustness specifications that no step "
+                        "estimated, so the panel carries them as blank rows: "
+                        + ", ".join(unexecuted_locked_specs)
+                        + ". A step re-estimating the locked grid must declare "
+                        "robustness_replay_spec to reach the deterministic "
+                        "replay owner; generic refitting stays disabled here "
+                        "because it would choose an exposure, outcome or "
+                        "method on the plan's behalf."
+                    ),
+                    detail={
+                        "unexecuted_spec_ids": unexecuted_locked_specs,
+                        "primary_spec_id": robustness_panel.primary_spec_id,
+                        "locked_spec_count": len(robustness_specs),
+                        "panel_path": "robustness_panel.json",
+                    },
+                )
+            )
         _flush_partial_manifest(
             {
                 "robustness_panel_path": "robustness_panel.json",
