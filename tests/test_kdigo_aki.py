@@ -119,6 +119,68 @@ def test_kdigo_uo_global_weight_without_id_applies_to_all_rows():
     assert result["uo_rt_6hr"].iloc[-1] == pytest.approx(0.2)
 
 
+def test_kdigo_hirid_direct_rate_uses_full_clock_time_coverage():
+    urine = pd.DataFrame(
+        {
+            "patientid": [1, 1, 1],
+            "datetime": [
+                pd.Timedelta(hours=0),
+                pd.Timedelta(hours=2),
+                pd.Timedelta(hours=6),
+            ],
+            "urine": [50.0, 100.0, 50.0],
+        }
+    )
+    weight = pd.DataFrame({"patientid": [1], "weight": [50.0]})
+
+    result = kdigo_uo(
+        urine,
+        weight,
+        id_col="patientid",
+        time_col="datetime",
+        source_is_rate=True,
+        interval=pd.Timedelta(hours=1),
+    )
+
+    # Direct rates cover [-1,0], [0,2], and [2,6]. At t=6 the exact
+    # six-hour window is therefore (100*2 + 50*4) / (50 kg * 6 h).
+    assert result["uo_rt_6hr"].iloc[-1] == pytest.approx(
+        400.0 / 50.0 / 6.0
+    )
+    assert result["uo_rt_12hr"].isna().all()
+    assert result["uo_rt_24hr"].isna().all()
+
+
+def test_kdigo_hirid_direct_rate_covers_only_observed_chart_span():
+    urine = pd.DataFrame(
+        {
+            "patientid": [1, 1],
+            "datetime": [
+                pd.Timedelta(hours=0),
+                pd.Timedelta(hours=10),
+            ],
+            "urine": [50.0, 500.0],
+        }
+    )
+    weight = pd.DataFrame({"patientid": [1], "weight": [50.0]})
+
+    result = kdigo_uo(
+        urine,
+        weight,
+        id_col="patientid",
+        time_col="datetime",
+        source_is_rate=True,
+        interval=pd.Timedelta(hours=1),
+    )
+
+    # The second recorded rate covers the preceding ten-hour chart interval:
+    # the six-hour KDIGO window is evaluable, but no 12-hour span exists.
+    assert result["uo_rt_6hr"].iloc[-1] == pytest.approx(10.0)
+    assert result["uo_rt_12hr"].isna().all()
+    assert result["uo_rt_24hr"].isna().all()
+    assert result["aki_stage_uo"].eq(0).all()
+
+
 def test_kdigo_rrt_stage_applies_from_first_active_rrt_time():
     creatinine = pd.DataFrame(
         {

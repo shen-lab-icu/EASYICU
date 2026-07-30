@@ -8150,8 +8150,9 @@
      "ids": 24000170,
      "table": "observations",
      "sub_var": "variableid",
-     "callback": "convert_unit(binary_op(`*`, 0.16114), '%')",
-     "class_name": "hrd_itm"
+     "callback": "convert_unit(binary_op(`*`, 0.1), 'g/dL')",
+     "class_name": "hrd_itm",
+     "_comment": "2026-07-30 HiRID raw reference declares MCHC in g/L (typical raw values 300-350). Convert g/L to g/dL with factor 0.1. The former 0.16114 factor produced a cross-database median of 49.3 instead of approximately 33 g/dL."
     }
    ],
    "miiv": [
@@ -15370,7 +15371,7 @@
      "sub_var": "variableid",
      "callback": "hirid_urine",
      "class_name": "hrd_itm",
-     "_comment": "2026-07-17 FIX: was 30005110 'Fluid balance' (cumulative NET balance incl. intake/non-urine output — not urine). Corrected to 10020000 'Hourly urine volume' (ml/h rate; official hirid_variable_reference). Callback now integrates rate x interval -> volume."
+     "_comment": "2026-07-30 source contract: 10020000 is directly recorded OUTUrine/h in mL/h (official HiRID reference and benchmark), not a cumulative counter. Publish one hourly-equivalent mL value per bin; derived UO windows apply each recorded rate to its preceding observed chart interval, matching official AKI-EWS backfill semantics, and use exact clock-time overlap. No rate is invented before the first reading or after the last. Descriptive windows require >=50% coverage; KDIGO requires the full 6/12/24h duration. 30005110 remains excluded because it is cumulative total fluid OUT, not urine."
     }
    ],
    "miiv": [

@@ -6570,7 +6570,20 @@ def _callback_rrt_criteria(
                     weight_df = weight_df.rename(columns={cols[0]: "weight"})
             
             # ⚡ PERF: Compute all 3 UO windows in a single merge+sort+groupby
-            uo_results = uo_all_windows(urine_df, weight_df, interval=ctx.interval)
+            source_is_rate = (
+                getattr(
+                    getattr(ctx.data_source, "config", None),
+                    "name",
+                    "",
+                )
+                == "hirid"
+            )
+            uo_results = uo_all_windows(
+                urine_df,
+                weight_df,
+                interval=ctx.interval,
+                source_is_rate=source_is_rate,
+            )
             for uo_name in missing_uo:
                 if uo_name in uo_results:
                     tables[uo_name] = _as_icutbl(uo_results[uo_name], id_columns=urine_tbl.id_columns, index_column=urine_tbl.index_column, value_column=uo_name)
@@ -6740,12 +6753,21 @@ def _callback_uo_window(
     
     # Call the actual callback function from callbacks.py
     min_hours = max(1, window_hours // 2)
+    source_is_rate = (
+        getattr(
+            getattr(ctx.data_source, "config", None),
+            "name",
+            "",
+        )
+        == "hirid"
+    )
     result_df = _urine_window_avg(
         urine=urine_tbl.data,
         weight=weight_tbl.data if weight_tbl else pd.DataFrame(),
         window_hours=window_hours,
         min_hours=min_hours,
-        interval=ctx.interval or pd.Timedelta(hours=1)
+        interval=ctx.interval or pd.Timedelta(hours=1),
+        source_is_rate=source_is_rate,
     )
     
     if result_df.empty:
@@ -7118,6 +7140,15 @@ def _callback_kdigo_aki(
         rrt_df=rrt_df,
         id_col=id_col,
         time_col=time_col,
+        urine_source_is_rate=(
+            getattr(
+                getattr(ctx.data_source, "config", None),
+                "name",
+                "",
+            )
+            == "hirid"
+        ),
+        interval=ctx.interval or pd.Timedelta(hours=1),
     )
     
     if result.empty:
@@ -7257,7 +7288,21 @@ def _callback_kdigo_uo(
             time_col = col
             break
     
-    result = kdigo_uo(urine_df, weight_df, id_col=id_col, time_col=time_col)
+    result = kdigo_uo(
+        urine_df,
+        weight_df,
+        id_col=id_col,
+        time_col=time_col,
+        source_is_rate=(
+            getattr(
+                getattr(ctx.data_source, "config", None),
+                "name",
+                "",
+            )
+            == "hirid"
+        ),
+        interval=ctx.interval or pd.Timedelta(hours=1),
+    )
     
     return ICUTable(
         data=result,
