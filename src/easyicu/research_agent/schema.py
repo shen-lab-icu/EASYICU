@@ -1099,6 +1099,15 @@ class PlannedModelRequirement(BaseModel):
         return self
 
 
+_DEFAULT_STABILITY_BASE_SEED = 1729
+"""Recorded starting seed when the study does not pick one.
+
+A seed makes a result reproducible; which seed it is carries no scientific
+claim.  Defaulting it keeps every run's randomisation recorded and repeatable
+while removing one more field the plan had to fill in to validate at all.
+"""
+
+
 class TrajectoryStabilitySpec(BaseModel):
     """Planner-owned design for a trajectory-cluster stability computation.
 
@@ -1107,33 +1116,68 @@ class TrajectoryStabilitySpec(BaseModel):
     metric, or label-alignment rule.  The selected clustering model, cluster
     count, representation, and missing-data fit are inherited from the typed
     upstream trajectory manifests rather than repeated here.
+
+    Sixteen of these fields are ``Literal`` types with exactly one legal value:
+    v1 of this calculator implements one resampling scheme, one comparison
+    metric and one label-alignment rule, so there is nothing to choose between.
+    They carry that single value as their default, which is the convention the
+    other Planner-owned specs in this module already follow.  The ``Literal``
+    still rejects every other spelling, the value is still serialised into the
+    spec and still hashed into ``trajectory_stability_spec_sha256`` -- the
+    Planner simply no longer has to retype sixteen constants correctly for the
+    plan to validate at all.  If a second implementation is ever added to any
+    of them, the field becomes a real choice and its default must be removed
+    (``test_planner_spec_constants.py`` enforces exactly that).
+
+    ``minimum_successful_resamples`` is likewise not a choice: the validator
+    below requires it to equal ``n_resamples``.  Leave it null and it is filled
+    in from ``n_resamples``; declare it and a disagreeing value is still
+    rejected.
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    resampling_method: Literal["subsample_without_replacement"]
+    resampling_method: Literal["subsample_without_replacement"] = (
+        "subsample_without_replacement"
+    )
     n_resamples: int = Field(ge=2, le=500)
     sample_fraction: Optional[float] = Field(default=None, gt=0.0, lt=1.0)
     sample_size: Optional[int] = Field(default=None, ge=2)
-    sample_fraction_rounding: Literal["floor"]
-    base_seed: int = Field(ge=0, le=2_147_483_647)
-    seed_derivation: Literal["numpy_seedsequence_spawn_uint32_v1"]
-    cross_resample_membership: Literal["distinct_membership_required"]
-    stability_metric: Literal["adjusted_rand_index"]
-    stability_aggregation: Literal["mean"]
-    metric_label_source: Literal["raw_refit_labels_label_invariant"]
-    evaluation_scope: Literal["sampled_overlap"]
-    label_alignment: Literal["hungarian_maximum_overlap"]
-    label_alignment_reference: Literal["frozen_candidate_assignments"]
-    label_alignment_tie_break: Literal["minimum_rank_distance_then_lexicographic_v1"]
-    final_assignment_policy: Literal["copy_selected_candidate_labels"]
-    minimum_successful_resamples: int = Field(ge=2)
-    failed_refit_policy: Literal["record_once_no_retry"]
-    refit_engine: Literal["easyicu_observed_data_diag_gmm_v1"]
-    refit_initialization: Literal["random_balanced_assignments"]
-    refit_max_iter: int = Field(ge=10, le=10_000)
-    refit_tolerance: float = Field(gt=0.0, le=0.1)
-    refit_regularization: float = Field(gt=0.0, le=1.0)
+    sample_fraction_rounding: Literal["floor"] = "floor"
+    base_seed: int = Field(default=_DEFAULT_STABILITY_BASE_SEED, ge=0, le=2_147_483_647)
+    seed_derivation: Literal["numpy_seedsequence_spawn_uint32_v1"] = (
+        "numpy_seedsequence_spawn_uint32_v1"
+    )
+    cross_resample_membership: Literal["distinct_membership_required"] = (
+        "distinct_membership_required"
+    )
+    stability_metric: Literal["adjusted_rand_index"] = "adjusted_rand_index"
+    stability_aggregation: Literal["mean"] = "mean"
+    metric_label_source: Literal["raw_refit_labels_label_invariant"] = (
+        "raw_refit_labels_label_invariant"
+    )
+    evaluation_scope: Literal["sampled_overlap"] = "sampled_overlap"
+    label_alignment: Literal["hungarian_maximum_overlap"] = "hungarian_maximum_overlap"
+    label_alignment_reference: Literal["frozen_candidate_assignments"] = (
+        "frozen_candidate_assignments"
+    )
+    label_alignment_tie_break: Literal[
+        "minimum_rank_distance_then_lexicographic_v1"
+    ] = "minimum_rank_distance_then_lexicographic_v1"
+    final_assignment_policy: Literal["copy_selected_candidate_labels"] = (
+        "copy_selected_candidate_labels"
+    )
+    minimum_successful_resamples: Optional[int] = Field(default=None, ge=2)
+    failed_refit_policy: Literal["record_once_no_retry"] = "record_once_no_retry"
+    refit_engine: Literal["easyicu_observed_data_diag_gmm_v1"] = (
+        "easyicu_observed_data_diag_gmm_v1"
+    )
+    refit_initialization: Literal["random_balanced_assignments"] = (
+        "random_balanced_assignments"
+    )
+    refit_max_iter: int = Field(default=200, ge=10, le=10_000)
+    refit_tolerance: float = Field(default=1e-6, gt=0.0, le=0.1)
+    refit_regularization: float = Field(default=1e-6, gt=0.0, le=1.0)
     minimum_mean_stability: Optional[float] = Field(
         default=None,
         ge=-1.0,
@@ -1143,8 +1187,10 @@ class TrajectoryStabilitySpec(BaseModel):
             "stability without making a binary accept/reject decision."
         ),
     )
-    decision_mode: Literal["report_only", "minimum_mean_threshold"]
-    threshold_failure_action: Literal["fail_closed_require_planner_revision"]
+    decision_mode: Optional[Literal["report_only", "minimum_mean_threshold"]] = None
+    threshold_failure_action: Literal["fail_closed_require_planner_revision"] = (
+        "fail_closed_require_planner_revision"
+    )
 
     @model_validator(mode="after")
     def _closed_resampling_design(self) -> "TrajectoryStabilitySpec":
@@ -1153,12 +1199,25 @@ class TrajectoryStabilitySpec(BaseModel):
                 "trajectory stability requires exactly one of sample_fraction "
                 "or sample_size"
             )
-        if self.minimum_successful_resamples != self.n_resamples:
+        if self.minimum_successful_resamples is None:
+            self.minimum_successful_resamples = self.n_resamples
+        elif self.minimum_successful_resamples != self.n_resamples:
             raise ValueError(
                 "v1 trajectory stability requires every planned refit to succeed; "
                 "minimum_successful_resamples must equal n_resamples"
             )
-        if self.decision_mode == "report_only":
+        # decision_mode restates minimum_mean_stability: the two are equivalent
+        # by the rules below, so declaring a threshold IS choosing to gate on
+        # it.  Left null it is derived; declared, a disagreement is still an
+        # error rather than a silently preferred interpretation.
+        implied = (
+            "report_only"
+            if self.minimum_mean_stability is None
+            else "minimum_mean_threshold"
+        )
+        if self.decision_mode is None:
+            self.decision_mode = implied
+        elif self.decision_mode == "report_only":
             if self.minimum_mean_stability is not None:
                 raise ValueError(
                     "report_only stability must not declare a binary threshold"
