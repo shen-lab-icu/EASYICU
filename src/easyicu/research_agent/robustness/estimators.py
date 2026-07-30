@@ -67,6 +67,19 @@ class EstimatorResult:
     #: adjusted-association owner shipped: a step that computed the study's
     #: primary estimate correctly and was then failed for not showing its terms.
     terms: Tuple["EstimatorTerm", ...] = ()
+    #: Events among the rows this fit actually used, or ``None``.
+    #:
+    #: ``n`` is the complete-case count, so its numerator has to come from the
+    #: same rows.  A caller counting events on its own frame counts them on the
+    #: rows this fit dropped as well, and reports the analysis set's
+    #: denominator with the whole cohort's numerator -- which is exactly what
+    #: the adjusted-association owner did: n=515 with event_n=102 where the 515
+    #: analysed rows held 78 events, a 31% overstatement of the event rate that
+    #: went into the model contract, the estimates table and the summary alike.
+    #:
+    #: ``None`` means there is no such count to report: a continuous outcome
+    #: has no events, and a fit that did not converge has no analysed row set.
+    n_events: Optional[int] = None
 
 
 class _UncodeableDesign(Exception):
@@ -375,6 +388,7 @@ def fit_estimator(
             ),
         )
 
+    n_events: Optional[int] = None
     if kind == "logistic":
         numeric_y = pd.to_numeric(y_series, errors="coerce")
         is_binary = bool(
@@ -396,6 +410,10 @@ def fit_estimator(
                 ),
             )
         y_series = numeric_y
+        # Counted here and nowhere else: ``combined.dropna()`` above already
+        # removed every incomplete row, so this is the numerator that belongs
+        # to ``n``.  The caller's frame still holds the dropped rows.
+        n_events = int((y_series == 1.0).sum())
 
     try:
         x_const = sm.add_constant(x_df.astype(float), has_constant="add")
@@ -498,6 +516,7 @@ def fit_estimator(
                 encoded_map=encoded_map,
                 exponentiate=True,
             ),
+            n_events=n_events,
         )
     except Exception as exc:
         return EstimatorResult(

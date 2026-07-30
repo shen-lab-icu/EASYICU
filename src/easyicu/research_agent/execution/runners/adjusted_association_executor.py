@@ -539,10 +539,22 @@ def run_adjusted_association_from_env(
             + (result.notes or "no estimate returned")
         )
 
-    outcome_values = pd.to_numeric(model_frame[outcome], errors="coerce")
-    n_events = (
-        int((outcome_values == 1).sum()) if estimator_kind == "logistic" else None
-    )
+    # From the fit, not from ``model_frame``.  ``result.n`` is the complete-case
+    # count, so its numerator has to come from the same rows; counting here
+    # counts the rows the estimator dropped as well.  A real run reported
+    # n=515 with event_n=102 where those 515 rows held 78 events -- the
+    # analysis set's denominator with the whole cohort's numerator, a 19.8%
+    # event rate reported for a 15.1% one.  The host's own primary-model
+    # contract recomputes both from the bound cohort and refused the step, so
+    # the study's primary estimate was computed, was correct, and was thrown
+    # away over a count this function had no business deriving.
+    n_events = result.n_events
+    if estimator_kind == "logistic" and n_events is None:
+        raise AdjustedAssociationError(
+            f"declared model {requirement_id!r} fitted a binary outcome without "
+            "reporting the events among the rows it used; refusing to report a "
+            "denominator without its numerator"
+        )
     row = {
         "fit_status": "fitted",
         "estimate": estimate,
