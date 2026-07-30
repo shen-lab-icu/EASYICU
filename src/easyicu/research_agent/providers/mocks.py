@@ -2141,7 +2141,7 @@ def _mock_code_publication_figure(
     from easyicu.research_agent.figures.publication import (
         apply_publication_style,
         add_panel_label,
-        audit_publication_exports,
+        audit_publication_exports_json,
         make_figure_contract,
         save_publication_figure,
     )
@@ -2168,11 +2168,6 @@ def _mock_code_publication_figure(
         except Exception:
             pass
         return x
-
-    def finding_to_dict(f):
-        if hasattr(f, "model_dump"):
-            return f.model_dump(mode="json")
-        return {"message": str(f)}
 
     family = "__ANALYSIS_TYPE__"
     apply_publication_style()
@@ -2254,7 +2249,7 @@ def _mock_code_publication_figure(
         stem = out_dir / "prediction_publication_figure"
         paths = save_publication_figure(fig, stem, contract=contract, dpi=300)
         plt.close(fig)
-        audit = [finding_to_dict(f) for f in audit_publication_exports(paths)]
+        audit = audit_publication_exports_json(paths)
         summary["figure_id"] = "prediction_publication_figure"
         summary["core_claim"] = contract.core_claim
         summary["outputs"] = {k: str(v.name) for k, v in paths.items()}
@@ -2326,7 +2321,7 @@ def _mock_code_publication_figure(
         stem = out_dir / "trajectory_clustering_publication_figure"
         paths = save_publication_figure(fig, stem, contract=contract, dpi=300)
         plt.close(fig)
-        audit = [finding_to_dict(f) for f in audit_publication_exports(paths)]
+        audit = audit_publication_exports_json(paths)
         summary["figure_id"] = "trajectory_clustering_publication_figure"
         summary["core_claim"] = contract.core_claim
         summary["outputs"] = {k: str(v.name) for k, v in paths.items()}

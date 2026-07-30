@@ -280,6 +280,7 @@ __all__ = [
     "apply_publication_style",
     "save_publication_figure",
     "audit_publication_exports",
+    "audit_publication_exports_json",
     "EvidenceStore",
     "EvidenceEnforcementMode",
     "EvidenceEnforcementError",
@@ -809,6 +810,7 @@ def __getattr__(name: str):
         "apply_publication_style",
         "save_publication_figure",
         "audit_publication_exports",
+        "audit_publication_exports_json",
     }:
         from .figures import publication as _pubfig
 
