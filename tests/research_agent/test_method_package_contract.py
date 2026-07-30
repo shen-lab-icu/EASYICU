@@ -16,6 +16,7 @@ import pytest
 from easyicu.research_agent.contracts.method_packages import (
     BASELINE_PACKAGES,
     CURATED_METHOD_PACKAGES,
+    FINGERPRINT_ONLY_DISTRIBUTIONS,
     OPTIONAL_BASELINE_PACKAGES,
     MethodPackage,
 )
@@ -68,6 +69,16 @@ def test_method_package_contract_is_frozen_and_complete() -> None:
             ),
         ),
     )
+    # patsy moves computed numbers (statsmodels formulas are built on it) but is
+    # deliberately NOT a MethodPackage: declaring it would advertise a direct
+    # import the Coder never needs.  It is its own declaration precisely so the
+    # literal stops being repeated in every builder of the distribution set.
+    assert FINGERPRINT_ONLY_DISTRIBUTIONS == ("patsy",)
+    assert not set(FINGERPRINT_ONLY_DISTRIBUTIONS) & {
+        *BASELINE_PACKAGES,
+        *OPTIONAL_BASELINE_PACKAGES,
+        *(package.import_name for package in CURATED_METHOD_PACKAGES),
+    }
     with pytest.raises(FrozenInstanceError):
         CURATED_METHOD_PACKAGES[0].import_name = "changed"  # type: ignore[misc]
 
