@@ -275,6 +275,7 @@ def render_article_analysis_contract_for_prompt(
 
     required = [req for req in contract.requirements if req.required]
     recommended = [req for req in contract.requirements if not req.required]
+    headline_roles = set(contract.planner_owned_result_roles)
     lines = [
         "ARTICLE ANALYSIS CONTRACT:",
         f"- analysis_family: {contract.analysis_family}",
@@ -287,7 +288,8 @@ def render_article_analysis_contract_for_prompt(
         lines.append(
             "  - "
             f"{req.module_id} (role={req.role}; tier={req.tier}; "
-            f"typed_example=table:{req.module_id}; "
+            + ("headline_owned=true; " if req.role in headline_roles else "")
+            + f"typed_example=table:{req.module_id}; "
             f"acceptable={', '.join(req.acceptable_outputs[:4])})"
         )
     if recommended:
@@ -309,6 +311,32 @@ def render_article_analysis_contract_for_prompt(
         "put its typed_example (or an equally explicit typed product using an "
         "acceptable term) in expected_outputs. Intent-only prose does not count."
     )
+    # The rule above is true for ordinary roles and INCOMPLETE for the
+    # headline-owned ones, which roles_covered_by_plan credits only from steps
+    # on the primary lineage. Measured 2026-07-30 on the recorded
+    # h1_ventilation_survival failure: the scientifically natural survival plan
+    # -- Cox model as the single primary step, Kaplan-Meier curve as its own
+    # secondary display step reading the analysis cohort -- covers
+    # survival_effect and misses temporal_absolute_risk, because the display
+    # step is off the lineage. The plan schema permits at most one primary step
+    # and refuses a primary step whose products are all rendering, so a Planner
+    # obeying the published rule literally has no way to satisfy the role. Five
+    # attempts, three distinct violations, nothing executed. Six of fifteen
+    # families declare a headline-owned role whose natural output is a display,
+    # so this is not one family's quirk.
+    if headline_roles & set(contract.required_roles):
+        lines.append(
+            "- rule: a role marked headline_owned=true is credited only when the "
+            "declaring step is on the primary lineage -- either the single "
+            "planned_analysis_role='primary' step itself, or a "
+            "secondary/auxiliary step whose inputs include a typed product that "
+            "only a lineage step produces. A plan may declare at most one primary "
+            "step, and that step must itself declare a non-rendering scientific "
+            "result product, so a display for a headline_owned role belongs in "
+            "the primary step's expected_outputs beside that result, or in a step "
+            "that consumes the primary step's typed output. A step reading only "
+            "the cohort does not join the lineage."
+        )
     # This contract was compiled for source_analysis_type, which the host
     # inferred from the research context. A plan that declares a different
     # analysis_type is judged against *that* family's contract, whose required
