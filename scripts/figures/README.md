@@ -2,6 +2,8 @@
 
 These stable Python entry points audit a completed six-database native-v2 run.
 Raw Parquet files and rendered outputs remain outside Git.
+They are the only maintained scripts for this publication-QC figure set; run
+directories should contain outputs and provenance, not copied plotting code.
 
 ```bash
 python scripts/figures/QC-A01_cross_database_distributions.py \
@@ -26,4 +28,6 @@ variables use probability-mass curves or database-by-category heatmaps.
 native-v2 manifests, metadata sidecars, provenance, availability and
 conservative distribution anomaly signals. A distribution flag is a review
 trigger, not proof of a conversion defect; source-table traceback remains
-required.
+required. For a curated package assembled from source-specific corrective
+reruns, `run_metadata.json` may declare a `database_commits` mapping; the audit
+then verifies each database against its own recorded Git commit.
