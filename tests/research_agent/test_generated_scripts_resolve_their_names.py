@@ -36,6 +36,7 @@ from easyicu.research_agent.execution.runners.plausibility_receipt import (
 from easyicu.research_agent.gates.preflight import (
     audit_mechanical_code_contracts,
     module_level_unbound_names,
+    unresolvable_names,
 )
 from easyicu.research_agent.schema import AnalysisStep
 
@@ -71,7 +72,7 @@ def _unbound_findings(source: str) -> List[dict]:
     return [
         finding.detail or {}
         for finding in audit_mechanical_code_contracts(source, _step())
-        if (finding.detail or {}).get("reason") == "module_level_unbound_name"
+        if (finding.detail or {}).get("reason") == "unresolvable_name"
     ]
 
 
@@ -173,7 +174,7 @@ def test_every_generated_script_binds_every_name_it_uses(name: str) -> None:
     source = _executor_scripts()[name]()
     compile(source, f"<{name}>", "exec")
 
-    assert module_level_unbound_names(ast.parse(source)) == []
+    assert unresolvable_names(ast.parse(source)) == []
 
 
 # ---------------------------------------------------------------------------
@@ -211,7 +212,7 @@ def test_the_message_carries_the_name_so_a_repair_prompt_can_use_it() -> None:
     messages = [
         finding.message
         for finding in audit_mechanical_code_contracts(source, _step())
-        if (finding.detail or {}).get("reason") == "module_level_unbound_name"
+        if (finding.detail or {}).get("reason") == "unresolvable_name"
     ]
 
     assert len(messages) == 1
@@ -225,7 +226,7 @@ def test_the_gate_refuses_the_script_rather_than_warning_about_it() -> None:
     findings = [
         finding
         for finding in audit_mechanical_code_contracts("x = nope\n", _step())
-        if (finding.detail or {}).get("reason") == "module_level_unbound_name"
+        if (finding.detail or {}).get("reason") == "unresolvable_name"
     ]
 
     assert [finding.severity for finding in findings] == ["error"]
@@ -247,6 +248,16 @@ def test_every_unbound_name_is_reported_not_just_the_first() -> None:
         {"name": "hashlib", "line": 1},
         {"name": "pd", "line": 2},
     ]
+
+    # The message, not the detail, is what reaches a repair prompt: asserting
+    # only the detail let a mutation that truncated the message survive.
+    message = next(
+        finding.message
+        for finding in audit_mechanical_code_contracts(source, _step())
+        if (finding.detail or {}).get("reason") == "unresolvable_name"
+    )
+    assert "hashlib (line 1)" in message
+    assert "pd (line 2)" in message
 
 
 def test_a_name_bound_anywhere_in_the_module_is_not_reported() -> None:
@@ -278,15 +289,69 @@ def test_a_module_level_read_before_its_assignment_is_left_to_its_owner() -> Non
     ), f"the ordering owner must still fire; saw {sorted(map(str, reasons))}"
 
 
-def test_a_name_read_only_inside_a_function_is_not_reported() -> None:
-    """The narrowing that removed the false positives, locked.
+def test_a_local_of_one_function_is_not_visible_in_another() -> None:
+    """canary4's death, reduced.
 
-    A recorded script read ``source_index`` inside a helper that was never
-    called and exited 0.  A gate that blocked it would have cost a real step a
-    repair for code that ran.
+    This test previously asserted the opposite -- that a read inside a function
+    body is never reported -- on the reasoning that such a name might be bound
+    by the time the function is called.  On 2026-07-30 that narrowing let
+    ``predicate_flow`` through: a local of ``validate_receipt``, read by
+    ``main`` as a global, killing step 01 and the three steps behind it.
+
+    The whole-program version would have missed it too, because it counted the
+    sibling function's local as a binding.  Only the scope chain answers it.
     """
 
-    source = "def helper():\n    return source_index\n"
+    source = (
+        "def build():\n"
+        "    flow = compute()\n"
+        "    return flow\n"
+        "\n"
+        "def main():\n"
+        "    return len(flow)\n"
+    )
+
+    details = _unbound_findings(source)
+
+    assert len(details) == 1
+    names = {item["name"] for item in details[0]["names"]}
+    assert "flow" in names
+
+
+def test_a_closure_reading_its_enclosing_scope_is_not_reported() -> None:
+    """The legitimate shape the scope chain must keep admitting."""
+
+    source = (
+        "def outer():\n"
+        "    total = 1\n"
+        "    def inner():\n"
+        "        return total\n"
+        "    return inner()\n"
+    )
+
+    assert _unbound_findings(source) == []
+
+
+def test_a_function_reading_a_module_level_name_is_not_reported() -> None:
+    """The commonest shape in every generated script."""
+
+    source = "import os\n\nOUT = os.environ['STEP_OUT_DIR']\n\ndef main():\n    return OUT\n"
+
+    assert _unbound_findings(source) == []
+
+
+def test_a_global_declaration_binds_the_name_for_the_reader() -> None:
+    """``global`` is a binding statement; treating it otherwise is a false flag."""
+
+    source = (
+        "def setup():\n"
+        "    global cache\n"
+        "    cache = {}\n"
+        "\n"
+        "def main():\n"
+        "    setup()\n"
+        "    return cache\n"
+    )
 
     assert _unbound_findings(source) == []
 
@@ -342,7 +407,7 @@ def test_a_match_statement_makes_the_check_abstain_instead_of_guessing() -> None
         "tail = never_bound_anywhere\n"
     )
 
-    assert module_level_unbound_names(ast.parse(source)) == []
+    assert unresolvable_names(ast.parse(source)) == []
 
 
 def test_the_check_runs_inside_the_mechanical_preflight_both_paths_use() -> None:
@@ -358,4 +423,4 @@ def test_the_check_runs_inside_the_mechanical_preflight_both_paths_use() -> None
         for finding in audit_mechanical_code_contracts("x = never_bound\n", _step())
     ]
 
-    assert "module_level_unbound_name" in reasons
+    assert "unresolvable_name" in reasons
