@@ -562,6 +562,7 @@ def test_pipeline_repairs_cross_step_source_status_denominator_drift(
     """A later Table 1 must preserve a prior explicit source-status lock."""
 
     _disable_article_contract(monkeypatch)
+
     def source_lock_script() -> str:
         return """
 import json
@@ -710,6 +711,7 @@ def test_pipeline_repairs_fixed_cohort_drift_in_current_step(
     """An explicit fixed-cohort promise routes N drift to local code repair."""
 
     _disable_article_contract(monkeypatch)
+
     def summary_script(*, cohort_n: int, field: str) -> str:
         return f"""
 import json
@@ -1232,6 +1234,8 @@ def test_initial_authority_checkpoint_io_failure_never_enters_code_fallback(
     expected_code_calls: int,
     error_pattern: str,
 ):
+    import re
+
     from easyicu.research_agent.execution import phase as pipeline_execute
     from easyicu.research_agent.authority.step_runtime import (
         StepAuthorityRuntimeError,
@@ -1306,14 +1310,42 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as hand
         enable_latex=False,
     )
 
-    with pytest.raises(StepAuthorityRuntimeError, match=error_pattern):
-        pipeline.run(
-            question="Summarize the locked ICU cohort.",
-            cohort=pd.DataFrame({"stay_id": [1, 2]}),
-            cohort_name="checkpoint_failure_test",
-            database="synthetic",
-            stop_after_analysis=True,
-        )
+    result = pipeline.run(
+        question="Summarize the locked ICU cohort.",
+        cohort=pd.DataFrame({"stay_id": [1, 2]}),
+        cohort_name="checkpoint_failure_test",
+        database="synthetic",
+        stop_after_analysis=True,
+    )
+
+    # ``run`` no longer re-raises: 89b04b1 made an unexpected step exception end
+    # the run fail-closed instead of escaping it, so the run stays sealable and
+    # the traceback is persisted. That retired the transport this test used, not
+    # the properties it protected, so both are asserted at their current owners.
+    #
+    # Property 1 -- the failure is *recorded*, with its typed reason, against the
+    # step that raised. A generic message here would mean the run is sealable but
+    # undiagnosable.
+    workdir = Path(str(result.workdir))
+    manifest = json.loads((workdir / "manifest.json").read_text(encoding="utf-8"))
+    records = {
+        record["step_id"]: record
+        for record in manifest["per_step_records"]
+        if isinstance(record, dict) and record.get("step_id")
+    }
+    assert records["01_summary"]["status"] == "execution_raised"
+    recorded_error = str(records["01_summary"].get("error") or "")
+    assert StepAuthorityRuntimeError.__name__ in recorded_error, recorded_error
+    assert re.search(error_pattern, recorded_error), recorded_error
+
+    # Property 2 -- the run is floored, so nothing downstream can read a
+    # checkpoint-failed run as a result. ``manuscript_path`` is still written
+    # (a scaffold always is); ``status`` is what says it carries no finding.
+    status = json.loads((workdir / "run_status.json").read_text(encoding="utf-8"))
+    assert status["status"] == "diagnostic_only"
+    assert status["strict_fail_closed"] is True
+    assert status["gates"]["execution_complete"] is False
+    assert status["gates"]["completed_step_count"] == 0
 
     code_calls = [
         messages
