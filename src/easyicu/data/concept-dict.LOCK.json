@@ -1,7 +1,7 @@
 {
-  "finalized": false,
-  "finalized_note": "候选修复 2026-07-30 — HiRID OUTUrine/h 直接速率语义、KDIGO 完整窗口覆盖和 MCHC g/L→g/dL 已通过全队列 renal/hematology 验证；等待在干净 Git commit 上重新发布 HiRID 全部 19 模块 native-v2 后定稿。",
-  "locked_for_extraction_run": "hirid_urine_mchc_official_uo_validation_20260730",
+  "finalized": true,
+  "finalized_note": "定稿 2026-07-30 — HiRID OUTUrine/h 直接速率语义、KDIGO 完整窗口覆盖和 MCHC g/L→g/dL 已在干净 Git commit 47b11aea 上完成全队列 19 模块 native-v2 发布；19/19 Parquet 可读且与另外五库逐模块 Arrow schema 完全一致。",
+  "locked_for_extraction_run": "hirid19_uo_mchc_native_v2_47b11aea_20260730",
   "concept_dict_sha256": "b8a5f5f5a8eab41426a724f728716663dcf37df6abdaa32d9108206995abbca2",
   "sofa2_dict_sha256": "ab39bdcf03ad481dd65bbd5f6e63bdc71612a2267539aa76cc9fb415e19a0fca",
   "total_concepts": 251,
@@ -14,7 +14,7 @@
   "extraction_contract": {
     "output_layout": "one wide parquet per module ({db}/{module}.parquet): id + time + one column per concept — NOT per-concept files. Matches the web export path (webserver/dataio.py).",
     "load_call": "load_concepts(module_concepts, merge=True) once per module inside keep_cache; do NOT hand-write a per-concept merge (time-column mismatch -> Cartesian blow-up -> OOM).",
-    "batching": "adaptive and result-invariant: one-shot when memory permits; streamed exports continuously size the first batch from currently available memory after reserving 25% (at least 2 GiB), round down to 5,000 stays, and then resize later batches from measured process-tree working set, capped at 67,000. An 8 GiB-available host therefore starts at 40,000 stays. Sepsis derivation reuses the outer batch rather than imposing a hidden 2,000-stay sub-batch. Explicit batch_size remains authoritative.",
+    "batching": "adaptive and result-invariant: one-shot when memory permits; streamed exports continuously size the first batch from currently available memory after reserving 25% (at least 2 GiB), round down to 5,000 stays, and then resize later batches from measured process-tree working set, capped at 67,000. An 8 GiB-available host therefore starts at 40,000 stays. Sepsis derivation reuses the outer batch rather than imposing a hidden 2,000-stay sub-batch. Explicit batch_size remains authoritative. The portable streamed launcher keeps a 1-thread/1GB/256MB safety profile; explicit one-shot runs scale in bounded 24/32/64-GiB tiers up to 8 workers, 8GB DuckDB and 8GB cache on large servers.",
     "spill": "DuckDB temp + batch spill default to <output_dir>/.easyicu_spill (the output drive), not system /tmp."
   },
   "merge_oom_safety": {
@@ -40,6 +40,6 @@
     "recall_sweep": "43 fixes (near-broken SIC mean_airway_pres/calcium_iv/bicarbonate/nitroglycerin; AUMC packed_rbc/ft4/retic; class-vs-molecule enoxaparin/milrinone/warfarin; eICU wrong-table nicardipine/diltiazem/pantoprazole)",
     "cross_db_distribution_scan": "235 concepts scanned; all our-own >=3x outliers resolved or explained (ferritin/myoglobin = true assay-selection difference, ng/mL==ug/L identity)",
     "vent_mode": "new harmonised mode concepts (MIMIC-IV/III/AUMC/HiRID); driving_pres_controlled = mode-conditioned driving pressure",
-    "final_data_distribution_check": "CANDIDATE PASSED — HiRID full-cohort renal/hematology re-extraction has no errors (2,109,733 rows; 147.4 s; 4.46 GiB process-tree peak RSS). HiRID descriptive UO medians are 1.25/1.32/1.40 mL/kg/h and KDIGO UO medians are 1.25/1.35/1.47; MCHC median is 33.8 g/dL across 103,667 values. Six-database native-v2 publication gate remains open until the clean-commit HiRID 19-module export completes."
+    "final_data_distribution_check": "PASSED — clean-commit HiRID native-v2 publication contains 19/19 readable Parquet modules, 201 typed columns, zero missing selected concepts, and exact Arrow-schema parity with AUMC/eICU/MIMIC-IV/MIMIC-III/SIC. Full-cohort extraction completed in 722.2 s. HiRID descriptive UO medians are 1.25/1.32/1.40 mL/kg/h and KDIGO UO medians are 1.25/1.35/1.47; MCHC median is 33.8 g/dL across 103,667 values. The three Sepsis modules are explicitly unavailable because HiRID lacks the strict infection-evidence inputs, not because extraction failed."
   }
 }
