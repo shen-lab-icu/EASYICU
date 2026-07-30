@@ -122,6 +122,52 @@ def test_module_extraction_writes_one_wide_module_file(monkeypatch, tmp_path):
     assert exported["test_signal"].tolist() == [1.0, 2.0]
 
 
+def test_module_extraction_adds_unavailable_concept_as_arrow_null(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Structural placeholders belong in Arrow, not dense pandas blocks."""
+    import pyarrow.parquet as pq
+
+    def fake_load_concepts(**kwargs):
+        assert kwargs["_defer_empty_columns_to_arrow"] is True
+        return pd.DataFrame(
+            {
+                "stay_id": [1, 2],
+                "charttime": [0.0, 1.0],
+                "test_signal": [1.0, 2.0],
+            }
+        )
+
+    monkeypatch.setattr(easyicu, "load_concepts", fake_load_concepts)
+
+    api._run_module_extraction(
+        "test_module",
+        ["test_signal", "optional_signal"],
+        "miiv",
+        str(tmp_path),
+        None,
+        None,
+        str(tmp_path),
+    )
+
+    manifest = json.loads((tmp_path / "_manifest.json").read_text())
+    saved = manifest["saved"]["test_module"]
+    table = pq.read_table(saved["path"])
+    assert manifest["errors"] == []
+    assert saved["concepts"] == ["test_signal"]
+    assert table.column_names == [
+        "stay_id",
+        "charttime",
+        "test_signal",
+        "optional_signal",
+    ]
+    assert str(table.schema.field("optional_signal").type) == "double"
+    assert table["optional_signal"].null_count == table.num_rows
+    assert "peak_rss_mb" in manifest
+    assert "peak_working_set_mb" in manifest
+
+
 def test_module_extraction_sanitises_mixed_object_columns(monkeypatch, tmp_path):
     # Indicator concepts (e.g. mech_circ_support) can return object dtype mixing bool/float/
     # NaN, which pyarrow refuses to write to parquet. The exporter losslessly coerces such
@@ -190,6 +236,103 @@ def test_module_extraction_streams_patient_batches_directly_to_parquet(
     exported = pd.read_parquet(manifest["saved"]["test_module"]["path"])
     assert exported["stay_id"].tolist() == [1, 2, 3, 4, 5]
     assert not (tmp_path / ".test_module.partial.parquet").exists()
+
+
+def test_streamed_module_grows_later_batches_from_first_measured_peak(
+    monkeypatch,
+    tmp_path,
+):
+    calls = []
+
+    class FixedMemorySampler:
+        def start(self):
+            return self
+
+        def stop(self):
+            return {
+                "start_rss_mb": 100.0,
+                "peak_rss_mb": 2_100.0,
+                "peak_working_set_mb": 2_000.0,
+                "available_memory_mb_at_start": 8 * 1024.0,
+            }
+
+    def fake_load_concepts(**kwargs):
+        ids = list(kwargs["patient_ids"]["stay_id"])
+        calls.append(len(ids))
+        return pd.DataFrame(
+            {
+                "stay_id": ids,
+                "charttime": [0.0] * len(ids),
+                "test_signal": pd.Series(ids, dtype="float32"),
+            }
+        )
+
+    monkeypatch.setattr(api, "_RSSPeakSampler", FixedMemorySampler)
+    monkeypatch.setattr(easyicu, "load_concepts", fake_load_concepts)
+
+    api._run_module_extraction(
+        "test_module",
+        ["test_signal"],
+        "eicu",
+        str(tmp_path),
+        {"stay_id": list(range(120_000))},
+        40_000,
+        str(tmp_path),
+        stream_output_batches=True,
+        adaptive_stream_batches=True,
+    )
+
+    manifest = json.loads((tmp_path / "_manifest.json").read_text())
+    assert manifest["errors"] == []
+    assert calls == [40_000, 67_000, 13_000]
+    assert manifest["initial_batch_size"] == 40_000
+    assert manifest["final_planned_batch_size"] == 67_000
+    assert manifest["adaptive_batch_growth"] is True
+    assert [
+        batch["stays"] for batch in manifest["stream_batches"]
+    ] == calls
+
+
+def test_streamed_module_preserves_first_schema_without_pandas_reindex(
+    monkeypatch, tmp_path
+):
+    def fake_load_concepts(**kwargs):
+        ids = list(kwargs["patient_ids"]["stay_id"])
+        frame = pd.DataFrame(
+            {
+                "stay_id": ids,
+                "charttime": [0.0] * len(ids),
+                "test_signal": [float(value) for value in ids],
+            }
+        )
+        if ids[0] == 1:
+            frame["optional_signal"] = [10.0] * len(ids)
+        return frame
+
+    monkeypatch.setattr(easyicu, "load_concepts", fake_load_concepts)
+
+    api._run_module_extraction(
+        "test_module",
+        ["test_signal", "optional_signal"],
+        "miiv",
+        str(tmp_path),
+        {"stay_id": [1, 2, 3]},
+        2,
+        str(tmp_path),
+        stream_output_batches=True,
+    )
+
+    manifest = json.loads((tmp_path / "_manifest.json").read_text())
+    assert manifest["errors"] == []
+    exported = pd.read_parquet(manifest["saved"]["test_module"]["path"])
+    assert list(exported.columns) == [
+        "stay_id",
+        "charttime",
+        "test_signal",
+        "optional_signal",
+    ]
+    assert exported["optional_signal"].tolist()[:2] == [10.0, 10.0]
+    assert pd.isna(exported["optional_signal"].iloc[2])
 
 
 def test_stream_batch_release_flushes_arrow_pool():
@@ -377,6 +520,42 @@ def test_streamed_special_export_accepts_declared_empty_infection_dependency(
     assert manifest["saved"] == {}
     assert not (output / "sep3_sofa1.parquet").exists()
     assert not (output / "sep3_sofa2.parquet").exists()
+
+
+def test_streamed_special_export_uses_outer_batch_instead_of_fixed_2000(
+    tmp_path,
+) -> None:
+    source = tmp_path / "published"
+    output = tmp_path / "special"
+    source.mkdir()
+    output.mkdir()
+    (source / "sepsis_shared.manifest.json").write_text(
+        json.dumps(
+            {
+                "module": "sepsis_shared",
+                "saved": {},
+                "errors": [],
+                "warnings": [],
+            }
+        )
+    )
+    stay_ids = list(range(2_501))
+
+    api._stream_special_extraction_batches(
+        ["sepsis3_sofa1", "sepsis3_sofa2"],
+        "eicu",
+        str(tmp_path),
+        {"stay_id": stay_ids},
+        len(stay_ids),
+        str(output),
+        use_sofa2=True,
+        published_output_dir=str(source),
+    )
+
+    manifest = json.loads((output / "_manifest.json").read_text())
+    assert manifest["errors"] == []
+    assert manifest["batch_size"] == 2_501
+    assert manifest["batch_count"] == 1
 
 
 def test_nonstream_special_export_reuses_already_published_scores(

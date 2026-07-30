@@ -17,7 +17,10 @@ from easyicu.runtime.memory_manager import (
     _ceil_div,
 )
 from easyicu.api import EXTRACT_MODULES
-from easyicu.api.extraction import _resolve_stream_batch_size
+from easyicu.api.extraction import (
+    _adapt_stream_batch_size_from_first_batch,
+    _resolve_stream_batch_size,
+)
 
 
 # 覆盖 6 个库的真实规模（含 eICU 最大 20 万），以及最宽 / 最重的模块。
@@ -92,11 +95,16 @@ def test_cap_constant_is_three():
     ("database", "total", "available_gb", "expected"),
     [
         ("eicu", 200_859, 32, 67_000),
-        ("eicu", 200_859, 16, 45_000),
-        ("eicu", 200_859, 14, 10_000),
-        ("eicu", 200_859, 8, 10_000),
+        ("eicu", 200_859, 16, 67_000),
+        ("eicu", 200_859, 14, 67_000),
+        ("eicu", 200_859, 8, 40_000),
+        ("eicu", 200_859, 6, 25_000),
+        ("eicu", 200_859, 4, 10_000),
         ("miiv", 94_458, 16, 94_458),
-        ("miiv", 94_458, 8, 10_000),
+        ("miiv", 94_458, 8, 40_000),
+        ("mimic", 61_532, 8, 40_000),
+        ("hirid", 33_000, 8, 33_000),
+        ("aumc", 23_000, 8, 23_000),
     ],
 )
 def test_stream_batch_uses_current_available_memory(
@@ -121,4 +129,40 @@ def test_explicit_stream_batch_size_always_wins():
             available_memory_mb=4 * 1024,
         )
         == 25_000
+    )
+
+
+def test_first_measured_batch_can_grow_40k_to_67k():
+    assert (
+        _adapt_stream_batch_size_from_first_batch(
+            40_000,
+            observed_working_set_mb=2_000,
+            available_memory_mb=8 * 1024,
+            remaining_patients=160_859,
+        )
+        == 67_000
+    )
+
+
+def test_first_measured_batch_can_shrink_when_real_working_set_is_heavy():
+    assert (
+        _adapt_stream_batch_size_from_first_batch(
+            40_000,
+            observed_working_set_mb=8_000,
+            available_memory_mb=8 * 1024,
+            remaining_patients=160_859,
+        )
+        == 30_000
+    )
+
+
+def test_measured_batch_plan_never_exceeds_remaining_cohort():
+    assert (
+        _adapt_stream_batch_size_from_first_batch(
+            40_000,
+            observed_working_set_mb=1_000,
+            available_memory_mb=8 * 1024,
+            remaining_patients=12_345,
+        )
+        == 12_345
     )
