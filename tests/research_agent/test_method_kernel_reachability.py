@@ -218,6 +218,132 @@ def test_a_module_cannot_be_both_offered_and_declared_dead():
 
 
 # ---------------------------------------------------------------------------
+# being offered is not the same as being SELECTED: max_software is 3
+# ---------------------------------------------------------------------------
+
+_RUNTIME = (
+    "pandas",
+    "numpy",
+    "scipy",
+    "statsmodels",
+    "sklearn",
+    "matplotlib",
+    "seaborn",
+    "pyarrow",
+    "lifelines",
+    "shap",
+    "xgboost",
+)
+
+
+def _coder_prompt(*, analysis_family: str, intent: str, method: str) -> str:
+    """Run the host's OWN bundle builder, so the real policy is exercised.
+
+    Rebuilding the policy here would test a policy nobody uses -- a first
+    attempt at this measurement invented one whose review statuses excluded
+    every descriptor, and it returned an empty selection that would have read
+    as "the kernels are never chosen".
+    """
+
+    from easyicu.research_agent.resources.coder import build_coder_resource_bundle
+
+    bundle = build_coder_resource_bundle(
+        step_id="01_probe",
+        profile_ref="test/profile@1",
+        analysis_family=analysis_family,
+        step_role="primary",
+        question="Does the exposure change the outcome?",
+        intent=intent,
+        method=method,
+        planner_inputs=("cohort",),
+        expected_outputs=("table:result",),
+        resolved_input_bindings={},
+        runtime_import_names=_RUNTIME,
+    )
+    return bundle.prompt_projection
+
+
+def _required_packages_of(prompt: str, import_suffix: str) -> list[str] | None:
+    """The parsed ``requires`` of one selected resource, or None if absent.
+
+    The prompt is newline-separated canonical JSON sections. Reading the field
+    is the point: a substring search cannot tell a declared dependency from the
+    same name mentioned in neighbouring prose.
+    """
+
+    import json
+
+    for section in prompt.splitlines():
+        section = section.strip()
+        if not section.startswith("{"):
+            continue
+        try:
+            payload = json.loads(section)
+        except json.JSONDecodeError:
+            continue
+        for resource in payload.get("resources") or []:
+            if str(resource.get("import_name", "")).endswith(import_suffix):
+                requires = resource.get("requires")
+                return list(requires) if requires is not None else None
+    return None
+
+
+def test_a_survival_step_is_offered_the_ph_kernel_and_the_library_it_wraps():
+    """Only three software resources are selected per step.
+
+    Measured before ``requires`` travelled inside the projection: a Cox step
+    selected ph_schoenfeld / rmst / temporal_features and ranked *lifelines*
+    out entirely -- the Coder got the assumption-check wrapper but not the
+    library needed to fit the model at all. Offering a wrapper while hiding
+    what it wraps is worse than offering neither.
+    """
+
+    prompt = _coder_prompt(
+        analysis_family="time_to_event",
+        intent=(
+            "Fit a Cox proportional hazards model and check the proportional "
+            "hazards assumption using Schoenfeld residuals."
+        ),
+        method="cox_proportional_hazards",
+    )
+    assert "methods.ph_schoenfeld" in prompt
+    # NOT `"lifelines" in prompt`. That first version SURVIVED its own
+    # mutation: deleting the requires projection entirely left the test green,
+    # because "lifelines" also appears inside the kernel's fallback prose. A
+    # substring shared with an incidental mention proves nothing about the
+    # field under test. Anchor on what is EXCLUSIVE to it -- the parsed
+    # requires list of the selected kernel.
+    required = _required_packages_of(prompt, "methods.ph_schoenfeld")
+    assert required is not None, (
+        "ph_schoenfeld reached the prompt without a requires field -- the Coder "
+        "is told to use a lifelines wrapper without being told about lifelines"
+    )
+    assert "lifelines" in required, (
+        f"the Cox step's kernel declares requires={required}, so the library it "
+        "wraps is not travelling with it"
+    )
+
+
+def test_a_plain_association_step_is_not_handed_the_trajectory_kernel():
+    """A family list is a relevance claim, and over-claiming costs a slot.
+
+    Measured with ``association`` in temporal_features' family list: it ranked
+    FIRST for "fit an adjusted logistic regression", above statsmodels, on a
+    step where trajectory timing is not the question.
+    """
+
+    prompt = _coder_prompt(
+        analysis_family="association",
+        intent="Fit an adjusted logistic regression of the exposure on the outcome.",
+        method="adjusted_association_models",
+    )
+    assert "methods.temporal_features" not in prompt
+    assert (
+        "statsmodels" in prompt
+    ), "the tool this step actually needs was ranked out of its three slots"
+
+
+# ---------------------------------------------------------------------------
 # the offer must actually reach the Coder
 # ---------------------------------------------------------------------------
 

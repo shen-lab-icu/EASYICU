@@ -74,6 +74,7 @@ class MethodKernel:
     capability: str  # what it computes, in the Coder's vocabulary
     families: Tuple[str, ...]  # analysis families it applies to
     fallback: str  # what the Coder must do if it is unavailable
+    requires: Tuple[str, ...] = ()  # packages the kernel itself imports
 
     @property
     def import_path(self) -> str:
@@ -83,6 +84,7 @@ class MethodKernel:
 CURATED_METHOD_KERNELS: Tuple[MethodKernel, ...] = (
     MethodKernel(
         module="ph_schoenfeld",
+        requires=("pandas", "lifelines"),
         entrypoints=("ph_test", "run_ph_test", "PHTestResult"),
         capability=(
             "proportional-hazards check for a fitted Cox model — Schoenfeld "
@@ -96,6 +98,7 @@ CURATED_METHOD_KERNELS: Tuple[MethodKernel, ...] = (
     ),
     MethodKernel(
         module="delong_auc",
+        requires=("numpy", "scipy"),
         entrypoints=(
             "delong_auc_ci",
             "delong_auc_variance",
@@ -114,6 +117,7 @@ CURATED_METHOD_KERNELS: Tuple[MethodKernel, ...] = (
     ),
     MethodKernel(
         module="rmst",
+        requires=("numpy", "scipy"),
         entrypoints=("rmst", "rmst_difference", "RMSTResult"),
         capability=(
             "restricted mean survival time up to a horizon, and the between-"
@@ -129,6 +133,7 @@ CURATED_METHOD_KERNELS: Tuple[MethodKernel, ...] = (
     ),
     MethodKernel(
         module="decision_curve",
+        requires=("numpy", "pandas"),
         entrypoints=(
             "net_benefit_curve",
             "net_benefit_at",
@@ -144,6 +149,7 @@ CURATED_METHOD_KERNELS: Tuple[MethodKernel, ...] = (
     ),
     MethodKernel(
         module="temporal_features",
+        requires=("numpy", "pandas"),
         entrypoints=("onset_times", "incident_outcome_cohort", "landmark_cohort"),
         capability=(
             "timing primitives over the long trajectory (TRAJECTORY_PARQUET): "
@@ -151,13 +157,12 @@ CURATED_METHOD_KERNELS: Tuple[MethodKernel, ...] = (
             "event-free classification relative to an index event; and the "
             "at-risk set plus follow-up clock from a landmark time"
         ),
-        families=(
-            "time_to_event",
-            "survival",
-            "causal_emulation",
-            "association",
-            "dynamic_prediction",
-        ),
+        # Deliberately NOT "association". Measured 2026-07-30: with it declared,
+        # this kernel out-ranked statsmodels as the top software resource for a
+        # plain "fit an adjusted logistic regression" step, where trajectory
+        # timing is not the question. A family list is a relevance claim, and
+        # claiming a family too widely crowds out the tool the step needs.
+        families=("time_to_event", "survival", "causal_emulation"),
         fallback=(
             "re-deriving onsets from the trajectory inside the analysis script "
             "— the failure this module was written for, where a 'measured but "
@@ -166,6 +171,7 @@ CURATED_METHOD_KERNELS: Tuple[MethodKernel, ...] = (
     ),
     MethodKernel(
         module="conformal",
+        requires=("numpy",),
         entrypoints=(
             "conformal_calibrate",
             "conformal_predict_sets",
