@@ -147,6 +147,10 @@ from ..gates.owner_declaration import (
     owner_declaration_replan_directive,
 )
 from ..gates.plan_declared_inputs import declared_raw_input_plan_findings
+from ..gates.product_promise import (
+    product_promise_plan_findings,
+    product_promise_replan_directive,
+)
 from ..authority.coder_authority import HostCoderAuthority
 from ..authority.plausibility import (
     FlagOnlyPlausibilityScope,
@@ -4822,6 +4826,7 @@ def run_execute_phase(
             context=context,
         )
         owner_declaration_preflight = owner_declaration_plan_findings(plan=plan)
+        product_promise_preflight = product_promise_plan_findings(plan=plan)
         trajectory_directive = None
         typed_plan_directive = None
         declared_input_directive = None
@@ -4910,6 +4915,13 @@ def run_execute_phase(
         owner_declaration_directive = owner_declaration_replan_directive(
             owner_declaration_preflight
         )
+        # Ordered before the ownership directive on purpose: an owner cannot
+        # claim a step whose promise no declaration can name, so telling the
+        # Planner to complete a declaration first would be asking for work that
+        # still leaves the step unowned.
+        product_promise_directive = product_promise_replan_directive(
+            product_promise_preflight
+        )
         plan = _maybe_replan(
             current_plan=plan,
             reason="probe_summary",
@@ -4922,6 +4934,7 @@ def run_execute_phase(
                     primary_cohort_directive,
                     trajectory_directive,
                     declared_input_directive,
+                    product_promise_directive,
                     owner_declaration_directive,
                 )
                 if directive
@@ -4932,6 +4945,7 @@ def run_execute_phase(
                 or primary_cohort_preflight
                 or trajectory_preflight
                 or declared_input_preflight
+                or product_promise_preflight
                 or owner_declaration_preflight
             ),
         )
