@@ -118,19 +118,80 @@ def test_a_figure_only_step_is_not_a_gap():
     assert verdict.missing_declarations == ()
 
 
-def test_a_step_that_already_declares_a_spec_is_not_a_gap():
-    """Including when the spec does not back every product (4 recorded steps).
+def _spec(*pairs: tuple[str, str]) -> dict:
+    return {
+        "schema_version": "easyicu.robustness_replay/1",
+        "products": [
+            {"product_id": product_id, "output": output} for product_id, output in pairs
+        ],
+    }
 
-    The Planner answered.  Whether a coverage shortfall should also become a
-    refusal is a separate question, and the existing design deliberately gave
-    it the safe answer of leaving the step unowned.
+
+def test_a_spec_that_backs_every_promised_product_is_not_a_gap():
+    """The Planner answered completely; there is nothing to ask it for."""
+
+    step = _step(
+        ["table:robustness_matrix"],
+        robustness_replay_spec=_spec(("robustness_matrix", "robustness_matrix")),
+    )
+    verdict = robustness_replay_declaration_verdict(step)
+
+    assert verdict.missing_declarations == ()
+    assert "backs every product" in verdict.reason
+
+
+def test_a_spec_that_names_no_entry_for_a_promised_product_is_a_gap():
+    """Measured 2026-07-30: 5 of the 6 robustness steps carrying a spec today.
+
+    The earlier design left this silent on the reasoning that the Planner had
+    answered.  It had answered about two products and promised four, and every
+    one of those steps went to the Coder with the host never saying why.
     """
 
-    step = _step(["table:robustness_summary"])
-    object.__setattr__(step, "robustness_replay_spec", object())
+    step = _step(
+        ["table:robustness_matrix", "statistic:complete_case_n"],
+        robustness_replay_spec=_spec(("robustness_matrix", "robustness_matrix")),
+    )
     verdict = robustness_replay_declaration_verdict(step)
+
+    assert verdict.missing_declarations == ("robustness_replay_spec.products",)
+    assert "'complete_case_n'" in verdict.reason
+
+
+def test_the_gap_names_every_unmapped_product_not_just_the_first():
+    """One replan round only closes a gap it was told the whole of."""
+
+    step = _step(
+        [
+            "table:robustness_matrix",
+            "statistic:complete_case_n",
+            "log:missingness_strategy_notes",
+        ],
+        robustness_replay_spec=_spec(("robustness_matrix", "robustness_matrix")),
+    )
+    verdict = robustness_replay_declaration_verdict(step)
+
+    assert "'complete_case_n'" in verdict.reason
+    assert "'missingness_strategy_notes'" in verdict.reason
+
+
+def test_a_spec_naming_every_product_is_not_asked_for_more_entries():
+    """The duplicate-kind step: adding entries could not close it.
+
+    ``table:robustness_summary`` plus ``statistic:robustness_summary`` resolve
+    to one bare name, so the spec already names every promised product and is
+    still not emittable.  Demanding another entry would be work that leaves the
+    step exactly as unowned; the product-promise gate owns this shape.
+    """
+
+    step = _step(
+        ["table:robustness_summary", "statistic:robustness_summary"],
+        robustness_replay_spec=_spec(("robustness_summary", "robustness_summary")),
+    )
+    verdict = robustness_replay_declaration_verdict(step)
+
     assert verdict.missing_declarations == ()
-    assert "already declares" in verdict.reason
+    assert "how the products are promised" in verdict.reason
 
 
 def test_a_step_promising_none_of_this_replays_products_is_not_a_gap():
