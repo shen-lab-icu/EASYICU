@@ -10,11 +10,16 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import threading
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
 
-from easyicu.concept import _drop_negative_source_end_durations
+from easyicu.concept import (
+    ConceptResolver,
+    _drop_negative_source_end_durations,
+    _source_duration_is_end,
+)
 from easyicu.api import (
     MAX_WINDOW_EXPANSION_POINTS,
     SOFA_FIXED_CHUNK_SIZE,
@@ -43,6 +48,158 @@ def _win_frame(dur_values, *, index=(0.0,)) -> pd.DataFrame:
             "norepi_rate": [0.1] * len(dur_values),
         }
     )
+
+
+def test_aumc_later_admissions_use_icu_relative_hours():
+    """AUMC's database-wide clock must not leak into native charttime."""
+
+    resolver = ConceptResolver.__new__(ConceptResolver)
+    resolver._aumc_admissions_cache = None
+    source = SimpleNamespace(
+        config=SimpleNamespace(name="aumc"),
+        load_table=lambda *_args, **_kwargs: pd.DataFrame(
+            {
+                "admissionid": [1, 2],
+                # ICUDataSource exposes AUMC's database-wide clock in minutes.
+                "admittedat": [0, 300],
+            }
+        ),
+    )
+    frame = pd.DataFrame(
+        {
+            "admissionid": [1, 2],
+            # bucketed sources reach the resolver as absolute minutes
+            "measuredat_minutes": [120.0, 540.0],
+            "stop": [180.0, 600.0],
+            "value": [1.0, 2.0],
+        }
+    )
+
+    out = resolver._align_time_to_admission(
+        frame,
+        source,
+        ["admissionid"],
+        "measuredat_minutes",
+        time_columns=["stop"],
+    )
+
+    assert out["measuredat_minutes"].tolist() == pytest.approx([2.0, 4.0])
+    assert out["stop"].tolist() == pytest.approx([3.0, 5.0])
+    assert "admittedat" not in out.columns
+
+
+def test_aumc_admission_table_time_does_not_merge_its_origin_twice():
+    """Stay-level AUMC concepts already carry admittedat in their frame."""
+
+    resolver = ConceptResolver.__new__(ConceptResolver)
+    source = SimpleNamespace(
+        config=SimpleNamespace(name="aumc"),
+        load_table=lambda *_args, **_kwargs: pytest.fail(
+            "an admissions frame must not reload and duplicate admittedat"
+        ),
+    )
+    frame = pd.DataFrame(
+        {
+            "admissionid": [2],
+            "admittedat": [300.0],
+            "dischargedat": [540.0],
+            "los_icu": [4.0],
+        }
+    )
+
+    out = resolver._align_time_to_admission(
+        frame,
+        source,
+        ["admissionid"],
+        "dischargedat",
+    )
+
+    assert out["dischargedat"].tolist() == [4.0]
+    assert "admittedat" not in out.columns
+
+
+def test_aumc_source_times_outside_the_icu_episode_are_quarantined():
+    resolver = ConceptResolver.__new__(ConceptResolver)
+    resolver._aumc_admissions_cache = None
+    source = SimpleNamespace(
+        config=SimpleNamespace(name="aumc"),
+        load_table=lambda *_args, **_kwargs: pd.DataFrame(
+            {
+                "admissionid": [2],
+                "admittedat": [300.0],
+                "dischargedat": [600.0],
+            }
+        ),
+    )
+    frame = pd.DataFrame(
+        {
+            "admissionid": [2, 2],
+            "measuredat_minutes": [540.0, 30_300.0],
+            "value": [1.0, 2.0],
+        }
+    )
+
+    out = resolver._align_time_to_admission(
+        frame,
+        source,
+        ["admissionid"],
+        "measuredat_minutes",
+    )
+
+    assert out["measuredat_minutes"].tolist() == [4.0]
+    assert out["value"].tolist() == [1.0]
+    assert "dischargedat" not in out.columns
+
+
+def test_sic_interval_duration_seconds_are_declared_as_hours():
+    """SIC data_range durations must not expand seconds as hours."""
+
+    resolver = ConceptResolver.__new__(ConceptResolver)
+    source = SimpleNamespace(config=SimpleNamespace(name="sic"))
+    frame = pd.DataFrame(
+        {
+            "CaseID": [1],
+            # The bucketed SIC loader already emitted an hour index.
+            "charttime": [2.0],
+            # data_range OffsetEnd - Offset is still seconds here.
+            "dur_var": [7200.0],
+        }
+    )
+
+    out = resolver._align_time_to_admission(
+        frame,
+        source,
+        ["CaseID"],
+        "charttime",
+    )
+
+    assert out["charttime"].tolist() == [2.0]
+    assert out["dur_var"].tolist() == [2.0]
+    assert get_dur_var_unit(out) == UNIT_HOURS
+
+
+def test_sic_extreme_source_interval_is_quarantined_before_expansion():
+    resolver = ConceptResolver.__new__(ConceptResolver)
+    source = SimpleNamespace(config=SimpleNamespace(name="sic"))
+    frame = pd.DataFrame(
+        {
+            "CaseID": [1, 1],
+            # Raw SIC offsets are seconds; these correspond to -31,138 h and
+            # +2 h respectively.
+            "charttime": [-31_138.0 * 3_600.0, 2.0 * 3_600.0],
+            "dur_var": [7_200.0, 7_200.0],
+        }
+    )
+
+    out = resolver._align_time_to_admission(
+        frame,
+        source,
+        ["CaseID"],
+        "charttime",
+    )
+
+    assert out["charttime"].tolist() == [2.0]
+    assert out["dur_var"].tolist() == [2.0]
 
 
 # --------------------------------------------------------------------------
@@ -192,6 +349,36 @@ def test_p0_2_known_source_end_before_start_is_quarantined(caplog):
 
     assert cleaned["stay_id"].tolist() == [1, 3]
     assert "dropping 1 raw end-before-start" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "column",
+    ["endtime", "stop", "drugstopoffset", "OffsetEnd"],
+)
+def test_p0_2_duration_end_semantics_come_from_schema_not_patient_sample(column):
+    source = SimpleNamespace(dur_var=column, params={})
+    assert _source_duration_is_end(source) is True
+
+
+def test_p0_2_explicit_duration_semantics_override_column_name():
+    assert (
+        _source_duration_is_end(
+            SimpleNamespace(
+                dur_var="drugstopoffset",
+                params={"dur_is_end": False},
+            )
+        )
+        is False
+    )
+    assert (
+        _source_duration_is_end(
+            SimpleNamespace(
+                dur_var="duration_minutes",
+                params={"dur_is_end": True},
+            )
+        )
+        is True
+    )
 
 
 def test_p0_2_missing_duration_is_dropped_not_zeroed(caplog):

@@ -212,6 +212,69 @@ def test_stream_batch_release_flushes_arrow_pool():
     assert released == [True]
 
 
+def test_stream_batch_clear_releases_implicit_global_loader(monkeypatch):
+    from easyicu.api import concepts as concept_api
+
+    calls = []
+    monkeypatch.setattr(
+        concept_api,
+        "clear_global_loader",
+        lambda: calls.append("clear_global_loader"),
+    )
+
+    api._clear_stream_loader_caches(None)
+
+    assert calls == ["clear_global_loader"]
+
+
+def test_streamed_vitals_loads_recursive_concepts_separately():
+    calls = []
+
+    def fake_load_concepts(**kwargs):
+        concepts = list(kwargs["concepts"])
+        calls.append(concepts)
+        if concepts == ["hr"]:
+            return pd.DataFrame(
+                {
+                    "stay_id": [1, 1],
+                    "charttime": [0.0, 1.0],
+                    "hr": [80.0, 90.0],
+                }
+            )
+        concept = concepts[0]
+        return pd.DataFrame(
+            {
+                "stay_id": [1],
+                "charttime": [1.0],
+                concept: [2.0],
+            }
+        )
+
+    class Pool:
+        def release_unused(self):
+            return None
+
+    class FakePyArrow:
+        @staticmethod
+        def default_memory_pool():
+            return Pool()
+
+    result = api._load_stream_module_batch(
+        fake_load_concepts,
+        module_name="vitals",
+        concepts=["hr", "pulse_pressure", "shock_index"],
+        load_kwargs={"concepts": ["hr", "pulse_pressure", "shock_index"]},
+        patient_ids={"stay_id": [1]},
+        loader=None,
+        pyarrow_module=FakePyArrow,
+    )
+
+    assert calls == [["hr"], ["pulse_pressure"], ["shock_index"]]
+    assert result["hr"].tolist() == [80.0, 90.0]
+    assert result["pulse_pressure"].tolist()[1] == 2.0
+    assert result["shock_index"].tolist()[1] == 2.0
+
+
 def test_streamed_special_export_uses_published_dependency_parquets(tmp_path):
     source = tmp_path / "published"
     output = tmp_path / "special"
@@ -244,3 +307,107 @@ def test_streamed_special_export_uses_published_dependency_parquets(tmp_path):
     assert set(manifest["saved"]) == {"sep3_sofa1", "sep3_sofa2"}
     assert (output / "sep3_sofa1.parquet").is_file()
     assert (output / "sep3_sofa2.parquet").is_file()
+
+
+def test_streamed_special_export_broadcasts_stay_level_suspicion(tmp_path):
+    source = tmp_path / "published"
+    output = tmp_path / "special"
+    source.mkdir()
+    output.mkdir()
+    time = pd.to_datetime(["2026-01-01T00:00:00", "2026-01-01T01:00:00"])
+    pd.DataFrame({"stay_id": [1], "susp_inf": [True]}).to_parquet(
+        source / "sepsis_shared.parquet", index=False
+    )
+    pd.DataFrame({"stay_id": [1, 1], "charttime": time, "sofa": [0.0, 3.0]}).to_parquet(
+        source / "sofa1_score.parquet", index=False
+    )
+    pd.DataFrame(
+        {"stay_id": [1, 1], "charttime": time, "sofa2": [0.0, 3.0]}
+    ).to_parquet(source / "sofa2_score.parquet", index=False)
+
+    api._stream_special_extraction_batches(
+        ["sepsis3_sofa1", "sepsis3_sofa2"],
+        "eicu",
+        str(tmp_path),
+        {"stay_id": [1]},
+        1,
+        str(output),
+        use_sofa2=True,
+        published_output_dir=str(source),
+    )
+
+    manifest = json.loads((output / "_manifest.json").read_text())
+    assert manifest["errors"] == []
+    assert set(manifest["saved"]) == {"sep3_sofa1", "sep3_sofa2"}
+    assert pd.read_parquet(output / "sep3_sofa1.parquet")["sep3_sofa1"].tolist() == [1]
+    assert pd.read_parquet(output / "sep3_sofa2.parquet")["sep3_sofa2"].tolist() == [1]
+
+
+def test_streamed_special_export_accepts_declared_empty_infection_dependency(
+    tmp_path,
+):
+    source = tmp_path / "published"
+    output = tmp_path / "special"
+    source.mkdir()
+    output.mkdir()
+    (source / "sepsis_shared.manifest.json").write_text(
+        json.dumps(
+            {
+                "module": "sepsis_shared",
+                "saved": {},
+                "errors": [],
+                "warnings": [],
+            }
+        )
+    )
+
+    api._stream_special_extraction_batches(
+        ["sepsis3_sofa1", "sepsis3_sofa2"],
+        "sic",
+        str(tmp_path),
+        {"stay_id": [1, 2]},
+        2_000,
+        str(output),
+        use_sofa2=True,
+        published_output_dir=str(source),
+    )
+
+    manifest = json.loads((output / "_manifest.json").read_text())
+    assert manifest["errors"] == []
+    assert manifest["saved"] == {}
+    assert not (output / "sep3_sofa1.parquet").exists()
+    assert not (output / "sep3_sofa2.parquet").exists()
+
+
+def test_nonstream_special_export_reuses_already_published_scores(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "published"
+    output = tmp_path / "special"
+    source.mkdir()
+    output.mkdir()
+    for module in ("sepsis_shared", "sofa1_score", "sofa2_score"):
+        (source / f"{module}.parquet").touch()
+    calls = []
+
+    def fake_stream(*args, **kwargs):
+        calls.append((args, kwargs))
+
+    monkeypatch.setattr(api, "_stream_special_extraction_batches", fake_stream)
+
+    api._run_special_extraction(
+        ["sepsis3_sofa1", "sepsis3_sofa2"],
+        "miiv",
+        str(tmp_path),
+        {"stay_id": [1, 2]},
+        2_000_000,
+        str(output),
+        use_sofa2=True,
+        stream_output_batches=False,
+        published_output_dir=str(source),
+    )
+
+    assert len(calls) == 1
+    assert calls[0][0][3] == {"stay_id": [1, 2]}
+    assert calls[0][0][4] == 2_000_000
+    assert calls[0][1]["published_output_dir"] == str(source)

@@ -69,6 +69,33 @@ def _remove_worker_spill_directory(source_output: Path) -> bool:
     return _remove_private_directory(source_output / ".easyicu_spill")
 
 
+def _adaptive_oneshot_budget_mb(
+    available_memory_mb: float | None = None,
+) -> int:
+    """Size nested concept worksets from memory that is available *now*.
+
+    The streamed patient batch is already the primary peak-RAM boundary.  A
+    fixed 512 MB nested budget is appropriate when a 16 GB laptop has only
+    about 8 GB free, but on a server it needlessly splits those already-bounded
+    worksets into 3,000-patient fragments and repeatedly scans the same table.
+    """
+
+    if available_memory_mb is None:
+        try:
+            import psutil
+
+            available_memory_mb = psutil.virtual_memory().available / (1024**2)
+        except Exception:
+            # Fail conservatively when system memory cannot be inspected.
+            available_memory_mb = 0.0
+    available = max(0.0, float(available_memory_mb))
+    if available < 12 * 1024:
+        return 512
+    if available < 24 * 1024:
+        return 4 * 1024
+    return 8 * 1024
+
+
 def _configure_external_runtime(
     root: Path, *, one_shot: bool
 ) -> tuple[Dict[str, str | None], str | None]:
@@ -111,7 +138,9 @@ def _configure_external_runtime(
         # all-patient module into auto-batches because of its safety profile.
         os.environ.pop("EASYICU_ONESHOT_BUDGET_MB", None)
     else:
-        os.environ["EASYICU_ONESHOT_BUDGET_MB"] = "512"
+        os.environ["EASYICU_ONESHOT_BUDGET_MB"] = str(
+            _adaptive_oneshot_budget_mb()
+        )
     tempfile.tempdir = str(runtime_tmp)
     return prior, prior_tempdir
 
@@ -150,8 +179,11 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=10_000,
-        help="bounded external-export batch size (default: 10000 stays)",
+        default=None,
+        help=(
+            "bounded external-export batch size; default auto-detects current "
+            "available memory (explicit values always win)"
+        ),
     )
     parser.add_argument(
         "--one-shot",
@@ -198,8 +230,23 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
         "database_order": databases,
         "batch_size": None if args.one_shot else args.batch_size,
         "extraction_mode": (
-            "one_shot_all_patients" if args.one_shot else "streamed_patient_batches"
+            "one_shot_all_patients"
+            if args.one_shot
+            else "memory_adaptive_streamed_patient_batches"
         ),
+        "runtime_limits": {
+            "duckdb_threads": int(os.environ["EASYICU_DUCKDB_THREADS"]),
+            "duckdb_memory_limit": os.environ["EASYICU_DUCKDB_MEMORY_LIMIT"],
+            "parallel_max_workers": int(
+                os.environ["EASYICU_PARALLEL_MAX_WORKERS"]
+            ),
+            "cache_budget_mb": int(os.environ["EASYICU_CACHE_BUDGET_MB"]),
+            "nested_workset_budget_mb": (
+                None
+                if args.one_shot
+                else int(os.environ["EASYICU_ONESHOT_BUDGET_MB"])
+            ),
+        },
         "sources": {},
         "status": "running",
     }
@@ -225,6 +272,7 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
                     "status": "verified",
                     "elapsed_sec": round(time.monotonic() - started, 1),
                     "num_patients": result["num_patients"],
+                    "effective_batch_size": result.get("batch_size"),
                     "native_manifest_sha256": _sha256(source_output / "_manifest.json"),
                     "column_metadata_sha256": package.column_metadata_sha256,
                     "typed_columns": len(package.concept_index),

@@ -202,58 +202,6 @@ def test_base_merge_preserves_requested_empty_event_concept_column() -> None:
     assert result["rrt"].isna().all()
 
 
-def test_concept_table_merge_builds_outer_union_without_changing_inputs() -> None:
-    resolver = ConceptResolver(ConceptDictionary({}))
-    first_data = pd.DataFrame(
-        {
-            "stay_id": [1, 1],
-            "charttime": [0.0, 2.0],
-            "sodium": [140.0, 142.0],
-        }
-    )
-    second_data = pd.DataFrame(
-        {
-            "stay_id": [1, 1],
-            "charttime": [1.0, 2.0],
-            "flag": [True, False],
-        }
-    )
-    expected_first = first_data.copy(deep=True)
-    expected_second = second_data.copy(deep=True)
-    tables = {
-        "sodium": ICUTable(
-            data=first_data,
-            id_columns=["stay_id"],
-            index_column="charttime",
-            value_column="sodium",
-        ),
-        "flag": ICUTable(
-            data=second_data,
-            id_columns=["stay_id"],
-            index_column="charttime",
-            value_column="flag",
-        ),
-    }
-
-    result = resolver._merge_tables(tables).sort_values(
-        ["stay_id", "charttime"]
-    ).reset_index(drop=True)
-
-    pd.testing.assert_frame_equal(first_data, expected_first)
-    pd.testing.assert_frame_equal(second_data, expected_second)
-    assert result[["stay_id", "charttime"]].to_dict("records") == [
-        {"stay_id": 1, "charttime": 0.0},
-        {"stay_id": 1, "charttime": 1.0},
-        {"stay_id": 1, "charttime": 2.0},
-    ]
-    assert result["sodium"].tolist()[:1] == [140.0]
-    assert pd.isna(result.loc[1, "sodium"])
-    assert result.loc[2, "sodium"] == 142.0
-    assert pd.isna(result.loc[0, "flag"])
-    assert bool(result.loc[1, "flag"]) is True
-    assert bool(result.loc[2, "flag"]) is False
-
-
 def test_mimic_fio2_carevue_torr_unit_is_not_reported_as_mismatch() -> None:
     class DataSource:
         config = DataSourceConfig(

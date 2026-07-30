@@ -3730,6 +3730,8 @@
  "dobu_dur": {
   "description": "dobutamine duration",
   "category": "medications",
+  "unit": "hours",
+  "min": 0,
   "aggregate": "max",
   "sources": {
    "aumc": [
@@ -3960,6 +3962,8 @@
  "dopa_dur": {
   "description": "dopamine duration",
   "category": "medications",
+  "unit": "hours",
+  "min": 0,
   "aggregate": "max",
   "sources": {
    "aumc": [
@@ -4559,6 +4563,8 @@
  "epi_dur": {
   "description": "epinephrine duration",
   "category": "medications",
+  "unit": "hours",
+  "min": 0,
   "aggregate": "max",
   "sources": {
    "aumc": [
@@ -9846,6 +9852,8 @@
  "norepi_dur": {
   "description": "norepinephrine duration",
   "category": "medications",
+  "unit": "hours",
+  "min": 0,
   "aggregate": "max",
   "sources": {
    "aumc": [

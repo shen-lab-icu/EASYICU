@@ -447,6 +447,11 @@ all_features = load_concepts(
 > auto-batch into subprocess workers — set the environment variable
 > `EASYICU_BATCH_TIMEOUT_SEC` (default 3600) to bound each batch in
 > case a worker hangs.
+> For disk exports, `extract_database(..., stream_output_batches=True)`
+> additionally chooses its default batch from **currently available** memory,
+> not nominal RAM. A busy 16 GB laptop with less than 12 GB available uses the
+> 10k constrained profile; close other applications or pass an explicit
+> `batch_size` only when you intentionally want a faster, higher-memory run.
 
 ### Domain-Specific Loaders
 
