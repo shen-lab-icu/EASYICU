@@ -202,6 +202,60 @@ def test_base_merge_preserves_requested_empty_event_concept_column() -> None:
     assert result["rrt"].isna().all()
 
 
+def test_base_batched_merge_aligns_sparse_concepts_without_dataframe_set_index(
+    monkeypatch,
+) -> None:
+    """The wide fallback must retain only one transient key index at a time."""
+    loader = BaseICULoader.__new__(BaseICULoader)
+    results = {
+        "hr": pd.DataFrame(
+            {
+                "stay_id": [1, 1, 2],
+                "charttime": [0.0, 1.0, 0.0],
+                "hr": [80.0, 90.0, 70.0],
+            }
+        ),
+        "map": pd.DataFrame(
+            {
+                "stay_id": [1, 2, 2],
+                "charttime": [1.0, 0.0, 1.0],
+                "map": [65.0, 75.0, 72.0],
+            }
+        ),
+        "rrt": pd.DataFrame(
+            {
+                "stay_id": [2],
+                "charttime": [1.0],
+                "rrt": [True],
+            }
+        ),
+    }
+
+    def forbidden_set_index(*args, **kwargs):
+        raise AssertionError("batched merge must not build per-concept DataFrame indexes")
+
+    monkeypatch.setattr(pd.DataFrame, "set_index", forbidden_set_index)
+
+    result = loader._merge_concepts(results, keep_components=False).sort_values(
+        ["stay_id", "charttime"],
+        ignore_index=True,
+    )
+
+    assert result[["stay_id", "charttime"]].values.tolist() == [
+        [1.0, 0.0],
+        [1.0, 1.0],
+        [2.0, 0.0],
+        [2.0, 1.0],
+    ]
+    assert result["hr"].tolist()[:3] == [80.0, 90.0, 70.0]
+    assert pd.isna(result["hr"].iloc[3])
+    assert pd.isna(result["map"].iloc[0])
+    assert result["map"].tolist()[1:] == [65.0, 75.0, 72.0]
+    assert result["rrt"].isna().tolist() == [True, True, True, False]
+    assert bool(result["rrt"].iloc[3]) is True
+    assert str(result["rrt"].dtype) == "boolean"
+
+
 def test_mimic_fio2_carevue_torr_unit_is_not_reported_as_mismatch() -> None:
     class DataSource:
         config = DataSourceConfig(

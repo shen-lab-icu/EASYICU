@@ -8,6 +8,7 @@ entry points.
 from __future__ import annotations
 
 import os
+from functools import lru_cache
 from pathlib import Path
 from typing import Dict, List, Optional, Union
 
@@ -87,6 +88,160 @@ EXTRACT_MODULE_ORDER: List[str] = [
 # pass.  A full eICU cohort crosses it and may use up to three large batches.
 ONESHOT_MAX_PATIENTS = 150_000
 
+# Streamed export planning is deliberately expressed as a continuous capacity
+# model, not a handful of RAM tiers.  ``available`` is memory the OS says can
+# be used now, so keep a meaningful reserve for the parent process, Arrow,
+# DuckDB, and applications that remain open on a laptop.  The remaining
+# working set is converted to stays with a conservative cross-module planning
+# coefficient, rounded down, and capped at the production-proven 67k batch.
+#
+# At 8 GiB available this yields 40k stays:
+#   available 8192 - reserve 2048 = 6144 MiB
+#   floor(6144 / 0.15 / 5000) * 5000 = 40,000
+#
+# This is substantially faster than the former "<12 GiB => 10k" cliff while
+# retaining 2 GiB of immediate headroom.  Explicit ``batch_size`` remains
+# authoritative.
+_STREAM_BATCH_RESERVE_FRACTION = 0.25
+_STREAM_BATCH_MIN_RESERVE_MB = 2 * 1024
+_STREAM_BATCH_MB_PER_STAY = 0.15
+_STREAM_BATCH_QUANTUM = 5_000
+_STREAM_BATCH_MIN = 5_000
+_STREAM_BATCH_MAX = 67_000
+
+
+def _process_tree_rss_mb() -> float:
+    """Return current RSS for this process tree without making psutil mandatory."""
+    try:
+        import psutil
+
+        root = psutil.Process(os.getpid())
+        processes = [root, *root.children(recursive=True)]
+        rss = 0
+        seen = set()
+        for process in processes:
+            if process.pid in seen:
+                continue
+            seen.add(process.pid)
+            try:
+                rss += int(process.memory_info().rss)
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        return rss / (1024.0**2)
+    except Exception:
+        try:
+            import resource
+            import sys
+
+            peak = float(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+            return peak / (1024.0**2 if sys.platform == "darwin" else 1024.0)
+        except Exception:
+            return 0.0
+
+
+def _available_memory_mb() -> float:
+    try:
+        from ..runtime.memory_manager import get_available_memory_mb
+
+        return max(0.0, float(get_available_memory_mb()))
+    except Exception:
+        return 0.0
+
+
+class _RSSPeakSampler:
+    """Low-overhead module/batch RSS sampler used for adaptive planning."""
+
+    def __init__(self, interval_seconds: float = 0.05):
+        self.interval_seconds = max(0.01, float(interval_seconds))
+        self.start_rss_mb = 0.0
+        self.peak_rss_mb = 0.0
+        self.available_memory_mb_at_start = 0.0
+        self._stop_event = None
+        self._thread = None
+
+    def _sample(self) -> None:
+        self.peak_rss_mb = max(self.peak_rss_mb, _process_tree_rss_mb())
+
+    def _run(self) -> None:
+        assert self._stop_event is not None
+        while not self._stop_event.wait(self.interval_seconds):
+            self._sample()
+
+    def start(self):
+        import threading
+
+        self.start_rss_mb = _process_tree_rss_mb()
+        self.peak_rss_mb = self.start_rss_mb
+        self.available_memory_mb_at_start = _available_memory_mb()
+        self._stop_event = threading.Event()
+        self._thread = threading.Thread(
+            target=self._run,
+            name="easyicu-rss-sampler",
+            daemon=True,
+        )
+        self._thread.start()
+        return self
+
+    def stop(self) -> Dict[str, float]:
+        if self._stop_event is not None:
+            self._stop_event.set()
+        if self._thread is not None:
+            self._thread.join(timeout=max(0.2, self.interval_seconds * 3))
+        self._sample()
+        return {
+            "start_rss_mb": round(self.start_rss_mb, 1),
+            "peak_rss_mb": round(self.peak_rss_mb, 1),
+            "peak_working_set_mb": round(
+                max(0.0, self.peak_rss_mb - self.start_rss_mb),
+                1,
+            ),
+            "available_memory_mb_at_start": round(
+                self.available_memory_mb_at_start,
+                1,
+            ),
+        }
+
+
+def _adapt_stream_batch_size_from_first_batch(
+    current_batch_size: int,
+    *,
+    observed_working_set_mb: float,
+    available_memory_mb: float,
+    remaining_patients: int,
+) -> int:
+    """Scale later batches from the first batch's measured working set.
+
+    The same reserve contract used for launch planning remains in force.
+    Growth is capped at the production-proven 67k and rounded to 5k, except
+    that the exact 67k cap remains reachable.  A failed/too-small measurement
+    leaves the original plan unchanged.
+    """
+    current = max(1, int(current_batch_size))
+    remaining = max(0, int(remaining_patients))
+    observed = max(0.0, float(observed_working_set_mb))
+    available = max(0.0, float(available_memory_mb))
+    if remaining <= 0 or observed < 64.0 or available <= 0:
+        return min(current, remaining) if remaining else current
+
+    reserve = max(
+        float(_STREAM_BATCH_MIN_RESERVE_MB),
+        available * _STREAM_BATCH_RESERVE_FRACTION,
+    )
+    usable = max(0.0, available - reserve)
+    if usable <= 0:
+        return min(current, remaining)
+
+    measured_capacity = int(current * usable / observed)
+    if measured_capacity >= _STREAM_BATCH_MAX:
+        planned = _STREAM_BATCH_MAX
+    else:
+        planned = (
+            measured_capacity // _STREAM_BATCH_QUANTUM
+        ) * _STREAM_BATCH_QUANTUM
+        planned = max(_STREAM_BATCH_MIN, planned)
+    planned = min(_STREAM_BATCH_MAX, planned)
+    return min(planned, remaining)
+
 
 def _resolve_stream_batch_size(
     database: str,
@@ -99,17 +254,15 @@ def _resolve_stream_batch_size(
 
     Total RAM is not a sufficient safety signal on a laptop: a nominal 16 GB
     machine may have only 8 GB available while an IDE, browser, or another
-    analysis is open.  Explicit user choices always win.  The automatic policy
-    otherwise keeps the established fast paths while failing safely under
-    memory pressure:
+    analysis is open.  Explicit user choices always win.
 
-    * server (>=24 GB available): eICU uses three ~67k batches;
-    * portable fast (>=15 GB available): eICU uses 45k batches;
-    * constrained (<12 GB available): every database uses 10k batches;
-    * the five smaller databases remain one-shot when >=12 GB is available.
-
-    The 12--15 GB eICU interval intentionally stays on the conservative 10k
-    path until an intermediate batch has a measured process-tree PSS baseline.
+    Automatic batches use a continuous capacity estimate: reserve 25% of
+    currently available memory (at least 2 GiB), budget 0.15 MiB per stay from
+    the remainder, round down to 5k stays, and cap at the production-proven
+    67k batch.  Thus an 8 GiB-available host starts at 40k rather than falling
+    off a fixed 10k threshold.  Databases whose complete cohort fits that
+    capacity stay one-shot; at >=12 GiB available the five sub-150k databases
+    retain their established one-shot fast path.
     """
 
     total = int(num_patients)
@@ -128,15 +281,22 @@ def _resolve_stream_batch_size(
         available_memory_mb = get_available_memory_mb()
     available = max(0.0, float(available_memory_mb))
 
-    if available < 12 * 1024:
-        return min(10_000, total)
-    if database == "eicu" and total > ONESHOT_MAX_PATIENTS:
-        if available >= 24 * 1024:
-            return min(67_000, total)
-        if available >= 15 * 1024:
-            return min(45_000, total)
-        return min(10_000, total)
-    return total
+    # The complete smaller cohorts have a measured one-shot path when at least
+    # 12 GiB is currently available.  Preserve it instead of manufacturing a
+    # nearly-full extra batch from the generic capacity formula.
+    if total <= ONESHOT_MAX_PATIENTS and available >= 12 * 1024:
+        return total
+
+    reserve = max(
+        float(_STREAM_BATCH_MIN_RESERVE_MB),
+        available * _STREAM_BATCH_RESERVE_FRACTION,
+    )
+    usable = max(0.0, available - reserve)
+    capacity = int(usable / _STREAM_BATCH_MB_PER_STAY)
+    capacity = (capacity // _STREAM_BATCH_QUANTUM) * _STREAM_BATCH_QUANTUM
+    capacity = max(_STREAM_BATCH_MIN, capacity)
+    capacity = min(_STREAM_BATCH_MAX, capacity)
+    return min(capacity, total)
 
 
 def _get_extraction_mp_context(mp_module, *, platform_name: Optional[str] = None):
@@ -398,15 +558,94 @@ def _enforce_concept_bounds(df, concept_name):
     return df.loc[keep].reset_index(drop=True), n_drop
 
 
-def _normalise_module_frame_for_parquet(result, concepts):
-    """Return one module frame in a stable, parquet-writable representation."""
+def _module_parquet_columns(columns, concepts, *, include_missing=False):
+    """Return stable context + catalog column order without touching payloads."""
+    requested = list(dict.fromkeys(concepts))
+    requested_set = set(requested)
+    context_columns = [column for column in columns if column not in requested_set]
+    concept_columns = (
+        requested
+        if include_missing
+        else [column for column in requested if column in columns]
+    )
+    return context_columns + concept_columns
+
+
+@lru_cache(maxsize=512)
+def _module_arrow_storage_kind(concept: str) -> str:
+    return _native_export_storage_kind(
+        concept,
+        load_dictionary(include_sofa2=True),
+    )
+
+
+def _module_arrow_null_type(concept: str, pyarrow_module):
+    """Return the non-lossy physical type for an unavailable concept column."""
+    kind = _module_arrow_storage_kind(str(concept))
+    if kind == "boolean":
+        return pyarrow_module.bool_()
+    if kind == "string":
+        return pyarrow_module.string()
+    # Use float64 for a concept whose first observed batch is empty.  A later
+    # float32 value can widen losslessly; choosing float32 here could silently
+    # downcast a later high-precision producer.
+    return pyarrow_module.float64()
+
+
+def _module_arrow_table(frame, concepts, pyarrow_module, *, schema=None):
+    """Create a stable module table, adding structural nulls only in Arrow."""
+    table = pyarrow_module.Table.from_pandas(frame, preserve_index=False)
+    requested = list(dict.fromkeys(concepts))
+    requested_set = set(requested)
+    context_columns = [
+        column for column in table.column_names if column not in requested_set
+    ]
+
+    if schema is None:
+        for concept in requested:
+            if concept in table.column_names:
+                continue
+            table = table.append_column(
+                concept,
+                pyarrow_module.nulls(
+                    len(table),
+                    type=_module_arrow_null_type(concept, pyarrow_module),
+                ),
+            )
+        return table.select(context_columns + requested)
+
+    for field in schema:
+        if field.name not in table.column_names:
+            table = table.append_column(
+                field,
+                pyarrow_module.nulls(len(table), type=field.type),
+            )
+    table = table.select(schema.names)
+    if table.schema != schema:
+        table = table.cast(schema)
+    return table
+
+
+def _normalise_module_frame_for_parquet(result, concepts, *, reorder=True):
+    """Return one module frame in a stable, parquet-writable representation.
+
+    ``reorder=False`` lets the Arrow writer reorder column references without
+    copying the dense pandas payload.  The default behavior remains a
+    canonically ordered DataFrame for other callers.
+    """
     import pandas as pd
 
     if not isinstance(result, pd.DataFrame) or result.empty:
         return None
-    result = result.copy()
+
+    # This function sits at the peak-RSS boundary: ``result`` is the complete
+    # dense module frame and Arrow is about to wrap it for parquet output.
+    # An unconditional ``copy()`` used to keep two full pandas payloads alive
+    # at exactly that point.  Export owns the frame and never reuses it, so
+    # preserve the original object when its columns are already canonical.
+    # Copy only for the uncommon duplicate/reorder cases.
     if result.columns.duplicated().any():
-        result = result.loc[:, ~result.columns.duplicated()]
+        result = result.loc[:, ~result.columns.duplicated()].copy()
 
     # Dedicated concept loaders are routed through sets internally
     # (KDIGO/circulatory/comorbidity/microbiology).  Their insertion order is
@@ -414,15 +653,9 @@ def _normalise_module_frame_for_parquet(result, concepts):
     # Parquet schema across fresh processes and operating systems.  The module
     # catalog is the export contract: keep identifier/time columns in their
     # established order, then place requested concepts in catalog order.
-    requested = list(dict.fromkeys(concepts))
-    requested_set = set(requested)
-    context_columns = [
-        column for column in result.columns if column not in requested_set
-    ]
-    ordered_columns = context_columns + [
-        column for column in requested if column in result.columns
-    ]
-    result = result.loc[:, ordered_columns]
+    ordered_columns = _module_parquet_columns(result.columns, concepts)
+    if reorder and list(result.columns) != ordered_columns:
+        result = result.loc[:, ordered_columns].copy()
 
     # Indicator concepts can arrive as bool/float/NA object columns.  Arrow
     # cannot write that mixed representation, while genuine text columns must
@@ -611,6 +844,7 @@ def _stream_module_batches_to_parquet(
     output_dir: str,
     *,
     loader=None,
+    adaptive_batch_growth: bool = False,
 ) -> Optional[Dict]:
     """Append bounded patient batches directly to one module parquet file.
 
@@ -641,43 +875,85 @@ def _stream_module_batches_to_parquet(
 
     writer = None
     schema = None
-    columns = None
     rows = 0
+    produced_concepts = set()
+    batch_telemetry = []
+    current_batch_size = int(batch_size)
     batch_load_kwargs = dict(load_kwargs)
     batch_load_kwargs.pop("patient_ids", None)
     try:
-        for start in range(0, len(all_ids), batch_size):
+        start = 0
+        while start < len(all_ids):
             table = None
-            batch = _load_stream_module_batch(
-                _lc,
-                module_name=module_name,
-                concepts=concepts,
-                load_kwargs=batch_load_kwargs,
-                patient_ids={
-                    id_col: all_ids[start : start + batch_size]
-                },
-                loader=loader,
-                pyarrow_module=pa,
+            batch_ids = all_ids[start : start + current_batch_size]
+            batch_sampler = _RSSPeakSampler().start()
+            frame = None
+            output_rows = 0
+            try:
+                batch = _load_stream_module_batch(
+                    _lc,
+                    module_name=module_name,
+                    concepts=concepts,
+                    load_kwargs=batch_load_kwargs,
+                    patient_ids={id_col: batch_ids},
+                    loader=loader,
+                    pyarrow_module=pa,
+                )
+                frame = _normalise_module_frame_for_parquet(
+                    batch,
+                    concepts,
+                    reorder=False,
+                )
+                if frame is not None:
+                    produced_concepts.update(
+                        concept for concept in concepts if concept in frame.columns
+                    )
+                    table = _module_arrow_table(
+                        frame,
+                        concepts,
+                        pa,
+                        schema=schema,
+                    )
+                    if writer is None:
+                        schema = table.schema
+                        writer = pq.ParquetWriter(
+                            partial,
+                            schema,
+                            compression="snappy",
+                        )
+                    writer.write_table(table)
+                    output_rows = len(frame)
+                    rows += output_rows
+            finally:
+                batch_memory = batch_sampler.stop()
+
+            batch_telemetry.append(
+                {
+                    "batch_index": len(batch_telemetry) + 1,
+                    "start_offset": start,
+                    "stays": len(batch_ids),
+                    "output_rows": output_rows,
+                    **batch_memory,
+                }
             )
-            frame = _normalise_module_frame_for_parquet(batch, concepts)
-            if frame is not None:
-                if columns is None:
-                    columns = list(frame.columns)
-                else:
-                    # A sparse batch may omit an optional column; preserve the
-                    # first-batch public schema rather than silently changing
-                    # the parquet contract mid-file.
-                    frame = frame.reindex(columns=columns)
-                table = pa.Table.from_pandas(frame, preserve_index=False, schema=schema)
-                if writer is None:
-                    schema = table.schema
-                    writer = pq.ParquetWriter(partial, schema, compression="snappy")
-                writer.write_table(table)
-                rows += len(frame)
             del table
             del batch, frame
             _clear_stream_loader_caches(loader)
             _release_stream_batch_memory(pa)
+            start += len(batch_ids)
+            if (
+                adaptive_batch_growth
+                and len(batch_telemetry) == 1
+                and start < len(all_ids)
+            ):
+                current_batch_size = _adapt_stream_batch_size_from_first_batch(
+                    current_batch_size,
+                    observed_working_set_mb=batch_memory["peak_working_set_mb"],
+                    available_memory_mb=batch_memory[
+                        "available_memory_mb_at_start"
+                    ],
+                    remaining_patients=len(all_ids) - start,
+                )
         if writer is None:
             return None
         writer.close()
@@ -692,7 +968,11 @@ def _stream_module_batches_to_parquet(
     return {
         "path": str(destination),
         "rows": rows,
-        "concepts": [name for name in concepts if name in (columns or [])],
+        "concepts": [name for name in concepts if name in produced_concepts],
+        "stream_batches": batch_telemetry,
+        "initial_batch_size": int(batch_size),
+        "final_planned_batch_size": current_batch_size,
+        "adaptive_batch_growth": bool(adaptive_batch_growth),
     }
 
 
@@ -707,6 +987,7 @@ def _run_module_extraction(
     use_sofa2: bool = False,
     loader=None,
     stream_output_batches: bool = False,
+    adaptive_stream_batches: bool = False,
 ) -> None:
     """加载一个模块的所有概念并写入 parquet + _manifest.json。
 
@@ -721,8 +1002,10 @@ def _run_module_extraction(
     from easyicu import load_concepts as _lc
 
     t0 = time.time()
+    module_memory_sampler = _RSSPeakSampler().start()
     saved = {}
     errors = []
+    stream_info = None
 
     # 构造 load_concepts 参数
     # use_sofa2 显式传入：分组模式下保持全组 loader 配置一致，
@@ -736,6 +1019,7 @@ def _run_module_extraction(
         merge=True,
         concept_workers=1,
         use_sofa2=use_sofa2,
+        _defer_empty_columns_to_arrow=True,
     )
     if patient_ids_filter:
         kwargs["patient_ids"] = patient_ids_filter
@@ -800,6 +1084,7 @@ def _run_module_extraction(
                 int(batch_size),
                 output_dir,
                 loader=loader,
+                adaptive_batch_growth=adaptive_stream_batches,
             )
             if stream_info is not None:
                 saved[module_name] = stream_info
@@ -857,10 +1142,22 @@ def _run_module_extraction(
         pass
     elif isinstance(result, pd.DataFrame) and len(result) > 0:
         try:
-            result = _normalise_module_frame_for_parquet(result, concepts)
+            result = _normalise_module_frame_for_parquet(
+                result,
+                concepts,
+                reorder=False,
+            )
             _cols = [c for c in concepts if c in result.columns]
             path = os.path.join(output_dir, f"{module_name}.parquet")
-            result.to_parquet(path, index=False, engine="pyarrow")
+            import pyarrow as pa
+            import pyarrow.parquet as pq
+
+            table = _module_arrow_table(
+                result,
+                concepts,
+                pa,
+            )
+            pq.write_table(table, path, compression="snappy")
             saved[module_name] = {
                 "path": path,
                 "rows": len(result),
@@ -876,13 +1173,25 @@ def _run_module_extraction(
         )
 
     elapsed = time.time() - t0
+    memory_stats = module_memory_sampler.stop()
     manifest = {
         "module": module_name,
         "saved": saved,
         "errors": errors,
         "warnings": warnings,
         "elapsed_sec": round(elapsed, 1),
+        **memory_stats,
     }
+    if stream_info is not None:
+        manifest["stream_batches"] = stream_info.get("stream_batches", [])
+        manifest["initial_batch_size"] = stream_info.get("initial_batch_size")
+        manifest["final_planned_batch_size"] = stream_info.get(
+            "final_planned_batch_size"
+        )
+        manifest["adaptive_batch_growth"] = stream_info.get(
+            "adaptive_batch_growth",
+            False,
+        )
     with open(os.path.join(output_dir, "_manifest.json"), "w") as f:
         json.dump(manifest, f)
 
@@ -944,9 +1253,21 @@ def _stream_special_extraction_batches(
         raise ValueError("streamed special export requires one patient-id filter")
     id_col, all_ids = next(iter(patient_ids_filter.items()))
     all_ids = list(all_ids)
-    # SOFA dependencies can be wider than the ordinary vitals module.  Keep
-    # their individual workset especially small on a 16 GB consumer machine.
-    safe_batch_size = min(int(batch_size), 2_000)
+    # These inputs are already projected dependency parquets (id, time, one
+    # score/flag), not raw SOFA source tables.  The former hard 2,000-stay cap
+    # caused up to 101 full parquet filter passes for eICU even when the outer
+    # streamed batch had safely handled 40k--67k stays.  Reuse that measured
+    # outer boundary.  Experts can still impose a smaller independent cap.
+    safe_batch_size = int(batch_size)
+    raw_sepsis_batch = os.environ.get("EASYICU_SEPSIS_BATCH_SIZE")
+    if raw_sepsis_batch:
+        try:
+            safe_batch_size = min(
+                safe_batch_size,
+                max(1, int(raw_sepsis_batch)),
+            )
+        except ValueError:
+            pass
     concepts = [
         concept
         for module_name in special_modules
@@ -959,6 +1280,7 @@ def _stream_special_extraction_batches(
     rows = {concept: 0 for concept in concepts}
     errors = []
     started = time.time()
+    module_memory_sampler = _RSSPeakSampler().start()
     source_root = Path(published_output_dir)
 
     def _read_dependency(module_name: str, ids: List) -> "pd.DataFrame":
@@ -1113,6 +1435,7 @@ def _stream_special_extraction_batches(
             writer.close()
         for partial in partials.values():
             partial.unlink(missing_ok=True)
+        module_memory_sampler.stop()
         raise
 
     manifest = {
@@ -1120,6 +1443,13 @@ def _stream_special_extraction_batches(
         "saved": saved,
         "errors": errors,
         "elapsed_sec": round(time.time() - started, 1),
+        "batch_size": safe_batch_size,
+        "batch_count": (
+            (len(all_ids) + safe_batch_size - 1) // safe_batch_size
+            if all_ids
+            else 0
+        ),
+        **module_memory_sampler.stop(),
     }
     with open(os.path.join(output_dir, "_manifest.json"), "w") as handle:
         json.dump(manifest, handle)
@@ -1178,6 +1508,7 @@ def _run_special_extraction(
         return
 
     t0 = time.time()
+    module_memory_sampler = _RSSPeakSampler().start()
     saved = {}
     errors = []
 
@@ -1314,6 +1645,7 @@ def _run_special_extraction(
         "saved": saved,
         "errors": errors,
         "elapsed_sec": round(elapsed, 1),
+        **module_memory_sampler.stop(),
     }
     with open(os.path.join(output_dir, "_manifest.json"), "w") as f:
         json.dump(manifest, f)
@@ -1350,6 +1682,7 @@ def _extract_module_group_worker(
     use_sofa2: bool,
     stream_output_batches: bool = False,
     published_output_dir: Optional[str] = None,
+    adaptive_stream_batches: bool = False,
 ):
     """在一个子进程中顺序提取一组共享源表的模块。
 
@@ -1385,6 +1718,7 @@ def _extract_module_group_worker(
                     use_sofa2=use_sofa2,
                     loader=_loader,
                     stream_output_batches=stream_output_batches,
+                    adaptive_stream_batches=adaptive_stream_batches,
                 )
             except Exception:
                 # _run_module_extraction 已内部捕获常规异常并写 manifest；
@@ -2214,6 +2548,21 @@ def _publish_native_export_v2(
         module: float((result.get("modules", {}).get(module) or {}).get("elapsed") or 0)
         for module in modules
     }
+    module_peak_rss_mb = {
+        module: float(
+            (result.get("modules", {}).get(module) or {}).get("peak_rss_mb") or 0
+        )
+        for module in modules
+    }
+    module_peak_working_set_mb = {
+        module: float(
+            (result.get("modules", {}).get(module) or {}).get(
+                "peak_working_set_mb"
+            )
+            or 0
+        )
+        for module in modules
+    }
     manifest = {
         "schema_version": _NATIVE_EXPORT_SCHEMA_V2,
         "database": normalized_database,
@@ -2236,6 +2585,8 @@ def _publish_native_export_v2(
             "declared_bounds_policy": "out_of_range_to_null",
         },
         "module_timings_seconds": module_timings,
+        "module_peak_rss_mb": module_peak_rss_mb,
+        "module_peak_working_set_mb": module_peak_working_set_mb,
         "runtime_provenance": _native_export_runtime_provenance(),
         "unavailable_modules": unavailable_modules,
         "unavailable_concepts": unavailable_concepts,
@@ -2306,8 +2657,8 @@ def extract_database(
         max_patients: 限制患者数量（与 patient_ids 互斥）
         batch_size: 模块内患者分批大小。None(默认) = 非流式提取时五个较小
             数据库一次性、完整 eICU 按稳定内存预算使用 1–3 个大批次；流式
-            提取时按当前可用内存自动选择 server / portable-fast / constrained
-            档。仅在需要覆盖默认策略时显式传值。
+            提取时按当前可用内存连续计算首批，并根据首批实测工作集调整后续
+            批次（上限 67,000 stays）。仅在需要覆盖默认策略时显式传值。
         group_modules: True(默认) = 自动选择：内存充足的服务器将共享源表的
             模块合并为分组子进程；≤24GB 主机或 ≤4GB 显式缓存预算自动切换
             为每模块一个隔离子进程。False = 始终逐模块隔离。可用
@@ -2413,7 +2764,9 @@ def extract_database(
     if stream_output_batches:
         # The bounded writer needs a concrete batch.  Resolve it from current
         # available memory rather than nominal total RAM: a 16 GB laptop with
-        # only 8 GB free must not inherit the portable-fast profile.
+        # only 8 GB free starts from a bounded 40k batch and can grow only
+        # after the first batch supplies a measured working-set baseline.
+        _adaptive_stream_batches = batch_size is None
         batch_size = _resolve_stream_batch_size(
             database,
             num_patients,
@@ -2421,9 +2774,11 @@ def extract_database(
         )
         _auto_one_shot = False
     elif batch_size is None:
+        _adaptive_stream_batches = False
         batch_size = max(num_patients + 1, 2_000_000)
         _auto_one_shot = True
     else:
+        _adaptive_stream_batches = False
         _auto_one_shot = False
 
     # 确定要提取的模块
@@ -2476,6 +2831,7 @@ def extract_database(
         "database": database,
         "num_patients": num_patients,
         "batch_size": batch_size,
+        "adaptive_stream_batches": _adaptive_stream_batches,
         "stream_output_batches": stream_output_batches,
         "modules": {},
         "total_elapsed": 0,
@@ -2519,6 +2875,9 @@ def extract_database(
             "errors": [],
             "warnings": [],
             "bounds": {},
+            "peak_rss_mb": 0.0,
+            "peak_working_set_mb": 0.0,
+            "stream_batches": [],
         }
         manifest_path = os.path.join(tmp_mod_dir, "_manifest.json")
         if not os.path.exists(manifest_path):
@@ -2531,6 +2890,12 @@ def extract_database(
         mod_result["errors"] = manifest.get("errors", [])
         mod_result["warnings"] = manifest.get("warnings", [])
         mod_result["elapsed"] = manifest.get("elapsed_sec", 0.0)
+        mod_result["peak_rss_mb"] = manifest.get("peak_rss_mb", 0.0)
+        mod_result["peak_working_set_mb"] = manifest.get(
+            "peak_working_set_mb",
+            0.0,
+        )
+        mod_result["stream_batches"] = manifest.get("stream_batches", [])
         output_manifest = {
             "module": mod_name,
             "saved": {},
@@ -2538,6 +2903,22 @@ def extract_database(
             "warnings": mod_result["warnings"],
             "bounds": mod_result["bounds"],
             "elapsed_sec": mod_result["elapsed"],
+            "start_rss_mb": manifest.get("start_rss_mb", 0.0),
+            "peak_rss_mb": mod_result["peak_rss_mb"],
+            "peak_working_set_mb": mod_result["peak_working_set_mb"],
+            "available_memory_mb_at_start": manifest.get(
+                "available_memory_mb_at_start",
+                0.0,
+            ),
+            "stream_batches": mod_result["stream_batches"],
+            "initial_batch_size": manifest.get("initial_batch_size"),
+            "final_planned_batch_size": manifest.get(
+                "final_planned_batch_size"
+            ),
+            "adaptive_batch_growth": manifest.get(
+                "adaptive_batch_growth",
+                False,
+            ),
         }
         # 每个模块一个宽表 parquet：manifest["saved"] 只有一条（键=模块名），
         # info 里带 concepts（列名清单）+ concept_meta（逐概念 rows/bounds provenance）。
@@ -2623,6 +3004,8 @@ def extract_database(
                     ],
                     "warnings": [],
                     "bounds": {},
+                    "peak_rss_mb": 0.0,
+                    "peak_working_set_mb": 0.0,
                 }
             else:
                 mod_result = {
@@ -2632,6 +3015,11 @@ def extract_database(
                     "errors": manifest.get("errors", []),
                     "warnings": manifest.get("warnings", []),
                     "bounds": {},
+                    "peak_rss_mb": manifest.get("peak_rss_mb", 0.0),
+                    "peak_working_set_mb": manifest.get(
+                        "peak_working_set_mb",
+                        0.0,
+                    ),
                 }
                 output_manifest = {
                     "module": mod_name,
@@ -2640,6 +3028,18 @@ def extract_database(
                     "warnings": mod_result["warnings"],
                     "bounds": mod_result["bounds"],
                     "elapsed_sec": sp_elapsed,
+                    "start_rss_mb": manifest.get("start_rss_mb", 0.0),
+                    "peak_rss_mb": manifest.get("peak_rss_mb", 0.0),
+                    "peak_working_set_mb": manifest.get(
+                        "peak_working_set_mb",
+                        0.0,
+                    ),
+                    "available_memory_mb_at_start": manifest.get(
+                        "available_memory_mb_at_start",
+                        0.0,
+                    ),
+                    "batch_size": manifest.get("batch_size"),
+                    "batch_count": manifest.get("batch_count"),
                 }
                 for c_name in concepts:
                     info = manifest.get("saved", {}).get(c_name)
@@ -2715,6 +3115,7 @@ def extract_database(
                 group_use_sofa2,
                 stream_output_batches,
                 output_dir,
+                _adaptive_stream_batches,
             ),
             daemon=True,
         )

@@ -762,14 +762,21 @@ class ConceptResolver:
     def _ensure_requested_concept_columns(
         df: pd.DataFrame,
         concept_names: Iterable[str],
+        *,
+        materialize_missing: bool = True,
     ) -> pd.DataFrame:
-        """Keep merged API schemas stable when a requested concept has no rows."""
+        """Keep merged API schemas stable when a requested concept has no rows.
+
+        Extraction can defer structural all-null columns to its Arrow writer.
+        That avoids allocating one dense pandas block per unavailable concept
+        across millions of rows while preserving the public API default.
+        """
         if not isinstance(df, pd.DataFrame):
             return df
         if df.empty:
             return df
         missing = [name for name in concept_names if name not in df.columns]
-        if not missing:
+        if not missing or not materialize_missing:
             return df
         out = df.copy()
         for name in missing:
@@ -1104,6 +1111,9 @@ class ConceptResolver:
         **kwargs,  # Additional parameters for callbacks (e.g., win_length, worst_val_fun)
     ):
         names = [name for name in concept_names]
+        defer_empty_columns_to_arrow = bool(
+            kwargs.pop("_defer_empty_columns_to_arrow", False)
+        )
         required_names = self._expand_dependencies(names)  # Ensure dependencies are expanded
         tables: Dict[str, ICUTable] = {}
         aggregators = self._normalise_aggregators(aggregate, required_names)
@@ -1218,6 +1228,9 @@ class ConceptResolver:
         wide_table_merged_df = None  # 🚀 保存批量加载的合并结果，避免重复合并
         wide_table_covered_names = set()
         wide_table_frames: List[pd.DataFrame] = []
+        materialize_wide_concept_frames = (
+            not merge or availability_sink is not None
+        )
         
         # 🔧 FIX: 只有当没有多数据源概念时才使用批量加载
         # 因为批量加载只处理一个表，不支持多表合并（如eICU的map需要合并vitalperiodic和vitalaperiodic）
@@ -1348,26 +1361,26 @@ class ConceptResolver:
                         table_batch_df = batch_df
                         table_covered_names = _concept_names
                         
-                        # 🚀 perf B4: avoid the per-concept .copy() — ICUTable
-                        # does not mutate its data, so each concept's view
-                        # can reference the same parent batch_df. The
-                        # `.dropna()` on a column subset returns a new
-                        # filtered frame anyway, so we still get an
-                        # independent dataframe per concept (just without
-                        # the unnecessary full-column-set copy in front).
-                        for concept_name, val_var in concepts_info_filtered:
-                            concept_df = batch_df.loc[
-                                batch_df[concept_name].notna(),
-                                [id_col, 'charttime', concept_name],
-                            ]
-                            _tbl = ICUTable(
-                                data=concept_df,
-                                id_columns=[id_col],
-                                index_column='charttime',
-                                value_column=concept_name
-                            )
-                            _tbl._pre_aggregated = True
-                            table_batch_results[concept_name] = _tbl
+                        # In merge mode ``batch_df`` is already the requested
+                        # wide result.  Do not immediately split it back into
+                        # one sparse DataFrame per concept: those copies were
+                        # retained alongside the wide frame and often doubled
+                        # peak memory.  Dict-mode and availability audits still
+                        # materialize their per-concept public objects.
+                        if materialize_wide_concept_frames:
+                            for concept_name, val_var in concepts_info_filtered:
+                                concept_df = batch_df.loc[
+                                    batch_df[concept_name].notna(),
+                                    [id_col, 'charttime', concept_name],
+                                ]
+                                _tbl = ICUTable(
+                                    data=concept_df,
+                                    id_columns=[id_col],
+                                    index_column='charttime',
+                                    value_column=concept_name
+                                )
+                                _tbl._pre_aggregated = True
+                                table_batch_results[concept_name] = _tbl
                         
                         if verbose:
                             logger.info(f"✅ 宽表批量加载完成，加载了 {len(concepts_info_filtered)} 个概念")
@@ -1510,21 +1523,28 @@ class ConceptResolver:
                         for concept_name in batch_itemids:
                             if concept_name not in batch_df.columns:
                                 continue
-                            concept_df = batch_df[[id_col, _time_col_out, concept_name]].copy()
-                            concept_df = concept_df.dropna(subset=[concept_name])
-                            _tbl = ICUTable(
-                                data=concept_df,
-                                id_columns=[id_col],
-                                index_column=_time_col_out,
-                                value_column=concept_name,
-                            )
-                            _tbl._pre_aggregated = True
-                            table_batch_results[concept_name] = _tbl
+                            if materialize_wide_concept_frames:
+                                concept_df = batch_df.loc[
+                                    batch_df[concept_name].notna(),
+                                    [id_col, _time_col_out, concept_name],
+                                ]
+                                _tbl = ICUTable(
+                                    data=concept_df,
+                                    id_columns=[id_col],
+                                    index_column=_time_col_out,
+                                    value_column=concept_name,
+                                )
+                                _tbl._pre_aggregated = True
+                                table_batch_results[concept_name] = _tbl
                             covered_names.add(concept_name)
 
                         if covered_names:
                             keep_cols = [id_col, _time_col_out] + [name for name in names if name in covered_names and name in batch_df.columns]
-                            table_batch_df = batch_df[keep_cols].copy()
+                            table_batch_df = (
+                                batch_df
+                                if list(batch_df.columns) == keep_cols
+                                else batch_df.loc[:, keep_cols]
+                            )
                             table_covered_names = set(covered_names)
 
                         if verbose and covered_names:
@@ -1558,7 +1578,7 @@ class ConceptResolver:
                 wide_table_merged_df = wide_table_merged_df.merge(frame, on=merge_keys, how='outer', sort=False)
 
         # 如果没有使用批量加载，使用串行加载
-        if not wide_table_batch_results and len(table_to_concepts) == 1 and concept_workers > 1 and total > 1:
+        if not wide_table_covered_names and len(table_to_concepts) == 1 and concept_workers > 1 and total > 1:
             shared_table = list(table_to_concepts.keys())[0]
             if verbose:
                 logger.info(f"🔄 所有 {total} 个概念共享表 '{shared_table}'，使用串行加载以共享缓存")
@@ -1600,7 +1620,10 @@ class ConceptResolver:
                     logger.info(f"🔄 检测到共享子概念 {shared_sub_concepts}，使用串行加载以利用缓存")
                 effective_workers = 1
 
-        def _resolve(name: str, position: int) -> tuple[str, ICUTable]:
+        def _resolve(
+            name: str,
+            position: int,
+        ) -> tuple[str, Optional[ICUTable]]:
             # 🚀 如果已经通过批量加载获取了数据，直接返回
             if name in wide_table_batch_results:
                 concept_table = wide_table_batch_results[name]
@@ -1608,6 +1631,10 @@ class ConceptResolver:
                     row_count = len(concept_table.data) if (isinstance(concept_table, ICUTable) or hasattr(concept_table, 'data')) else len(concept_table)
                     logger.info("✅  概念 '%s' (批量) 已加载 (行数: %s)", name, row_count)
                 return name, concept_table
+            if name in wide_table_covered_names:
+                # merge=True can return the producer-built wide frame directly.
+                # A per-concept sparse table would only duplicate that payload.
+                return name, None
             
             if verbose and logger.isEnabledFor(logging.INFO):
                 logger.info("➡️  [%d/%d] 加载概念 '%s'", position, total, name)
@@ -1644,16 +1671,46 @@ class ConceptResolver:
                     }
                     for future in as_completed(future_map):
                         name, concept_table = future.result()
-                        results[name] = concept_table
+                        if concept_table is not None:
+                            results[name] = concept_table
             else:
                 for idx, name in enumerate(names, start=1):
                     name, concept_table = _resolve(name, idx)
-                    results[name] = concept_table
+                    if concept_table is not None:
+                        results[name] = concept_table
 
-            tables = {
-                name: results[name]
-                for name in names
-            }
+            tables = {name: results[name] for name in names if name in results}
+
+            def _materialize_covered_wide_tables_for_fallback() -> None:
+                """Recreate sparse tables only if the direct wide merge cannot finish."""
+                if wide_table_merged_df is None or wide_table_merged_df.empty:
+                    return
+                id_col = wide_table_merged_df.columns[0]
+                time_col = next(
+                    (
+                        candidate
+                        for candidate in ("charttime", "measuredat_minutes")
+                        if candidate in wide_table_merged_df.columns
+                    ),
+                    None,
+                )
+                if time_col is None:
+                    return
+                for concept_name in wide_table_covered_names:
+                    if concept_name in tables or concept_name not in wide_table_merged_df:
+                        continue
+                    concept_df = wide_table_merged_df.loc[
+                        wide_table_merged_df[concept_name].notna(),
+                        [id_col, time_col, concept_name],
+                    ]
+                    concept_table = ICUTable(
+                        data=concept_df,
+                        id_columns=[id_col],
+                        index_column=time_col,
+                        value_column=concept_name,
+                    )
+                    concept_table._pre_aggregated = True
+                    tables[concept_name] = concept_table
 
             if availability_sink is not None and availability_context is not None:
                 unavailable_by_table: Dict[str, List[str]] = {}
@@ -1707,7 +1764,11 @@ class ConceptResolver:
                 if verbose:
                     logger.info("🚀 使用宽表批量加载的合并结果，跳过合并步骤")
                 return self._downcast_float64_to_float32(
-                    self._ensure_requested_concept_columns(wide_table_merged_df, names)
+                    self._ensure_requested_concept_columns(
+                        wide_table_merged_df,
+                        names,
+                        materialize_missing=not defer_empty_columns_to_arrow,
+                    )
                 )
 
             # 如果是r_compatible模式，使用增强的ricu风格合并
@@ -1782,7 +1843,11 @@ class ConceptResolver:
                             if verbose:
                                 logger.info("🚀 使用部分宽表批量结果并仅合并剩余概念")
                             return self._downcast_float64_to_float32(
-                                self._ensure_requested_concept_columns(merged_partial, names)
+                                self._ensure_requested_concept_columns(
+                                    merged_partial,
+                                    names,
+                                    materialize_missing=not defer_empty_columns_to_arrow,
+                                )
                             )
                         # Partial merge failed (e.g. non-charttime time column) — fall through to full merge
                     elif _all_covered:
@@ -1797,13 +1862,22 @@ class ConceptResolver:
                             self._ensure_requested_concept_columns(
                                 wide_table_merged_df.reset_index(drop=True),
                                 names,
+                                materialize_missing=not defer_empty_columns_to_arrow,
                             )
                         )
-                return self._to_r_format_merged_enhanced(tables, names, interval, data_source=data_source)
+                _materialize_covered_wide_tables_for_fallback()
+                return self._to_r_format_merged_enhanced(
+                    tables,
+                    names,
+                    interval,
+                    data_source=data_source,
+                    materialize_missing_concepts=not defer_empty_columns_to_arrow,
+                )
 
             merged = self._ensure_requested_concept_columns(
                 self._merge_tables(tables),
                 names,
+                materialize_missing=not defer_empty_columns_to_arrow,
             )
             return merged
         finally:
@@ -8407,6 +8481,7 @@ class ConceptResolver:
         concept_names: List[str],
         interval: Optional[pd.Timedelta] = None,
         data_source: Optional['ICUDataSource'] = None,  # 🔧 FIX 2025-01-31: 添加数据源参数
+        materialize_missing_concepts: bool = True,
     ) -> pd.DataFrame:
         """
         将多个概念表以ricu风格合并，实现完整的时间网格对齐和窗口展开
@@ -8548,7 +8623,11 @@ class ConceptResolver:
             time_col=time_col,
             interval_hours=interval_hours,
         )
-        result = self._ensure_requested_concept_columns(result, concept_names)
+        result = self._ensure_requested_concept_columns(
+            result,
+            concept_names,
+            materialize_missing=materialize_missing_concepts,
+        )
         
         # 确保概念列按请求的顺序排列
         final_cols = [id_col, time_col]
