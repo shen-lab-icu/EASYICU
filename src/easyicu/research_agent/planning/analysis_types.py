@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
-from typing import Dict, Iterable, List, Optional, Sequence
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from ..schema import ResearchContext, VariableRole
 
@@ -706,68 +706,98 @@ def strong_trajectory_clustering_framing(text: str) -> bool:
     # therefore not sufficient: require an action that discovers/fits groups or
     # an unambiguous unsupervised procedure.  This keeps context inference aligned
     # with execution routing.
-    discovery_action = re.search(
-        r"\b(?:discover|identify|derive|learn|uncover|fit|perform|run|select|"
-        r"partition|group|cluster)\w*\b",
-        normalised,
-    ) is not None
-    phenotype_target = re.search(
-        r"\b(?:sub[-\s]?phenotypes?|phenotypes?|phenotyping)\b",
-        normalised,
-    ) is not None
-    generic_unsupervised_method = re.search(
-        r"\b(?:clustering|k[-_\s]?means|unsupervised|gmm|"
-        r"gaussian[-_\s]+mixture(?:[-_\s]+models?)?|"
-        r"latent[-_\s]+class(?:es)?[-_\s]+(?:analysis|models?|modeling))\b",
-        normalised,
-    ) is not None
-    explicit_procedure = re.search(
-        r"\b(?:trajectory\s+clustering|unsupervised\s+clustering|"
-        r"k[-_\s]?means(?:[-_\s]+clustering)?|gmm|"
-        r"gaussian[-_\s]+mixture(?:[-_\s]+models?)?|"
-        r"latent[-_\s]+class(?:es)?[-_\s]+(?:analysis|models?|modeling))\b",
-        normalised,
-    ) is not None
-    cluster_action_target = re.search(
-        r"\b(?:cluster|partition|group)\s+(?:the\s+)?"
-        r"(?:[a-z0-9_-]+\s+){0,3}(?:patients?|"
-        r"trajectories?|longitudinal\s+(?:records?|profiles?|features?))\b"
-        r".{0,64}\b(?:using|with|based\s+on|according\s+to|by)\b",
-        normalised,
-    ) is not None
-    cluster_into_groups = re.search(
-        r"\bcluster\b.{0,96}\b(?:patients?|trajectories?|longitudinal\s+"
-        r"(?:records?|profiles?|features?))\b.{0,96}\binto\s+(?:latent\s+)?"
-        r"(?:classes|groups|clusters|phenotypes)\b",
-        normalised,
-    ) is not None
-    imperative_trajectory_clustering = re.search(
-        r"(?:^|[.!?]\s+)(?:please\s+)?(?:cluster|partition|group)\s+"
-        r"(?:[a-z0-9_-]+\s+){0,6}"
-        r"(?:trajectories?|longitudinal\s+(?:records?|profiles?|features?))\b",
-        normalised,
-    ) is not None
-    chinese_discovery_disclaimer = re.search(
-        r"(?:不|无需|避免)(?:进行|作|做|开展|采用|使用)?"
-        r"[^，。；;]{0,12}(?:患者)?(?:表型|亚型|轨迹|患者群)"
-        r"[^，。；;]{0,8}(?:聚类|分群|识别|发现)?"
-        r"|(?:不|无需|避免)(?:进行|作|做|开展)?"
-        r"[^，。；;]{0,8}(?:聚类|分群)"
-        r"[^，。；;]{0,8}(?:患者)?(?:表型|亚型|轨迹|患者群)",
-        normalised,
-    ) is not None
-    chinese_action_target = re.search(
-        r"(?:识别|发现|构建|拟合|学习|划分)"
-        r"[^，。；;]{0,12}(?:患者)?(?:表型|亚型|轨迹|患者群)"
-        r"[^，。；;]{0,6}(?:聚类|分群)?"
-        r"|(?:患者)?(?:表型|亚型|轨迹|患者群)"
-        r"[^，。；;]{0,8}(?:聚类|分群|识别|发现|构建)",
-        normalised,
-    ) is not None
-    chinese_named_grouping = re.search(
-        r"(?:患者)?(?:表型|亚型|轨迹)[^，。；;]{0,4}(?:聚类|分群)",
-        normalised,
-    ) is not None
+    discovery_action = (
+        re.search(
+            r"\b(?:discover|identify|derive|learn|uncover|fit|perform|run|select|"
+            r"partition|group|cluster)\w*\b",
+            normalised,
+        )
+        is not None
+    )
+    phenotype_target = (
+        re.search(
+            r"\b(?:sub[-\s]?phenotypes?|phenotypes?|phenotyping)\b",
+            normalised,
+        )
+        is not None
+    )
+    generic_unsupervised_method = (
+        re.search(
+            r"\b(?:clustering|k[-_\s]?means|unsupervised|gmm|"
+            r"gaussian[-_\s]+mixture(?:[-_\s]+models?)?|"
+            r"latent[-_\s]+class(?:es)?[-_\s]+(?:analysis|models?|modeling))\b",
+            normalised,
+        )
+        is not None
+    )
+    explicit_procedure = (
+        re.search(
+            r"\b(?:trajectory\s+clustering|unsupervised\s+clustering|"
+            r"k[-_\s]?means(?:[-_\s]+clustering)?|gmm|"
+            r"gaussian[-_\s]+mixture(?:[-_\s]+models?)?|"
+            r"latent[-_\s]+class(?:es)?[-_\s]+(?:analysis|models?|modeling))\b",
+            normalised,
+        )
+        is not None
+    )
+    cluster_action_target = (
+        re.search(
+            r"\b(?:cluster|partition|group)\s+(?:the\s+)?"
+            r"(?:[a-z0-9_-]+\s+){0,3}(?:patients?|"
+            r"trajectories?|longitudinal\s+(?:records?|profiles?|features?))\b"
+            r".{0,64}\b(?:using|with|based\s+on|according\s+to|by)\b",
+            normalised,
+        )
+        is not None
+    )
+    cluster_into_groups = (
+        re.search(
+            r"\bcluster\b.{0,96}\b(?:patients?|trajectories?|longitudinal\s+"
+            r"(?:records?|profiles?|features?))\b.{0,96}\binto\s+(?:latent\s+)?"
+            r"(?:classes|groups|clusters|phenotypes)\b",
+            normalised,
+        )
+        is not None
+    )
+    imperative_trajectory_clustering = (
+        re.search(
+            r"(?:^|[.!?]\s+)(?:please\s+)?(?:cluster|partition|group)\s+"
+            r"(?:[a-z0-9_-]+\s+){0,6}"
+            r"(?:trajectories?|longitudinal\s+(?:records?|profiles?|features?))\b",
+            normalised,
+        )
+        is not None
+    )
+    chinese_discovery_disclaimer = (
+        re.search(
+            r"(?:不|无需|避免)(?:进行|作|做|开展|采用|使用)?"
+            r"[^，。；;]{0,12}(?:患者)?(?:表型|亚型|轨迹|患者群)"
+            r"[^，。；;]{0,8}(?:聚类|分群|识别|发现)?"
+            r"|(?:不|无需|避免)(?:进行|作|做|开展)?"
+            r"[^，。；;]{0,8}(?:聚类|分群)"
+            r"[^，。；;]{0,8}(?:患者)?(?:表型|亚型|轨迹|患者群)",
+            normalised,
+        )
+        is not None
+    )
+    chinese_action_target = (
+        re.search(
+            r"(?:识别|发现|构建|拟合|学习|划分)"
+            r"[^，。；;]{0,12}(?:患者)?(?:表型|亚型|轨迹|患者群)"
+            r"[^，。；;]{0,6}(?:聚类|分群)?"
+            r"|(?:患者)?(?:表型|亚型|轨迹|患者群)"
+            r"[^，。；;]{0,8}(?:聚类|分群|识别|发现|构建)",
+            normalised,
+        )
+        is not None
+    )
+    chinese_named_grouping = (
+        re.search(
+            r"(?:患者)?(?:表型|亚型|轨迹)[^，。；;]{0,4}(?:聚类|分群)",
+            normalised,
+        )
+        is not None
+    )
     chinese_discovery = bool(
         not chinese_discovery_disclaimer
         and (chinese_action_target or chinese_named_grouping)
@@ -783,12 +813,15 @@ def strong_trajectory_clustering_framing(text: str) -> bool:
         pattern.search(normalised) is not None
         for pattern in _CLUSTERING_NUISANCE_PATTERNS
     )
-    explicit_discovery_target = re.search(
-        r"\b(?:discover|identify|derive|learn|uncover)\w*\b.{0,64}"
-        r"\b(?:sub[-\s]?phenotypes?|phenotypes?|trajectory\s+clusters?|"
-        r"latent[-\s]+classes?)\b",
-        normalised,
-    ) is not None
+    explicit_discovery_target = (
+        re.search(
+            r"\b(?:discover|identify|derive|learn|uncover)\w*\b.{0,64}"
+            r"\b(?:sub[-\s]?phenotypes?|phenotypes?|trajectory\s+clusters?|"
+            r"latent[-\s]+classes?)\b",
+            normalised,
+        )
+        is not None
+    )
     english_discovery = (
         cluster_action_target
         or cluster_into_groups
@@ -1008,19 +1041,22 @@ def infer_analysis_type(
     # (target trial, propensity, IPTW, ...) still routes to the causal family
     # through explicit_causal_method_framing below, which is what keeps this
     # from silently disarming genuine causal work.
-    causal_disclaimer = re.search(
-        r"\b(?:do\s+not|don't|not|avoid|without)\b.{0,40}\bcausal(?:ity|ly)?\b"
-        r"|\b(?:rather\s+than|instead\s+of|as\s+opposed\s+to)\b"
-        r".{0,30}\bcausal(?:ity|ly)?\b"
-        r"|\bnon-?causal\b"
-        r"|\bcausal\s+(?:claim|conclusion|interpretation)\b.{0,24}\b"
-        r"(?:not|unsupported|avoid)\b"
-        r"|(?:不(?:作|做|进行|用于|支持|解释为?)|避免|无意).{0,24}因果"
-        r"|因果.{0,16}(?:不成立|不支持|不解释)"
-        r"|(?:而非|不是|并非).{0,12}因果",
-        text,
-        flags=re.IGNORECASE,
-    ) is not None
+    causal_disclaimer = (
+        re.search(
+            r"\b(?:do\s+not|don't|not|avoid|without)\b.{0,40}\bcausal(?:ity|ly)?\b"
+            r"|\b(?:rather\s+than|instead\s+of|as\s+opposed\s+to)\b"
+            r".{0,30}\bcausal(?:ity|ly)?\b"
+            r"|\bnon-?causal\b"
+            r"|\bcausal\s+(?:claim|conclusion|interpretation)\b.{0,24}\b"
+            r"(?:not|unsupported|avoid)\b"
+            r"|(?:不(?:作|做|进行|用于|支持|解释为?)|避免|无意).{0,24}因果"
+            r"|因果.{0,16}(?:不成立|不支持|不解释)"
+            r"|(?:而非|不是|并非).{0,12}因果",
+            text,
+            flags=re.IGNORECASE,
+        )
+        is not None
+    )
     explicit_causal_method_framing = any(
         _keyword_present(text, term)
         for term in (
@@ -1046,14 +1082,17 @@ def infer_analysis_type(
         not causal_disclaimer
         and any(_keyword_present(text, term) for term in ("causal", "因果"))
     )
-    survival_disclaimer = re.search(
-        r"\b(?:do\s+not|don't|not|avoid|without)\b.{0,40}"
-        r"\b(?:survival|time[-\s]+to[-\s]+event|cox|kaplan)\b"
-        r"|(?:不(?:作|做|进行|采用|使用)|避免|无需).{0,20}"
-        r"(?:生存分析|时间到事件|cox|kaplan)",
-        text,
-        flags=re.IGNORECASE,
-    ) is not None
+    survival_disclaimer = (
+        re.search(
+            r"\b(?:do\s+not|don't|not|avoid|without)\b.{0,40}"
+            r"\b(?:survival|time[-\s]+to[-\s]+event|cox|kaplan)\b"
+            r"|(?:不(?:作|做|进行|采用|使用)|避免|无需).{0,20}"
+            r"(?:生存分析|时间到事件|cox|kaplan)",
+            text,
+            flags=re.IGNORECASE,
+        )
+        is not None
+    )
     # Survival vocabulary spent on cohort eligibility does not get a vote. A
     # real run routed a prevalence-and-association question to the survival
     # family on a single occurrence of the word, inside the clause "the
@@ -1132,16 +1171,16 @@ def infer_analysis_type(
         _has_any("data_quality_audit")
         and not cohort_sensitivity_framed
         and not any(
-        _has_any(key)
-        for key in (
-            "association_study",
-            "prediction_model",
-            "causal_inference",
-            "trajectory_clustering",
-            "reinforcement_learning",
-            "measurement_bias_audit",
-            "score_policy_sensitivity",
-        )
+            _has_any(key)
+            for key in (
+                "association_study",
+                "prediction_model",
+                "causal_inference",
+                "trajectory_clustering",
+                "reinforcement_learning",
+                "measurement_bias_audit",
+                "score_policy_sensitivity",
+            )
         )
     ):
         return _REGISTRY["data_quality_audit"]
@@ -1202,7 +1241,18 @@ def infer_analysis_type(
     has_multimodal_variable = any(
         _keyword_present(((v.name or "") + " " + (v.description or "")).lower(), token)
         for v in context.variables
-        for token in ("note", "notes", "text", "waveform", "ecg", "image", "imaging", "cxr", "ct", "mri")
+        for token in (
+            "note",
+            "notes",
+            "text",
+            "waveform",
+            "ecg",
+            "image",
+            "imaging",
+            "cxr",
+            "ct",
+            "mri",
+        )
     )
     if has_multimodal_variable:
         scores["multimodal"] += 2
@@ -1210,11 +1260,7 @@ def infer_analysis_type(
         scores["validation"] += 1
         scores["cross_database_replication"] += 2
 
-    if (
-        target_outcome
-        and _has_any("association_study")
-        and not has_multimodal_variable
-    ):
+    if target_outcome and _has_any("association_study") and not has_multimodal_variable:
         # An explicit association/effect question is stronger evidence than the
         # mere presence of an outcome column.  More specialised families have
         # already returned above, so this only prevents the generic descriptive
@@ -1236,26 +1282,62 @@ def infer_analysis_type(
     return _REGISTRY[best_key]
 
 
-def planner_analysis_type_guide() -> str:
+#: Detail levels for :func:`planner_analysis_type_guide`, most complete first.
+#:
+#: The catalog is a menu: its job is to let the Planner *choose* a family.  The
+#: chosen family's modules and guardrails are restated in full by
+#: :func:`locked_analysis_type_guide`, so a shortened catalog still leaves the
+#: inferred family fully specified -- what it costs is detail on the families
+#: the Planner might switch TO.  That is why the ladder shortens rather than
+#: drops entries: every family stays selectable at every level.
+#:
+#: Measured 2026-07-30 on the real catalog (16 entries, 8,046 bytes):
+#: ``full`` 8,046, ``without_guardrails`` 5,631 (-2,415), ``names_only`` 2,504
+#: (-5,542).
+CATALOG_DETAIL_LADDER: Tuple[str, ...] = (
+    "full",
+    "without_guardrails",
+    "names_only",
+)
+
+
+def planner_analysis_type_guide(*, detail: str = "full") -> str:
     """Short prompt block for the planner.
 
     The guide intentionally presents task families and candidate steps,
     not mandatory recipes.
+
+    ``detail`` selects a rung of :data:`CATALOG_DETAIL_LADDER`.  Callers under
+    transport pressure descend it instead of failing the whole task; nothing
+    else may vary it, because a catalog that changes with anything other than
+    the byte budget would make the Planner's menu depend on a hidden decision.
     """
+    if detail not in CATALOG_DETAIL_LADDER:
+        raise ValueError(
+            f"unknown analysis-type catalog detail {detail!r}; "
+            f"expected one of {CATALOG_DETAIL_LADDER}"
+        )
     lines = [
         "ANALYSIS-TYPE CATALOG:",
         "First infer the task family from the research question. Treat the entries below as candidate modules, not mandatory fixed recipes.",
     ]
     for spec in list_analysis_types():
-        lines.append(
-            f"- {spec.key}: {spec.description} "
-            f"Common modules: {', '.join(spec.candidate_steps)}. "
-            f"Guardrails: {' '.join(spec.guardrails)}"
-        )
+        entry = f"- {spec.key}: {spec.description}"
+        if detail != "names_only":
+            entry += f" Common modules: {', '.join(spec.candidate_steps)}."
+        if detail == "full":
+            entry += f" Guardrails: {' '.join(spec.guardrails)}"
+        lines.append(entry)
     lines.append(
         "Choose only the steps justified by the task family and available context. "
         "Do not force Table 1, outcome incidence, missingness, or score-specific QC unless they serve the question."
     )
+    if detail != "full":
+        lines.append(
+            "This catalog was shortened to fit the request budget; ask for a "
+            "family's guardrails through the inferred-family block above rather "
+            "than assuming it has none."
+        )
     return "\n".join(lines)
 
 
