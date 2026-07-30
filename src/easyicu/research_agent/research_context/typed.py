@@ -1031,7 +1031,15 @@ def raw_contract_inputs_for_step(
     planner_declared_inputs: Sequence[str],
     primary_cohort_execution_receipt: Optional[Mapping[str, Any]],
 ) -> tuple[str, ...]:
-    """Add only host-resolved cohort predicates to exact Planner inputs."""
+    """Add only host-resolved cohort predicates to exact Planner inputs.
+
+    A predicate coordinate is whichever column the host's mask actually read.
+    For a predicate the host narrowed to an event-time window that is two
+    columns, not one, so the event-time column is authorized on the same
+    footing as ``resolved_column``: the Coder is asked to reproduce that
+    predicate's counts, and it cannot do so from a column it has no contract
+    for. Rows without the field are unrefined and add nothing.
+    """
 
     names = [str(value) for value in planner_declared_inputs]
     if primary_cohort_execution_receipt is None:
@@ -1046,19 +1054,21 @@ def raw_contract_inputs_for_step(
             raise MaterializedMetadataError(
                 "primary cohort execution receipt contains an invalid predicate"
             )
-        resolved_column = row.get("resolved_column")
-        if resolved_column is None:
-            continue
-        if not (
-            isinstance(resolved_column, str)
-            and resolved_column.strip()
-            and ":" not in resolved_column
+        for field, reason in (
+            ("resolved_column", "resolved column"),
+            ("event_time_column", "predicate event-time column"),
         ):
-            raise MaterializedMetadataError(
-                "primary cohort execution receipt has an invalid resolved column"
-            )
-        if resolved_column not in names:
-            names.append(resolved_column)
+            column = row.get(field)
+            if column is None:
+                continue
+            if not (
+                isinstance(column, str) and column.strip() and ":" not in column
+            ):
+                raise MaterializedMetadataError(
+                    f"primary cohort execution receipt has an invalid {reason}"
+                )
+            if column not in names:
+                names.append(column)
     return tuple(names)
 
 

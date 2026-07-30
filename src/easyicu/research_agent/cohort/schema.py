@@ -17,6 +17,7 @@ import hashlib
 import json
 import math
 import re
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
@@ -1323,6 +1324,7 @@ def _build_cohort_with_flow(
             "n_before": int(len(data)),
             "n_excluded": 0,
             "n_remaining": int(len(data)),
+            **_event_time_flow_fields(None),
         }
     ]
     ordered = [
@@ -1331,7 +1333,7 @@ def _build_cohort_with_flow(
     ]
     for order, (kind, predicate) in enumerate(ordered, start=1):
         before = int(mask.sum())
-        predicate_mask = _predicate_mask(
+        predicate_mask, event_time_window = _predicate_mask(
             data,
             predicate,
             column_bindings=column_bindings,
@@ -1356,6 +1358,10 @@ def _build_cohort_with_flow(
                 "n_before": before,
                 "n_excluded": before - remaining,
                 "n_remaining": remaining,
+                # The mask above is the only authority on what this predicate
+                # did; the same call that built it reports the window it used,
+                # so the ledger cannot describe a filter that was not applied.
+                **_event_time_flow_fields(event_time_window),
             }
         )
     return data.loc[mask].copy(), flow
@@ -1422,7 +1428,7 @@ def _predicate_mask(
     pred: ConceptPredicate,
     *,
     column_bindings: Optional[Dict[str, str]] = None,
-) -> Any:
+) -> tuple[Any, Optional["AppliedEventTimeWindow"]]:
     if pred.aggregation not in _IMPLEMENTED_AGGREGATIONS:
         raise NotImplementedError(
             f"aggregation {pred.aggregation!r} is not implemented by the CTAS "
@@ -1445,9 +1451,56 @@ def _predicate_mask(
     return _refine_occurrence_mask_by_event_time(data, pred, mask)
 
 
+@dataclass(frozen=True)
+class AppliedEventTimeWindow:
+    """The event-time window a predicate mask actually consulted.
+
+    The attrition ledger publishes ``resolved_column``, ``op`` and ``value``,
+    and the Coder authority prompt tells the Coder to reproduce the recorded
+    before/excluded/remaining counts from them. For a predicate that
+    ``_refine_occurrence_mask_by_event_time`` narrowed, those three fields are
+    not the whole predicate: the mask also consulted a second column. Correct
+    generated code then computes a different count and fails closed, which is
+    the right behaviour against a receipt that under-describes its own filter.
+
+    So the owner that applies the refinement is the owner that describes it:
+    this record is produced by the same call that builds the mask and is
+    written straight into the ledger row, leaving no second place for the two
+    to drift apart. ``None`` means the predicate was applied exactly as the
+    ledger's ordinary fields state.
+    """
+
+    event_time_column: str
+    start_offset_hours: float
+    end_offset_hours: float
+
+
+def _event_time_flow_fields(
+    refinement: Optional[AppliedEventTimeWindow],
+) -> Dict[str, Any]:
+    """Render one refinement as flat ledger fields.
+
+    Flat rather than nested because every other field of a flow row is flat and
+    the same rows are written verbatim to ``<stem>_flow.csv`` through
+    ``pd.DataFrame``; a nested object would land in that CSV as a repr string.
+    Unrefined predicates carry the keys with ``None`` so the ledger's schema
+    does not depend on which predicates a plan happened to declare.
+    """
+
+    return {
+        "event_time_column": refinement.event_time_column if refinement else None,
+        "event_time_start_hours": (
+            float(refinement.start_offset_hours) if refinement else None
+        ),
+        "event_time_end_hours": (
+            float(refinement.end_offset_hours) if refinement else None
+        ),
+    }
+
+
 def _refine_occurrence_mask_by_event_time(
     data: Any, pred: ConceptPredicate, mask: Any
-) -> Any:
+) -> tuple[Any, Optional[AppliedEventTimeWindow]]:
     """Intersect an event-occurrence predicate with its event-time window.
 
     ``build_cohort`` filters an already-materialised wide table and, by design,
@@ -1465,29 +1518,43 @@ def _refine_occurrence_mask_by_event_time(
     column is refined. Magnitude filters (age>=18, los>=1) and concepts without
     an event-time column are untouched, so association runs with no event-time
     columns behave exactly as before.
+
+    Returns the mask together with the window it consulted, or ``None`` when the
+    predicate was left exactly as its ordinary fields describe it. Every early
+    return below is a case the ledger's ``resolved_column``/``op``/``value``
+    already describe on their own.
+
+    ``pred.time_window`` and its ``end_offset_hours`` are taken as given:
+    ``ConceptPredicate.__post_init__`` refuses a predicate without a window and
+    ``TimeWindow.end_offset_hours`` is a required float, so guarding them here
+    only hid a broken invariant behind a silently unrefined mask. An infinite
+    end is a different matter -- ``_coerce_offset`` accepts ``"inf"`` for a
+    deliberately unbounded window, which refines nothing and could not be
+    published as a finite bound.
     """
     tw = pred.time_window
-    if tw is None:
-        return mask
     if pred.op != "==" or pred.value in (0, 0.0, False, None):
-        return mask
-    end = tw.end_offset_hours
-    if end is None or not math.isfinite(float(end)):
-        return mask
+        return mask, None
+    end = float(tw.end_offset_hours)
+    if not math.isfinite(end):
+        return mask, None
     event_time_col = f"{pred.concept_id}_time"
     if event_time_col not in data.columns:
-        return mask
+        return mask, None
     event_time = data[event_time_col]
-    in_window = (event_time >= float(tw.start_offset_hours)) & (
-        event_time <= float(end)
-    )
+    start = float(tw.start_offset_hours)
+    in_window = (event_time >= start) & (event_time <= end)
     # NaN event time (no event) -> not in window; keep the row's occurrence flag
     # from deciding membership only when the event genuinely falls in the window.
     try:
         in_window = in_window.fillna(False)
     except Exception:
         pass
-    return mask & in_window
+    return mask & in_window, AppliedEventTimeWindow(
+        event_time_column=event_time_col,
+        start_offset_hours=start,
+        end_offset_hours=end,
+    )
 
 
 def _apply_op(series: Any, op: str, value: Any) -> Any:
