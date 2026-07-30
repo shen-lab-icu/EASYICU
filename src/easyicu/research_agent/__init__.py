@@ -69,6 +69,7 @@ __all__ = [
     # Schemas
     "ResearchContext",
     "ConceptDescriptor",
+    "EndpointSpec",
     "FixedWindowTrajectoryMetadata",
     "ClusterSelectionCandidate",
     "ClusterSelectionManifest",
@@ -458,6 +459,7 @@ __all__ = [
 from .schema import (
     ResearchContext,
     ConceptDescriptor,
+    EndpointSpec,
     FixedWindowTrajectoryMetadata,
     ClusterSelectionCandidate,
     ClusterSelectionManifest,

@@ -608,6 +608,219 @@ class UserPreferences(BaseModel):
     extra_notes: Optional[str] = None
 
 
+EndpointKind = Literal[
+    "binary",
+    "continuous",
+    "count",
+    "ordinal",
+    "time_to_event",
+    "repeated_measures",
+]
+
+EndpointAbsenceSemantics = Literal[
+    # A positive-only source: an analysis unit with no row did not have the
+    # event.  Declaring this is what makes a zero count legible as a real zero.
+    "absent_row_is_no_event",
+    # An analysis unit with no row was never assessed.  A denominator built
+    # from these rows measures ascertainment, not incidence.
+    "absent_row_is_unmeasured",
+    # Every analysis unit carries an explicit value; absence cannot occur.
+    "no_absent_rows",
+]
+
+
+class EndpointSpec(BaseModel):
+    """What the study's endpoint *is*, declared once instead of inferred.
+
+    The typed context has always been able to say that ``death`` is an
+    ``OUTCOME`` of dtype ``int64`` and that ``death_time`` is a ``TIME`` of
+    dtype ``float64``.  It has never been able to say whether the endpoint of
+    *this study* is the binary flag or the time-to-event pair those two columns
+    would form together -- that pairing simply did not exist in the type system,
+    so it could only be guessed from a ``_time`` suffix.
+
+    Four separately-patched defects were the same missing type:
+
+    * a landmark phrase ("must survive to 24 hours") re-typed a binary mortality
+      study as a survival study, because nothing could contradict the words;
+    * an outcome value outside the declared set was silently counted as
+      "did not happen", because the level set was not closed;
+    * a positive-only event's absent rows were read as real negatives, because
+      absence had no declared meaning;
+    * a time column was used with no declared origin, so negative event times
+      and events before time zero passed through.
+
+    Declaring the endpoint removes the guess.  Nothing here may be
+    reverse-inferred from a column-name suffix, a pandas dtype, or the order the
+    columns arrived in -- those are exactly the signals that produced the four
+    defects, and a validator here that consulted them would reintroduce them.
+
+    ``absence_semantics`` has no default on purpose.  A default would answer,
+    on the declarer's behalf, the one question that distinguishes "the event did
+    not occur" from "nobody looked" -- and the wrong answer there changes an
+    incidence into an ascertainment rate without changing a single number's
+    appearance.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str
+    kind: EndpointKind
+    absence_semantics: EndpointAbsenceSemantics
+    levels: Optional[List[Any]] = Field(
+        default=None,
+        description=(
+            "Closed level set. Required for binary (exactly two) and ordinal "
+            "(two or more, in order). Forbidden for every other kind."
+        ),
+    )
+    event_column: Optional[str] = None
+    time_column: Optional[str] = None
+    time_origin: Optional[str] = Field(
+        default=None,
+        description=(
+            "What t=0 means for time_column, stated explicitly (e.g. "
+            "'icu_admission'). Never inferred."
+        ),
+    )
+    censoring_rule: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _validate_kind_closure(self) -> "EndpointSpec":
+        if not self.name.strip():
+            raise ValueError("EndpointSpec.name must be a non-empty column name")
+
+        # The fields split along two independent axes rather than one
+        # "time_to_event or not" switch. Collapsing them was an over-restriction
+        # that only a mortality-association study would never notice: a
+        # repeated-measures endpoint genuinely has a time axis, and refusing to
+        # let it declare one puts the time column straight back into the
+        # guessing that this type exists to end.
+        TIME_AXIS_KINDS = {"time_to_event", "repeated_measures"}
+        EVENT_KINDS = {"time_to_event"}
+        # Kinds whose values form a closed set. ``time_to_event`` belongs here:
+        # its event column carries the event *type*, and a competing-risks
+        # design (extubation vs. death vs. tracheostomy) is exactly a closed set
+        # of codes. Leaving it out meant a competing-risks endpoint could not be
+        # declared at all, and an unlisted event code would land in the same
+        # silent non-event hole M1 closed for binary outcomes.
+        CLOSED_LEVEL_KINDS = {"binary", "ordinal", "time_to_event"}
+
+        axis_fields = {"time_column": self.time_column, "time_origin": self.time_origin}
+        event_fields = {
+            "event_column": self.event_column,
+            "censoring_rule": self.censoring_rule,
+        }
+
+        def _blank(value: Optional[str]) -> bool:
+            return value is None or not str(value).strip()
+
+        if self.kind in TIME_AXIS_KINDS:
+            missing = sorted(field for field, v in axis_fields.items() if _blank(v))
+            if missing:
+                raise ValueError(
+                    f"a {self.kind} endpoint must declare "
+                    + ", ".join(missing)
+                    + "; these are never inferred from column names or dtypes"
+                )
+        else:
+            present = sorted(field for field, v in axis_fields.items() if v is not None)
+            if present:
+                raise ValueError(
+                    f"a {self.kind} endpoint has no time axis, so it must not "
+                    "declare " + ", ".join(present)
+                )
+
+        if self.kind in EVENT_KINDS:
+            missing = sorted(field for field, v in event_fields.items() if _blank(v))
+            if missing:
+                raise ValueError(
+                    f"a {self.kind} endpoint must declare "
+                    + ", ".join(missing)
+                    + "; these are never inferred from column names or dtypes"
+                )
+        else:
+            present = sorted(
+                field for field, v in event_fields.items() if v is not None
+            )
+            if present:
+                raise ValueError(
+                    f"a {self.kind} endpoint has no event/censoring structure, so "
+                    "it must not declare " + ", ".join(present)
+                )
+
+        if self.kind in CLOSED_LEVEL_KINDS:
+            if self.levels is None:
+                raise ValueError(
+                    f"a {self.kind} endpoint must declare its closed level set; "
+                    "an undeclared value must stop the step, not be counted as "
+                    "a non-event"
+                )
+            levels = _closed_table_one_levels(
+                self.levels, label=f"EndpointSpec({self.name}) levels"
+            )
+            if self.kind == "binary" and len(levels) != 2:
+                raise ValueError(
+                    "a binary endpoint must declare exactly two levels, got "
+                    f"{len(levels)}"
+                )
+            if self.kind == "ordinal" and len(levels) < 2:
+                raise ValueError(
+                    "an ordinal endpoint must declare at least two ordered levels"
+                )
+            if self.kind == "time_to_event" and len(levels) < 2:
+                # One censored code plus at least one event type. A
+                # competing-risks design declares one code per competing event,
+                # so the closed set is what distinguishes it from a single-event
+                # design -- declared, not counted from the data.
+                raise ValueError(
+                    "a time_to_event endpoint must declare the closed set of "
+                    "event_column codes: the censored code plus one code per "
+                    "event type (a competing-risks design declares one each)"
+                )
+            # ``_closed_table_one_levels`` separates levels by type as well as
+            # by value, which is what M1 needs so an unexpected value cannot
+            # impersonate a declared one. An endpoint needs the stronger
+            # property: the levels must also be distinguishable *in the data*.
+            # ``[0, False]`` passes the typed check and is still unusable --
+            # a column compared against 0 matches both -- so an endpoint whose
+            # levels collide by value is rejected here rather than silently
+            # collapsing one arm of the contrast.
+            for index, level in enumerate(levels):
+                for other in levels[index + 1 :]:
+                    try:
+                        collides = bool(level == other)
+                    except Exception:  # pragma: no cover - exotic __eq__
+                        collides = False
+                    if collides:
+                        raise ValueError(
+                            f"EndpointSpec({self.name}) declares levels {level!r} "
+                            f"and {other!r} that compare equal; the data cannot "
+                            "tell them apart"
+                        )
+        elif self.levels is not None:
+            raise ValueError(
+                f"a {self.kind} endpoint has no closed level set; remove levels"
+            )
+        return self
+
+    def declared_columns(self) -> tuple[str, ...]:
+        """Every cohort column this declaration binds, in declaration order.
+
+        The caller checks these against the verified materialized cohort. That
+        check is the receipt: a declaration naming a column the cohort does not
+        have is a fail-closed error, not a warning.
+        """
+        names = [self.name]
+        for column in (self.event_column, self.time_column):
+            if column is not None:
+                names.append(column)
+        seen: dict[str, None] = {}
+        for name in names:
+            seen.setdefault(name, None)
+        return tuple(seen)
+
+
 RESEARCH_CONTEXT_SCHEMA_VERSION = "easyicu.research_context/1"
 
 # Field set that constitutes the immutable schema. A test under
@@ -624,6 +837,7 @@ RESEARCH_CONTEXT_FIELDS: tuple = (
     "time_windows",
     "temporal_constraints",
     "target_outcome",
+    "endpoint",
     "primary_exposure",
     "cross_database_validation",
     "cohort_parquet",
@@ -665,6 +879,17 @@ class ResearchContext(BaseModel):
     target_outcome: Optional[str] = Field(
         default=None,
         description="Name of the primary outcome column.",
+    )
+    endpoint: Optional[EndpointSpec] = Field(
+        default=None,
+        description=(
+            "What the endpoint named by target_outcome IS -- binary flag, "
+            "time-to-event pair, ordinal score -- declared once at context "
+            "construction. Never reverse-inferred from a column-name suffix, a "
+            "dtype, or input order. Optional so existing contexts still load; "
+            "consumers that need the type must fail closed when it is absent "
+            "rather than guess, which is the guessing this field exists to end."
+        ),
     )
     primary_exposure: Optional[str] = Field(
         default=None,
