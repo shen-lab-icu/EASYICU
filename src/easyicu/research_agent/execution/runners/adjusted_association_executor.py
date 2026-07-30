@@ -40,6 +40,7 @@ from typing import Any, Dict, Optional, Sequence
 
 from ...authority.plausibility import FlagOnlyPlausibilityScope
 from ...contracts.host_scaffold import HostScaffoldedScript
+from ...contracts.ownership_verdict import OwnershipVerdict
 from ...robustness.estimators import fit_estimator
 from ...schema import (
     ADJUSTED_ASSOCIATION_BINARY_METHOD_FAMILIES,
@@ -54,18 +55,25 @@ from .plausibility_receipt import render_standard_plausibility_receipt_code
 from .typed_input_binding import load_step_cohort_frame, sole_typed_cohort_input
 
 __all__ = [
+    "ADJUSTED_ASSOCIATION_ANALYSIS_KIND",
     "ADJUSTED_ASSOCIATION_ESTIMATES_COLUMNS",
     "ADJUSTED_ASSOCIATION_OUTPUT",
     "AdjustedAssociationError",
     "adjusted_association_executor_code",
     "adjusted_association_executor_owns_step",
     "adjusted_association_executor_scaffold",
+    "adjusted_association_executor_verdict",
     "run_adjusted_association_from_env",
 ]
 
 ADJUSTED_ASSOCIATION_OUTPUT = (
     f"{PLANNED_MODEL_REQUIREMENTS_OUTPUT_KIND}:{PLANNED_MODEL_REQUIREMENTS_OUTPUT}"
 )
+
+#: The ``analysis_kind`` this owner reports, in selection and in its verdict.
+#: One declaration, because a retyped kind literal is how two layers end up
+#: disagreeing about which owner produced an artifact (see task #95/N6).
+ADJUSTED_ASSOCIATION_ANALYSIS_KIND = PLANNED_MODEL_REQUIREMENTS_OUTPUT
 _TABLE_FILENAME = "adjusted_association_estimates.csv"
 
 #: The exact header. The first six are what ``bind_primary_output`` reads; the
@@ -173,7 +181,7 @@ def _effect_scale(kind: str) -> str:
     return "odds_ratio" if kind == "logistic" else "coefficient"
 
 
-def adjusted_association_executor_owns_step(step: AnalysisStep) -> bool:
+def adjusted_association_executor_verdict(step: AnalysisStep) -> OwnershipVerdict:
     """Own only a single, completely declared adjusted-association model.
 
     Every clause is a thing the host would otherwise have to decide:
@@ -188,29 +196,112 @@ def adjusted_association_executor_owns_step(step: AnalysisStep) -> bool:
       method's name;
     * one typed cohort input at most, so the frame that was analysed is the
       digest-bound one.
+
+    The clauses are unchanged from when this returned ``bool``; what is new is
+    that each one says *which kind* of decline it is.  Measured over 553
+    recorded steps, 54 of the 59 declines here were a field the Planner simply
+    never filled in -- and a bool sent every one of them to the coder without
+    telling anyone.  See :mod:`..contracts.ownership_verdict`.
+
+    Two clauses are deliberately **not** reported as incomplete declarations,
+    because more declaring is not what would fix them:
+
+    * a step bundling this product with others is task #105's question of
+      whether an owner's claim may depend on Planner bundling at all, and
+      calling it "missing" would misname an over-declaration;
+    * more than one typed input, or an unimplemented estimator family, are
+      contracts this owner does not have.
     """
 
     method = _normalise_model_contract_token(
         str(step.method or "").lower().split(" with ", 1)[0]
     )
     if method != PLANNED_MODEL_REQUIREMENTS_STEP_METHOD:
-        return False
-    if [str(value or "").strip() for value in step.expected_outputs or []] != [
-        ADJUSTED_ASSOCIATION_OUTPUT
-    ]:
-        return False
-    requirement = _requirement(step)
-    if requirement is None or requirement.covariates is None:
-        return False
+        return OwnershipVerdict.wrong_shape(
+            ADJUSTED_ASSOCIATION_ANALYSIS_KIND,
+            reason=f"step method {method!r} is not {PLANNED_MODEL_REQUIREMENTS_STEP_METHOD!r}",
+        )
+    declared_outputs = [
+        str(value or "").strip() for value in step.expected_outputs or []
+    ]
+    if declared_outputs != [ADJUSTED_ASSOCIATION_OUTPUT]:
+        return OwnershipVerdict.wrong_shape(
+            ADJUSTED_ASSOCIATION_ANALYSIS_KIND,
+            reason=(
+                f"step declares {len(declared_outputs)} expected output(s), not "
+                f"exactly [{ADJUSTED_ASSOCIATION_OUTPUT}]"
+            ),
+        )
+    requirements = list(step.model_requirements or [])
+    if not requirements:
+        return OwnershipVerdict.incomplete_declaration(
+            ADJUSTED_ASSOCIATION_ANALYSIS_KIND,
+            missing=("model_requirements",),
+            reason=(
+                "the step declares the primary adjusted-association product but "
+                "no model requirement, so the outcome, outcome type, method "
+                "family and exposure are undeclared"
+            ),
+        )
+    if len(requirements) != 1:
+        return OwnershipVerdict.wrong_shape(
+            ADJUSTED_ASSOCIATION_ANALYSIS_KIND,
+            reason=(
+                f"step declares {len(requirements)} model requirements; a "
+                "multi-model step is a different product shape"
+            ),
+        )
+    requirement = requirements[0]
+    if requirement.covariates is None:
+        return OwnershipVerdict.incomplete_declaration(
+            ADJUSTED_ASSOCIATION_ANALYSIS_KIND,
+            missing=("model_requirements[0].covariates",),
+            reason=(
+                "the model requirement declares no adjustment set, and "
+                "reconstructing one from step.inputs would be inference"
+            ),
+        )
     if not _estimator_kind(requirement):
-        return False
+        return OwnershipVerdict.wrong_shape(
+            ADJUSTED_ASSOCIATION_ANALYSIS_KIND,
+            reason=(
+                f"method family {requirement.method_family!r} for outcome type "
+                f"{requirement.outcome_type!r} is not an estimator this owner implements"
+            ),
+        )
     if sole_typed_cohort_input(step) == "":
-        return False
-    return not (
-        step.table_one_spec is not None
-        or step.trajectory_stability_spec is not None
-        or step.exposure_outcome_distribution_spec is not None
+        return OwnershipVerdict.wrong_shape(
+            ADJUSTED_ASSOCIATION_ANALYSIS_KIND,
+            reason=(
+                "the step declares more than one typed input, or one this "
+                "executor family does not support"
+            ),
+        )
+    for spec_name in (
+        "table_one_spec",
+        "trajectory_stability_spec",
+        "exposure_outcome_distribution_spec",
+    ):
+        if getattr(step, spec_name) is not None:
+            return OwnershipVerdict.wrong_shape(
+                ADJUSTED_ASSOCIATION_ANALYSIS_KIND,
+                reason=f"the step also declares {spec_name}, which another owner claims",
+            )
+    return OwnershipVerdict.claim(
+        ADJUSTED_ASSOCIATION_ANALYSIS_KIND,
+        reason="a single, completely declared adjusted-association model",
     )
+
+
+def adjusted_association_executor_owns_step(step: AnalysisStep) -> bool:
+    """Bool view of :func:`adjusted_association_executor_verdict`.
+
+    It delegates rather than re-testing the clauses: two copies of one
+    ownership rule drifting apart is the defect shape this package keeps
+    paying for.
+    """
+
+    return adjusted_association_executor_verdict(step).claimed
 
 
 def adjusted_association_executor_scaffold(
