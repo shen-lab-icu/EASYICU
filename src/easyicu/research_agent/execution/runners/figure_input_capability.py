@@ -24,9 +24,24 @@ What this deliberately does **not** relax:
   different question than the plan promised.
 * Duplicates are refused.  Two identical keys cannot both be bound, and taking
   the set would hide the contradiction.
-* The declared inputs and the consumption contracts must be the same set.  A
-  contract for an input that is not declared, or an input with no contract, is
-  a plan that has not decided what it reads.
+* A contract for an input that is not declared is refused.  It is a plan that
+  has not decided what it reads.
+* Every declared input that *has rows* must carry one.  A contract for a
+  row-bearing input is the plan saying it consumes the whole thing rather than
+  a subset, which is the decision this check exists to force.
+
+  Which inputs owe one is ``schema.inputs_owing_a_consumption_contract`` --
+  the same function ``AnalysisStep`` validates with, deliberately not a second
+  copy.  A ``statistic:`` input owes nothing, because the product is one finite
+  number in a JSON sidecar and ``mode="all_rows"`` over it decides nothing.
+
+  This module used to answer that question itself and answered it more
+  strictly, demanding a contract for *every* declared input.  A step that
+  satisfied the schema was then refused by the capability sitting behind it, so
+  the renderer declined without a word and the figure went to the Coder.
+  Measured 2026-07-30: 7 of 21 visualization steps lost their owner that way,
+  and in 100% of them the inputs without a contract were exactly the
+  statistics.
 
 Marking an input optional is a claim about the *renderer*: that its code path
 produces a correct figure when that binding is absent.  Declaring an input
@@ -40,6 +55,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Iterable, Sequence
+
+from ...schema import inputs_owing_a_consumption_contract
 
 __all__ = [
     "TypedInputCapability",
@@ -99,11 +116,18 @@ class TypedInputCapability:
 
 
 def _contracts_match(contracts: Iterable[Any], declared: Sequence[str]) -> bool:
-    """Every declared input is consumed whole, once, and nothing else is."""
+    """Every input that owes a contract has one, whole and once, and only those.
+
+    Which inputs owe one is not decided here.  ``AnalysisStep`` already
+    validated it for every visualization step, and this asks the same function
+    so the two answers cannot drift -- which they had.
+    """
 
     consumption = list(contracts)
     keys = [str(contract.input_key or "").strip() for contract in consumption]
-    if len(keys) != len(declared) or set(keys) != set(declared):
+    if len(keys) != len(set(keys)):
+        return False
+    if set(keys) != inputs_owing_a_consumption_contract(declared):
         return False
     return all(
         contract.mode == "all_rows"
