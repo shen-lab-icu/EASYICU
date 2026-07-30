@@ -141,6 +141,10 @@ from ..gates.concept import (
     quarantined_errors_superseded_by_current_policy as _quarantined_errors_superseded_by_current_policy,
 )
 from ..gates.plausibility_receipt import plausibility_audit_receipt_findings
+from ..gates.owner_declaration import (
+    owner_declaration_plan_findings,
+    owner_declaration_replan_directive,
+)
 from ..gates.plan_declared_inputs import declared_raw_input_plan_findings
 from ..authority.coder_authority import HostCoderAuthority
 from ..authority.plausibility import (
@@ -4816,6 +4820,7 @@ def run_execute_phase(
             plan=plan,
             context=context,
         )
+        owner_declaration_preflight = owner_declaration_plan_findings(plan=plan)
         trajectory_directive = None
         typed_plan_directive = None
         declared_input_directive = None
@@ -4901,6 +4906,9 @@ def run_execute_phase(
                     default=str,
                 )
             )
+        owner_declaration_directive = owner_declaration_replan_directive(
+            owner_declaration_preflight
+        )
         plan = _maybe_replan(
             current_plan=plan,
             reason="probe_summary",
@@ -4913,6 +4921,7 @@ def run_execute_phase(
                     primary_cohort_directive,
                     trajectory_directive,
                     declared_input_directive,
+                    owner_declaration_directive,
                 )
                 if directive
             )
@@ -4922,6 +4931,7 @@ def run_execute_phase(
                 or primary_cohort_preflight
                 or trajectory_preflight
                 or declared_input_preflight
+                or owner_declaration_preflight
             ),
         )
 
