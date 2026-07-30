@@ -155,11 +155,20 @@ def robustness_replay_declaration_verdict(step: AnalysisStep) -> OwnershipVerdic
       constant emittability uses.  Including ``figure:`` would over-claim --
       ``figure:robustness_summary`` is the *sole* trigger on 5 recorded steps
       and this runner writes no figures.
-    * A step that already carries a spec is never reported here, even when the
-      spec does not back every declared product (4 recorded steps).  The
-      Planner did answer; whether a coverage shortfall should also become a
-      refusal is a separate question, and the existing design deliberately gave
-      it the safe answer of leaving the step unowned.
+    * A coverage shortfall *is* reported, as of 2026-07-30.  The earlier design
+      deliberately left it silent -- "the Planner did answer" -- and the cost of
+      that safe answer has now been measured: on today's post-fix plans, 5 of
+      the 6 robustness steps carrying a spec declare one it does not back, and
+      every one of them goes to the Coder without the host ever saying why.
+      The shortfall names the missing entries, so it is a declaration gap in
+      exactly the sense this verdict exists to report.
+
+      It composes with the product-promise gate rather than fighting it.  A step
+      whose promise also collides (``statistic:x`` plus ``table:x``) receives
+      both directives in one replan: remove the surplus kind, then map what
+      remains.  Satisfying them in that order is possible -- verified against
+      the real ``07_missingness_robustness_replay``, whose five surviving
+      products are all outputs this runner emits.
 
     This owner does not claim.  No recorded step is emittable today, so a claim
     path could not be exercised by any real plan, and the runner is already
@@ -169,11 +178,46 @@ def robustness_replay_declaration_verdict(step: AnalysisStep) -> OwnershipVerdic
     """
 
     if step.robustness_replay_spec is not None:
-        return OwnershipVerdict.wrong_shape(
+        if robustness_replay_spec_is_emittable(step):
+            return OwnershipVerdict.wrong_shape(
+                ROBUSTNESS_REPLAY_ANALYSIS_KIND,
+                reason=(
+                    "the step declares a robustness replay spec that backs every "
+                    "product it promises; there is no declaration gap to report"
+                ),
+            )
+        unbacked = sorted(
+            product
+            for product in (
+                str(value or "").strip().partition(":")[2]
+                for value in step.expected_outputs or []
+            )
+            if product
+            and step.robustness_replay_spec.output_for(product) is None
+        )
+        if not unbacked:
+            # Every promised product IS named, so the shortfall is something
+            # this verdict cannot close by asking for more entries -- a kind
+            # outside the runner's surface, or one bare name promised twice,
+            # which the product-promise gate owns. Reporting a missing entry
+            # here would demand work that leaves the step exactly as unowned.
+            return OwnershipVerdict.wrong_shape(
+                ROBUSTNESS_REPLAY_ANALYSIS_KIND,
+                reason=(
+                    "the spec names every promised product yet still does not "
+                    "back the step, so the gap is in how the products are "
+                    "promised rather than in this declaration"
+                ),
+            )
+        return OwnershipVerdict.incomplete_declaration(
             ROBUSTNESS_REPLAY_ANALYSIS_KIND,
+            missing=("robustness_replay_spec.products",),
             reason=(
-                "the step already declares a robustness replay spec; whether it "
-                "backs every declared product is emittability's question"
+                "the step declares a robustness replay spec that names no entry "
+                "for "
+                + ", ".join(repr(name) for name in unbacked)
+                + ", so the host cannot tell which replay output each of those "
+                "promised products is and the Coder would have to decide"
             ),
         )
     promised = sorted(
