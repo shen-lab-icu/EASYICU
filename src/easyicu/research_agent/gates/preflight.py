@@ -4422,88 +4422,187 @@ _MODULE_DUNDERS = frozenset(
 )
 
 
-def module_level_unbound_names(tree: ast.Module) -> list[tuple[str, int]]:
-    """Names read while the module body runs that nothing in the program binds.
+def _names_bound_in_scope(scope: ast.AST) -> set[str]:
+    """Every name this one scope binds, not descending into nested definitions."""
 
-    ``compile()`` accepts these: a module-level ``NameError`` is a runtime
-    event, so the syntax check is happy and the container is not.  The name is
-    reported with the first line that reads it.
+    bound: set[str] = set()
+    if isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+        arguments = scope.args
+        for group in (
+            arguments.posonlyargs,
+            arguments.args,
+            arguments.kwonlyargs,
+        ):
+            bound.update(argument.arg for argument in group)
+        for solo in (arguments.vararg, arguments.kwarg):
+            if solo is not None:
+                bound.add(solo.arg)
 
-    Scope is deliberately asymmetric and narrow.  Only loads that execute on
-    import are collected -- a name read inside a function body may legitimately
-    be bound by the time that function is called, and on the recorded corpus
-    those reads were where the false positives lived.  Bindings, by contrast,
-    are collected from the whole program: a name assigned anywhere is bound.
-
-    Definition bodies (``def`` / ``async def`` / ``lambda`` / ``class``) are
-    skipped wholesale, so a decorator or a default argument that reads an
-    unbound name is not reported.  Generated analysis scripts do not use those
-    shapes; a branch for them would never fire.
-
-    A ``match`` statement binds names that are not ``Name`` stores, so a module
-    containing one is abstained on rather than guessed at.  Over the 408
-    recorded generated scripts there is not one, and a wrong flag here would
-    cost a healthy step a repair -- the expensive direction to be wrong in.
-    """
-
-    bound: set[str] = set(dir(builtins)) | set(_MODULE_DUNDERS)
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Match):
-            return []
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                bound.add(alias.asname or alias.name.split(".", 1)[0])
-        elif isinstance(node, ast.ImportFrom):
-            for alias in node.names:
-                bound.add(alias.asname or alias.name)
-        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            bound.add(node.name)
-        elif isinstance(node, ast.arg):
-            bound.add(node.arg)
-        elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
-            bound.add(node.id)
-        elif isinstance(node, ast.ExceptHandler) and node.name:
-            bound.add(node.name)
-
-    loaded: dict[str, int] = {}
-
-    def _collect(node: ast.AST) -> None:
+    def _walk(node: ast.AST) -> None:
         for child in ast.iter_child_nodes(node):
             if isinstance(
-                child,
-                (
-                    ast.FunctionDef,
-                    ast.AsyncFunctionDef,
-                    ast.ClassDef,
-                    ast.Lambda,
-                ),
+                child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
             ):
+                bound.add(child.name)
                 continue
-            if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Load):
-                loaded.setdefault(child.id, int(child.lineno))
-            _collect(child)
+            if isinstance(child, ast.Lambda):
+                continue
+            if isinstance(child, ast.Import):
+                for alias in child.names:
+                    bound.add(alias.asname or alias.name.split(".", 1)[0])
+            elif isinstance(child, ast.ImportFrom):
+                for alias in child.names:
+                    bound.add(alias.asname or alias.name)
+            elif isinstance(child, ast.Name) and isinstance(child.ctx, ast.Store):
+                bound.add(child.id)
+            elif isinstance(child, ast.ExceptHandler) and child.name:
+                bound.add(child.name)
+            elif isinstance(child, (ast.Global, ast.Nonlocal)):
+                bound.update(child.names)
+            _walk(child)
 
-    _collect(tree)
-    return sorted(
-        (name, line) for name, line in loaded.items() if name not in bound
-    )
+    _walk(scope)
+    return bound
 
 
-def _module_level_unbound_findings(tree: ast.Module) -> list[ValidationFinding]:
-    """Reject a module-level read of a name nothing in the program binds.
+def unresolvable_names(tree: ast.Module) -> list[tuple[str, int]]:
+    """Names read where Python's scope rules cannot resolve them.
 
-    fresh22 died this way on ``hashlib``, and the H1 canary died twice on the
-    same class in one step: ``manifest`` in the generated draft, then
-    ``table_one_spec`` in the repair that replaced it.  Each death cost an
-    execution slot and a repair before anything scientific was attempted.
+    ``compile()`` accepts every one of these -- a ``NameError`` is a runtime
+    event -- so the syntax check is happy and the container is not.  A name is
+    reported with the first line that reads it.
 
-    ``_undefined_direct_call_findings`` overlaps on exactly one shape -- a bare
-    call at module level -- and keeps its own wider scope over calls inside
-    functions.  A name both reject is reported twice, and both reports are
-    true; neither is allowed to assume the other ran.
+    A read resolves if the name is bound in its own scope, in an enclosing
+    function scope, at module level, or is a builtin.  Nothing else counts, and
+    that is the whole point: an earlier version of this check collected
+    bindings from the *whole program*, so a name that was only ever a local of
+    some other function looked bound.  canary4 died on exactly that --
+    ``predicate_flow`` is a local of ``validate_receipt`` and ``main`` reads it
+    as a global at line 133.  Both the module-only and whole-tree versions
+    returned nothing for that script.
+
+    Measured over the 409 recorded generated scripts: 4 flagged (1.0%), and
+    every one is a real defect --
+
+    * ``predicate_flow``  -- canary4, the death above
+    * ``cohort_df``       -- an earlier run, same shape, also fatal
+    * ``provenance_audit``-- unverifiable, that container never started
+    * ``source_index``    -- a typo for ``source_row_index`` inside a ``raise``
+      branch.  It has never executed, so no run has died of it; if the branch
+      ever fires it replaces a written diagnostic with a ``NameError``, exactly
+      when something has already gone wrong.
+
+    A ``match`` statement binds names that are not ``Name`` stores, so a module
+    containing one is abstained on rather than guessed at.  There is not one in
+    the corpus, and a wrong flag costs a healthy step a repair -- the expensive
+    direction to be wrong in.
     """
 
-    unbound = module_level_unbound_names(tree)
+    if any(isinstance(node, ast.Match) for node in ast.walk(tree)):
+        return []
+
+    parents = {
+        id(child): parent
+        for parent in ast.walk(tree)
+        for child in ast.iter_child_nodes(parent)
+    }
+    scopes: list[ast.AST] = [tree]
+    scopes.extend(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda))
+    )
+    bound_by_scope = {id(scope): _names_bound_in_scope(scope) for scope in scopes}
+    # ``global x`` inside a function binds x at MODULE level, not in the
+    # function that declares it -- so a sibling reading x afterwards is legal
+    # Python.  Attributing it to the declaring scope reported that sibling,
+    # which is the false positive this check must not produce.
+    declared_global: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Global):
+            declared_global.update(node.names)
+    module_names = (
+        bound_by_scope[id(tree)]
+        | declared_global
+        | set(dir(builtins))
+        | set(_MODULE_DUNDERS)
+    )
+
+    loaded: dict[str, int] = {}
+    for scope in scopes:
+        visible = set(module_names) | bound_by_scope[id(scope)]
+        enclosing = parents.get(id(scope))
+        while enclosing is not None:
+            if isinstance(
+                enclosing, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
+            ):
+                visible |= bound_by_scope[id(enclosing)]
+            enclosing = parents.get(id(enclosing))
+
+        def _reads(node: ast.AST) -> None:
+            for child in ast.iter_child_nodes(node):
+                if isinstance(
+                    child,
+                    (
+                        ast.FunctionDef,
+                        ast.AsyncFunctionDef,
+                        ast.ClassDef,
+                        ast.Lambda,
+                    ),
+                ):
+                    continue
+                if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Load):
+                    if child.id not in visible:
+                        loaded.setdefault(child.id, int(child.lineno))
+                _reads(child)
+
+        _reads(scope)
+
+    return sorted(loaded.items())
+
+
+def module_level_unbound_names(tree: ast.Module) -> list[tuple[str, int]]:
+    """The module-scope answer, kept because the host's own fragments use it.
+
+    A rendered fragment is not a whole module, so asking about function scopes
+    it does not contain would be meaningless.  Delegates rather than repeating
+    the walk.
+    """
+
+    module_scope = ast.Module(
+        body=[
+            statement
+            for statement in tree.body
+            if not isinstance(
+                statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+            )
+        ],
+        type_ignores=[],
+    )
+    defined = _names_bound_in_scope(tree)
+    return [
+        (name, line)
+        for name, line in unresolvable_names(module_scope)
+        if name not in defined
+    ]
+
+
+def _unresolvable_name_findings(tree: ast.Module) -> list[ValidationFinding]:
+    """Reject a read Python's scope rules cannot resolve.
+
+    fresh22 died on ``hashlib`` at module level; the H1 canary died twice in one
+    step on ``manifest`` then ``table_one_spec``; canary4 died on
+    ``predicate_flow``, a local of one function read as a global by another.
+    Each cost an execution slot, and the last one cost the three steps behind
+    it.  All six instances in the recorded corpus are real defects.
+
+    ``_undefined_direct_call_findings`` overlaps on one shape -- a bare call to
+    a name nothing defines -- and keeps its own reasoning.  A name both reject
+    is reported twice, and both reports are true; neither is allowed to assume
+    the other ran.
+    """
+
+    unbound = unresolvable_names(tree)
     if not unbound:
         return []
     return [
@@ -4511,14 +4610,16 @@ def _module_level_unbound_findings(tree: ast.Module) -> list[ValidationFinding]:
             validator="mechanical_code_preflight",
             severity="error",
             message=(
-                "Module-level code reads names that nothing in the script "
-                "binds, so it raises NameError before any analysis runs: "
+                "The script reads names Python cannot resolve where they are "
+                "used, so it raises NameError at run time: "
                 + ", ".join(f"{name} (line {line})" for name, line in unbound)
-                + ". Bind each name -- import it, or compute it earlier in "
-                "the module -- instead of assuming the host provides it."
+                + ". A name assigned inside another function is not visible "
+                "here. Bind each one in the scope that reads it -- import it, "
+                "pass it as an argument, or return it from the function that "
+                "computes it -- instead of assuming it is already in scope."
             ),
             detail={
-                "reason": "module_level_unbound_name",
+                "reason": "unresolvable_name",
                 "names": [{"name": name, "line": line} for name, line in unbound],
             },
         )
@@ -8705,7 +8806,7 @@ def audit_mechanical_code_contracts(
     findings.extend(_finalized_exposure_reconciliation_findings(tree, step))
     findings.extend(_typed_dataframe_erasure_findings(tree, step))
     findings.extend(_undefined_direct_call_findings(tree))
-    findings.extend(_module_level_unbound_findings(tree))
+    findings.extend(_unresolvable_name_findings(tree))
     findings.extend(_local_call_signature_findings(tree))
     findings.extend(_local_read_before_assignment_findings(tree))
     findings.extend(_branch_local_unbound_findings(tree))
@@ -8736,4 +8837,8 @@ def audit_mechanical_code_contracts(
     return findings
 
 
-__all__ = ["audit_mechanical_code_contracts", "module_level_unbound_names"]
+__all__ = [
+    "audit_mechanical_code_contracts",
+    "module_level_unbound_names",
+    "unresolvable_names",
+]
