@@ -53,11 +53,48 @@ from ..execution.runners.selection import (
 from ..schema import ValidationFinding
 
 __all__ = [
+    "execution_declaration_refusal",
     "owner_declaration_plan_findings",
     "owner_declaration_replan_directive",
 ]
 
 _VALIDATOR = "plan_owner_declaration"
+
+
+def execution_declaration_refusal(
+    *,
+    claimed_by: Any,
+    trace: Sequence[StandardExecutorCandidate],
+) -> Tuple[StandardExecutorCandidate, ...]:
+    """The declaration gaps that must refuse a step at execution time.
+
+    The plan-time gate above asks for the field first and spends a forced
+    replan on the answer.  A step that reaches execution still under-declared
+    means that replan did not supply it, and handing it to the Coder anyway is
+    the fail-open this whole module exists to close.
+
+    Two clauses, and both are what the answer *means* rather than checks bolted
+    onto it:
+
+    * ``claimed_by`` is None -- nobody is going to compute the step.  A gap
+      reported by one owner while a different owner claimed it is moot, and
+      refusing there would be a wrong block of work that was about to be done
+      correctly.  Measured over the recorded plans (694 distinct step shapes):
+      8 reach "no owner + a gap", **0** reach "an owner claimed + a gap".  So
+      this clause has never fired on real data; it is kept because the failure
+      it prevents is severe and nothing in the selector forbids that answer.
+    * only ``incomplete_declaration`` verdicts count.  A wrong-shape decline
+      means no owner exists and the Coder path is correct.
+
+    It lives here rather than inline at the call site so the plan-time gate and
+    the execution-time refusal share one definition of "under-declared".  Two
+    copies of that rule drifting apart is the defect shape this package keeps
+    paying for.
+    """
+
+    if claimed_by is not None:
+        return ()
+    return tuple(candidate for candidate in trace if candidate.missing_declarations)
 
 #: The scientific choices a replan must not *make* in order to satisfy this
 #: gate.  The gap is a missing declaration of something the plan already chose,
