@@ -4046,6 +4046,7 @@ def main() -> int:
                 stream_enabled=bool(args.llm_stream),
                 provider_environment=provider_environment,
                 provider_base_url=str(args.provider_base_url),
+                items=args.items,
             )
 
         if n_repeat == 1:
@@ -4780,6 +4781,7 @@ def _run_ehrflowbench_jsonl(
     stream_enabled: bool = False,
     provider_environment: Optional[Mapping[str, str]] = None,
     provider_base_url: Optional[str] = None,
+    items: Optional[Sequence[str]] = None,
 ) -> int:
     """Run an external EHRFlowBench-style JSONL export when available."""
     pipeline_options = _bind_benchmark_cost_price_table(
@@ -4844,6 +4846,43 @@ def _run_ehrflowbench_jsonl(
                     "line": line_number,
                 }
             )
+    if items:
+        # ``--items`` is applied on the built-in bench path but was never
+        # threaded here, so it read as accepted and did nothing.  On
+        # 2026-07-30 a launch that asked for one canary task started all nine
+        # against a real provider; it was noticed only because the run folders
+        # named tasks nobody had asked for.  A selector that silently widens
+        # its own scope is worse than no selector, so an unknown key is fatal
+        # rather than an empty selection.
+        wanted = {str(value).strip() for value in items if str(value).strip()}
+        available = {
+            str(row.get("key") or row.get("id") or f"ehrflowbench_{idx:03d}")
+            for idx, row in enumerate(rows)
+        }
+        unknown = sorted(wanted - available)
+        if unknown:
+            raise SystemExit(
+                "--items names no row in this EHRFlowBench JSONL: "
+                + ", ".join(unknown)
+                + ". Available: "
+                + ", ".join(sorted(available))
+            )
+        kept: List[Dict[str, Any]] = []
+        kept_invalid: set[int] = set()
+        for index, row in enumerate(rows):
+            key = str(row.get("key") or row.get("id") or f"ehrflowbench_{index:03d}")
+            if key not in wanted:
+                continue
+            if index in invalid_row_indices:
+                kept_invalid.add(len(kept))
+            kept.append(row)
+        rows = kept
+        invalid_row_indices = kept_invalid
+        print(
+            f"[items] running {len(rows)} of {len(available)} rows: "
+            + ", ".join(sorted(wanted)),
+            flush=True,
+        )
     if resume_run_id and len(rows) != 1:
         raise SystemExit(
             "--resume-run-id requires a one-row EHRFlowBench JSONL file so the "
