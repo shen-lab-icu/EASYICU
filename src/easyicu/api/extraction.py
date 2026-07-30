@@ -88,6 +88,57 @@ EXTRACT_MODULE_ORDER: List[str] = [
 ONESHOT_MAX_PATIENTS = 150_000
 
 
+def _resolve_stream_batch_size(
+    database: str,
+    num_patients: int,
+    requested_batch_size: Optional[int] = None,
+    *,
+    available_memory_mb: Optional[float] = None,
+) -> int:
+    """Choose a streamed-export batch from *currently available* memory.
+
+    Total RAM is not a sufficient safety signal on a laptop: a nominal 16 GB
+    machine may have only 8 GB available while an IDE, browser, or another
+    analysis is open.  Explicit user choices always win.  The automatic policy
+    otherwise keeps the established fast paths while failing safely under
+    memory pressure:
+
+    * server (>=24 GB available): eICU uses three ~67k batches;
+    * portable fast (>=15 GB available): eICU uses 45k batches;
+    * constrained (<12 GB available): every database uses 10k batches;
+    * the five smaller databases remain one-shot when >=12 GB is available.
+
+    The 12--15 GB eICU interval intentionally stays on the conservative 10k
+    path until an intermediate batch has a measured process-tree PSS baseline.
+    """
+
+    total = int(num_patients)
+    if total <= 0:
+        raise ValueError("num_patients must be positive")
+
+    if requested_batch_size is not None:
+        requested = int(requested_batch_size)
+        if requested <= 0:
+            raise ValueError("batch_size must be positive")
+        return min(requested, total)
+
+    if available_memory_mb is None:
+        from ..runtime.memory_manager import get_available_memory_mb
+
+        available_memory_mb = get_available_memory_mb()
+    available = max(0.0, float(available_memory_mb))
+
+    if available < 12 * 1024:
+        return min(10_000, total)
+    if database == "eicu" and total > ONESHOT_MAX_PATIENTS:
+        if available >= 24 * 1024:
+            return min(67_000, total)
+        if available >= 15 * 1024:
+            return min(45_000, total)
+        return min(10_000, total)
+    return total
+
+
 def _get_extraction_mp_context(mp_module, *, platform_name: Optional[str] = None):
     """Resolve the extraction worker context with a cross-platform safe default.
 
@@ -417,6 +468,140 @@ def _release_stream_batch_memory(
             pass
 
 
+_VITAL_STREAM_DERIVED_CONCEPTS = (
+    "pulse_pressure",
+    "shock_index",
+    "modified_shock_index",
+    "diastolic_shock_index",
+)
+
+
+def _clear_stream_loader_caches(loader) -> None:
+    if loader is None:
+        # Streamed exports disable module grouping, so this helper normally
+        # receives no explicitly shared loader.  ``load_concepts`` still owns
+        # a process-global loader cache, however.  Returning here retained
+        # cohort-scoped resolver state across patient batches; mixed
+        # window/point concepts such as eICU ``dex`` then produced different
+        # time grids for 45k versus 67k batches.
+        from .concepts import clear_global_loader
+
+        clear_global_loader()
+        return
+    try:
+        loader.clear_cache()
+        return
+    except Exception:
+        pass
+    resolver = getattr(loader, "concept_resolver", None)
+    if resolver is not None and hasattr(resolver, "drop_source_caches"):
+        resolver.drop_source_caches()
+
+
+def _attach_stream_derived_columns(base, addition, value_columns):
+    """Attach derived values whose time keys are a subset of the base grid."""
+    import numpy as np
+    import pandas as pd
+
+    if not isinstance(base, pd.DataFrame) or base.empty:
+        return addition
+    if not isinstance(addition, pd.DataFrame) or addition.empty:
+        for column in value_columns:
+            if column not in base.columns:
+                base[column] = np.nan
+        return base
+
+    id_candidates = (
+        "stay_id",
+        "patientunitstayid",
+        "icustay_id",
+        "admissionid",
+        "patientid",
+        "CaseID",
+    )
+    key_columns = [
+        column
+        for column in (*id_candidates, "charttime")
+        if column in base.columns and column in addition.columns
+    ]
+    if not key_columns or "charttime" not in key_columns:
+        raise ValueError("streamed derived concept has no shared ICU time key")
+
+    base_index = pd.MultiIndex.from_frame(base[key_columns])
+    addition_index = pd.MultiIndex.from_frame(addition[key_columns])
+    if not base_index.is_unique or not addition_index.is_unique:
+        return base.merge(
+            addition[key_columns + list(value_columns)],
+            on=key_columns,
+            how="outer",
+            sort=False,
+        )
+    indexer = base_index.get_indexer(addition_index)
+    if bool((indexer < 0).any()):
+        return base.merge(
+            addition[key_columns + list(value_columns)],
+            on=key_columns,
+            how="outer",
+            sort=False,
+        )
+
+    for column in value_columns:
+        values = np.full(len(base), np.nan, dtype="float64")
+        if column in addition.columns:
+            values[indexer] = pd.to_numeric(
+                addition[column],
+                errors="coerce",
+            ).to_numpy()
+        base[column] = values
+    return base
+
+
+def _load_stream_module_batch(
+    load_concepts_fn,
+    *,
+    module_name: str,
+    concepts: List[str],
+    load_kwargs: Dict,
+    patient_ids: Dict,
+    loader,
+    pyarrow_module,
+):
+    """Load one patient batch with bounded recursive-vitals intermediates."""
+    requested_derived = [
+        concept
+        for concept in _VITAL_STREAM_DERIVED_CONCEPTS
+        if concept in concepts
+    ]
+    if module_name != "vitals" or not requested_derived:
+        return load_concepts_fn(**load_kwargs, patient_ids=patient_ids)
+
+    base_concepts = [
+        concept for concept in concepts if concept not in requested_derived
+    ]
+    base_kwargs = dict(load_kwargs)
+    base_kwargs["concepts"] = base_concepts
+    result = load_concepts_fn(**base_kwargs, patient_ids=patient_ids)
+
+    for concept in requested_derived:
+        _clear_stream_loader_caches(loader)
+        _release_stream_batch_memory(pyarrow_module)
+        derived_kwargs = dict(load_kwargs)
+        derived_kwargs["concepts"] = [concept]
+        derived = load_concepts_fn(
+            **derived_kwargs,
+            patient_ids=patient_ids,
+        )
+        result = _attach_stream_derived_columns(
+            result,
+            derived,
+            [concept],
+        )
+        del derived
+    _clear_stream_loader_caches(loader)
+    _release_stream_batch_memory(pyarrow_module)
+    return result
+
+
 def _stream_module_batches_to_parquet(
     module_name: str,
     concepts: List[str],
@@ -463,9 +648,16 @@ def _stream_module_batches_to_parquet(
     try:
         for start in range(0, len(all_ids), batch_size):
             table = None
-            batch = _lc(
-                **batch_load_kwargs,
-                patient_ids={id_col: all_ids[start : start + batch_size]},
+            batch = _load_stream_module_batch(
+                _lc,
+                module_name=module_name,
+                concepts=concepts,
+                load_kwargs=batch_load_kwargs,
+                patient_ids={
+                    id_col: all_ids[start : start + batch_size]
+                },
+                loader=loader,
+                pyarrow_module=pa,
             )
             frame = _normalise_module_frame_for_parquet(batch, concepts)
             if frame is not None:
@@ -484,13 +676,7 @@ def _stream_module_batches_to_parquet(
                 rows += len(frame)
             del table
             del batch, frame
-            if loader is not None:
-                try:
-                    loader.clear_cache()
-                except Exception:
-                    resolver = getattr(loader, "concept_resolver", None)
-                    if resolver is not None and hasattr(resolver, "drop_source_caches"):
-                        resolver.drop_source_caches()
+            _clear_stream_loader_caches(loader)
             _release_stream_batch_memory(pa)
         if writer is None:
             return None
@@ -750,6 +936,7 @@ def _stream_special_extraction_batches(
     import os
     import time
 
+    import pandas as pd
     import pyarrow.dataset as ds
     import pyarrow.parquet as pq
 
@@ -765,6 +952,8 @@ def _stream_special_extraction_batches(
         for module_name in special_modules
         for concept in EXTRACT_MODULES.get(module_name, [])
     ]
+    need_sofa1 = "sep3_sofa1" in concepts
+    need_sofa2 = "sep3_sofa2" in concepts
     writers = {}
     partials = {}
     rows = {concept: 0 for concept in concepts}
@@ -775,7 +964,29 @@ def _stream_special_extraction_batches(
     def _read_dependency(module_name: str, ids: List) -> "pd.DataFrame":
         source = source_root / f"{module_name}.parquet"
         if not source.is_file():
-            raise FileNotFoundError(f"missing streamed dependency module: {source}")
+            # A normal module can complete successfully with zero rows (for
+            # example strict suspected infection is structurally unavailable
+            # in SIC).  Its collector publishes an empty, error-free module
+            # manifest but deliberately leaves parquet placeholder creation to
+            # the final native publisher.  Accept only that explicit state;
+            # an absent/failed dependency must remain fail-closed.
+            manifest_path = source_root / f"{module_name}.manifest.json"
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (FileNotFoundError, json.JSONDecodeError, OSError):
+                manifest = None
+            if not (
+                isinstance(manifest, dict)
+                and manifest.get("module") == module_name
+                and not manifest.get("errors")
+                and not manifest.get("saved")
+            ):
+                raise FileNotFoundError(
+                    f"missing streamed dependency module: {source}"
+                )
+            return pd.DataFrame(
+                columns=[id_col, *EXTRACT_MODULES.get(module_name, [])]
+            )
         return (
             ds.dataset(source, format="parquet")
             .to_table(filter=ds.field(id_col).isin(ids))
@@ -795,59 +1006,101 @@ def _stream_special_extraction_batches(
         writers[concept].write_table(table)
         rows[concept] += len(frame)
 
+    def _suspicion_timeline(susp, score, time_col: str):
+        """Return suspected-infection flags on the score time axis.
+
+        Some databases expose ``susp_inf`` as a timed event, while eICU's
+        public ``sepsis_shared`` module is deliberately stay-level.  The
+        ordinary (non-streamed) multi-concept merge broadcasts that stay-level
+        flag onto the SOFA time grid.  Recreate the same representation here
+        so streamed and one-shot exports remain result-invariant.
+        """
+        if time_col in susp.columns:
+            return susp[[id_col, time_col, "susp_inf"]]
+        stay_flags = susp[[id_col, "susp_inf"]].drop_duplicates(
+            subset=[id_col], keep="last"
+        )
+        return score[[id_col, time_col]].merge(
+            stay_flags,
+            on=id_col,
+            how="left",
+            validate="many_to_one",
+        )
+
     try:
         for start in range(0, len(all_ids), safe_batch_size):
             ids = all_ids[start : start + safe_batch_size]
             susp = _read_dependency("sepsis_shared", ids)
-            sofa1 = _read_dependency("sofa1_score", ids)
-            sofa2 = _read_dependency("sofa2_score", ids)
-            time_col = next(
-                (
-                    name
-                    for name in (
-                        "charttime",
-                        "time",
-                        "starttime",
-                        "datetime",
-                        "Offset",
-                        "measuredat_minutes",
-                        "measuredat",
-                    )
-                    if name in susp.columns
-                    and name in sofa1.columns
-                    and name in sofa2.columns
-                ),
-                None,
-            )
-            if time_col is None or "susp_inf" not in susp.columns:
+            # No strict infection evidence means Sepsis-3 is structurally
+            # unavailable, not a cohort-wide negative label.  Leave both
+            # derived modules empty so the native publisher can emit typed
+            # structural placeholders.
+            if susp.empty:
+                continue
+            sofa1 = _read_dependency("sofa1_score", ids) if need_sofa1 else None
+            sofa2 = _read_dependency("sofa2_score", ids) if need_sofa2 else None
+            if "susp_inf" not in susp.columns:
                 errors.append(
-                    "streamed Sepsis dependencies lack a shared time index or susp_inf"
+                    "streamed Sepsis dependency sepsis_shared lacks susp_inf"
                 )
                 continue
-            if "sep3_sofa1" in concepts and "sofa" in sofa1.columns:
+
+            def _score_time_column(score):
+                return next(
+                    (
+                        name
+                        for name in (
+                            "charttime",
+                            "time",
+                            "starttime",
+                            "datetime",
+                            "Offset",
+                            "measuredat_minutes",
+                            "measuredat",
+                        )
+                        if name in score.columns
+                    ),
+                    None,
+                )
+
+            if need_sofa1 and sofa1 is not None and "sofa" in sofa1.columns:
                 from ..scores.sepsis import sep3 as _sep3
 
-                frame = _sep3(
-                    sofa1[[id_col, time_col, "sofa"]],
-                    susp[[id_col, time_col, "susp_inf"]],
-                    id_cols=[id_col],
-                    index_col=time_col,
-                ).rename(columns={"sep3": "sep3_sofa1"})
-                if "sep3_sofa1" in frame.columns:
-                    frame["sep3_sofa1"] = frame["sep3_sofa1"].fillna(0).astype(int)
-                _append_frame("sep3_sofa1", frame)
-            if "sep3_sofa2" in concepts and "sofa2" in sofa2.columns:
+                time_col = _score_time_column(sofa1)
+                if time_col is None:
+                    errors.append("streamed SOFA-1 dependency lacks a time index")
+                else:
+                    susp1 = _suspicion_timeline(susp, sofa1, time_col)
+                    frame = _sep3(
+                        sofa1[[id_col, time_col, "sofa"]],
+                        susp1,
+                        id_cols=[id_col],
+                        index_col=time_col,
+                    ).rename(columns={"sep3": "sep3_sofa1"})
+                    if "sep3_sofa1" in frame.columns:
+                        frame["sep3_sofa1"] = (
+                            frame["sep3_sofa1"].fillna(0).astype(int)
+                        )
+                    _append_frame("sep3_sofa1", frame)
+            if need_sofa2 and sofa2 is not None and "sofa2" in sofa2.columns:
                 from ..scores.sepsis_sofa2 import sep3_sofa2 as _sep3_sofa2
 
-                frame = _sep3_sofa2(
-                    sofa2[[id_col, time_col, "sofa2"]],
-                    susp[[id_col, time_col, "susp_inf"]],
-                    id_cols=[id_col],
-                    index_col=time_col,
-                )
-                if "sep3_sofa2" in frame.columns:
-                    frame["sep3_sofa2"] = frame["sep3_sofa2"].fillna(0).astype(int)
-                _append_frame("sep3_sofa2", frame)
+                time_col = _score_time_column(sofa2)
+                if time_col is None:
+                    errors.append("streamed SOFA-2 dependency lacks a time index")
+                else:
+                    susp2 = _suspicion_timeline(susp, sofa2, time_col)
+                    frame = _sep3_sofa2(
+                        sofa2[[id_col, time_col, "sofa2"]],
+                        susp2,
+                        id_cols=[id_col],
+                        index_col=time_col,
+                    )
+                    if "sep3_sofa2" in frame.columns:
+                        frame["sep3_sofa2"] = (
+                            frame["sep3_sofa2"].fillna(0).astype(int)
+                        )
+                    _append_frame("sep3_sofa2", frame)
 
         saved = {}
         for concept, writer in writers.items():
@@ -896,7 +1149,18 @@ def _run_special_extraction(
     import pandas as pd
     from easyicu import load_concepts as _lc
 
-    if stream_output_batches:
+    dependency_root = Path(published_output_dir or output_dir)
+    required_dependency_modules = ["sepsis_shared"]
+    if any("sep3_sofa1" in EXTRACT_MODULES.get(m, []) for m in special_modules):
+        required_dependency_modules.append("sofa1_score")
+    if any("sep3_sofa2" in EXTRACT_MODULES.get(m, []) for m in special_modules):
+        required_dependency_modules.append("sofa2_score")
+    published_dependencies_ready = bool(published_output_dir) and all(
+        (dependency_root / f"{module}.parquet").is_file()
+        for module in required_dependency_modules
+    )
+
+    if stream_output_batches or published_dependencies_ready:
         if not patient_ids_filter or not batch_size:
             raise ValueError(
                 "streamed special export requires patient_ids and batch_size"
@@ -1407,6 +1671,108 @@ def _canonicalise_native_export_frame(
     return canonical
 
 
+def _native_export_stay_time_upper_bounds(outcome_frame) -> Dict[int, float]:
+    """Return each stay's last plausible ICU-relative event hour.
+
+    ``los_icu`` is a cross-database days concept.  A one-day post-discharge
+    allowance preserves boundary measurements while preventing a single
+    corrupt source timestamp from stretching hourly score grids for years.
+    """
+    import pandas as pd
+    from ..utils.time_units import ICU_TIME_POST_DISCHARGE_HOURS
+
+    if not isinstance(outcome_frame, pd.DataFrame) or "los_icu" not in outcome_frame:
+        return {}
+    identity = next(
+        (
+            column
+            for column in _NATIVE_EXPORT_ID_COLUMNS
+            if column in outcome_frame.columns
+        ),
+        None,
+    )
+    if identity is None:
+        return {}
+    stay_id = pd.to_numeric(outcome_frame[identity], errors="coerce")
+    los_days = pd.to_numeric(outcome_frame["los_icu"], errors="coerce")
+    valid = stay_id.notna() & los_days.notna() & (los_days >= 0)
+    if not bool(valid.any()):
+        return {}
+    bounds = pd.DataFrame(
+        {
+            "stay_id": stay_id.loc[valid].astype("int64"),
+            "upper": (
+                los_days.loc[valid].astype("float64") * 24.0
+                + ICU_TIME_POST_DISCHARGE_HOURS
+            ),
+        }
+    )
+    return {
+        int(key): float(value)
+        for key, value in bounds.groupby("stay_id", sort=False)["upper"].max().items()
+    }
+
+
+def _enforce_native_export_time_axis(
+    frame,
+    *,
+    module: str,
+    stay_time_upper_bounds: Dict[int, float],
+):
+    """Apply the ICU-relative time contract and return an auditable frame.
+
+    Outcome values are stay-level endpoints with mixed follow-up windows, so
+    their shared physical index is ICU admission (0 h).  Longitudinal modules
+    retain only the ICU episode with a 24-hour pre/post allowance.  Stays
+    without a usable LOS receive a conservative 366-day sanity fallback.
+    """
+    import numpy as np
+    import pandas as pd
+    from ..utils.time_units import (
+        ICU_TIME_FALLBACK_LIMIT_HOURS,
+        ICU_TIME_PRE_ADMISSION_HOURS,
+    )
+
+    audit: Dict[str, object] = {
+        "policy": "icu_episode_with_24h_pre_post_allowance",
+        "excluded_rows": 0,
+        "normalized_stay_level_rows": 0,
+        "fallback_upper_hours": ICU_TIME_FALLBACK_LIMIT_HOURS,
+    }
+    if "charttime" not in frame.columns:
+        audit["policy"] = "not_applicable_stay_level_module"
+        return frame, audit
+
+    if module == "outcome":
+        charttime = pd.to_numeric(frame["charttime"], errors="coerce")
+        audit["policy"] = "stay_level_at_icu_admission"
+        audit["normalized_stay_level_rows"] = int(
+            (charttime.isna() | (charttime != 0.0)).sum()
+        )
+        frame = frame.copy()
+        frame["charttime"] = 0.0
+        return frame, audit
+
+    charttime = pd.to_numeric(frame["charttime"], errors="coerce")
+    upper = frame["stay_id"].map(stay_time_upper_bounds).astype("float64")
+    upper = upper.fillna(ICU_TIME_FALLBACK_LIMIT_HOURS)
+    invalid = charttime.notna() & (
+        (charttime < -ICU_TIME_PRE_ADMISSION_HOURS) | (charttime > upper)
+    )
+    audit["excluded_rows"] = int(invalid.sum())
+    audit["rows_with_los_bound"] = int(
+        frame["stay_id"].isin(stay_time_upper_bounds).sum()
+    )
+    if not bool(invalid.any()):
+        return frame, audit
+    kept = frame.loc[~invalid].copy()
+    # Preserve canonical numeric dtype even when every row was excluded.
+    kept["charttime"] = pd.to_numeric(
+        kept["charttime"], errors="coerce"
+    ).astype(np.float64)
+    return kept, audit
+
+
 def _enforce_native_export_concept_bounds(
     frame,
     *,
@@ -1595,15 +1961,7 @@ def _publish_native_export_v2(
     # source) is not an extraction failure. It has no physical file and must not
     # be silently given a typed binding; record it separately and select only
     # the files the producer actually materialized.
-    unavailable_modules = [
-        {
-            "module": module,
-            "reason": "producer_returned_no_physical_output",
-            "concept_ids": list(EXTRACT_MODULES[module]),
-        }
-        for module in modules
-        if not (output_root / f"{module}.parquet").is_file()
-    ]
+    unavailable_modules: List[Dict[str, object]] = []
     # Native-v2 promises one physical parquet per requested module. A database
     # may be structurally unable to produce an entire module (for example,
     # Sepsis-3 in a source without infection timestamps). Seal that absence as
@@ -1627,16 +1985,22 @@ def _publish_native_export_v2(
     files: List[Dict[str, object]] = []
     file_bindings = []
     temporary_module_files: List[tuple[Path, Path]] = []
+    outcome_source = output_root / "outcome.parquet"
+    stay_time_upper_bounds: Dict[int, float] = {}
+    if outcome_source.is_file() and not outcome_source.is_symlink():
+        stay_time_upper_bounds = _native_export_stay_time_upper_bounds(
+            pd.read_parquet(outcome_source)
+        )
 
     for module in published_modules:
         relative_path = f"{module}.parquet"
         source_parquet = output_root / relative_path
-        whole_module_unavailable = not source_parquet.is_file()
+        physical_output_missing = not source_parquet.is_file()
         # This is an output validation pass, not a second scan of any raw table.
         # A structurally unavailable module starts from an empty identity frame;
         # canonicalisation below adds charttime and every requested typed value
         # column in catalog order.
-        if whole_module_unavailable:
+        if physical_output_missing:
             frame = pd.DataFrame(
                 {"stay_id": pd.Series([], dtype="int64")}
             )
@@ -1644,11 +2008,11 @@ def _publish_native_export_v2(
             frame = pd.read_parquet(source_parquet)
         original_columns = set(frame.columns)
         produced_concepts: Optional[set[str]] = (
-            set() if whole_module_unavailable else None
+            set() if physical_output_missing else None
         )
         module_manifest_path = output_root / f"{module}.manifest.json"
         if (
-            not whole_module_unavailable
+            not physical_output_missing
             and module_manifest_path.is_file()
             and not module_manifest_path.is_symlink()
         ):
@@ -1667,6 +2031,23 @@ def _publish_native_export_v2(
                             for concept in (record.get("concepts") or [])
                             if isinstance(concept, str)
                         )
+        # A sealed structural placeholder is a real zero-row parquet.  On a
+        # later metadata-only republish, file existence alone must not turn it
+        # into an "available" module.  The producer manifest's empty ``saved``
+        # mapping is the authoritative evidence that no physical concept was
+        # produced.  Preserve that status so native-v2 publication is
+        # idempotent.
+        whole_module_unavailable = physical_output_missing or (
+            frame.empty and produced_concepts == set()
+        )
+        if whole_module_unavailable:
+            unavailable_modules.append(
+                {
+                    "module": module,
+                    "reason": "producer_returned_no_physical_output",
+                    "concept_ids": list(EXTRACT_MODULES[module]),
+                }
+            )
         structurally_unavailable = {
             concept
             for concept in requested_concept_plan[module]
@@ -1710,6 +2091,11 @@ def _publish_native_export_v2(
                 module=module,
                 requested_concepts=requested_concept_plan[module],
                 dictionary=dictionary,
+            )
+            frame, time_axis_audit = _enforce_native_export_time_axis(
+                frame,
+                module=module,
+                stay_time_upper_bounds=stay_time_upper_bounds,
             )
             bounds_audit = _enforce_native_export_concept_bounds(
                 frame,
@@ -1794,6 +2180,7 @@ def _publish_native_export_v2(
                 "physical_concept_ids": requested_concept_plan[module],
                 "rows": int(frame.shape[0]),
                 "physical_schema": physical_schema,
+                "time_axis_audit": time_axis_audit,
                 "concept_status": concept_status,
                 "column_metadata_columns": list(binding.columns),
             }
@@ -1840,6 +2227,10 @@ def _publish_native_export_v2(
             "time_column": "charttime",
             "time_origin": "icu_admission",
             "time_unit": "h",
+            "time_window_policy": (
+                "longitudinal modules: ICU episode with 24h pre/post allowance; "
+                "outcome: stay-level at ICU admission"
+            ),
             "concept_order": "module_catalog",
             "unavailable_representation": "typed_all_null_placeholder",
             "declared_bounds_policy": "out_of_range_to_null",
@@ -1913,9 +2304,10 @@ def extract_database(
         modules: 要提取的模块列表（None = 全部 19 个模块）
         patient_ids: 患者 ID 列表或 dict（None = 全部患者）
         max_patients: 限制患者数量（与 patient_ids 互斥）
-        batch_size: 模块内患者分批大小。None(默认) = 五个较小数据库一次性
-            in-process 加载；完整 eICU 队列按稳定内存预算使用 1–3 个大批次。
-            仅在需要覆盖默认策略时显式传值。
+        batch_size: 模块内患者分批大小。None(默认) = 非流式提取时五个较小
+            数据库一次性、完整 eICU 按稳定内存预算使用 1–3 个大批次；流式
+            提取时按当前可用内存自动选择 server / portable-fast / constrained
+            档。仅在需要覆盖默认策略时显式传值。
         group_modules: True(默认) = 自动选择：内存充足的服务器将共享源表的
             模块合并为分组子进程；≤24GB 主机或 ≤4GB 显式缓存预算自动切换
             为每模块一个隔离子进程。False = 始终逐模块隔离。可用
@@ -2019,10 +2411,14 @@ def extract_database(
     # 让较小数据库单次扫表完成；eICU 的 worker 会应用三批上限。仅在特殊
     # 机器/存储条件下由用户显式传 batch_size 覆盖。
     if stream_output_batches:
-        # The bounded writer needs real batches.  10K stays keeps the largest
-        # MIMIC-IV chart-event module below the host-memory/swap cliff while
-        # still avoiding tiny, pathological per-patient reads.
-        batch_size = int(batch_size or min(10_000, num_patients))
+        # The bounded writer needs a concrete batch.  Resolve it from current
+        # available memory rather than nominal total RAM: a 16 GB laptop with
+        # only 8 GB free must not inherit the portable-fast profile.
+        batch_size = _resolve_stream_batch_size(
+            database,
+            num_patients,
+            batch_size,
+        )
         _auto_one_shot = False
     elif batch_size is None:
         batch_size = max(num_patients + 1, 2_000_000)
@@ -2079,6 +2475,8 @@ def extract_database(
     result = {
         "database": database,
         "num_patients": num_patients,
+        "batch_size": batch_size,
+        "stream_output_batches": stream_output_batches,
         "modules": {},
         "total_elapsed": 0,
         "output_dir": output_dir,

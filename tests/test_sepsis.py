@@ -9,7 +9,7 @@ those values as **hours since ICU admission** — the post
 
 import pandas as pd
 
-from easyicu.scores.sepsis import compute_sepsis3_onset, susp_inf
+from easyicu.scores.sepsis import compute_sepsis3_onset, sep3, susp_inf
 
 
 def test_susp_inf_numeric_hour_offsets_match_within_abx_window():
@@ -105,3 +105,26 @@ def test_compute_sepsis3_onset_missing_susp_inf_column_fails_closed():
     )
 
     assert result.empty
+
+
+def test_sep3_accepts_nullable_boolean_suspicion_flags():
+    sofa = pd.DataFrame(
+        {
+            "stay_id": [1, 1],
+            "charttime": [0.0, 1.0],
+            "sofa": [0.0, 3.0],
+        }
+    )
+    si = pd.DataFrame(
+        {
+            "stay_id": [1, 1],
+            "charttime": [0.0, 1.0],
+            "susp_inf": pd.Series([True, pd.NA], dtype="boolean"),
+        }
+    )
+
+    result = sep3(sofa, si, id_cols=["stay_id"], index_col="charttime")
+
+    assert result[["stay_id", "charttime", "sep3"]].to_dict("records") == [
+        {"stay_id": 1, "charttime": 1.0, "sep3": True}
+    ]

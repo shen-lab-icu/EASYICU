@@ -16,6 +16,46 @@ def _completed_result(module: str = "demographics") -> dict[str, object]:
     return {"modules": {module: {"errors": []}}}
 
 
+def test_native_time_axis_uses_los_and_normalises_stay_level_outcomes() -> None:
+    outcome = pd.DataFrame(
+        {
+            "admissionid": [1, 2],
+            "los_icu": [2.0, float("nan")],
+        }
+    )
+    bounds = api._native_export_stay_time_upper_bounds(outcome)
+    assert bounds == {1: 72.0}
+
+    longitudinal = pd.DataFrame(
+        {
+            "stay_id": [1, 1, 1, 2],
+            "charttime": [-25.0, -24.0, 73.0, 9_000.0],
+            "hr": [70.0, 71.0, 72.0, 73.0],
+        }
+    )
+    filtered, audit = api._enforce_native_export_time_axis(
+        longitudinal,
+        module="vitals",
+        stay_time_upper_bounds=bounds,
+    )
+    assert filtered["charttime"].tolist() == [-24.0]
+    assert audit["excluded_rows"] == 3
+
+    stay_level, stay_audit = api._enforce_native_export_time_axis(
+        pd.DataFrame(
+            {
+                "stay_id": [1, 2],
+                "charttime": [127_664.0, float("nan")],
+                "mort_28d": [False, True],
+            }
+        ),
+        module="outcome",
+        stay_time_upper_bounds=bounds,
+    )
+    assert stay_level["charttime"].tolist() == [0.0, 0.0]
+    assert stay_audit["normalized_stay_level_rows"] == 2
+
+
 def test_grouped_output_is_sealed_without_accessing_the_raw_data_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -126,6 +166,39 @@ def test_grouped_export_records_structural_unavailability_without_selecting_it(
     assert placeholder["charttime"].dtype == "float64"
     assert str(placeholder["susp_inf"].dtype) == "boolean"
     assert published["output_validation_reads"] == 2
+    with open_export_package(tmp_path) as package:
+        assert set(package.concept_index) == {"age"}
+
+    # Re-sealing an existing typed placeholder must preserve its structural
+    # unavailability rather than treating file existence as source evidence.
+    (tmp_path / "sepsis_shared.manifest.json").write_text(
+        json.dumps({"saved": {}, "errors": []}),
+        encoding="utf-8",
+    )
+    sidecar_file = manifest["column_metadata"]["file"]
+    (tmp_path / "_manifest.json").unlink()
+    (tmp_path / sidecar_file).unlink()
+    api._publish_native_export_v2(
+        database="miiv",
+        data_path="/raw/source-must-not-be-read",
+        output_dir=str(tmp_path),
+        modules=["demographics", "sepsis_shared"],
+        max_patients=None,
+        result={
+            "modules": {
+                "demographics": {"errors": []},
+                "sepsis_shared": {"errors": []},
+            }
+        },
+    )
+
+    republished = json.loads((tmp_path / "_manifest.json").read_text())
+    assert republished["unavailable_modules"] == manifest["unavailable_modules"]
+    assert next(
+        file
+        for file in republished["files"]
+        if file["module"] == "sepsis_shared"
+    )["availability"] == "structurally_unavailable"
     with open_export_package(tmp_path) as package:
         assert set(package.concept_index) == {"age"}
 

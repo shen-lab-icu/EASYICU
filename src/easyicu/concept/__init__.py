@@ -144,6 +144,33 @@ def _drop_negative_source_end_durations(
     return frame.loc[~invalid].copy()
 
 
+def _source_duration_is_end(source) -> bool:
+    """Return whether a configured source duration column stores an end time.
+
+    This is schema semantics and must never be inferred from sampled patient
+    values.  The old ``head(100)``/80% heuristic made the same eICU
+    ``drugstopoffset`` column switch meaning when the patient batch boundary
+    changed, so 45k and 67k exports produced different D10 time grids.
+
+    Future dictionaries can declare ``params.dur_is_end`` explicitly.
+    Existing ricu-compatible sources use unambiguous end/stop column names.
+    """
+
+    params = getattr(source, "params", None) or {}
+    explicit = params.get("dur_is_end")
+    if isinstance(explicit, str):
+        normalized = explicit.strip().lower()
+        if normalized in {"true", "1", "yes"}:
+            return True
+        if normalized in {"false", "0", "no"}:
+            return False
+    elif explicit is not None:
+        return bool(explicit)
+
+    name = re.sub(r"[^a-z0-9]+", "", str(getattr(source, "dur_var", "")).lower())
+    return "end" in name or "stop" in name
+
+
 def resolve_window_aggregate(concept_name: str, agg_method):
     """套用概念级窗口聚合覆盖，返回最终的 agg_method（纯函数，便于单测）。
 
@@ -1455,16 +1482,29 @@ class ConceptResolver:
                         if 'measuredat_minutes' in batch_df.columns:
                             _time_col_out = 'measuredat_minutes'
 
-                        # 🔧 FIX 2026-05: AUMC batch-multi outputs minutes, but single-concept
-                        # path and _align_time_to_admission expect hours. Convert to hours here
-                        # to match single-concept behavior (avoid downstream time-unit mismatch
-                        # when merging sub-concepts, e.g. in _callback_news/mews).
-                        # 转换因子统一走 time_units.minutes_to_hours_series（单一来源，禁止裸 /60.0）。
+                        # AUMC batch-multi output is still on the database-wide
+                        # absolute minute clock.  Route it through the same ICU
+                        # admission alignment as the single-concept path; a
+                        # bare minutes->hours conversion leaves repeat
+                        # admissions shifted by tens of thousands of hours.
                         _db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
                         if _db_name == 'aumc' and _time_col_out == 'measuredat_minutes':
-                            from ..utils.time_units import minutes_to_hours_series
                             batch_df = batch_df.copy()
-                            batch_df['measuredat_minutes'] = minutes_to_hours_series(batch_df['measuredat_minutes'])
+                            batch_df = self._align_time_to_admission(
+                                batch_df,
+                                data_source,
+                                [id_col],
+                                _time_col_out,
+                            )
+                            # The all-covered fast path returns this frame
+                            # directly, bypassing the regular R-format merger
+                            # that normally canonicalises the time-column name.
+                            # Streamed derived vitals therefore need the
+                            # producer to publish the canonical key here.
+                            batch_df = batch_df.rename(
+                                columns={_time_col_out: "charttime"}
+                            )
+                            _time_col_out = "charttime"
 
                         covered_names = set()
                         for concept_name in batch_itemids:
@@ -3904,37 +3944,38 @@ class ConceptResolver:
                         frame[duration_col] = (frame[source.dur_var] - frame[source_index_column]).dt.total_seconds() / 60
                     
                     # Case 2: 数值类型的 endtime (如 AUMC 的毫秒时间)
-                    # 检测：如果 dur_var 是数值且通常大于 index_var，说明是 endtime
+                    # 结束时间语义来自字典契约/列名，不从当前患者批次抽样猜测。
                     elif pd.api.types.is_numeric_dtype(frame[source.dur_var]) and \
                          pd.api.types.is_numeric_dtype(frame[source_index_column]):
-                        # 检查 dur_var 是否大于 index_var（表示它是 endtime）
-                        # 使用抽样检查以提高性能
-                        sample_size = min(100, len(frame))
-                        if sample_size > 0:
-                            sample = frame.head(sample_size)
-                            dur_vals = pd.to_numeric(sample[source.dur_var], errors='coerce')
-                            idx_vals = pd.to_numeric(sample[source_index_column], errors='coerce')
-                            valid_mask = dur_vals.notna() & idx_vals.notna()
-                            if valid_mask.sum() > 0:
-                                # 如果大部分 dur_var > index_var，则认为是 endtime
-                                ratio = (dur_vals[valid_mask] > idx_vals[valid_mask]).mean()
-                                if ratio > 0.8:  # 80% 以上的值满足 dur_var > index_var
-                                    dur_is_end = True
-                                    # 计算 duration = endtime - starttime (数值)
-                                    # 🔧 FIX 2025-02-14: R ricu keeps duration in MINUTES, NOT hours
-                                    # AUMC: 分钟（datasource.py 已将 ms 转为分钟）
-                                    # eICU: 分钟（offset 列本身就是分钟）
-                                    frame[duration_col] = frame[source.dur_var] - frame[source_index_column]
-                                    
-                                    if DEBUG_MODE:
-                                        db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
-                                        print(f"   🔧 {db_name} dur_is_end=True: {source.dur_var}={dur_vals.head(3).tolist()}, "
-                                              f"{source_index_column}={idx_vals.head(3).tolist()}")
+                        if _source_duration_is_end(source):
+                            dur_is_end = True
+                            # 计算 duration = endtime - starttime (数值)
+                            # 🔧 FIX 2025-02-14: R ricu keeps duration in MINUTES, NOT hours
+                            # AUMC: 分钟（datasource.py 已将 ms 转为分钟）
+                            # eICU: 分钟（offset 列本身就是分钟）
+                            frame[duration_col] = (
+                                frame[source.dur_var]
+                                - frame[source_index_column]
+                            )
+
+                            if DEBUG_MODE:
+                                db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
+                                print(
+                                    f"   🔧 {db_name} dur_is_end=True: "
+                                    f"{source.dur_var}="
+                                    f"{frame[source.dur_var].head(3).tolist()}, "
+                                    f"{source_index_column}="
+                                    f"{frame[source_index_column].head(3).tolist()}"
+                                )
                     
                     if dur_is_end and DEBUG_MODE:
                         print(f"   dur_var '{source.dur_var}' → duration '{duration_col}' (示例: {frame[duration_col].head(1).tolist()})")
                     if dur_is_end:
-                        from ..table.duration import UNIT_MINUTES, set_dur_var_unit
+                        from ..table.duration import (
+                            UNIT_MINUTES,
+                            UNIT_SECONDS,
+                            set_dur_var_unit,
+                        )
 
                         frame = _drop_negative_source_end_durations(
                             frame,
@@ -3942,7 +3983,21 @@ class ConceptResolver:
                             source_table=source.table,
                             column=duration_col,
                         )
-                        set_dur_var_unit(frame, UNIT_MINUTES)
+                        source_db = (
+                            data_source.config.name
+                            if hasattr(data_source, "config")
+                            and hasattr(data_source.config, "name")
+                            else ""
+                        )
+                        # SIC Offset/OffsetEnd are seconds.  Every other
+                        # numeric end-offset producer reaching this point is
+                        # normalised to minutes by its source loader.
+                        set_dur_var_unit(
+                            frame,
+                            UNIT_SECONDS
+                            if source_db in {"sic", "sic_demo"}
+                            else UNIT_MINUTES,
+                        )
                 if "dur_var" in frame.columns and pd.api.types.is_numeric_dtype(
                     frame["dur_var"]
                 ):
@@ -5481,17 +5536,13 @@ class ConceptResolver:
             return data
 
         if db_name == 'aumc':
-            # AUMC时间列是绝对时间戳（毫秒，已在datasource.py中转换为分钟）
-            # R ricu 的行为：使用绝对时间（小时），不减去 admittedat
-            # 
-            # 🔧 ricu 兼容模式：
-            # ricu 的 change_id 对于 AUMC 不做时间相对化，因为数据默认是 admissionid 级别
-            # 当 id_var == target_id 时，change_id 直接返回不处理时间
-            # 因此 ricu 导出的 CSV 使用绝对时间（floor(ms/3600000) = 小时）
-            # 
-            # 为了与 ricu 兼容，easyicu 也使用绝对时间：
-            # - 不减去 admittedat
-            # - 只将分钟转换为小时
+            # AUMC timestamps are milliseconds from a database-wide epoch.
+            # The bucketed loader converts them to absolute minutes, so every
+            # timed column still has to subtract this admission's admittedat.
+            # Keeping the absolute clock happened to look correct for first
+            # admissions (whose admittedat is often zero) but shifted later
+            # admissions by up to ~100,000 hours while native-v2 claimed that
+            # charttime was relative to ICU admission.
             
             # 收集所有需要转换的时间列
             cols_to_convert = set()
@@ -5511,13 +5562,127 @@ class ConceptResolver:
             
             if not cols_to_convert:
                 return data
-            
-            # 时间转换：只将分钟转换为小时（不减去 admittedat）— 统一走 time_units
-            from ..utils.time_units import minutes_to_hours_series
+
+            primary_id = next((col for col in id_columns if col in data.columns), None)
+            if primary_id is None:
+                raise ValueError(
+                    "AUMC time alignment requires an admission identifier"
+                )
+            source_contains_admission_origin = "admittedat" in data.columns
+            if source_contains_admission_origin:
+                # Admission/outcome concepts are loaded from the admissions
+                # table itself.  Re-merging the same column would create
+                # admittedat_x/admittedat_y and leave no canonical origin.
+                frame = data.copy()
+            else:
+                try:
+                    admission_times = getattr(self, "_aumc_admissions_cache", None)
+                    if (
+                        admission_times is None
+                        or primary_id not in admission_times.columns
+                        or "admittedat" not in admission_times.columns
+                        or "dischargedat" not in admission_times.columns
+                    ):
+                        admissions = data_source.load_table(
+                            "admissions",
+                            columns=[primary_id, "admittedat", "dischargedat"],
+                            verbose=False,
+                        )
+                        admission_times = (
+                            admissions.data
+                            if hasattr(admissions, "data")
+                            else admissions
+                        )
+                        if "dischargedat" not in admission_times.columns:
+                            admission_times = admission_times.copy()
+                            admission_times["dischargedat"] = pd.NA
+                        admission_times = (
+                            admission_times[
+                                [primary_id, "admittedat", "dischargedat"]
+                            ]
+                            .drop_duplicates(subset=[primary_id], keep="last")
+                            .copy()
+                        )
+                        self._aumc_admissions_cache = admission_times
+                    frame = data.merge(
+                        admission_times,
+                        on=primary_id,
+                        how="left",
+                        validate="many_to_one",
+                    )
+                except Exception as exc:
+                    raise ValueError(
+                        "AUMC time alignment requires admissions.admittedat"
+                    ) from exc
+
+            admittedat = pd.to_numeric(frame["admittedat"], errors="coerce")
+            if admittedat.notna().sum() == 0:
+                raise ValueError(
+                    "AUMC time alignment found no usable admissions.admittedat"
+                )
+            # ICUDataSource normalises AUMC timestamp columns from raw
+            # milliseconds to minutes.  Accept raw milliseconds as a defensive
+            # fallback for custom datasource implementations.
+            admittedat_scale = (
+                3_600_000.0
+                if admittedat.abs().median(skipna=True) > 1_000_000_000
+                else 60.0
+            )
+            origin_hours = admittedat / admittedat_scale
+            discharge_hours = None
+            if "dischargedat" in frame.columns:
+                discharge_hours = (
+                    pd.to_numeric(frame["dischargedat"], errors="coerce")
+                    / admittedat_scale
+                    - origin_hours
+                )
             for col in cols_to_convert:
-                if col in data.columns and pd.api.types.is_numeric_dtype(data[col]):
-                    # 分钟转小时（单一来源转换因子）
-                    data[col] = minutes_to_hours_series(data[col])
+                if col in frame.columns and pd.api.types.is_numeric_dtype(frame[col]):
+                    # Source columns reach this layer as absolute minutes.
+                    frame[col] = (
+                        pd.to_numeric(frame[col], errors="coerce") / 60.0
+                        - origin_hours
+                    )
+            if (
+                not source_contains_admission_origin
+                and index_column
+                and index_column in frame.columns
+            ):
+                from ..utils.time_units import (
+                    ICU_TIME_FALLBACK_LIMIT_HOURS,
+                    ICU_TIME_POST_DISCHARGE_HOURS,
+                    ICU_TIME_PRE_ADMISSION_HOURS,
+                )
+
+                event_hours = pd.to_numeric(
+                    frame[index_column], errors="coerce"
+                )
+                if discharge_hours is None:
+                    upper_hours = pd.Series(
+                        ICU_TIME_FALLBACK_LIMIT_HOURS,
+                        index=frame.index,
+                        dtype="float64",
+                    )
+                else:
+                    upper_hours = discharge_hours.add(
+                        ICU_TIME_POST_DISCHARGE_HOURS
+                    ).fillna(ICU_TIME_FALLBACK_LIMIT_HOURS)
+                invalid_time = event_hours.notna() & (
+                    (event_hours < -ICU_TIME_PRE_ADMISSION_HOURS)
+                    | (event_hours > upper_hours)
+                )
+                excluded = int(invalid_time.sum())
+                if excluded:
+                    logger.warning(
+                        "dropping %d AUMC row(s) outside the ICU episode "
+                        "(24h pre/post allowance)",
+                        excluded,
+                    )
+                    frame = frame.loc[~invalid_time].copy()
+            origin_columns = ["admittedat"]
+            if "dischargedat" not in cols_to_convert:
+                origin_columns.append("dischargedat")
+            data = frame.drop(columns=origin_columns, errors="ignore")
 
             _normalize_duration_to_hours(data)
             return data
@@ -5539,14 +5704,6 @@ class ConceptResolver:
                             cols_to_convert.add(col)
             
             for col in data.columns:
-                # Include 'dur_var' alongside start/stop. SIC interval tables
-                # (e.g. data_range for mech_vent: Offset/OffsetEnd in seconds)
-                # produce a 'dur_var' = OffsetEnd - Offset still in SECONDS, while
-                # the index column is converted to hours below. The aumc branch
-                # already converts 'dur_var'; omitting it for SIC left dur_var in
-                # seconds and an hours index, so win_tbl expansion (end = start +
-                # dur) blew up (e.g. vent_ind exploding to tens of millions of
-                # rows). Convert dur_var on the same seconds->hours basis.
                 if col in ['start', 'stop']:
                     if pd.api.types.is_numeric_dtype(data[col]):
                         cols_to_convert.add(col)
@@ -5558,7 +5715,42 @@ class ConceptResolver:
                         # Values > 5000 cannot be hours (= 208 days), must be seconds
                         data[col] = data[col] / 3600.0
 
+            # SIC interval tables (notably data_range for mech_vent) produce
+            # dur_var in seconds.  It is an interval, not an absolute offset,
+            # so it deliberately stays out of the magnitude-based conversion
+            # above.  Convert an undeclared producer duration exactly once and
+            # declare the resulting unit before the generic duration gate.
+            if (
+                "dur_var" in data.columns
+                and pd.api.types.is_numeric_dtype(data["dur_var"])
+                and not dur_unit
+            ):
+                data["dur_var"] = (
+                    pd.to_numeric(data["dur_var"], errors="coerce") / 3600.0
+                )
+                set_dur_var_unit(data, UNIT_HOURS)
+                dur_unit = UNIT_HOURS
+
             _normalize_duration_to_hours(data)
+            if index_column and index_column in data.columns:
+                from ..utils.time_units import (
+                    ICU_TIME_FALLBACK_LIMIT_HOURS,
+                )
+
+                event_hours = pd.to_numeric(
+                    data[index_column], errors="coerce"
+                )
+                invalid_time = event_hours.notna() & (
+                    event_hours.abs() > ICU_TIME_FALLBACK_LIMIT_HOURS
+                )
+                excluded = int(invalid_time.sum())
+                if excluded:
+                    logger.warning(
+                        "dropping %d SIC row(s) outside the 366-day "
+                        "source-time sanity bound",
+                        excluded,
+                    )
+                    data = data.loc[~invalid_time].copy()
             return data
         
         # Early return checks (no verbose output for performance)
@@ -7237,11 +7429,7 @@ class ConceptResolver:
         id_columns: Optional[List[str]] = None
 
         for name, table in tables.items():
-            # Keep the source table immutable, but avoid eagerly copying every
-            # concept frame before projection.  A 49-concept chemistry module
-            # otherwise holds the resolver outputs, full copies, indexed
-            # copies, and the final outer-join result at the same time.
-            frame = table.data
+            frame = table.data.copy()
 
             # Handle both ICUTable and WinTbl
             if isinstance(table, WinTbl):
@@ -7334,47 +7522,10 @@ class ConceptResolver:
         if len(all_frames) == 1:
             merged = all_frames[0].reset_index()
         else:
-            # Build the outer key union once, then align one value column at a
-            # time.  ``pd.concat(all_frames, axis=1)`` first reindexed every
-            # narrow concept frame to the full union and retained all aligned
-            # intermediates until concatenation completed.  For an eICU
-            # chemistry batch (49 concepts) that path peaked above 18 GiB even
-            # with one concept worker.  The union-first representation keeps
-            # only the final-width columns plus one temporary aligned Series.
+            # 🚀 优化: 用 pd.concat(axis=1) 替代 sequential join
+            # 单次操作完成所有概念的 outer join，避免 N-1 次 _get_indexer
             try:
-                index_names = list(all_frames[0].index.names)
-                key_parts = [
-                    frame.index.to_frame(index=False) for frame in all_frames
-                ]
-                union_keys = pd.concat(key_parts, ignore_index=True)
-                union_keys = union_keys.drop_duplicates(ignore_index=True)
-                del key_parts
-
-                if len(index_names) == 1:
-                    union_index = pd.Index(
-                        union_keys.iloc[:, 0],
-                        name=index_names[0],
-                    )
-                else:
-                    union_index = pd.MultiIndex.from_frame(
-                        union_keys,
-                        names=index_names,
-                    )
-
-                merged_columns = {
-                    column: union_keys.iloc[:, position].array
-                    for position, column in enumerate(union_keys.columns)
-                }
-                seen_columns = set(merged_columns)
-                for frame in all_frames:
-                    for column in frame.columns:
-                        if column in seen_columns:
-                            continue
-                        merged_columns[column] = (
-                            frame[column].reindex(union_index).array
-                        )
-                        seen_columns.add(column)
-                merged = pd.DataFrame(merged_columns, copy=False)
+                merged = pd.concat(all_frames, axis=1).reset_index()
             except Exception:
                 # Fallback: sequential join for edge cases (mismatched index levels)
                 merged = all_frames[0]

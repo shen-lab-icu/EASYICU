@@ -28,7 +28,27 @@ class _Package:
         return None
 
 
-def test_launcher_is_sequential_private_and_uses_bounded_external_streaming(
+@pytest.mark.parametrize(
+    ("available_memory_mb", "expected_budget_mb"),
+    [
+        (8 * 1024, 512),
+        (12 * 1024, 4 * 1024),
+        (20 * 1024, 4 * 1024),
+        (24 * 1024, 8 * 1024),
+        (256 * 1024, 8 * 1024),
+    ],
+)
+def test_nested_workset_budget_scales_with_current_available_memory(
+    available_memory_mb: float,
+    expected_budget_mb: int,
+) -> None:
+    assert (
+        launcher._adaptive_oneshot_budget_mb(available_memory_mb)
+        == expected_budget_mb
+    )
+
+
+def test_launcher_is_sequential_private_and_uses_adaptive_external_streaming(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     source = tmp_path / "source"
@@ -36,6 +56,9 @@ def test_launcher_is_sequential_private_and_uses_bounded_external_streaming(
     calls: list[dict[str, object]] = []
 
     monkeypatch.setattr(launcher, "DEFAULT_DATA_PATHS", {"miiv": str(source)})
+    monkeypatch.setattr(
+        launcher, "_adaptive_oneshot_budget_mb", lambda: 4 * 1024
+    )
 
     def fake_extract(database, **kwargs):
         calls.append({"database": database, **kwargs})
@@ -47,6 +70,7 @@ def test_launcher_is_sequential_private_and_uses_bounded_external_streaming(
         )
         assert os.environ["EASYICU_DUCKDB_THREADS"] == "1"
         assert os.environ["EASYICU_DUCKDB_MEMORY_LIMIT"] == "1GB"
+        assert os.environ["EASYICU_ONESHOT_BUDGET_MB"] == "4096"
         out = Path(kwargs["output_dir"])
         out.mkdir(mode=0o700)
         spill = out / ".easyicu_spill"
@@ -74,7 +98,7 @@ def test_launcher_is_sequential_private_and_uses_bounded_external_streaming(
             "database": "miiv",
             "data_path": str(source),
             "output_dir": tmp_path / "out" / "miiv",
-            "batch_size": 10_000,
+            "batch_size": None,
             "native_export_v2": True,
             "stream_output_batches": True,
             "verbose": True,
@@ -82,6 +106,7 @@ def test_launcher_is_sequential_private_and_uses_bounded_external_streaming(
     ]
     persisted = json.loads((tmp_path / "out" / "run_manifest.json").read_text())
     assert persisted["sources"]["miiv"]["status"] == "verified"
+    assert persisted["runtime_limits"]["nested_workset_budget_mb"] == 4096
     assert persisted["sources"]["miiv"]["spill_directory_removed"] is True
     assert not (tmp_path / "out" / "miiv" / ".easyicu_spill").exists()
     assert not (tmp_path / "out" / ".runtime_tmp").exists()
