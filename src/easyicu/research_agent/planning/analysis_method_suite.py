@@ -439,11 +439,13 @@ _CAUSAL = MethodSuite(
             notes=(
                 "Produced by the host in orchestration/finalize.py over every "
                 "primary-effect row; shared with the association family. "
-                "CAVEAT a reviewer must see: converting an OR to an RR needs a "
-                "baseline event prevalence. The run supplies one when an "
-                "outcome-rate product exists; otherwise compute_e_value "
-                "ASSUMES 0.1 and records that assumption in the row's note. "
-                "The assumed value moves the reported E-value."
+                "Converting an OR to an RR needs a baseline event rate, and it "
+                "is ALWAYS this run's own observed rate, read from its "
+                "outcome-rate product and named in e_values.md. When no "
+                "unambiguous observed rate exists the E-value is not reported "
+                "at all: compute_e_value raises rather than assume one. Until "
+                "2026-07-30 it assumed 0.1, which for OR=2.0 gives E=3.04 "
+                "against 2.68 at an observed 0.214 -- overstating robustness."
             ),
         ),
         AnalysisMethod(
@@ -564,7 +566,7 @@ _ASSOCIATION = MethodSuite(
             reporting_items=("STROBE 12e",),
             notes=(
                 "Same host-produced artifact as the causal family's entry, "
-                "including its baseline-prevalence caveat."
+                "including its observed-event-rate requirement."
             ),
         ),
         AnalysisMethod(
