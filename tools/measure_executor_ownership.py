@@ -114,6 +114,12 @@ class StepOwnership:
     upper_owner: Optional[str]
     lower_owner: Optional[str]
     upper_trace: tuple[tuple[str, bool, str], ...]
+    #: ``(analysis_kind, missing fields)`` for every owner that declined this
+    #: step *solely* because the Planner left one of its own fields undeclared.
+    #: This is the actionable middle of the ledger: not "no owner exists" but
+    #: "an owner exists and is one declaration away", which the previous
+    #: bool-shaped predicates could not report and so nobody counted.
+    declaration_gaps: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
     @property
     def claimed_upper(self) -> bool:
@@ -122,6 +128,12 @@ class StepOwnership:
     @property
     def claimed_lower(self) -> bool:
         return self.lower_owner is not None
+
+    @property
+    def one_declaration_away(self) -> bool:
+        """Unclaimed, but an owner named exactly what it was waiting for."""
+
+        return not self.claimed_upper and bool(self.declaration_gaps)
 
 
 @dataclass
@@ -317,6 +329,11 @@ def measure_plan(
                 upper_trace=tuple(
                     (c.analysis_kind, c.contract_matches, c.outcome) for c in trace
                 ),
+                declaration_gaps=tuple(
+                    (c.analysis_kind, tuple(c.missing_declarations))
+                    for c in trace
+                    if c.missing_declarations
+                ),
             )
         )
     return rows
@@ -347,9 +364,27 @@ def _report(ledger: OwnershipLedger, *, top: int) -> None:
             f"  {ledger.plans_needing_registered_concepts} parsed only after "
             "granting the concept ids the plan itself names"
         )
+    gap_steps = [step for step in steps if step.one_declaration_away]
     print(f"unique recorded steps: {total}")
     print(f"  claimed, upper bound (no receipt owed): {upper:5d}  {upper / total:6.1%}")
     print(f"  claimed, lower bound (receipt owed)   : {lower:5d}  {lower / total:6.1%}")
+    print(
+        f"  unclaimed but ONE DECLARATION AWAY    : {len(gap_steps):5d}  "
+        f"{len(gap_steps) / total:6.1%}"
+    )
+    if gap_steps:
+        gap_fields: Counter = Counter()
+        for step in gap_steps:
+            for kind, missing in step.declaration_gaps:
+                for name in missing:
+                    gap_fields[f"{kind}: {name}"] += 1
+        for label, count in gap_fields.most_common(top):
+            print(f"      {count:5d}  {label}")
+    print(
+        "  (an owner exists and named the field it was waiting for; only owners "
+        "already converted to a typed verdict can report this, so it is a lower "
+        "bound on the real gap, never an upper one)"
+    )
     if ledger.raised:
         print(
             f"  selector raised on {len(ledger.raised)} step(s) -- counted as unclaimed"

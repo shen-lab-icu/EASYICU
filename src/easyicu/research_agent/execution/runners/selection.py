@@ -6,10 +6,12 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 from ...authority.plausibility import FlagOnlyPlausibilityScope
+from ...contracts.ownership_verdict import OwnershipVerdict
 from ...schema import AnalysisPlan, AnalysisStep
 from .adjusted_association_executor import (
+    ADJUSTED_ASSOCIATION_ANALYSIS_KIND,
     adjusted_association_executor_code,
-    adjusted_association_executor_owns_step,
+    adjusted_association_executor_verdict,
 )
 from .exposure_outcome_distribution_render import (
     EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_INPUT,
@@ -86,6 +88,13 @@ class StandardExecutorCandidate:
     analysis_kind: str
     contract_matches: bool
     outcome: str  # "selected" | "declined_receipt_required" | "contract_declined"
+    #: Non-empty only when the owner declined *solely* because the Planner left
+    #: a field it owns undeclared -- i.e. this step is one declaration away from
+    #: a deterministic result.  A plain ``contract_declined`` cannot be read that
+    #: way, which is why 54 of 59 real primary-model steps went to the coder with
+    #: nobody able to say they need not have.
+    missing_declarations: tuple[str, ...] = ()
+    decline_reason: str = ""
 
 
 def select_standard_executor(
@@ -116,18 +125,44 @@ def select_standard_executor(
         plausibility_scope is not None and plausibility_scope.expected_columns
     )
 
-    def _note(analysis_kind: str, contract_matches: bool, outcome: str) -> None:
+    def _note(
+        analysis_kind: str,
+        contract_matches: bool,
+        outcome: str,
+        *,
+        missing_declarations: tuple[str, ...] = (),
+        decline_reason: str = "",
+    ) -> None:
         if trace is not None:
             trace.append(
                 StandardExecutorCandidate(
                     analysis_kind=analysis_kind,
                     contract_matches=contract_matches,
                     outcome=outcome,
+                    missing_declarations=missing_declarations,
+                    decline_reason=decline_reason,
                 )
             )
 
     def _missed(analysis_kind: str) -> None:
         _note(analysis_kind, False, "contract_declined")
+
+    def _declined(verdict: OwnershipVerdict) -> None:
+        """Record a typed decline, keeping the two kinds apart.
+
+        ``contract_matches`` stays False either way -- no owner ran -- but an
+        incomplete declaration carries the fields whose absence is the only
+        reason, so the pre-registration gate can refuse the plan instead of
+        the host silently substituting the coder for an owner it already has.
+        """
+
+        _note(
+            verdict.analysis_kind,
+            False,
+            "contract_declined",
+            missing_declarations=verdict.missing_declarations,
+            decline_reason=verdict.reason,
+        )
 
     def _receipt_declined(analysis_kind: str) -> None:
         _note(analysis_kind, True, "declined_receipt_required")
@@ -347,7 +382,8 @@ def select_standard_executor(
             )
         )
     _missed("trajectory_cluster_stability")
-    if adjusted_association_executor_owns_step(step):
+    adjusted_association_verdict = adjusted_association_executor_verdict(step)
+    if adjusted_association_verdict.claimed:
         # This owner renders the flag-only receipt itself, like the cohort
         # summary and Table 1 owners, so a receipt obligation does not send the
         # study's primary estimate to the stochastic coder.
@@ -359,7 +395,7 @@ def select_standard_executor(
         )
         return _selected(
             StandardExecutorSelection(
-                analysis_kind="adjusted_association_estimates",
+                analysis_kind=ADJUSTED_ASSOCIATION_ANALYSIS_KIND,
                 selection_reason="adjusted_association_model_contract_preflight",
                 progress_message=(
                     "Using planner-declared adjusted-association executor"
@@ -371,5 +407,5 @@ def select_standard_executor(
                 consumed_input_keys=typed_cohort_inputs,
             )
         )
-    _missed("adjusted_association_estimates")
+    _declined(adjusted_association_verdict)
     return None
