@@ -1,7 +1,15 @@
-"""Tests for O17 / O19 / O24 / O25.
+"""Tests for O17 / O24 / O25.
 
 Tight unit tests on the numpy helpers plus end-to-end checks that the
 pipeline integration doesn't crash on the synthetic cohort.
+
+The O19 Cox and Fine-Gray tests that used to open this file are gone with
+``methods/survival.py``.  Nothing was left uncovered: they asserted that a
+hand-written Breslow-tie Newton-Raphson fit recovers a positive log-HR and
+that the subdistribution sketch emits a coefficient — properties of that
+implementation, which no production caller ever used and which ``lifelines``
+(pinned in the runner image) already provides.  Deleting the implementation
+makes those assertions vacuous rather than unowned.
 """
 
 from __future__ import annotations
@@ -11,55 +19,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-
-
-# ---------------------------------------------------------------------------
-# O19 — Cox
-# ---------------------------------------------------------------------------
-
-
-def test_cox_recovers_positive_coefficient(ra):
-    import numpy as np
-
-    rng = np.random.default_rng(7)
-    n = 600
-    x = rng.normal(0, 1, n)
-    # true log-HR = 0.8 for x
-    baseline = rng.exponential(1.0, n)
-    t = baseline * np.exp(-0.8 * x)
-    e = (t < np.quantile(t, 0.7)).astype(int)
-    result = ra.fit_cox_model(
-        times=list(t),
-        events=list(e),
-        covariates=[[v] for v in x],
-        terms=["x"],
-    )
-    assert result.converged
-    assert len(result.coefficients) == 1
-    coef = result.coefficients[0]
-    assert coef.hazard_ratio > 1.0  # positive log-HR => HR > 1
-    assert coef.p_value is not None and coef.p_value < 0.05
-    assert result.concordance is not None and 0.6 < result.concordance < 0.95
-
-
-def test_fine_gray_handles_competing_event(ra):
-    import numpy as np
-
-    rng = np.random.default_rng(3)
-    n = 400
-    x = rng.normal(0, 1, n)
-    t = rng.exponential(1.0, n)
-    codes = rng.choice([0, 1, 2], size=n, p=[0.3, 0.5, 0.2])
-    result = ra.fit_fine_gray_subdistribution(
-        times=list(t),
-        event_codes=list(codes),
-        covariates=[[v] for v in x],
-        terms=["x"],
-        event_of_interest=1,
-    )
-    assert result.n_events > 0
-    # convergence optional; the fit should at least emit a coefficient
-    assert len(result.coefficients) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -168,7 +127,9 @@ def test_hypothesis_generator_ranks_candidates(ra):
                 role=VariableRole.LAB,
                 dtype="int64",
                 missingness=MissingnessProfile(
-                    fraction_missing=0.05, n_missing=25, n_total=500,
+                    fraction_missing=0.05,
+                    n_missing=25,
+                    n_total=500,
                 ),
             ),
             ConceptDescriptor(
@@ -176,7 +137,9 @@ def test_hypothesis_generator_ranks_candidates(ra):
                 role=VariableRole.LAB,
                 dtype="float64",
                 missingness=MissingnessProfile(
-                    fraction_missing=0.20, n_missing=100, n_total=500,
+                    fraction_missing=0.20,
+                    n_missing=100,
+                    n_total=500,
                 ),
             ),
             ConceptDescriptor(
@@ -278,15 +241,19 @@ def test_hypothesis_generator_uses_joint_feasibility_without_dropping(ra):
     )
 
     by_predictor = {c.predictor: c for c in result.candidates}
-    assert by_predictor["marker_joint_ready"].priority_score > by_predictor[
-        "marker_high_single"
-    ].priority_score
+    assert (
+        by_predictor["marker_joint_ready"].priority_score
+        > by_predictor["marker_high_single"].priority_score
+    )
     assert by_predictor["marker_high_single"].variable_coverage == pytest.approx(0.10)
-    assert by_predictor["marker_high_single"].coverage_source == "pair_joint_feasibility"
+    assert (
+        by_predictor["marker_high_single"].coverage_source == "pair_joint_feasibility"
+    )
     assert by_predictor["marker_high_single"].feasibility_note is not None
-    assert "joint completeness below" in by_predictor[
-        "marker_high_single"
-    ].feasibility_note
+    assert (
+        "joint completeness below"
+        in by_predictor["marker_high_single"].feasibility_note
+    )
     assert {"marker_high_single", "marker_joint_ready"}.issubset(by_predictor)
 
 
@@ -396,12 +363,17 @@ def test_hypothesis_generator_saturation_is_density_signal(ra):
     candidate = result.candidates[0]
     assert candidate.literature_saturation_signal == pytest.approx(0.5)
     assert "literature_gap=0.50" in candidate.rationale
-    assert candidate.candidate_id == ra.generate_hypotheses(
-        context=ctx,
-        citations=citations,
-        top_k=1,
-        hypothesis_family_id="family:saturation",
-    ).candidates[0].candidate_id
+    assert (
+        candidate.candidate_id
+        == ra.generate_hypotheses(
+            context=ctx,
+            citations=citations,
+            top_k=1,
+            hypothesis_family_id="family:saturation",
+        )
+        .candidates[0]
+        .candidate_id
+    )
 
 
 def test_hypothesis_generator_uses_caller_supplied_prior_art_saturation(ra):

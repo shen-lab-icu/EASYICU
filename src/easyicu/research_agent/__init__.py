@@ -400,11 +400,6 @@ __all__ = [
     "build_notebook",
     "build_requirements_lockfile",
     "write_notebook",
-    # Survival analysis (O19)
-    "CoxCoefficient",
-    "CoxFitResult",
-    "fit_cox_model",
-    "fit_fine_gray_subdistribution",
     # Missing data (O25)
     "MICEImputationResult",
     "TippingPointResult",
@@ -991,15 +986,6 @@ def __getattr__(name: str):
         from .replication import notebook as _repro_art
 
         return getattr(_repro_art, name)
-    if name in {
-        "CoxCoefficient",
-        "CoxFitResult",
-        "fit_cox_model",
-        "fit_fine_gray_subdistribution",
-    }:
-        from .methods import survival as _surv
-
-        return getattr(_surv, name)
     if name in {
         "MICEImputationResult",
         "TippingPointResult",
