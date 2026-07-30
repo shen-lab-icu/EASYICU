@@ -35,34 +35,37 @@ STEP_ID = "05_missingness_measurement_audit_figure"
 PARENT_STEP = "05_missingness_measurement_audit"
 PRODUCT = "data_quality"
 
+# The producer's real wide schemas, verbatim from a real E1 run's step-04
+# artifacts.  The renderer reads a subset of these; the extra columns are kept
+# in the fixture on purpose, because a consumer that demanded exact equality
+# with its own read-set is the defect this file now guards against.
 _AUDIT_COLUMNS = [
+    "concept",
     "variable",
-    "metric",
-    "level",
-    "count",
-    "percentage",
-    "denominator",
-    "valid_observed_denominator",
-    "raw_nonfinite_n",
-    "plausibility_flag_n",
-    "summary_value",
-    "q1",
-    "q3",
-    "notes",
+    "label",
+    "value_column",
+    "n_total",
+    "measured_one_n",
+    "measured_one_pct",
+    "value_missing_n",
+    "value_missing_pct",
+    "eligible_n",
+    "not_applicable_n",
+    "indicator_semantics",
+    "missingness_kind",
 ]
 _PROCESS_COLUMNS = [
+    "concept",
     "variable",
-    "process_measure",
-    "level",
-    "count",
-    "percentage",
-    "denominator",
-    "valid_observed_denominator",
-    "median",
-    "q1",
-    "q3",
-    "nonfinite_n",
-    "notes",
+    "value_column",
+    "n_total",
+    "measured_one_n",
+    "measurement_total_n",
+    "measurement_count_max",
+    "repeat_measured_n",
+    "eligible_n",
+    "not_applicable_n",
+    "missingness_kind",
 ]
 _N = 1000
 
@@ -84,219 +87,78 @@ def _step(**updates) -> AnalysisStep:
     return AnalysisStep.model_validate(payload)
 
 
-def _numeric_variable_rows(variable: str, missing: int) -> list[list]:
-    """Emit the real four-row shape: two tallies plus two distribution summaries."""
+def _audit_row(
+    variable: str,
+    *,
+    missing: int,
+    not_applicable: int = 0,
+) -> list:
+    """One wide audit row, with both partitions satisfied by construction."""
 
-    observed = _N - missing
+    eligible = _N - not_applicable
+    measured = eligible - missing
     return [
-        # Counting rows carry count/percentage and no distribution summary.
-        [
-            variable,
-            "missing",
-            "",
-            float(missing),
-            100.0 * missing / _N,
-            _N,
-            float(_N),
-            0.0,
-            0.0,
-            None,
-            None,
-            None,
-            "source missingness",
-        ],
-        [
-            variable,
-            "valid_observed",
-            "",
-            float(observed),
-            100.0 * observed / _N,
-            _N,
-            float(_N),
-            0.0,
-            0.0,
-            None,
-            None,
-            None,
-            "finite observed",
-        ],
-        # Distribution rows carry summary_value/q1/q3 and NO count by design.
-        [
-            variable,
-            "median",
-            "",
-            None,
-            None,
-            _N,
-            float(_N),
-            0.0,
-            0.0,
-            1.0,
-            0.0,
-            2.0,
-            "median among observed",
-        ],
-        [
-            variable,
-            "iqr",
-            "",
-            None,
-            None,
-            _N,
-            float(_N),
-            0.0,
-            0.0,
-            2.0,
-            0.0,
-            2.0,
-            "iqr among observed",
-        ],
+        variable,
+        variable,
+        variable.replace("_", " "),
+        f"{variable}_value",
+        _N,
+        measured,
+        100.0 * measured / _N,
+        missing,
+        100.0 * missing / _N,
+        eligible,
+        not_applicable,
+        "measurement",
+        "measurement_missing",
+    ]
+
+
+def _process_row(
+    variable: str,
+    *,
+    measured: int,
+    repeat: int,
+    not_applicable: int = 0,
+) -> list:
+    return [
+        variable,
+        variable,
+        f"{variable}_value",
+        _N,
+        measured,
+        measured * 3,
+        5,
+        repeat,
+        _N - not_applicable,
+        not_applicable,
+        "measurement_missing",
     ]
 
 
 def _audit_frame() -> pd.DataFrame:
-    rows = _numeric_variable_rows("lact_first", missing=400)
-    rows += _numeric_variable_rows("sep3_sofa2_max", missing=0)
-    # A categorical variable closes through level_distribution rows instead.
-    rows += [
+    return pd.DataFrame(
         [
-            "sex",
-            "missing",
-            "",
-            0.0,
-            0.0,
-            _N,
-            float(_N),
-            None,
-            None,
-            None,
-            None,
-            None,
-            "source missingness",
+            _audit_row("lact_first", missing=400),
+            _audit_row("sep3_sofa2_max", missing=0),
+            # A conditional variable: applicable to a tenth of the cohort, and
+            # fully observed within it.  Its cohort-stated missing share is 0 %,
+            # which is exactly the number a reader can misread.
+            _audit_row("death_time", missing=0, not_applicable=900),
         ],
-        [
-            "sex",
-            "level_distribution",
-            "Female",
-            440.0,
-            44.0,
-            _N,
-            float(_N),
-            None,
-            None,
-            None,
-            None,
-            None,
-            "category share",
-        ],
-        [
-            "sex",
-            "level_distribution",
-            "Male",
-            560.0,
-            56.0,
-            _N,
-            float(_N),
-            None,
-            None,
-            None,
-            None,
-            None,
-            "category share",
-        ],
-    ]
-    return pd.DataFrame(rows, columns=_AUDIT_COLUMNS)
+        columns=_AUDIT_COLUMNS,
+    )
 
 
 def _process_frame() -> pd.DataFrame:
-    rows = [
+    return pd.DataFrame(
         [
-            "lact_n",
-            "count_missing",
-            "",
-            0,
-            0.0,
-            _N,
-            float(_N),
-            0.0,
-            0.0,
-            1.0,
-            0.0,
-            "count missingness",
+            _process_row("lact_first", measured=600, repeat=300),
+            _process_row("sep3_sofa2_max", measured=1000, repeat=0),
+            _process_row("death_time", measured=100, repeat=0, not_applicable=900),
         ],
-        [
-            "lact_n",
-            "count_frequency_summary",
-            "",
-            _N,
-            100.0,
-            _N,
-            float(_N),
-            1.0,
-            0.0,
-            2.0,
-            0.0,
-            "count frequency",
-        ],
-        # One measure split across levels: the levels partition its denominator.
-        [
-            "lact_measured",
-            "measured_status",
-            "0.0",
-            400,
-            40.0,
-            _N,
-            float(_N),
-            None,
-            None,
-            None,
-            0.0,
-            "not measured",
-        ],
-        [
-            "lact_measured",
-            "measured_status",
-            "1.0",
-            600,
-            60.0,
-            _N,
-            float(_N),
-            None,
-            None,
-            None,
-            0.0,
-            "measured",
-        ],
-        [
-            "sep3_sofa2_max",
-            "count_positive_rows",
-            "",
-            360,
-            36.0,
-            _N,
-            None,
-            None,
-            None,
-            None,
-            None,
-            "positive rows",
-        ],
-        [
-            "sep3_sofa2_max",
-            "count_zero_rows",
-            "",
-            640,
-            64.0,
-            _N,
-            None,
-            None,
-            None,
-            None,
-            None,
-            "zero rows",
-        ],
-    ]
-    return pd.DataFrame(rows, columns=_PROCESS_COLUMNS)
+        columns=_PROCESS_COLUMNS,
+    )
 
 
 def _register(
@@ -484,15 +346,22 @@ def test_owner_rejects_unbound_or_scientific_contracts() -> None:
         )
 
 
-def test_distribution_summary_rows_are_not_read_as_broken_accounting(
+def test_a_conditional_variable_is_drawn_and_marked_not_rescaled(
     tmp_path: Path,
 ) -> None:
-    """The exact real-run regression: median/IQR rows carry no count by design."""
+    """The real trap this panel can set for a reader.
+
+    ``death_time`` applies to a tenth of the cohort and is fully observed
+    within it, so its cohort-stated missing share is 0 %.  Drawn alone that
+    reads as a completely observed variable.  The renderer keeps the parent's
+    own number -- rescaling it to the eligible stays would be the renderer
+    choosing a denominator -- and marks the variable instead.
+    """
 
     audit = _audit_frame()
-    summary_rows = audit["metric"].isin({"median", "iqr"})
-    assert summary_rows.sum() == 4
-    assert audit.loc[summary_rows, "count"].isna().all()
+    conditional = audit["variable"].eq("death_time")
+    assert audit.loc[conditional, "value_missing_pct"].tolist() == [0.0]
+    assert audit.loc[conditional, "not_applicable_n"].tolist() == [900]
 
     run_dir, manifest = _binding(tmp_path, audit=audit)
     out_dir, summary = _run(run_dir, manifest)
@@ -503,6 +372,14 @@ def test_distribution_summary_rows_are_not_read_as_broken_accounting(
         MEASUREMENT_PROCESS_AUDIT_INPUT: len(_process_frame()),
     }
     assert (out_dir / f"{PRODUCT}.png").is_file()
+    # Panel B is what lets the reader see the 0 % is over a cohort the
+    # variable barely applies to, so the eligible share must be drawn.
+    process_source = pd.read_csv(
+        out_dir / f"{PRODUCT}_measurement_process_source_data.csv"
+    )
+    assert process_source.loc[
+        process_source["variable"].eq("death_time"), "eligible_n"
+    ].tolist() == [100]
 
 
 def test_runner_renders_complete_source_backed_bundle(tmp_path: Path) -> None:
@@ -511,30 +388,30 @@ def test_runner_renders_complete_source_backed_bundle(tmp_path: Path) -> None:
 
     assert summary["status"] == "ok"
     assert summary["audited_variable_count"] == 3
-    assert summary["measurement_process_cell_count"] == 6
+    # Three variables x the three declared stay-count measures.
+    assert summary["measurement_process_cell_count"] == 9
     for suffix in ("png", "svg", "pdf", "tiff"):
         assert (out_dir / f"{PRODUCT}.{suffix}").is_file()
 
     audit_source = pd.read_csv(out_dir / f"{PRODUCT}_missingness_source_data.csv")
-    assert audit_source["source_row_index"].tolist() == list(range(11))
+    assert audit_source["source_row_index"].tolist() == list(range(3))
     process_source = pd.read_csv(
         out_dir / f"{PRODUCT}_measurement_process_source_data.csv"
     )
-    assert process_source["source_row_index"].tolist() == list(range(6))
+    assert process_source["source_row_index"].tolist() == list(range(3))
 
     # The panel projection is a verbatim row subset of the parent: every value
     # and every row position is the parent's own, so it stays traceable.
     panel = pd.read_csv(out_dir / f"{PRODUCT}_source_missingness_panel_source_data.csv")
-    assert panel["variable"].tolist() == ["lact_first", "sep3_sofa2_max", "sex"]
-    assert panel["metric"].tolist() == ["missing"] * 3
-    assert panel["count"].tolist() == [400.0, 0.0, 0.0]
-    assert panel["percentage"].tolist() == [40.0, 0.0, 0.0]
-    assert panel["source_row_index"].tolist() == [0, 4, 8]
+    assert panel["variable"].tolist() == ["lact_first", "sep3_sofa2_max", "death_time"]
+    assert panel["value_missing_n"].tolist() == [400, 0, 0]
+    assert panel["value_missing_pct"].tolist() == [40.0, 0.0, 0.0]
+    assert panel["source_row_index"].tolist() == [0, 1, 2]
     parent = pd.read_csv(out_dir / f"{PRODUCT}_missingness_source_data.csv")
     for _, row in panel.iterrows():
         origin = parent.loc[parent["source_row_index"] == row["source_row_index"]]
-        assert origin["count"].tolist() == [row["count"]]
-        assert origin["percentage"].tolist() == [row["percentage"]]
+        assert origin["value_missing_n"].tolist() == [row["value_missing_n"]]
+        assert origin["value_missing_pct"].tolist() == [row["value_missing_pct"]]
 
     contract = json.loads(
         (out_dir / f"{PRODUCT}.figure_contract.json").read_text(encoding="utf-8")
@@ -571,67 +448,137 @@ def test_runner_renders_complete_source_backed_bundle(tmp_path: Path) -> None:
     ]
 
 
-def test_a_summary_row_reported_as_a_tally_is_rejected(tmp_path: Path) -> None:
+# The long-format schema these tests were written against (metric / level /
+# summary_value rows) was never emitted by the deterministic producer, so the
+# row-kind properties -- "a median reported as a tally", "an unknown metric",
+# "levels that do not partition their measure" -- describe a table that does
+# not exist.  Each is replaced below by the property the real wide schema has
+# in its place; nothing is merely deleted.
+
+
+def test_counts_that_do_not_partition_the_eligible_stays_are_rejected(
+    tmp_path: Path,
+) -> None:
+    """Replaces the long-format missing/valid-observed partition check."""
+
     audit = _audit_frame()
-    audit.loc[audit["metric"].eq("median"), "count"] = 5.0
+    audit.loc[audit["variable"].eq("lact_first"), "measured_one_n"] = 500
     run_dir, manifest = _binding(tmp_path, audit=audit)
-    with pytest.raises(ValueError, match="as a tally"):
+    with pytest.raises(ValueError, match="partition its eligible stays"):
         _run(run_dir, manifest)
     assert not (run_dir / "steps" / STEP_ID / "outputs" / f"{PRODUCT}.png").exists()
 
 
-def test_a_counting_row_reported_as_a_distribution_is_rejected(
+def test_eligibility_that_does_not_partition_the_cohort_is_rejected(
     tmp_path: Path,
 ) -> None:
-    audit = _audit_frame()
-    audit.loc[audit["metric"].eq("valid_observed"), "summary_value"] = 1.0
-    run_dir, manifest = _binding(tmp_path, audit=audit)
-    with pytest.raises(ValueError, match="as a distribution"):
-        _run(run_dir, manifest)
+    """The second partition: the one a single-denominator schema could not state."""
 
-
-def test_counts_that_do_not_partition_the_denominator_are_rejected(
-    tmp_path: Path,
-) -> None:
     audit = _audit_frame()
-    target = audit["variable"].eq("lact_first") & audit["metric"].eq("valid_observed")
-    audit.loc[target, "count"] = 500.0
-    audit.loc[target, "percentage"] = 50.0
+    audit.loc[audit["variable"].eq("death_time"), "not_applicable_n"] = 800
     run_dir, manifest = _binding(tmp_path, audit=audit)
-    with pytest.raises(ValueError, match="partition its denominator"):
+    with pytest.raises(ValueError, match="partition the cohort"):
         _run(run_dir, manifest)
 
 
 def test_a_percentage_that_does_not_reconcile_is_rejected(tmp_path: Path) -> None:
     audit = _audit_frame()
-    audit.loc[audit["variable"].eq("sex") & audit["level"].eq("Male"), "percentage"] = (
-        99.0
-    )
+    audit.loc[audit["variable"].eq("lact_first"), "value_missing_pct"] = 99.0
     run_dir, manifest = _binding(tmp_path, audit=audit)
     with pytest.raises(ValueError, match="percentage does not reconcile"):
         _run(run_dir, manifest)
 
 
-def test_levels_that_do_not_partition_their_measure_are_rejected(
+def test_a_percentage_restated_over_the_wrong_denominator_is_rejected(
     tmp_path: Path,
 ) -> None:
-    process = _process_frame()
-    target = process["process_measure"].eq("measured_status") & process["level"].eq(
-        "1.0"
-    )
-    process.loc[target, "count"] = 500
-    process.loc[target, "percentage"] = 50.0
-    run_dir, manifest = _binding(tmp_path, process=process)
-    with pytest.raises(ValueError, match="do not partition its denominator"):
-        _run(run_dir, manifest)
+    """The conditional variable's share must stay stated over the cohort.
 
+    40 % of ``death_time``'s eligible stays is a defensible number, but it is
+    not the number this column holds, and drawing it beside cohort-stated bars
+    would put two denominators on one axis.
+    """
 
-def test_an_unknown_metric_is_rejected_rather_than_ignored(tmp_path: Path) -> None:
     audit = _audit_frame()
-    audit.loc[audit["metric"].eq("iqr"), "metric"] = "invented_metric"
+    conditional = audit["variable"].eq("death_time")
+    audit.loc[conditional, "value_missing_n"] = 40
+    audit.loc[conditional, "measured_one_n"] = 60
+    audit.loc[conditional, "value_missing_pct"] = 40.0  # over eligible_n, not n_total
     run_dir, manifest = _binding(tmp_path, audit=audit)
-    with pytest.raises(ValueError, match="unsupported metric"):
+    with pytest.raises(ValueError, match="against the cohort it is stated over"):
         _run(run_dir, manifest)
+
+
+def test_measurement_counts_that_do_not_nest_are_rejected(tmp_path: Path) -> None:
+    """Replaces the long-format level-partition check."""
+
+    process = _process_frame()
+    process.loc[process["variable"].eq("lact_first"), "repeat_measured_n"] = 900
+    run_dir, manifest = _binding(tmp_path, process=process)
+    with pytest.raises(ValueError, match="do not nest"):
+        _run(run_dir, manifest)
+
+
+def test_a_measure_larger_than_its_cohort_is_rejected(tmp_path: Path) -> None:
+    """Replaces the long-format count-vs-denominator check."""
+
+    process = _process_frame()
+    process.loc[process["variable"].eq("sep3_sofa2_max"), "measured_one_n"] = _N + 1
+    run_dir, manifest = _binding(tmp_path, process=process)
+    with pytest.raises(ValueError, match="other than a stay count"):
+        _run(run_dir, manifest)
+
+
+def test_a_repeated_variable_row_is_rejected(tmp_path: Path) -> None:
+    """Replaces the long-format repeated-cell check.
+
+    One wide row per variable is the schema; a second row is a second answer
+    to the same question, and the panel would silently draw one of them.
+    """
+
+    audit = pd.concat([_audit_frame(), _audit_frame().iloc[[0]]], ignore_index=True)
+    run_dir, manifest = _binding(tmp_path, audit=audit)
+    with pytest.raises(ValueError, match="appears twice in the audit"):
+        _run(run_dir, manifest)
+
+    process = pd.concat(
+        [_process_frame(), _process_frame().iloc[[0]]], ignore_index=True
+    )
+    run_dir, manifest = _binding(tmp_path / "second", process=process)
+    with pytest.raises(ValueError, match="appears twice in the measurement-process"):
+        _run(run_dir, manifest)
+
+
+def test_a_producer_column_the_figure_reads_cannot_go_missing(
+    tmp_path: Path,
+) -> None:
+    """The W1 regression, stated from the consumer's side.
+
+    A producer that stops emitting a column this renderer reads must fail
+    closed and name the column -- the failure that actually happened said only
+    "product contract is unsupported" and named nothing.
+    """
+
+    audit = _audit_frame().drop(columns=["eligible_n"])
+    run_dir, manifest = _binding(tmp_path, audit=audit)
+    with pytest.raises(ValueError, match="omits the columns this figure reads"):
+        _run(run_dir, manifest)
+
+
+def test_extra_producer_columns_do_not_break_the_consumer(tmp_path: Path) -> None:
+    """The other half of W1: exact equality was the wrong consumer contract.
+
+    The producer emits 27 columns and this renderer reads seven of them.  A
+    column added upstream must not turn a working figure into a host crash.
+    """
+
+    audit = _audit_frame()
+    audit["a_column_added_upstream_later"] = 1
+    run_dir, manifest = _binding(tmp_path, audit=audit)
+    out_dir, summary = _run(run_dir, manifest)
+
+    assert summary["status"] == "ok"
+    assert (out_dir / f"{PRODUCT}.png").is_file()
 
 
 def test_a_tampered_digest_fails_closed(tmp_path: Path) -> None:
@@ -659,8 +606,14 @@ def test_a_declared_schema_that_disagrees_with_the_bytes_fails_closed(
     contract = manifest["inputs"][MISSINGNESS_MEASUREMENT_AUDIT_INPUT][
         "product_contract"
     ]
-    contract["columns"] = contract["columns"][:-1]
-    with pytest.raises(ValueError, match="product contract is unsupported"):
+    # Drop a column the renderer never reads: the declared schema must still
+    # match the bytes, because the digest pins one and the contract describes
+    # the other.  A consumer that only checked its own read-set would accept a
+    # contract that has stopped describing the artifact.
+    contract["columns"] = [
+        name for name in contract["columns"] if name != "missingness_kind"
+    ]
+    with pytest.raises(ValueError, match="disagree with its product contract"):
         _run(run_dir, manifest)
 
 
@@ -689,82 +642,34 @@ def test_a_widened_or_foreign_manifest_fails_closed(tmp_path: Path) -> None:
         _run(run_dir, manifest)
 
 
-def test_real_e1_row_kind_mix_is_accepted(tmp_path: Path) -> None:
-    """Lock the real E1 shape: 13 numeric variables plus one categorical."""
+def test_real_e1_shape_is_accepted(tmp_path: Path) -> None:
+    """Lock the real E1 shape: 15 audited variables, one of them conditional."""
 
-    rows: list[list] = []
-    for index in range(13):
-        rows += _numeric_variable_rows(f"concept_{index:02d}", missing=index * 10)
-    rows += [
+    audit = pd.DataFrame(
+        [_audit_row(f"concept_{index:02d}", missing=index * 10) for index in range(14)]
+        + [_audit_row("death_time", missing=0, not_applicable=898)],
+        columns=_AUDIT_COLUMNS,
+    )
+    process = pd.DataFrame(
         [
-            "sex",
-            "missing",
-            "",
-            0.0,
-            0.0,
-            _N,
-            float(_N),
-            None,
-            None,
-            None,
-            None,
-            None,
-            "source missingness",
-        ],
-        [
-            "sex",
-            "level_distribution",
-            "Female",
-            440.0,
-            44.0,
-            _N,
-            float(_N),
-            None,
-            None,
-            None,
-            None,
-            None,
-            "category share",
-        ],
-        [
-            "sex",
-            "level_distribution",
-            "Male",
-            560.0,
-            56.0,
-            _N,
-            float(_N),
-            None,
-            None,
-            None,
-            None,
-            None,
-            "category share",
-        ],
-    ]
-    audit = pd.DataFrame(rows, columns=_AUDIT_COLUMNS)
-    assert len(audit) == 55
-    assert audit["metric"].value_counts().to_dict() == {
-        "missing": 14,
-        "valid_observed": 13,
-        "median": 13,
-        "iqr": 13,
-        "level_distribution": 2,
-    }
+            _process_row(
+                f"concept_{index:02d}", measured=_N - index * 10, repeat=index * 5
+            )
+            for index in range(14)
+        ]
+        + [_process_row("death_time", measured=102, repeat=0, not_applicable=898)],
+        columns=_PROCESS_COLUMNS,
+    )
+    assert len(audit) == 15
+    assert (audit["not_applicable_n"] > 0).sum() == 1
 
-    run_dir, manifest = _binding(tmp_path, audit=audit)
-    _out_dir, summary = _run(run_dir, manifest)
+    run_dir, manifest = _binding(tmp_path, audit=audit, process=process)
+    out_dir, summary = _run(run_dir, manifest)
+
     assert summary["status"] == "ok"
-    assert summary["audited_variable_count"] == 14
-    assert summary["source_rows_consumed"][MISSINGNESS_MEASUREMENT_AUDIT_INPUT] == 55
-
-
-# --- Fail-closed gaps in the row validators -------------------------------
-#
-# The real E1 tables satisfy all of these, so none of them blocked the run.
-# A sealed executor that publishes a figure straight from an upstream table is
-# the only thing standing between an inconsistent audit and a manuscript
-# panel, so each invariant it silently assumed is asserted here instead.
+    assert summary["audited_variable_count"] == 15
+    assert summary["measurement_process_cell_count"] == 45
+    assert (out_dir / f"{PRODUCT}.png").is_file()
 
 
 def _audit_rows_error(mutate) -> str:
@@ -787,88 +692,61 @@ def test_real_tables_still_pass_every_tightened_check():
     per_variable = _validate_audit_rows(_audit_frame())
     cells = _validate_process_rows(_process_frame())
 
-    assert set(per_variable) == {"lact_first", "sep3_sofa2_max", "sex"}
-    assert cells
+    assert set(per_variable) == {"lact_first", "sep3_sofa2_max", "death_time"}
+    # The conditional variable is the one the panel must mark.
+    assert [name for name, entry in per_variable.items() if entry["conditional"]] == [
+        "death_time"
+    ]
+    assert len(cells) == 9
 
 
-def test_a_median_outside_its_own_quartiles_is_rejected():
-    """``q1 <= q3`` passes a median copied from a different variable."""
+def test_a_non_integer_count_is_rejected_rather_than_coerced():
+    """Replaces the long-format quartile checks.
 
-    def mutate(frame: pd.DataFrame) -> None:
-        target = (frame["variable"] == "lact_first") & (frame["metric"] == "median")
-        frame.loc[target, "summary_value"] = 99.0
+    The wide schema has no distribution rows, so a median cannot fall outside
+    its own quartiles here.  What can still arrive is a count that is not a
+    whole number of stays, and reading it as one would silently round patients.
+    """
 
-    assert "does not reconcile with its own q1-q3 range" in _audit_rows_error(mutate)
-
-
-def test_an_iqr_that_is_not_the_reported_range_width_is_rejected():
-    def mutate(frame: pd.DataFrame) -> None:
-        target = (frame["variable"] == "lact_first") & (frame["metric"] == "iqr")
-        frame.loc[target, "summary_value"] = 7.0
-
-    assert "does not reconcile with its own q1-q3 range" in _audit_rows_error(mutate)
+    message = _audit_rows_error(
+        lambda frame: frame.__setitem__("measured_one_n", 599.5)
+    )
+    assert "whole-stay count" in message
 
 
-def test_level_counts_must_agree_with_a_valid_observed_total_reported_beside_them():
-    """A variable stating both is stating the same observed rows twice."""
+def test_an_empty_audit_is_rejected_rather_than_drawn_blank():
+    """A figure with no variables is a blank claim, not a valid rendering."""
 
-    def mutate(frame: pd.DataFrame) -> None:
-        extra = frame.loc[frame["variable"] == "sex"].iloc[[0]].copy()
-        extra["metric"] = "valid_observed"
-        extra["level"] = ""
-        extra["count"] = 900.0
-        extra["percentage"] = 100.0 * 900.0 / _N
-        frame.loc[len(frame)] = extra.iloc[0]
-
-    message = _audit_rows_error(mutate)
-    assert "level counts sum to 1000" in message
-    assert "valid-observed total is 900" in message
+    with pytest.raises(ValueError, match="audits no variable"):
+        _validate_audit_rows(_audit_frame().iloc[0:0])
+    with pytest.raises(ValueError, match="audits no variable"):
+        _validate_process_rows(_process_frame().iloc[0:0])
 
 
-def test_consistent_level_counts_and_valid_observed_total_are_accepted():
-    frame = _audit_frame()
-    extra = frame.loc[frame["variable"] == "sex"].iloc[[0]].copy()
-    extra["metric"] = "valid_observed"
-    extra["level"] = ""
-    extra["count"] = 1000.0
-    extra["percentage"] = 100.0
-    frame.loc[len(frame)] = extra.iloc[0]
+def test_a_measurement_total_is_never_treated_as_a_stay_count():
+    """``measurement_total_n`` counts measurements, not stays.
 
-    per_variable = _validate_audit_rows(frame)
+    A real run reported 24,179 measurements over 1,000 stays.  It is excluded
+    from the panel by construction; this pins that the panel's declared
+    measures are the stay counts only, so a future edit cannot quietly put a
+    measurement total on a 0-100 % axis.
+    """
 
-    assert per_variable["sex"]["valid_observed"] == 1000
+    from easyicu.research_agent.execution.runners import (
+        missingness_measurement_figure_executor as module,
+    )
 
-
-def test_a_repeated_unlevelled_process_cell_is_rejected():
-    """Levelled rows are covered by the partition check; a lone measure was not."""
-
-    def mutate(frame: pd.DataFrame) -> None:
-        duplicate = frame.loc[frame["process_measure"] == "count_missing"].iloc[[0]]
-        frame.loc[len(frame)] = duplicate.iloc[0]
-
-    assert "repeats the cell 'count_missing'" in _process_rows_error(mutate)
-
-
-def test_a_process_median_outside_its_own_quartiles_is_rejected():
-    def mutate(frame: pd.DataFrame) -> None:
-        target = frame["process_measure"] == "count_frequency_summary"
-        frame.loc[target, "median"] = 50.0
-
-    assert "median outside its own q1-q3 range" in _process_rows_error(mutate)
+    drawn = {column for column, _label in module._PROCESS_MEASURES}
+    assert drawn == {"eligible_n", "measured_one_n", "repeat_measured_n"}
+    assert "measurement_total_n" not in drawn
+    assert "measurement_count_max" not in drawn
+    assert "measurement_count_median_when_measured" not in drawn
+    frame = _process_frame()
+    cells = _validate_process_rows(frame)
+    for cell in cells:
+        assert 0.0 <= cell["percentage"] <= 100.0
 
 
-# --------------------------------------------------------------------------
-# L0: the renderer claims a step by its typed contract, not by the spelling of
-# the figure product.  The id is a Planner-owned label; competence is fixed by
-# the two required inputs and their verified schemas.
-# --------------------------------------------------------------------------
-
-
-#: Transcribed verbatim from the real 12-step authority plan
-#: (``analysis_plan_revision_3``) of run ``run_20260728T131514_c54ead``.  It is
-#: a *fixture*: the production renderer must contain no branch that recognises
-#: this benchmark item, and the assertions below are about the shape of the
-#: contract, never about the case.
 _REAL_PLAN_FIGURE_STEP = {
     "step_id": "05_missingness_measurement_process_audit_figure",
     "planned_analysis_role": "auxiliary",

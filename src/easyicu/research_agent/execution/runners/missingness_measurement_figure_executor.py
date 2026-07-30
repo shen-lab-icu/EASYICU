@@ -5,14 +5,15 @@ direct parent under ``all_rows`` contracts and renders the availability and
 measurement-process context the parent already measured.  It does not read the
 cohort, choose variables, redefine missingness, or fit a model.
 
-The two tables carry **two structurally different row kinds**, and conflating
-them is what this executor exists to get right.  Counting rows (source
-missingness, valid-observed totals, categorical level distributions) reconcile
-``count`` against ``denominator``.  Distribution-summary rows (median, IQR)
-legitimately carry an empty ``count`` because a median is not a tally; they
-reconcile through ``summary_value``/``q1``/``q3`` instead.  A validator that
-demands a count from every row rejects the summary rows as malformed
-accounting when they are exactly what the parent's schema prescribes.
+Each parent publishes one wide row per audited variable, and the thing this
+executor exists to get right is that **one row carries two denominators**.
+``eligible_n`` and ``not_applicable_n`` partition the cohort; within the
+eligible stays, ``measured_one_n`` and ``value_missing_n`` partition again.
+Both are re-derived here.  The published missing share is stated over the
+*cohort*, so a variable that applies to only part of it can report a small
+missing share while being unobservable for most stays -- that number is drawn
+as the parent computed it and the variable is marked, never silently rescaled
+to whichever denominator would look tidier.
 """
 
 from __future__ import annotations
@@ -74,40 +75,51 @@ def _is_safe_figure_product_id(value: Any) -> bool:
     return bool(_FIGURE_PRODUCT_ID.fullmatch(str(value or "")))
 
 
+# The columns this renderer READS from each parent, not the parent's full
+# schema.  The previous contract demanded exact equality with a 13-column
+# long-format table (``metric``/``level``/``count``/``summary_value`` ...) that
+# the deterministic producer never emitted: that shape came from an
+# LLM-generated audit step, and when ``deterministic_missingness`` took
+# ownership of the product it emitted a 27-column wide table with zero columns
+# in common.  Nothing in the tree has produced the old schema since, so this
+# executor could not succeed at all -- it failed inside host code with
+# "product contract is unsupported".
+#
+# Exact equality is also the wrong contract for a consumer even when it
+# matches: it makes any column the producer ADDS a fatal error in a renderer
+# that never reads it.  A consumer states what it needs; the digest binding
+# already pins exactly which bytes were drawn, and the arithmetic below is
+# re-derived rather than trusted.
 _AUDIT_COLUMNS = (
     "variable",
-    "metric",
-    "level",
-    "count",
-    "percentage",
-    "denominator",
-    "valid_observed_denominator",
-    "raw_nonfinite_n",
-    "plausibility_flag_n",
-    "summary_value",
-    "q1",
-    "q3",
-    "notes",
+    "n_total",
+    "eligible_n",
+    "not_applicable_n",
+    "measured_one_n",
+    "value_missing_n",
+    "value_missing_pct",
 )
 _PROCESS_COLUMNS = (
     "variable",
-    "process_measure",
-    "level",
-    "count",
-    "percentage",
-    "denominator",
-    "valid_observed_denominator",
-    "median",
-    "q1",
-    "q3",
-    "nonfinite_n",
-    "notes",
+    "n_total",
+    "eligible_n",
+    "measured_one_n",
+    "repeat_measured_n",
 )
-# Row kinds in the missingness audit.  ``_COUNT_METRICS`` tally stays against a
-# denominator; ``_SUMMARY_METRICS`` describe the distribution of the observed
-# values and carry no count by construction.
-_COUNT_METRICS = frozenset({"missing", "valid_observed", "level_distribution"})
-_SUMMARY_METRICS = frozenset({"median", "iqr"})
+#: Measurement-process measures drawn on panel B.  Each is a count of *stays*
+#: and is therefore commensurable with ``n_total``; that is the property the
+#: panel's shared 0-100% scale depends on, and it is re-checked per row.
+#: ``measurement_total_n`` / ``measurement_count_max`` /
+#: ``measurement_count_median_when_measured`` are deliberately excluded: they
+#: count measurements, not stays (a real run reported 24,179 measurements over
+#: 1,000 stays), so drawing them on this scale would be arithmetic nonsense.
+#: A measure the producer stops emitting fails closed rather than silently
+#: dropping a column from the reader's grid.
+_PROCESS_MEASURES = (
+    ("eligible_n", "Applicable"),
+    ("measured_one_n", "Measured >=1"),
+    ("repeat_measured_n", "Measured >1"),
+)
 _PRODUCT_BY_INPUT = {
     MISSINGNESS_MEASUREMENT_AUDIT_INPUT: "missingness_measurement_audit",
     MEASUREMENT_PROCESS_AUDIT_INPUT: "measurement_process_audit",
@@ -239,16 +251,23 @@ def _load_one_binding(
         raise ValueError(f"{input_key} digest verification failed")
 
     row_count = product_contract.get("row_count")
+    declared_columns = product_contract.get("columns")
     if (
-        product_contract.get("columns") != expected_columns
+        not isinstance(declared_columns, list)
         or isinstance(row_count, bool)
         or not isinstance(row_count, int)
         or row_count < 1
         or consumption.get("verified_row_count") != row_count
     ):
         raise ValueError(f"{input_key} product contract is unsupported")
+    absent = [name for name in expected_columns if name not in declared_columns]
+    if absent:
+        raise ValueError(
+            f"{input_key} product contract omits the columns this figure reads: "
+            + ", ".join(absent)
+        )
     frame = pd.read_csv(path)
-    if list(frame.columns) != expected_columns or len(frame) != row_count:
+    if list(frame.columns) != declared_columns or len(frame) != row_count:
         raise ValueError(f"{input_key} bytes disagree with its product contract")
     if _canonical_sha256(path) != expected_sha256:
         raise ValueError(f"{input_key} changed while it was being read")
@@ -324,247 +343,141 @@ def _percentage_matches(value: Any, count: int, denominator: int) -> bool:
     )
 
 
-def _summary_reconciles(
-    metric: str, summary_value: float, q1: float, q3: float
-) -> bool:
-    """Check a distribution summary against the quartiles reported with it."""
-
-    if metric == "median":
-        return q1 <= summary_value <= q3
-    if metric == "iqr":
-        return math.isclose(summary_value, q3 - q1, rel_tol=1e-6, abs_tol=1e-6)
-    return True
-
-
 def _validate_audit_rows(frame: pd.DataFrame) -> dict[str, dict[str, Any]]:
-    """Validate every audit row against the kind its ``metric`` declares."""
+    """Re-derive every audited variable's accounting from its own counts.
+
+    The parent publishes one wide row per variable.  Two partitions hold and
+    both are checked, because they answer different questions and a figure that
+    silently picked one would mislabel the other: ``eligible_n`` and
+    ``not_applicable_n`` partition the cohort, and within the eligible stays
+    ``measured_one_n`` and ``value_missing_n`` partition again.  The published
+    ``value_missing_pct`` is stated against the *cohort*, so a variable that
+    applies to only part of the cohort can report a small missing share while
+    being unobservable for most stays; that is preserved and reported rather
+    than rescaled here, and the panel marks it.
+    """
 
     per_variable: dict[str, dict[str, Any]] = {}
     for index, row in frame.iterrows():
         variable = _text(row["variable"])
-        metric = _text(row["metric"])
         if not variable:
             raise ValueError(f"missingness audit row {index} names no variable")
-        if metric not in _COUNT_METRICS and metric not in _SUMMARY_METRICS:
-            raise ValueError(
-                f"missingness audit row {index} declares unsupported metric {metric!r}"
-            )
-        denominator = _integer(row["denominator"])
-        if denominator is None or denominator <= 0:
-            raise ValueError(
-                f"missingness audit row {index} has no positive denominator"
-            )
-        entry = per_variable.setdefault(
-            variable,
-            {
-                "denominator": denominator,
-                "missing": None,
-                "valid_observed": None,
-                "level_total": 0,
-                "level_rows": 0,
-                "summary_metrics": set(),
-            },
-        )
-        if entry["denominator"] != denominator:
-            raise ValueError(
-                f"variable {variable!r} mixes two denominators in the missingness audit"
-            )
-
-        if metric in _SUMMARY_METRICS:
-            # A median or IQR is a distribution summary, not a tally: an empty
-            # ``count``/``percentage`` here is the schema, not a defect.
-            if not _blank(row["count"]) or not _blank(row["percentage"]):
+        if variable in per_variable:
+            raise ValueError(f"variable {variable!r} appears twice in the audit")
+        counts: dict[str, int] = {}
+        for name in (
+            "n_total",
+            "eligible_n",
+            "not_applicable_n",
+            "measured_one_n",
+            "value_missing_n",
+        ):
+            value = _integer(row[name])
+            if value is None:
                 raise ValueError(
-                    f"missingness audit row {index} reports {metric!r} as a tally"
+                    f"variable {variable!r} has no whole-stay count for {name!r}"
                 )
-            summary_value = _finite(row["summary_value"])
-            q1 = _finite(row["q1"])
-            q3 = _finite(row["q3"])
-            if summary_value is None or q1 is None or q3 is None or q1 > q3:
-                raise ValueError(
-                    f"missingness audit row {index} has an incomplete {metric!r} summary"
-                )
-            # ``q1 <= q3`` alone accepts a summary_value belonging to another
-            # variable. Each summary must reconcile with the quartiles printed
-            # beside it: a median falls inside its own range, an IQR is that
-            # range's width.
-            if not _summary_reconciles(metric, summary_value, q1, q3):
-                raise ValueError(
-                    f"missingness audit row {index} reports a {metric!r} that "
-                    "does not reconcile with its own q1-q3 range"
-                )
-            entry["summary_metrics"].add(metric)
-            continue
-
-        if (
-            not _blank(row["summary_value"])
-            or not _blank(row["q1"])
-            or not _blank(row["q3"])
+            counts[name] = value
+        cohort = counts["n_total"]
+        if cohort <= 0:
+            raise ValueError(f"variable {variable!r} has no positive cohort size")
+        if counts["eligible_n"] + counts["not_applicable_n"] != cohort:
+            raise ValueError(
+                f"variable {variable!r} eligible and not-applicable counts do not "
+                "partition the cohort"
+            )
+        if counts["measured_one_n"] + counts["value_missing_n"] != counts["eligible_n"]:
+            raise ValueError(
+                f"variable {variable!r} measured and missing counts do not "
+                "partition its eligible stays"
+            )
+        if not _percentage_matches(
+            row["value_missing_pct"], counts["value_missing_n"], cohort
         ):
             raise ValueError(
-                f"missingness audit row {index} reports {metric!r} as a distribution"
+                f"variable {variable!r} missing percentage does not reconcile "
+                "against the cohort it is stated over"
             )
-        count = _integer(row["count"])
-        if count is None or count > denominator:
-            raise ValueError(f"missingness audit row {index} has an invalid count")
-        if not _percentage_matches(row["percentage"], count, denominator):
-            raise ValueError(
-                f"missingness audit row {index} percentage does not reconcile"
-            )
-        if metric == "level_distribution":
-            if not _text(row["level"]):
-                raise ValueError(
-                    f"missingness audit row {index} is a level row with no level"
-                )
-            entry["level_total"] += count
-            entry["level_rows"] += 1
-        else:
-            if entry[metric] is not None:
-                raise ValueError(f"variable {variable!r} repeats its {metric!r} row")
-            entry[metric] = count
-
-    for variable, entry in per_variable.items():
-        denominator = entry["denominator"]
-        if entry["missing"] is None:
-            raise ValueError(f"variable {variable!r} has no source-missingness row")
-        observed = entry["valid_observed"]
-        if observed is None and entry["level_rows"] == 0:
-            raise ValueError(
-                f"variable {variable!r} reports neither a valid-observed total nor levels"
-            )
-        if entry["summary_metrics"] and observed is None:
-            raise ValueError(
-                f"variable {variable!r} summarises a distribution it never counted"
-            )
-        if (
-            observed is not None
-            and entry["level_rows"]
-            and entry["level_total"] != observed
-        ):
-            # A variable that reports both is reporting the same observed rows
-            # twice; if the two disagree the figure would draw one of them and
-            # silently contradict the other.
-            raise ValueError(
-                f"variable {variable!r} level counts sum to {entry['level_total']} "
-                f"but its valid-observed total is {observed}"
-            )
-        closure = observed if observed is not None else entry["level_total"]
-        if entry["missing"] + closure != denominator:
-            raise ValueError(
-                f"variable {variable!r} missing and observed counts do not "
-                "partition its denominator"
-            )
-        entry["available"] = denominator - entry["missing"]
-        entry["available_pct"] = 100.0 * entry["available"] / denominator
+        per_variable[variable] = {
+            "denominator": cohort,
+            "eligible": counts["eligible_n"],
+            "not_applicable": counts["not_applicable_n"],
+            "missing": counts["value_missing_n"],
+            "missing_pct": 100.0 * counts["value_missing_n"] / cohort,
+            "available": counts["measured_one_n"],
+            "available_pct": 100.0 * counts["measured_one_n"] / cohort,
+            "conditional": counts["not_applicable_n"] > 0,
+        }
+    if not per_variable:
+        raise ValueError("the missingness audit table audits no variable")
     return per_variable
 
 
 def _validate_process_rows(frame: pd.DataFrame) -> list[dict[str, Any]]:
-    """Validate every measurement-process row and key it by measure and level."""
+    """Turn one wide process row per variable into verified panel cells.
+
+    Every drawn measure must be a count of stays bounded by the cohort, and
+    the measurement funnel must narrow: a stay measured more than once was
+    measured at least once, and a stay measured at all was eligible.  A row
+    that violates the nesting is not a smaller bar, it is a different
+    denominator, so it fails closed instead of being drawn.
+    """
 
     cells: list[dict[str, Any]] = []
-    partitions: dict[tuple[str, str], dict[str, int]] = {}
-    seen_cells: set[tuple[str, str, str]] = set()
+    seen: set[str] = set()
     for index, row in frame.iterrows():
         variable = _text(row["variable"])
-        measure = _text(row["process_measure"])
-        if not variable or not measure:
+        if not variable:
+            raise ValueError(f"measurement-process row {index} names no variable")
+        if variable in seen:
             raise ValueError(
-                f"measurement-process row {index} names no variable or measure"
+                f"variable {variable!r} appears twice in the measurement-process audit"
             )
-        denominator = _integer(row["denominator"])
-        count = _integer(row["count"])
-        if denominator is None or denominator <= 0:
+        seen.add(variable)
+        cohort = _integer(row["n_total"])
+        if cohort is None or cohort <= 0:
             raise ValueError(
-                f"measurement-process row {index} has no positive denominator"
+                f"measurement-process row {index} has no positive cohort size"
             )
-        if count is None or count > denominator:
-            raise ValueError(f"measurement-process row {index} has an invalid count")
-        if not _percentage_matches(row["percentage"], count, denominator):
-            raise ValueError(
-                f"measurement-process row {index} percentage does not reconcile"
-            )
-        summary = [row["median"], row["q1"], row["q3"]]
-        if any(not _blank(value) for value in summary):
-            median, q1, q3 = (_finite(value) for value in summary)
-            if median is None or q1 is None or q3 is None or q1 > q3:
+        counts: dict[str, int] = {}
+        for column, _label in _PROCESS_MEASURES:
+            value = _integer(row[column])
+            if value is None or value > cohort:
                 raise ValueError(
-                    f"measurement-process row {index} has an incomplete summary"
+                    f"variable {variable!r} reports {column!r} as something other "
+                    "than a stay count within its cohort"
                 )
-            if not _summary_reconciles("median", median, q1, q3):
-                raise ValueError(
-                    f"measurement-process row {index} reports a median outside "
-                    "its own q1-q3 range"
-                )
-        level = _text(row["level"])
-        # Every cell is one point on the panel, so the same coordinate may not
-        # be stated twice. Levelled rows are additionally a partition, checked
-        # below; an unlevelled measure is a single cell and has no such cover.
-        coordinate = (variable, measure, level)
-        if coordinate in seen_cells:
+            counts[column] = value
+        if not (
+            counts["repeat_measured_n"]
+            <= counts["measured_one_n"]
+            <= counts["eligible_n"]
+        ):
             raise ValueError(
-                f"measurement-process row {index} repeats the cell "
-                f"{measure!r} for {variable!r}"
+                f"variable {variable!r} measurement counts do not nest: "
+                "repeatedly measured stays must be a subset of measured stays, "
+                "which must be a subset of eligible stays"
             )
-        seen_cells.add(coordinate)
-        if level:
-            # Levels of one measure are a partition of that measure's
-            # denominator; this is structural and never keyed on the measure's
-            # name.
-            bucket = partitions.setdefault((variable, measure), {})
-            if level in bucket:
-                raise ValueError(
-                    f"measurement-process row {index} repeats level {level!r}"
-                )
-            bucket[level] = count
-        cells.append(
-            {
-                "variable": variable,
-                "process_measure": measure,
-                "level": level,
-                "column": f"{measure}={level}" if level else measure,
-                "count": count,
-                "denominator": denominator,
-                "percentage": 100.0 * count / denominator,
-            }
-        )
-
-    for (variable, measure), bucket in partitions.items():
-        denominators = {
-            cell["denominator"]
-            for cell in cells
-            if cell["variable"] == variable and cell["process_measure"] == measure
-        }
-        if len(denominators) != 1 or sum(bucket.values()) != next(iter(denominators)):
-            raise ValueError(
-                f"levels of {measure!r} for {variable!r} do not partition its denominator"
+        for column, label in _PROCESS_MEASURES:
+            cells.append(
+                {
+                    "variable": variable,
+                    "process_measure": column,
+                    "level": "",
+                    "column": label,
+                    "count": counts[column],
+                    "denominator": cohort,
+                    "percentage": 100.0 * counts[column] / cohort,
+                }
             )
+    if not cells:
+        raise ValueError("the measurement-process table audits no variable")
     return cells
 
 
 def _reader_label(value: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9]+", " ", str(value or "")).strip()
     return cleaned if cleaned else "Variable"
-
-
-def _level_text(value: str) -> str:
-    """Render a level for a reader without inventing or rounding a category."""
-
-    text = str(value or "").strip()
-    parsed = _finite(text)
-    if parsed is not None and parsed.is_integer():
-        return str(int(parsed))
-    return text
-
-
-def _column_label(column: str) -> str:
-    """Label one coverage column, keeping its level distinct from its measure."""
-
-    measure, separator, level = str(column or "").partition("=")
-    label = _reader_label(measure)
-    if not separator:
-        return label
-    return f"{label}\n({_level_text(level)})"
 
 
 def _write_source_projection(
@@ -626,9 +539,7 @@ def run_missingness_measurement_figure(
     # complement, a reshaped coverage grid) cannot be traced back to any single
     # upstream row, so it is computed for validation and reported in the step
     # summary rather than published as if it were source data.
-    missing_rows = audit_frame.loc[
-        audit_frame["metric"].map(_text).eq("missing")
-    ].sort_values("percentage", ascending=False)
+    missing_rows = audit_frame.sort_values("value_missing_pct", ascending=False)
     _write_source_projection(
         missing_rows,
         path=missingness_panel_source,
@@ -642,7 +553,9 @@ def run_missingness_measurement_figure(
 
     palette = apply_publication_style(font_size=7.0)
     variables = [_text(value) for value in missing_rows["variable"]]
-    columns = sorted({str(cell["column"]) for cell in process_cells})
+    # Declared order, not alphabetical: the three measures are a funnel, and
+    # sorting them by name would put "Measured >1" before "Measured >=1".
+    columns = [label for _column, label in _PROCESS_MEASURES]
     grid_variables = sorted({str(cell["variable"]) for cell in process_cells})
     height_mm = max(86.0, 26.0 + 5.4 * max(len(variables), len(grid_variables)))
     fig, (ax_a, ax_b) = plt.subplots(
@@ -653,8 +566,10 @@ def run_missingness_measurement_figure(
     )
 
     positions = list(range(len(variables)))
-    missing_pct = pd.to_numeric(missing_rows["percentage"]).to_numpy()
-    missing_counts = pd.to_numeric(missing_rows["count"]).astype(int).to_numpy()
+    missing_pct = pd.to_numeric(missing_rows["value_missing_pct"]).to_numpy()
+    missing_counts = (
+        pd.to_numeric(missing_rows["value_missing_n"]).astype(int).to_numpy()
+    )
     bars = ax_a.barh(
         positions,
         missing_pct,
@@ -662,10 +577,20 @@ def run_missingness_measurement_figure(
         height=0.62,
     )
     ax_a.set_yticks(positions)
-    ax_a.set_yticklabels([_reader_label(name) for name in variables])
+    # A variable that does not apply to every stay is marked, because its
+    # missing share is stated over the whole cohort: without the mark a
+    # conditional variable observed for a tenth of the cohort reads as if it
+    # were almost completely observed.
+    ax_a.set_yticklabels(
+        [
+            _reader_label(name)
+            + (" †" if per_variable.get(name, {}).get("conditional") else "")
+            for name in variables
+        ]
+    )
     ax_a.invert_yaxis()
     ax_a.set_xlim(0, 100)
-    ax_a.set_xlabel("Stays with no source value (%)")
+    ax_a.set_xlabel("Stays with no source value (% of cohort)")
     ax_a.set_title("Source missingness", loc="left", pad=4)
     ax_a.grid(axis="x", color=palette["neutral_light"], linewidth=0.55)
     for bar, percentage, missing_n in zip(bars, missing_pct, missing_counts):
@@ -676,6 +601,11 @@ def run_missingness_measurement_figure(
             va="center",
             ha="left" if percentage < 88 else "right",
             fontsize=6.1,
+        )
+    if any(entry["conditional"] for entry in per_variable.values()):
+        ax_a.set_xlabel(
+            "Stays with no source value (% of cohort)\n"
+            "† applies to only part of the cohort; see panel B"
         )
     add_panel_label(ax_a, "A", x=-0.30, y=1.02)
 
@@ -703,7 +633,7 @@ def run_missingness_measurement_figure(
     )
     ax_b.set_xticks(range(len(columns)))
     ax_b.set_xticklabels(
-        [_column_label(column) for column in columns],
+        columns,
         rotation=35,
         ha="right",
     )
@@ -734,7 +664,7 @@ def run_missingness_measurement_figure(
                 color="white" if float(value) >= 55.0 else palette["blue"],
             )
     colorbar = fig.colorbar(image, ax=ax_b, fraction=0.032, pad=0.02)
-    colorbar.set_label("Share of the measure's denominator (%)", fontsize=6.2)
+    colorbar.set_label("Share of the cohort (%)", fontsize=6.2)
     colorbar.ax.tick_params(labelsize=5.8)
     add_panel_label(ax_b, "B", x=-0.30, y=1.02)
     fig.subplots_adjust(left=0.20, right=0.94, bottom=0.22, top=0.88, wspace=0.72)
@@ -755,8 +685,10 @@ def run_missingness_measurement_figure(
                 "role": "data_quality",
                 "claim": (
                     "Each audited variable's source-missingness share is the "
-                    "parent table's own value; missing and observed counts "
-                    "partition the parent-locked denominator."
+                    "parent table's own value, restated over the cohort it was "
+                    "computed against; measured and missing counts partition "
+                    "the variable's eligible stays, and eligible plus "
+                    "not-applicable stays partition the cohort."
                 ),
                 "evidence_ids": [missingness_panel_source.name],
                 "metadata": {
@@ -769,9 +701,9 @@ def run_missingness_measurement_figure(
                 "title": "Measurement-process coverage",
                 "role": "data_quality",
                 "claim": (
-                    "Each measurement-process measure is shown as a share of "
-                    "its own denominator; blank cells are measures the parent "
-                    "did not report for that variable."
+                    "Applicable, measured-at-least-once and measured-more-than-"
+                    "once stays are each shown as a share of the same cohort, "
+                    "so the three columns read as one narrowing funnel."
                 ),
                 "evidence_ids": [process_source.name],
                 "metadata": {
@@ -786,11 +718,14 @@ def run_missingness_measurement_figure(
             missingness_panel_source.name,
         ],
         statistics_note=(
-            "Percentages are recomputed from the sealed integer counts. "
-            "Distribution-summary rows (median, IQR) are validated on "
-            "summary_value/q1/q3 and are not counted as tallies. The executor "
-            "validates all source rows and introduces no cohort, variable, "
-            "missing-data, or modeling decision."
+            "Percentages are recomputed from the sealed integer counts. Both "
+            "partitions are re-derived per variable (eligible + not applicable "
+            "= cohort; measured + missing = eligible) and the measurement "
+            "counts are required to nest. Measurement totals and per-stay "
+            "measurement medians are deliberately not drawn: they count "
+            "measurements, not stays, and are not commensurable with this "
+            "scale. The executor validates all source rows and introduces no "
+            "cohort, variable, missing-data, or modeling decision."
         ),
     )
     outputs = save_publication_figure(
