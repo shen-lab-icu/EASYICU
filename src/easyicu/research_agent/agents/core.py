@@ -1377,6 +1377,16 @@ class PlannerAgent:
             if "robustness" in contract.required_roles and not plan.robustness_specs:
                 missing_roles = sorted({*missing_roles, "robustness_specs"})
             if missing_roles:
+                # A missing headline-owned role is not fixed by declaring the
+                # product anywhere: roles_covered_by_plan credits it only from
+                # the primary lineage. Naming the product without saying that
+                # sends the Planner back to add the same off-lineage display
+                # step it already wrote, which is how the recorded
+                # h1_ventilation_survival plan spent its attempts.
+                headline_roles = set(contract.planner_owned_result_roles)
+                missing_headline = [
+                    role for role in missing_roles if role in headline_roles
+                ]
                 completion_hints: list[str] = []
                 for role in missing_roles:
                     if role == "robustness_specs":
@@ -1391,7 +1401,8 @@ class PlannerAgent:
                     typed_examples = ", ".join(
                         f"'table:{module_id}'" for module_id in module_ids[:3]
                     )
-                    completion_hints.append(f"{role} -> {typed_examples}")
+                    marker = " (headline_owned)" if role in headline_roles else ""
+                    completion_hints.append(f"{role}{marker} -> {typed_examples}")
                 hint_text = (
                     " Required typed step examples: "
                     + "; ".join(completion_hints)
@@ -1399,6 +1410,18 @@ class PlannerAgent:
                     if completion_hints
                     else ""
                 )
+                if missing_headline:
+                    hint_text += (
+                        " These are headline_owned and are credited only on the "
+                        "primary lineage: "
+                        + ", ".join(missing_headline)
+                        + ". Declare each in the single "
+                        "planned_analysis_role='primary' step's expected_outputs "
+                        "beside its non-rendering scientific result, or in a step "
+                        "whose inputs include a typed product only a lineage step "
+                        "produces. A second primary step is refused, and a step "
+                        "reading only the cohort does not join the lineage."
+                    )
                 raise PlannerArticleContractError(
                     "Planner plan is missing required article contract role(s): "
                     + ", ".join(missing_roles)
