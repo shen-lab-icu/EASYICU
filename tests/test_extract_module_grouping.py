@@ -235,3 +235,18 @@ def test_module_parquet_columns_follow_catalog_order_across_hash_seeds():
         "circ_failure",
         "circ_event",
     ]
+
+
+def test_module_parquet_normalisation_reuses_canonical_numeric_frame():
+    """Do not duplicate a full dense module at the Arrow write boundary."""
+    frame = pd.DataFrame(
+        {
+            "patientunitstayid": [1, 2],
+            "charttime": [0.0, 1.0],
+            "glu": [90.0, 100.0],
+        }
+    )
+
+    normalised = _normalise_module_frame_for_parquet(frame, ["glu"])
+
+    assert normalised is frame

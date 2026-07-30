@@ -398,6 +398,13 @@ all_features = load_concepts(
 > 会自动分批到 subprocess。可以用环境变量
 > `EASYICU_BATCH_TIMEOUT_SEC`（默认 3600）限制每个 batch 的最大时长，
 > 子进程超时会被强制杀掉，避免父进程永远等下去。
+> 对 `extract_database(..., stream_output_batches=True)` 的磁盘导出，
+> 默认批量按**当前可用内存**连续计算：保留 25%（且至少保留 2 GiB），
+> 将剩余工作集换算为 stay 数并向下取整到 5,000。因而启动时约有 8 GiB
+> 可用内存时默认采用 40,000 stays，而不是固定降到 10,000；用户显式传入的
+> `batch_size` 始终优先。自动模式完成首批后，会根据进程树实测工作集调整
+> 后续批次（上限 67,000），并把模块及逐批峰值 RSS 写入 manifest。Sepsis
+> 标签派生复用相同的外层批次，不再暗中固定切成 2,000-stay 小批。
 
 ### 专业模块
 

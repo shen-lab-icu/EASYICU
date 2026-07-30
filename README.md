@@ -449,9 +449,14 @@ all_features = load_concepts(
 > case a worker hangs.
 > For disk exports, `extract_database(..., stream_output_batches=True)`
 > additionally chooses its default batch from **currently available** memory,
-> not nominal RAM. A busy 16 GB laptop with less than 12 GB available uses the
-> 10k constrained profile; close other applications or pass an explicit
-> `batch_size` only when you intentionally want a faster, higher-memory run.
+> not nominal RAM. The planner reserves 25% (at least 2 GiB), converts the
+> remaining working set to a batch continuously, and rounds down to 5k stays.
+> With 8 GiB available the default is therefore 40k stays, not a fixed 10k
+> low-memory tier. After the first automatic batch, later batches are resized
+> from the measured process-tree working set (up to 67k stays); module and
+> batch peak-RSS telemetry is written to the export manifests. Sepsis label
+> derivation reuses the same outer batch instead of imposing a hidden 2k
+> sub-batch. Explicit `batch_size` values remain authoritative.
 
 ### Domain-Specific Loaders
 

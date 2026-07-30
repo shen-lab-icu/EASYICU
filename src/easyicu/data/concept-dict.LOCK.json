@@ -14,7 +14,7 @@
   "extraction_contract": {
     "output_layout": "one wide parquet per module ({db}/{module}.parquet): id + time + one column per concept — NOT per-concept files. Matches the web export path (webserver/dataio.py).",
     "load_call": "load_concepts(module_concepts, merge=True) once per module inside keep_cache; do NOT hand-write a per-concept merge (time-column mismatch -> Cartesian blow-up -> OOM).",
-    "batching": "adaptive and result-invariant: one-shot when memory permits; eICU uses three large batches on servers and smaller portable batches; every database falls back to 10,000-stay batches below 12 GB available memory. Explicit batch_size remains authoritative.",
+    "batching": "adaptive and result-invariant: one-shot when memory permits; streamed exports continuously size the first batch from currently available memory after reserving 25% (at least 2 GiB), round down to 5,000 stays, and then resize later batches from measured process-tree working set, capped at 67,000. An 8 GiB-available host therefore starts at 40,000 stays. Sepsis derivation reuses the outer batch rather than imposing a hidden 2,000-stay sub-batch. Explicit batch_size remains authoritative.",
     "spill": "DuckDB temp + batch spill default to <output_dir>/.easyicu_spill (the output drive), not system /tmp."
   },
   "merge_oom_safety": {

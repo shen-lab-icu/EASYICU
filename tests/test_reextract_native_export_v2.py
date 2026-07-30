@@ -31,9 +31,9 @@ class _Package:
 @pytest.mark.parametrize(
     ("available_memory_mb", "expected_budget_mb"),
     [
-        (8 * 1024, 512),
+        (8 * 1024, 2560),
         (12 * 1024, 4 * 1024),
-        (20 * 1024, 4 * 1024),
+        (20 * 1024, 6656),
         (24 * 1024, 8 * 1024),
         (256 * 1024, 8 * 1024),
     ],
