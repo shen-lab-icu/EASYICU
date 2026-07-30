@@ -9,6 +9,7 @@ directories should contain outputs and provenance, not copied plotting code.
 python scripts/figures/QC-A01_cross_database_distributions.py \
   --input-root /path/to/full6_run/exports \
   --output-root /path/to/full6_run/publication_qc \
+  --run-metadata /path/to/full6_run/run_metadata.json \
   --catalog src/easyicu/data/concept-dict.json
 
 python scripts/figures/QC-A02_easyicu_cross_database_reliability_audit.py \
@@ -18,11 +19,30 @@ python scripts/figures/QC-A02_easyicu_cross_database_reliability_audit.py \
   --output-dir /path/to/full6_run/publication_qc/reliability_audit
 ```
 
+To refresh labels, units, bounds and figures from the existing lightweight
+audit/source CSVs without rescanning Parquet:
+
+```bash
+python scripts/figures/QC-A01_cross_database_distributions.py \
+  --input-root /path/to/full6_run/exports \
+  --output-root /path/to/full6_run/publication_qc \
+  --run-metadata /path/to/full6_run/run_metadata.json \
+  --catalog src/easyicu/data/concept-dict.json \
+  --render-only
+```
+
 `QC-A01` produces one paginated atlas per module (maximum 12 panels per
 183-mm page), editable SVG/PDF, 600-dpi TIFF, PNG previews, plotting-source CSVs,
 and explicit display-tail counts. Continuous variables use record-level
 densities; binary variables use stay-level prevalence; ordinal and categorical
 variables use probability-mass curves or database-by-category heatmaps.
+
+Both QC manifests bind their outputs to `source_run_id` and the SHA-256 of the
+exact source `run_metadata.json`. When QC-A01 is run directly from a Git
+checkout, it places that checkout's `src` first so an older editable EasyICU
+installation cannot silently supply catalog metadata. Canonical audit units
+remain explicit; type markers such as `boolean`, `category` and `datetime` are
+suppressed only in reader-facing plot labels.
 
 `QC-A02` checks exact physical schema equality, canonical identifiers and time,
 native-v2 manifests, metadata sidecars, provenance, availability and

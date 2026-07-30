@@ -378,6 +378,29 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _source_run_lineage(
+    run_metadata_path: Path,
+    raw_metadata: bytes | None = None,
+) -> dict[str, str]:
+    """Return the exact source-run identity shared by QC-A01 and QC-A02."""
+
+    if not run_metadata_path.is_file():
+        raise FileNotFoundError(f"Missing source run metadata: {run_metadata_path}")
+    source_bytes = (
+        raw_metadata if raw_metadata is not None else run_metadata_path.read_bytes()
+    )
+    metadata = json.loads(source_bytes)
+    run_id = metadata.get("run_id") if isinstance(metadata, dict) else None
+    if not isinstance(run_id, str) or not run_id.strip():
+        raise ValueError(
+            f"Source run metadata has no non-empty run_id: {run_metadata_path}"
+        )
+    return {
+        "source_run_id": run_id.strip(),
+        "source_run_metadata_sha256": hashlib.sha256(source_bytes).hexdigest(),
+    }
+
+
 def _load_root_manifests(export_root: Path) -> dict[str, dict[str, Any]]:
     manifests: dict[str, dict[str, Any]] = {}
     for database in DATABASES:
@@ -1035,7 +1058,9 @@ def main() -> None:
     args = parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    run_metadata = json.loads(args.run_metadata.read_text(encoding="utf-8"))
+    raw_run_metadata = args.run_metadata.read_bytes()
+    run_metadata = json.loads(raw_run_metadata)
+    lineage = _source_run_lineage(args.run_metadata, raw_run_metadata)
     module_concepts = _derive_module_concepts(args.export_root, run_metadata)
     if len(module_concepts) != 19:
         raise ValueError(
@@ -1265,6 +1290,7 @@ def main() -> None:
 
     summary = {
         "run_id": run_metadata.get("run_id"),
+        **lineage,
         "audited_easyicu_commit": run_metadata.get("easyicu_commit"),
         "audited_easyicu_commits": {
             database: _expected_runtime_commit(run_metadata, database)
