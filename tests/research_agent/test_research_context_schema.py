@@ -9,12 +9,26 @@ Bump-procedure for an intentional schema change:
 
 1. Update ``RESEARCH_CONTEXT_FIELDS`` and the
    ``ResearchContext`` field list in :mod:`schema`.
-2. Bump ``RESEARCH_CONTEXT_SCHEMA_VERSION`` (e.g.
-   ``"easyicu.research_context/1"`` -> ``"easyicu.research_context/2"``).
-3. Update ``EXPECTED_VERSION`` below.
+2. Bump ``RESEARCH_CONTEXT_SCHEMA_VERSION`` **when the change can make an
+   existing stored payload invalid or silently change its meaning** -- a
+   removed field, a renamed field, a new required field, a narrowed type, a
+   changed default. Update ``EXPECTED_VERSION`` below in the same edit.
+3. Do **not** bump for a purely additive optional field with a default: no
+   stored payload becomes invalid, and the version literal on
+   ``ResearchContextV2`` means a bump would make every previously written V2
+   context unparseable, destroying replay of the runs that are our evidence.
+   ``test_literal_v1_payload_roundtrips_without_rewrite`` asserts the property
+   the version string was standing in for -- an archived payload still parses
+   and no key it carried is rewritten; that assertion, not the string, is the
+   actual protection.
 4. If the change is breaking for downstream consumers (paper.py,
    context.py builders, webapp serialization), update them in the
    same commit.
+
+``endpoint`` (2026-07-29, task O1) is the worked example of case 3: optional,
+defaulted to ``None``, added so the study's endpoint can be *declared* instead
+of guessed from a column-name suffix. No payload written before it becomes
+invalid.
 """
 
 from __future__ import annotations
@@ -43,6 +57,7 @@ EXPECTED_FIELDS = (
     "time_windows",
     "temporal_constraints",
     "target_outcome",
+    "endpoint",
     "primary_exposure",
     "cross_database_validation",
     "cohort_parquet",
@@ -146,8 +161,22 @@ def test_literal_v1_payload_roundtrips_without_rewrite():
     )
     parsed = parse_research_context_json(raw)
     assert type(parsed) is ResearchContext
-    assert parsed.model_dump(mode="json") == payload
-    assert "materialized_inputs" not in parsed.model_dump(mode="json")
+    dumped = parsed.model_dump(mode="json")
+
+    # The payload above is deliberately frozen at its archived shape and must
+    # not be edited when a field is added. "Without rewrite" means every key the
+    # archive carried keeps its exact value.
+    assert {key: dumped[key] for key in payload} == payload
+
+    # A purely additive optional field may appear. It must appear as None: a
+    # field that materialised a *value* while reading an archive would mean the
+    # reader inferred something the archive never said -- which for ``endpoint``
+    # is the precise failure it was introduced to end.
+    added = set(dumped) - set(payload)
+    assert added == {"endpoint"}
+    assert all(dumped[key] is None for key in added)
+
+    assert "materialized_inputs" not in dumped
 
 
 def test_unknown_research_context_version_is_rejected():

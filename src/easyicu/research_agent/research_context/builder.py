@@ -32,6 +32,7 @@ from ..schema import (
     AggregationRule,
     CohortDescriptor,
     ConceptDescriptor,
+    EndpointSpec,
     MissingnessProfile,
     ResearchContext,
     TimeWindow,
@@ -344,8 +345,7 @@ def _estimate_mvn_with_em(
 
                     expected = rows.copy().astype(float)
                     expected[:, mis] = (
-                        mu[mis]
-                        + (rows[:, obs] - mu[obs]) @ conditional_weights.T
+                        mu[mis] + (rows[:, obs] - mu[obs]) @ conditional_weights.T
                     )
                     expected_sum += expected.sum(axis=0)
                     second_sum += expected.T @ expected
@@ -478,6 +478,7 @@ def build_research_context(
     inclusion_criteria: Optional[Sequence[str]] = None,
     exclusion_criteria: Optional[Sequence[str]] = None,
     target_outcome: Optional[str] = None,
+    endpoint: Optional[EndpointSpec] = None,
     primary_exposure: Optional[str] = None,
     cross_database_validation: Optional[Sequence[str]] = None,
     id_columns: Optional[Sequence[str]] = None,
@@ -690,6 +691,12 @@ def build_research_context(
         time_windows=windows,
         temporal_constraints=temporal_constraints,
         target_outcome=target_outcome,
+        # Passed through exactly as declared. This builder knows the column
+        # names, the dtypes and the order they arrived in -- which is precisely
+        # why it must not consult any of them to fill this in. Every one of the
+        # four defects this type exists for came from a layer that had those
+        # signals and used them.
+        endpoint=endpoint,
         primary_exposure=primary_exposure,
         cross_database_validation=list(cross_database_validation or []),
         cohort_parquet=cohort_path,

@@ -484,6 +484,23 @@ class ResearchContextV2(ResearchContext):
                         "context descriptor physical field does not match typed "
                         f"column binding: {column}.{field_name}"
                     )
+        if self.endpoint is not None:
+            # The receipt for the endpoint declaration. A declaration is only
+            # worth trusting if the columns it names exist in the cohort that
+            # was actually verified -- otherwise it is prose with a type
+            # annotation, and a downstream consumer resolving the columns would
+            # be back to guessing. Fail closed here, at declaration time,
+            # rather than at the step that first tries to read the column.
+            absent = [
+                column
+                for column in self.endpoint.declared_columns()
+                if column not in set(cohort.cohort_columns)
+            ]
+            if absent:
+                raise ValueError(
+                    "endpoint declaration names columns absent from the typed "
+                    "cohort: " + ", ".join(sorted(absent))
+                )
         return self
 
 
@@ -845,9 +862,8 @@ def _closed_observed_levels(
         ]
     except (TypeError, ValueError):
         return None
-    if (
-        len(encoded_levels) != len(observed_levels)
-        or len(set(encoded_levels)) != len(encoded_levels)
+    if len(encoded_levels) != len(observed_levels) or len(set(encoded_levels)) != len(
+        encoded_levels
     ):
         return None
     return list(observed_levels)
@@ -942,9 +958,7 @@ def resolved_raw_input_contracts(
             contracts[name] = _legacy_raw_input_contract(variable)
         payload: Dict[str, Any] = {
             "schema_version": "easyicu.resolved_raw_input_contracts/1",
-            "authority_scope": (
-                "host_generated_sealed_research_context_constraints"
-            ),
+            "authority_scope": ("host_generated_sealed_research_context_constraints"),
             "scientific_ownership": (
                 "Planner retains cohort, exposure, outcome, method, covariates, "
                 "and estimand decisions"
@@ -977,16 +991,13 @@ def resolved_raw_input_contracts(
         variable = variables.get(name)
         domain = (
             variable.observed_domain
-            if variable is not None
-            and isinstance(variable.observed_domain, Mapping)
+            if variable is not None and isinstance(variable.observed_domain, Mapping)
             else None
         )
         observed_levels = _closed_observed_levels(domain)
         if "allowed_values" not in fact and observed_levels is not None:
             fact["allowed_values"] = observed_levels
-            fact["allowed_values_basis"] = (
-                "sealed_research_context_observed_domain"
-            )
+            fact["allowed_values_basis"] = "sealed_research_context_observed_domain"
         if binding.analysis_plausibility_range is not None:
             fact["plausibility_policy"] = {
                 "range_policy": "flag_only",
