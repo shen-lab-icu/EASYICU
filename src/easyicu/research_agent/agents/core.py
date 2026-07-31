@@ -127,6 +127,8 @@ from ..research_context.repair_prompt import format_repair_authority_context
 from ..research_context.outbound import project_outbound_probe
 from ..authority.step_capsule import ContentRef
 from ..schema import (
+    ADJUSTED_ASSOCIATION_BINARY_METHOD_FAMILIES,
+    ADJUSTED_ASSOCIATION_CONTINUOUS_METHOD_FAMILIES,
     AgentRuntimeState,
     AnalysisPlan,
     ArtifactConsumptionContract,
@@ -460,7 +462,10 @@ def _build_planner_user_prompt(
         "A step that declares the exact output `table:table_one` MUST also "
         "declare `table_one_spec`: group_by, at least two closed group_levels, "
         "and a variables roster whose name/kind/summary/test/closed levels "
-        "encode the scientific comparison. Levels follow the variable kind: a "
+        "encode the scientific comparison. THE COLUMN YOU GROUP ON IS NOT ALSO "
+        "A ROW -- it would report each group as 100% itself. Name it in "
+        "`group_by` or in `variables`, never in both. "
+        "Levels follow the variable kind: a "
         "'categorical' row summarised 'count_percent' requires at least two "
         "closed levels; an 'ordinal' row summarised numerically may declare "
         "its closed levels (a 0-4 organ score, a 0-3 stage) and the host then "
@@ -588,9 +593,13 @@ def _build_planner_user_prompt(
         "(primary, secondary, or sensitivity), `analysis_set` (source_aware or "
         "complete_case), `required_for_step_success`, and `covariates`. You "
         "decide this roster; "
-        "the execution layer only verifies it. `method_family` must be a binary "
-        "logistic family or a continuous linear/quantile family matching "
-        "`outcome_type`. Primary and secondary entries must be required for step "
+        "the execution layer only verifies it. `method_family` is matched "
+        "against an exact set, so here is the set. outcome_type 'binary': "
+        + ", ".join(sorted(ADJUSTED_ASSOCIATION_BINARY_METHOD_FAMILIES))
+        + ". outcome_type 'continuous': "
+        + ", ".join(sorted(ADJUSTED_ASSOCIATION_CONTINUOUS_METHOD_FAMILIES))
+        + ". No other label passes, and neither does one from the other list. "
+        "Primary and secondary entries must be required for step "
         "success; only a sensitivity entry may be optional. "
         "AN ORDINAL OR CATEGORICAL EXPOSURE is one model with several "
         "contrasts, not one number. When the exposure has discrete levels -- a "
