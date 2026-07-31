@@ -302,35 +302,105 @@ def test_the_bound_tier_moves_the_plan_into_real_role_validation():
     assert "trajectory_role_missing" in with_kinds
 
 
-def test_every_hop_between_the_phase_and_the_evaluator_carries_the_flag():
-    """One un-threaded hop is what made the first fix invisible in a real run."""
+#: Every entry point that re-asks whether the trajectory contract applies.
+#: Missing one is not a cosmetic gap: it is the whole defect, twice over.
+_GATE_ENTRY_POINTS = (
+    "trajectory_plan_contract_applies",
+    "trajectory_plan_dag_findings",
+    "evaluate_trajectory_plan_dag",
+    "trajectory_bundle_findings",
+    "resolve_trajectory_bundle_plan_authority",
+)
 
+
+def _calls_in(source, callee):
     import ast
+
+    tree = ast.parse(source.lstrip())
+    return [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == callee
+    ]
+
+
+def test_every_gate_call_in_the_execution_phase_carries_the_flag():
+    """Enumerated, not enumerated-by-me.
+
+    The first fix threaded one of four call sites and shipped; the second
+    threaded two more and shipped; H3 was refused by the fourth both times.
+    This walks run_execute_phase for EVERY entry point that re-asks the
+    question, so the next missed one fails here instead of in a paid run.
+    """
+
     import inspect
 
     from easyicu.research_agent.execution import phase
-    from easyicu.research_agent.trajectory import bundle
+
+    source = inspect.getsource(phase.run_execute_phase)
+    seen = 0
+    for callee in _GATE_ENTRY_POINTS:
+        for call in _calls_in(source, callee):
+            seen += 1
+            assert any(
+                keyword.arg == "long_trajectory_bound" for keyword in call.keywords
+            ), f"a call to {callee} in run_execute_phase drops the bound-tier flag"
+    assert seen >= 4, f"expected the phase to consult the gate; found {seen} calls"
+
+
+def test_the_hops_below_the_phase_carry_it_too():
+    import inspect
+
+    from easyicu.research_agent.trajectory import bundle, plan_contract
 
     hops = {
-        "trajectory_bundle_findings": inspect.getsource(phase.run_execute_phase),
         "resolve_trajectory_bundle_plan_authority": inspect.getsource(
             bundle.trajectory_bundle_findings
         ),
-        "evaluate_trajectory_plan_dag": inspect.getsource(
-            bundle.resolve_trajectory_bundle_plan_authority
+        "evaluate_trajectory_plan_dag": "\n".join(
+            (
+                inspect.getsource(bundle.resolve_trajectory_bundle_plan_authority),
+                inspect.getsource(plan_contract.trajectory_plan_dag_findings),
+            )
         ),
     }
     for callee, source in hops.items():
-        tree = ast.parse(source.lstrip())
-        calls = [
-            node
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Name)
-            and node.func.id == callee
-        ]
+        calls = _calls_in(source, callee)
         assert calls, f"the chain no longer calls {callee}"
         assert all(
             any(keyword.arg == "long_trajectory_bound" for keyword in call.keywords)
             for call in calls
         ), f"a call to {callee} drops the bound-tier flag"
+
+
+def test_the_flag_is_bound_before_the_first_gate_call_that_uses_it():
+    """It is derived beside the authority; every consult below must follow it."""
+
+    import ast
+    import inspect
+
+    from easyicu.research_agent.execution import phase
+
+    source = inspect.getsource(phase.run_execute_phase)
+    tree = ast.parse(source.lstrip())
+    bound_at = min(
+        node.lineno
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "long_trajectory_bound"
+            for target in node.targets
+        )
+    )
+    used_at = [
+        keyword.value.lineno
+        for callee in _GATE_ENTRY_POINTS
+        for call in _calls_in(source, callee)
+        for keyword in call.keywords
+        if keyword.arg == "long_trajectory_bound"
+    ]
+
+    assert used_at
+    assert bound_at < min(used_at)
