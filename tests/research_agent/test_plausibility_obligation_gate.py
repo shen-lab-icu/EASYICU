@@ -1483,3 +1483,266 @@ main()
     assert _reasons_for_columns(unrelated, "second_marker") == {
         "plausibility_scope_column_not_attributable"
     }
+
+
+# ---------------------------------------------------------------------------
+# Seeding the all-zero receipt, then filling it
+#
+# The obligation's own message demands the counts "on every path, including
+# when every count is 0".  E3's ``05_ordinal_trend_audit`` obeyed literally --
+# it seeded the zero-valued receipt up front and overwrote it once the range
+# was read -- wrote a conforming ``step_summary.json``, and was quarantined
+# anyway after two wasted repair attempts: the seed is a *populated* literal,
+# so the name was never certified and a compliant write read as
+# ``flag_evidence: local_only``.  The host was refusing the shape it asked for.
+# ---------------------------------------------------------------------------
+
+SEEDS_THEN_FILLS = (
+    HEADER
+    + """
+plausibility_audit = {
+    "marker": {
+        "policy": "retain_and_flag",
+        "below_minimum_n": 0,
+        "above_maximum_n": 0,
+        "out_of_range_n": 0,
+    }
+}
+"""
+    + HELPER_HEAD
+    + """        below_n = int((numeric < float(lower)).sum()) if lower is not None else 0
+        above_n = int((numeric > float(upper)).sum()) if upper is not None else 0
+        plausibility_audit[column] = {
+            "policy": "retain_and_flag",
+            "below_minimum_n": below_n,
+            "above_maximum_n": above_n,
+            "out_of_range_n": below_n + above_n,
+        }
+
+validate_allowed_numeric(frame["marker"], "marker", manifest)
+write_json(SUMMARY_PATH, {"plausibility_audit": plausibility_audit})
+"""
+)
+
+# The documented payload bypass, which spells the same two literals in the
+# other order: compute the real record, then rebind the name to a fabricated
+# zero.  The artifact then holds a zero the data never produced.
+FILLS_THEN_FABRICATES_ZERO = (
+    HEADER
+    + """
+plausibility_audit = {}
+"""
+    + HELPER_HEAD
+    + """        below_n = int((numeric < float(lower)).sum()) if lower is not None else 0
+        above_n = int((numeric > float(upper)).sum()) if upper is not None else 0
+        plausibility_audit[column] = {
+            "policy": "retain_and_flag",
+            "below_minimum_n": below_n,
+            "above_maximum_n": above_n,
+            "out_of_range_n": below_n + above_n,
+        }
+
+validate_allowed_numeric(frame["marker"], "marker", manifest)
+plausibility_audit = {
+    "marker": {
+        "policy": "retain_and_flag",
+        "below_minimum_n": 0,
+        "above_maximum_n": 0,
+        "out_of_range_n": 0,
+    }
+}
+write_json(SUMMARY_PATH, {"plausibility_audit": plausibility_audit})
+"""
+)
+
+# A seed carrying a count the data never produced is a fabrication whichever
+# order it appears in, so the zero is load-bearing, not decoration.
+SEEDS_A_NONZERO_COUNT = SEEDS_THEN_FILLS.replace(
+    '"out_of_range_n": 0,\n    }\n}', '"out_of_range_n": 7,\n    }\n}', 1
+)
+
+# Seeded and never filled: the receipt would report zero for every column
+# whatever the data held, which is the fail-open the certification rule exists
+# to catch.
+SEEDS_AND_NEVER_FILLS = (
+    HEADER
+    + """
+plausibility_audit = {
+    "marker": {
+        "policy": "retain_and_flag",
+        "below_minimum_n": 0,
+        "above_maximum_n": 0,
+        "out_of_range_n": 0,
+    }
+}
+"""
+    + HELPER_HEAD
+    + """        below_n = int((numeric < float(lower)).sum()) if lower is not None else 0
+        above_n = int((numeric > float(upper)).sum()) if upper is not None else 0
+
+validate_allowed_numeric(frame["marker"], "marker", manifest)
+write_json(SUMMARY_PATH, {"plausibility_audit": plausibility_audit})
+"""
+)
+
+
+def test_seeding_the_zero_receipt_then_filling_it_is_accepted() -> None:
+    """The exact shape quarantined on canary10's E3 step 05."""
+
+    assert _reasons(SEEDS_THEN_FILLS) == set()
+
+
+def test_the_seed_is_not_confused_with_a_replacement() -> None:
+    """The documented payload bypass must keep failing.
+
+    ``audit = {computed}`` then ``audit = {fabricated zero}`` writes a zero the
+    data never produced.  It spells the same two literals as the accepted
+    shape; only which one runs last decides whether the artifact holds a real
+    count, so order is the whole distinction and this proves the gate reads it.
+    """
+
+    assert _reasons(FILLS_THEN_FABRICATES_ZERO) == {
+        "out_of_range_record_not_in_declared_output"
+    }
+
+
+def test_a_seed_carrying_a_count_the_data_never_produced_is_refused() -> None:
+    """Only an all-zero seed is an accumulator; a number in it is a claim."""
+
+    assert _reasons(SEEDS_A_NONZERO_COUNT) == {
+        "out_of_range_record_not_in_declared_output"
+    }
+
+
+def test_a_seed_that_is_never_filled_is_still_refused() -> None:
+    """A receipt of zeros written whatever the data held is not a measurement."""
+
+    assert _reasons(SEEDS_AND_NEVER_FILLS) == {
+        "out_of_range_record_not_in_declared_output"
+    }
+
+
+def test_the_accepted_shape_is_the_one_the_message_asks_for() -> None:
+    """The seed exists because the gate's own sentence demands the zero path.
+
+    If that clause is ever dropped, this relaxation loses its justification and
+    should be reconsidered rather than left as an unexplained hole.
+    """
+
+    from easyicu.research_agent.gates.plausibility_receipt import (
+        RECEIPT_CONTRACT_SENTENCE,
+    )
+
+    assert "including when every count is 0" in RECEIPT_CONTRACT_SENTENCE
+
+
+# A populated seed that is not the receipt at all.  Accepting it would defeat
+# the reason the seed is allowed: if the range turns out to be absent, the
+# artifact would carry this under the receipt key instead of the zero counts
+# the contract promises a reader.
+SEEDS_SOMETHING_THAT_IS_NOT_A_RECEIPT = SEEDS_THEN_FILLS.replace(
+    """    "marker": {
+        "policy": "retain_and_flag",
+        "below_minimum_n": 0,
+        "above_maximum_n": 0,
+        "out_of_range_n": 0,
+    }""",
+    """    "marker": {
+        "policy": "retain_and_flag",
+        "units": "hours",
+    }""",
+    1,
+)
+
+# Seeded, and later written to -- but with a value that never touched the
+# comparison.  The receipt still reports zeros whatever the data held.
+SEEDS_THEN_FILLS_WITH_NOTHING_COMPUTED = (
+    HEADER
+    + """
+plausibility_audit = {
+    "marker": {
+        "policy": "retain_and_flag",
+        "below_minimum_n": 0,
+        "above_maximum_n": 0,
+        "out_of_range_n": 0,
+    }
+}
+"""
+    + HELPER_HEAD
+    + """        below_n = int((numeric < float(lower)).sum()) if lower is not None else 0
+        above_n = int((numeric > float(upper)).sum()) if upper is not None else 0
+        plausibility_audit[column] = {"policy": "retain_and_flag"}
+
+validate_allowed_numeric(frame["marker"], "marker", manifest)
+write_json(SUMMARY_PATH, {"plausibility_audit": plausibility_audit})
+"""
+)
+
+
+def test_a_seed_that_is_not_the_receipt_shape_is_refused() -> None:
+    """The seed is allowed because it covers the zero path; this one does not."""
+
+    assert _reasons(SEEDS_SOMETHING_THAT_IS_NOT_A_RECEIPT) == {
+        "out_of_range_record_not_in_declared_output"
+    }
+
+
+def test_a_later_write_that_computed_nothing_does_not_certify_the_seed() -> None:
+    """Being written to later is not the same as being filled with the result."""
+
+    assert _reasons(SEEDS_THEN_FILLS_WITH_NOTHING_COMPUTED) == {
+        "out_of_range_record_not_in_declared_output"
+    }
+
+
+def test_an_empty_mapping_is_not_a_zero_receipt() -> None:
+    """The predicate's name is a claim about content, so check the content.
+
+    ``{}`` records nothing at all.  It is legitimately an accumulator seed and
+    the neighbouring ``_initialises_an_accumulator`` says so, which is why no
+    end-to-end fixture can tell the two apart -- the verdict is the same either
+    way.  Asserted here directly so the predicate cannot quietly start calling
+    an empty mapping a receipt for some later caller that has no such twin.
+    """
+
+    from easyicu.research_agent.gates.plausibility_obligation import (
+        _seeds_a_zero_receipt,
+    )
+
+    assert _seeds_a_zero_receipt(ast.parse("{}", mode="eval").body) is False
+    assert (
+        _seeds_a_zero_receipt(
+            ast.parse(
+                '{"marker": {"below_minimum_n": 0, "above_maximum_n": 0,'
+                ' "out_of_range_n": 0}}',
+                mode="eval",
+            ).body
+        )
+        is True
+    )
+
+
+# The order rule needs a write on BOTH sides of the fabricated zero, or the
+# fixture cannot tell "a later write" from "a later write that carries the
+# record": with nothing at all after the rebinding, the seed fails either way.
+# Here the real record is computed first, the zero rebinding replaces it, and
+# the only thing that follows is a note.
+FABRICATES_ZERO_THEN_WRITES_A_NOTE = FILLS_THEN_FABRICATES_ZERO.replace(
+    'write_json(SUMMARY_PATH, {"plausibility_audit": plausibility_audit})',
+    'plausibility_audit["note"] = "checked"\n'
+    'write_json(SUMMARY_PATH, {"plausibility_audit": plausibility_audit})',
+    1,
+)
+
+
+def test_a_note_written_after_a_fabricated_zero_does_not_rescue_it() -> None:
+    """Only a write that carries the computed record makes a seed a seed.
+
+    Without this the order rule would read "something happens later" rather
+    than "the result lands there later", and the fabricated zero would be
+    certified by an unrelated line.
+    """
+
+    assert _reasons(FABRICATES_ZERO_THEN_WRITES_A_NOTE) == {
+        "out_of_range_record_not_in_declared_output"
+    }
