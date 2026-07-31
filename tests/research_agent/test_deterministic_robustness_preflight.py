@@ -712,7 +712,8 @@ def test_structured_preflight_replays_exact_primary_code_and_emits_spec_by_model
     source_outputs.mkdir(parents=True)
     source_script = source_step / "analysis.py"
     source_script.write_text(
-        textwrap.dedent("""
+        textwrap.dedent(
+            """
             import json, math, os
             from pathlib import Path
             import pandas as pd
@@ -796,13 +797,22 @@ def test_structured_preflight_replays_exact_primary_code_and_emits_spec_by_model
                 "primary_ci_high": primary_or + 0.1,
                 "primary_model_n": n_full,
                 "model_contracts": contracts,
+                # Named the way a producer names it. This fixture used to
+                # publish the companion only under `output_files.coefficients`
+                # -- a key the reader never consulted -- and passed anyway,
+                # because the reader assumed a fixed `coefficients.csv` when no
+                # companion was declared. No recorded run has ever written a
+                # file by that name, so the assumption resolved to nothing in
+                # production while this test stayed green.
+                "coefficient_table": "coefficients.csv",
                 "output_files": {
                     "coefficients": "coefficients.csv",
                     "model_summaries": "model_summaries.csv",
                 },
             }
             (out / "step_summary.json").write_text(json.dumps(summary))
-            """),
+            """
+        ),
         encoding="utf-8",
     )
     base_env = os.environ.copy()
@@ -1058,10 +1068,15 @@ def _write_structured_source_authority(
         summary["diagnostic_companions"] = {
             "coefficients": diagnostic_reference,
         }
-    elif coefficient_filename != "coefficients.csv":
+    else:
         summary["diagnostic_companions"] = {
             "coefficients": coefficient_filename,
         }
+    # A summary that names its companion badly is refused outright, so this
+    # sibling never rescues the malformed case above -- it is here so that the
+    # ordinary fixture declares the file the way a producer does, instead of
+    # relying on a default filename no run has ever written.
+    summary["coefficient_table"] = coefficient_filename
     summary_path = outputs_dir / "step_summary.json"
     summary_path.write_text(json.dumps(summary), encoding="utf-8")
     script_sha = hashlib.sha256(script_path.read_bytes()).hexdigest()
@@ -1564,7 +1579,8 @@ def test_exact_replay_blocks_script_that_ignores_locked_cohort_membership(
     source_outputs.mkdir(parents=True)
     source_script = source_dir / "analysis.py"
     source_script.write_text(
-        textwrap.dedent("""
+        textwrap.dedent(
+            """
             import json, os
             from pathlib import Path
             import pandas as pd
@@ -1597,9 +1613,15 @@ def test_exact_replay_blocks_script_that_ignores_locked_cohort_membership(
             }]).to_csv(out / "coefficients.csv", index=False)
             (out / "step_summary.json").write_text(json.dumps({
                 "primary_model_id": "primary",
+                # The decoy is wrong about ONE thing -- it ignores the locked
+                # membership -- so it must be well formed everywhere else, or
+                # the replay refuses it for the wrong reason and this test
+                # stops testing membership.
+                "coefficient_table": "coefficients.csv",
                 "model_contracts": [contract],
             }))
-            """),
+            """
+        ),
         encoding="utf-8",
     )
     primary_contract = {
@@ -1668,7 +1690,8 @@ def test_exact_replay_uses_declared_coefficient_companion_without_primary_id(
     source_outputs.mkdir(parents=True)
     source_script = source_dir / "analysis.py"
     source_script.write_text(
-        textwrap.dedent("""
+        textwrap.dedent(
+            """
             import json, os
             from pathlib import Path
             import pandas as pd
@@ -1703,7 +1726,8 @@ def test_exact_replay_uses_declared_coefficient_companion_without_primary_id(
                 "model_contracts": [contract],
                 "diagnostic_companions": {"coefficients": coefficient_name},
             }))
-            """),
+            """
+        ),
         encoding="utf-8",
     )
     primary_contract = {

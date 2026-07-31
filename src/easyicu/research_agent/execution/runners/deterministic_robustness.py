@@ -50,6 +50,7 @@ from ...robustness.panel import (
     validate_robustness_specs,
 )
 from ...contracts.ownership_verdict import OwnershipVerdict
+from ...contracts.result_envelope import model_summary_coefficient_filename
 from ...schema import AnalysisStep, spec_backs_every_declared_product
 from ...contracts.host_scaffold import HostScaffoldedScript
 from .plausibility_receipt import render_standard_plausibility_receipt_code
@@ -192,8 +193,7 @@ def robustness_replay_declaration_verdict(step: AnalysisStep) -> OwnershipVerdic
                 str(value or "").strip().partition(":")[2]
                 for value in step.expected_outputs or []
             )
-            if product
-            and step.robustness_replay_spec.output_for(product) is None
+            if product and step.robustness_replay_spec.output_for(product) is None
         )
         if not unbacked:
             # Every promised product IS named, so the shortfall is something
@@ -987,30 +987,17 @@ def _safe_step_id(step_id: str) -> bool:
 def _coefficient_filename_from_summary(summary: Dict[str, Any]) -> Optional[str]:
     """Resolve the exact registered coefficient companion name.
 
-    Current model runners publish the term-level table through the sealed
-    ``diagnostic_companions.coefficients`` field.  Historical runners used the
-    fixed ``coefficients.csv`` name.  An explicit malformed companion must
-    fail closed rather than silently falling back to a sibling file.
+    The spellings a model summary may use are published in one place, because
+    this reader and the owners that write the summary are different modules
+    and had drifted: the reader consulted only
+    ``diagnostic_companions.coefficients`` and otherwise assumed a fixed
+    ``coefficients.csv``, while the deterministic association owner writes
+    ``coefficient_table`` and a Coder-written summary wrote ``coefficient_file``.
+    No run has ever produced a file called ``coefficients.csv``, so that
+    assumption resolved to nothing and took the exact-replay path down with it.
     """
 
-    companions = summary.get("diagnostic_companions")
-    if companions is None:
-        return "coefficients.csv"
-    if not isinstance(companions, dict):
-        return None
-    raw_name = companions.get("coefficients")
-    if raw_name is None:
-        return "coefficients.csv"
-    if not isinstance(raw_name, str):
-        return None
-    filename = raw_name.strip()
-    if (
-        not filename
-        or Path(filename).name != filename
-        or Path(filename).suffix.lower() != ".csv"
-    ):
-        return None
-    return filename
+    return model_summary_coefficient_filename(summary)
 
 
 def _coefficient_path_from_summary(
