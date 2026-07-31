@@ -59,11 +59,20 @@ from .plausibility_receipt import (
     CANONICAL_STEP_SUMMARY_FILENAME,
     HOST_OUTPUT_DIR_ENV_KEYS,
     POLICY_CONTRACT_KEY,
+    RECEIPT_ABOVE_FIELD,
+    RECEIPT_BELOW_FIELD,
     RECEIPT_CONTRACT_SENTENCE,
     RECEIPT_POLICY_VALUE,
     RECEIPT_SUMMARY_KEY,
+    RECEIPT_TOTAL_FIELD,
     REPAIR_RECEIPT_MARKER,
     step_is_under_the_flag_only_obligation,
+)
+
+#: The three counts the receipt owes for one column, imported from the module
+#: that defines the contract rather than restated here.
+_RECEIPT_COUNT_FIELDS: frozenset[str] = frozenset(
+    {RECEIPT_BELOW_FIELD, RECEIPT_ABOVE_FIELD, RECEIPT_TOTAL_FIELD}
 )
 
 #: The bound keys inside that contract, in both the sealed mapping spelling
@@ -1104,6 +1113,52 @@ def _initialises_an_accumulator(node: ast.AST) -> bool:
     return False
 
 
+def _seeds_a_zero_receipt(node: ast.AST) -> bool:
+    """Whether a populated literal is the all-zero receipt, not a replacement.
+
+    ``_initialises_an_accumulator`` recognises ``audit = {}``; it refuses a
+    populated literal, and the reason it gives is sound -- rebinding a name to
+    a hand-written record after the real one was computed is the documented
+    payload bypass.
+
+    But the obligation's own message demands the counts "on every path,
+    including when every count is 0: a count of zero is a result, and its
+    absence cannot be told apart from never having looked."  The natural --
+    and instructed -- way to guarantee that is to seed the zero-valued receipt
+    up front and overwrite it once the range is read.  E3's
+    ``05_ordinal_trend_audit`` did exactly that, wrote a conforming
+    ``step_summary.json``, and was quarantined for it after two wasted repair
+    attempts: the seed is a populated literal, so the name was never certified
+    and the compliant write read as ``flag_evidence: local_only``.
+
+    So this recognises exactly one populated shape: a mapping whose every
+    value is a per-column record carrying all three counts as literal zero.  A
+    literal with any non-zero count is still a replacement, because that is
+    the fabrication the certification rule exists to catch.  Ordering does the
+    rest -- see :meth:`_FlagFlow._seeds_before_it_is_filled`; a zero receipt
+    written *after* the real one is still a replacement.
+    """
+
+    if not isinstance(node, ast.Dict) or not node.keys:
+        return False
+    for value in node.values:
+        if not isinstance(value, ast.Dict):
+            return False
+        counts = {
+            key.value: item
+            for key, item in zip(value.keys, value.values)
+            if isinstance(key, ast.Constant) and key.value in _RECEIPT_COUNT_FIELDS
+        }
+        if set(counts) != _RECEIPT_COUNT_FIELDS:
+            return False
+        if any(
+            not isinstance(item, ast.Constant) or item.value != 0
+            for item in counts.values()
+        ):
+            return False
+    return True
+
+
 def _writer_functions(
     tree: ast.AST,
     *,
@@ -1667,10 +1722,48 @@ class _FlagFlow:
                 certified.add(key)
         return certified
 
+    def _seeds_before_it_is_filled(self, name: str, payload: ast.AST) -> bool:
+        """Whether an all-zero receipt literal is followed by the real record.
+
+        Order is the whole distinction, and it is why this is not simply
+        folded into :func:`_seeds_a_zero_receipt`.  Seed-then-fill::
+
+            audit = {col: {..., "out_of_range_n": 0}}   # every path covered
+            audit[col] = {..., "out_of_range_n": n}     # the real counts
+
+        is the shape the contract asks for.  The reverse::
+
+            audit = {col: {..., "out_of_range_n": n}}   # computed
+            audit = {col: {..., "out_of_range_n": 0}}   # fabricated zero
+
+        is the payload bypass the certification rule was written to catch, and
+        it must keep failing.  Both spell the same two literals; only which one
+        runs last decides whether the artifact holds a real count.
+        """
+
+        if not _seeds_a_zero_receipt(payload):
+            return False
+        seed = (getattr(payload, "lineno", 0), getattr(payload, "col_offset", 0))
+        for node in self._nodes():
+            if not isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
+                continue
+            value = getattr(node, "value", None)
+            if value is None or name not in self._assigned_names(node):
+                continue
+            if not self._carries(value):
+                continue
+            if (node.lineno, node.col_offset) > seed:
+                return True
+        return False
+
     def _binding_survives(self, name: str, binding: tuple) -> bool:
         kind, payload = binding
         if kind == "value":
-            return self._carries(payload) or _initialises_an_accumulator(payload)
+            return (
+                self._carries(payload)
+                or _initialises_an_accumulator(payload)
+                or self._seeds_before_it_is_filled(name, payload)
+            )
         if kind == "param":
             values = self.destinations.arguments.get((id(payload), name))
             return bool(values) and all(
