@@ -96,6 +96,7 @@ from ..contracts.declared_product import (
     primary_analysis_cohort_plan_findings,
     typed_product as _canonical_typed_product,
 )
+from ..contracts.result_envelope import STATISTIC_PAYLOAD_KEY_ALIASES
 from ..plan_utils import (
     _cohort_predicate_partition_safety_rules,
     _primary_analysis_cohort_canonical_schema_rules,
@@ -2504,6 +2505,46 @@ def _cohort_predicate_partition_safety_contract(step: AnalysisStep) -> str:
     )
 
 
+def _declared_statistic_products(step: AnalysisStep) -> tuple[str, ...]:
+    """The step's own ``statistic:<name>`` products, in declared order."""
+
+    seen: list[str] = []
+    for item in step.expected_outputs or ():
+        text = str(item or "").strip()
+        if text.startswith("statistic:") and text not in seen:
+            seen.append(text)
+    return tuple(seen)
+
+
+def _statistic_payload_shape_directive(products: Sequence[str]) -> str:
+    """Publish the reader for a statistic file, not a description of it.
+
+    A real run wrote ``[{"name": ..., "value": 445, ...}]`` -- the right object
+    wrapped in a one-element list, the same shape it writes every table in --
+    and the canonical normalizer refused it with ``invalid_statistic_shape``
+    after the step had produced every other output correctly.  Nothing in any
+    host prompt had ever said a statistic file must be an object, so the shape
+    was only learnable by dying.  The aliases are rendered from the reader's own
+    mapping so a new one reaches the model instead of drifting away from it.
+    """
+
+    aliases = "; ".join(
+        f"{field} from {'/'.join(keys)}"
+        for field, keys in STATISTIC_PAYLOAD_KEY_ALIASES.items()
+    )
+    return (
+        "- Write each declared `statistic:<name>` product as a single JSON "
+        "OBJECT, never a list and never a bare number: "
+        '`{"name": "<name>", "value": <number>}`. A one-element list of that '
+        "same object is refused as invalid_statistic_shape and kills the step "
+        "after every other output is already correct. An included `name` (or "
+        "`statistic`) must equal the declared product name. The host reads "
+        f"{aliases}; it also reads effect_scale/effect_measure/scale and "
+        "unit/units. Any other key is kept but is not read as one of those "
+        "fields. Declared here: " + ", ".join(products) + "."
+    )
+
+
 def _declared_output_scope_contract(step: AnalysisStep) -> str:
     """Keep code generation inside the plan's typed product boundary.
 
@@ -2528,6 +2569,9 @@ def _declared_output_scope_contract(step: AnalysisStep) -> str:
         "requirements are part of the method contract. The inferred analysis family "
         "is context only and cannot authorize additional scientific products.",
     ]
+    statistic_products = _declared_statistic_products(step)
+    if statistic_products:
+        lines.append(_statistic_payload_shape_directive(statistic_products))
     if effect_authorized:
         lines.append(
             "- Effect authorization does not widen scope: emit effect estimates or "

@@ -20,6 +20,7 @@ import tempfile
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from pathlib import Path, PurePosixPath
+from types import MappingProxyType
 from typing import Any, Literal, Mapping, Sequence, Union
 
 from pydantic import (
@@ -81,6 +82,26 @@ _HIGH_KEYS = ("ci_high", "ci_95_high", "ci_upper", "upper")
 _P_VALUE_KEYS = ("p_value", "p")
 _NUMERATOR_KEYS = ("numerator", "positive_n", "event_n", "count")
 _DENOMINATOR_KEYS = ("denominator", "denominator_n", "n_total", "total_n")
+#: The reader for a registered ``statistic:<name>`` product, as data.
+#:
+#: A statistic file is refused unless it parses to a JSON object, and its
+#: fields are recovered by trying these aliases in order.  Generated code has
+#: to write a shape it was never shown otherwise: a real run wrote a
+#: one-element list of exactly the right object and was refused with
+#: ``invalid_statistic_shape`` after producing every other output correctly.
+#: The Coder directive renders this mapping rather than describing it, so a
+#: new alias here reaches the model instead of drifting away from it.
+STATISTIC_PAYLOAD_KEY_ALIASES: Mapping[str, tuple[str, ...]] = MappingProxyType(
+    {
+        "point estimate": _VALUE_KEYS,
+        "interval lower bound": _LOW_KEYS,
+        "interval upper bound": _HIGH_KEYS,
+        "p value": _P_VALUE_KEYS,
+        "numerator": _NUMERATOR_KEYS,
+        "denominator": _DENOMINATOR_KEYS,
+    }
+)
+
 _MAX_SCALARS = 5_000
 _MAX_DEPTH = 12
 _MAX_TABLE_BYTES = 16 * 1024 * 1024
@@ -433,7 +454,9 @@ def _container_relative_scalar_path(
             relative = absolute.relative_to(root)
         except ValueError:
             continue
-        if not relative.parts or any(part in {"", ".", ".."} for part in relative.parts):
+        if not relative.parts or any(
+            part in {"", ".", ".."} for part in relative.parts
+        ):
             continue
         return relative.as_posix()
     return None
@@ -2407,6 +2430,7 @@ __all__ = [
     "StepMissingVariableResult",
     "StepModelDiagnostic",
     "StepPopulationResult",
+    "STATISTIC_PAYLOAD_KEY_ALIASES",
     "StepResultEnvelope",
     "StepVariableBindings",
     "normalize_step_result_shadow",
