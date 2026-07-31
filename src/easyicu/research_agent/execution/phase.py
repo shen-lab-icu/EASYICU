@@ -12059,10 +12059,19 @@ def run_execute_phase(
             flush_partial_manifest=_flush_partial_manifest,
         )
 
+    # The context can only ever show the wide fixed-window representation; the
+    # long tier is a verified typed run input this scope can see and it cannot.
+    long_trajectory_bound = (
+        run_input_authority_state.trajectory_authority_sha256 is not None
+    )
     if (
         not trajectory_plan_blocked
         and not typed_plan_dag_blocked
-        and trajectory_plan_contract_applies(plan=plan, context=context)
+        and trajectory_plan_contract_applies(
+            plan=plan,
+            context=context,
+            long_trajectory_bound=long_trajectory_bound,
+        )
     ):
         run_level_trajectory_findings = trajectory_bundle_findings(
             context=context,
