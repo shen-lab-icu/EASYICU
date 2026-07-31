@@ -102,6 +102,66 @@ STATISTIC_PAYLOAD_KEY_ALIASES: Mapping[str, tuple[str, ...]] = MappingProxyType(
     }
 )
 
+#: Where a model step's summary names its term-level coefficient companion.
+#:
+#: The exact-replay path for robustness variants needs the fitted coefficients,
+#: not just the reported effect, and it finds them by this key.  It used to
+#: read ``diagnostic_companions.coefficients`` alone and fall back to a fixed
+#: ``coefficients.csv`` -- a filename no producer has ever written.  Measured
+#: over every recorded run: 334 step summaries, of which 23 carry
+#: ``model_contracts``; ``coefficient_table`` appears 10 times (the
+#: deterministic owner writes it), ``coefficient_file`` 3 times (a Coder-written
+#: summary), ``diagnostic_companions`` once, and ``coefficients.csv`` exists
+#: zero times.  So the reader resolved 1 of 23, and the replay path it guards
+#: was unreachable in every other run.
+#:
+#: Order is preference, not permission: a summary declaring more than one is
+#: read by the first, and any of them being unreadable is a refusal rather
+#: than a fall-through to the next.
+MODEL_SUMMARY_COEFFICIENT_TABLE_KEYS: tuple[str, ...] = (
+    "diagnostic_companions.coefficients",
+    "coefficient_table",
+    "coefficient_file",
+)
+
+
+def model_summary_coefficient_filename(summary: Mapping[str, Any]) -> str | None:
+    """Return the coefficient companion filename a model summary declares.
+
+    ``None`` means *this summary does not name one*, which is a refusal: the
+    caller must not guess a filename, because a guessed name that happens to
+    exist would bind the replay to a table nobody declared.
+    """
+
+    if not isinstance(summary, Mapping):
+        return None
+    for key in MODEL_SUMMARY_COEFFICIENT_TABLE_KEYS:
+        declared: Any = summary
+        for part in key.split("."):
+            if declared is None:
+                break
+            if not isinstance(declared, Mapping):
+                # The summary *has* this path and it is not navigable, which
+                # is a broken declaration.  Moving on to the next spelling
+                # would answer with a different table than the one it tried
+                # to name, and the substitution would be invisible.
+                return None
+            declared = declared.get(part)
+        if declared is None:
+            continue
+        if not isinstance(declared, str):
+            return None
+        filename = declared.strip()
+        if (
+            not filename
+            or PurePosixPath(filename).name != filename
+            or not filename.lower().endswith(".csv")
+        ):
+            return None
+        return filename
+    return None
+
+
 _MAX_SCALARS = 5_000
 _MAX_DEPTH = 12
 _MAX_TABLE_BYTES = 16 * 1024 * 1024
@@ -2423,6 +2483,7 @@ __all__ = [
     "CanonicalScalar",
     "CanonicalStatistic",
     "CanonicalTableProfile",
+    "MODEL_SUMMARY_COEFFICIENT_TABLE_KEYS",
     "NormalizationIssue",
     "NormalizationReceipt",
     "StepArtifactRef",
@@ -2433,6 +2494,7 @@ __all__ = [
     "STATISTIC_PAYLOAD_KEY_ALIASES",
     "StepResultEnvelope",
     "StepVariableBindings",
+    "model_summary_coefficient_filename",
     "normalize_step_result_shadow",
     "rebind_step_result_status",
     "rebuild_observed_scalar_tree",
