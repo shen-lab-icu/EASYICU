@@ -44,6 +44,11 @@ from .missingness_measurement_figure_executor import (
     missingness_measurement_figure_executor_code,
     missingness_measurement_figure_executor_owns_step,
 )
+from .robustness_figure_executor import (
+    ROBUSTNESS_FIGURE_INPUT,
+    robustness_figure_executor_code,
+    robustness_figure_executor_owns_step,
+)
 from .prevalence_outcome_figure_executor import (
     PREVALENCE_OUTCOME_FIGURE_INPUT,
     prevalence_outcome_figure_executor_code,
@@ -266,6 +271,20 @@ def select_standard_executor(
             )
         )
     _missed("prevalence_outcome_figure")
+    if robustness_figure_executor_owns_step(step):
+        if receipt_required:
+            _receipt_declined("robustness_figure")
+            return None
+        return _selected(
+            StandardExecutorSelection(
+                analysis_kind="robustness_figure",
+                selection_reason="robustness_figure_contract_preflight",
+                progress_message=("Using planner-scoped robustness figure executor"),
+                code=robustness_figure_executor_code(step),
+                consumed_input_keys=(ROBUSTNESS_FIGURE_INPUT,),
+            )
+        )
+    _missed("robustness_figure")
     if prevalence_mortality_figure_executor_owns_step(step):
         if receipt_required:
             _receipt_declined("prevalence_mortality_figure")
