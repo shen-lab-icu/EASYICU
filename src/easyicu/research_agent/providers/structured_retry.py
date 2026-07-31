@@ -59,6 +59,116 @@ _DEFAULT_FEEDBACK_INSTRUCTIONS = (
 )
 
 
+_FEEDBACK_MAX_VIOLATIONS = 40
+_FEEDBACK_MAX_CHARS = 4000
+_FEEDBACK_MAX_INPUT_ECHO = 80
+_EARLIER_FAILURE_MAX_CHARS = 1200
+
+
+def _violation_lines(exc: BaseException) -> Optional[List[str]]:
+    """One compact line per structured-validation violation, or ``None``.
+
+    Duck-typed on ``.errors()`` rather than imported from a validation
+    library: this module is deliberately library-agnostic, and anything that
+    can enumerate its own ``loc``/``msg`` records renders the same way.
+    Anything that cannot is reported through the plain-string path.
+    """
+
+    errors = getattr(exc, "errors", None)
+    if not callable(errors):
+        return None
+    try:
+        records = list(errors())
+    except Exception:  # noqa: BLE001 — an un-enumerable validator falls back
+        return None
+    if not records or not all(isinstance(record, dict) for record in records):
+        return None
+    lines: List[str] = []
+    for record in records:
+        location = ".".join(str(part) for part in record.get("loc", ())) or "<root>"
+        message = str(record.get("msg", "")).strip()
+        line = f"{location}: {message}" if message else location
+        if "input" in record:
+            # Omitted rather than truncated when long. A clipped container
+            # repr is not the value the location names -- on a missing-field
+            # violation the reported input is the *enclosing* object, so
+            # "you sent: {...}" would attribute the whole payload to the one
+            # field that was absent from it.
+            echo = repr(record["input"])
+            if len(echo) <= _FEEDBACK_MAX_INPUT_ECHO:
+                line = f"{line} (you sent: {echo})"
+        lines.append(line)
+    return lines
+
+
+def clip_to_whole_lines(text: str, max_chars: int) -> str:
+    """Truncate on a line boundary, never inside a line.
+
+    A violation list cut mid-line reads as a shorter, different constraint
+    than the one the validator raised, which is the failure this whole
+    module exists to avoid.
+    """
+
+    if len(text) <= max_chars:
+        return text
+    kept: List[str] = []
+    used = 0
+    for line in text.splitlines():
+        if kept and used + len(line) + 1 > max_chars:
+            break
+        kept.append(line)
+        used += len(line) + 1
+    return "\n".join(kept)
+
+
+def render_parse_failure(
+    exc: BaseException, *, max_chars: int = _FEEDBACK_MAX_CHARS
+) -> str:
+    """Render a parse failure so a retry can fix *all* of it, not just its head.
+
+    A validation error prints roughly 240 characters per violation, a third
+    of it a documentation URL the model cannot visit. Truncating that prose
+    at a fixed character budget therefore states the first violation and
+    silently drops the rest: measured on a real rejection, a 400-character
+    window showed 2 of 6 forbidden fields, and 1 of 20.
+
+    The model then fixes what it was shown, resubmits, and is rejected for
+    the violations it was never told about. A real Planner run recorded
+    exactly that: attempt 0 was told only that one field was missing, and
+    attempt 4 -- having supplied it -- died on the same six forbidden fields
+    that had been present, and unreported, from the start. Across the
+    recorded runs 14 of 18 rejections carry more than one violation.
+
+    Enumerating the violations compactly and budgeting by violation count
+    states the whole constraint set in less space than the truncated prose
+    used.
+    """
+
+    lines = _violation_lines(exc)
+    if lines is None:
+        text = str(exc)
+        return text if len(text) <= max_chars else text[: max_chars - 3] + "..."
+    total = len(lines)
+    kept: List[str] = []
+    used = 0
+    for line in lines[:_FEEDBACK_MAX_VIOLATIONS]:
+        rendered_length = len(line) + 7  # "    - " plus the newline
+        if kept and used + rendered_length > max_chars:
+            break
+        kept.append(line)
+        used += rendered_length
+    body = "\n".join(f"    - {line}" for line in kept)
+    if len(kept) < total:
+        body += (
+            f"\n    - ...and {total - len(kept)} further problem(s) not listed "
+            "here; re-check the whole object against the schema."
+        )
+    return (
+        f"{total} problem(s), all of which must be fixed together in one "
+        f"corrected response:\n{body}"
+    )
+
+
 @dataclass
 class StructuredAttempt:
     """One LLM call attempt during a structured-retry loop."""
@@ -265,13 +375,18 @@ def call_llm_with_structured_retry(
         try:
             value = parser(raw)
         except Exception as exc:  # noqa: BLE001 — parser may raise anything
+            # Rendered once, then reused for the record, the feedback message
+            # and the carry-forward signature -- three readers of one string,
+            # so the retry cannot be shown a different rejection from the one
+            # that was recorded.
+            rendered_failure = render_parse_failure(exc)
             attempts.append(
                 StructuredAttempt(
                     attempt=i,
                     raw_head=head,
                     raw_chars=len(raw or ""),
                     error_class=exc.__class__.__name__,
-                    error_message=str(exc)[:600],
+                    error_message=rendered_failure,
                 )
             )
             last_exc = exc
@@ -283,7 +398,7 @@ def call_llm_with_structured_retry(
             # can opt out and regenerate from the base plus validator feedback.
             feedback_parts = [
                 feedback_preamble,
-                f"  {exc.__class__.__name__}: {str(exc)[:400]}",
+                f"  {exc.__class__.__name__}: {rendered_failure}",
                 "",
                 feedback_instructions,
             ]
@@ -298,7 +413,7 @@ def call_llm_with_structured_retry(
             earlier = [
                 signature
                 for signature in distinct_failures(attempts[:-1])
-                if signature != (exc.__class__.__name__, str(exc)[:600])
+                if signature != (exc.__class__.__name__, rendered_failure)
             ]
             if earlier:
                 feedback_parts.extend(
@@ -309,7 +424,8 @@ def call_llm_with_structured_retry(
                         "that fixes only the latest one will be rejected "
                         "again. Satisfy all of them together:",
                         *(
-                            f"  - {error_class}: {message[:250]}"
+                            f"  - {error_class}: "
+                            f"{clip_to_whole_lines(message, _EARLIER_FAILURE_MAX_CHARS)}"
                             for error_class, message in earlier
                         ),
                     ]
@@ -352,6 +468,8 @@ __all__ = [
     "StructuredResponseFailure",
     "annotate_with_attempt_history",
     "call_llm_with_structured_retry",
+    "clip_to_whole_lines",
     "distinct_failures",
+    "render_parse_failure",
     "summarise_attempt_history",
 ]
