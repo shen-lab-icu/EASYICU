@@ -821,15 +821,30 @@ def trajectory_plan_contract_applies(
     *,
     plan: AnalysisPlan,
     context: ResearchContext,
+    long_trajectory_bound: bool = False,
 ) -> bool:
     """Return the non-heuristic trigger for the run-level trajectory contract.
 
     Once the agent stamps a fixed-window plan as ``trajectory_clustering``, a
     missing or artifact-only role cannot make the contract disappear.  The
     evaluator will instead return explicit plan-contract errors.
+
+    Trajectories reach this host in two representations.  ``ResearchContext``
+    only ever carries the wide one, because ``fixed_window_trajectory`` is
+    inferred by parsing a column name (``<family>_h<start>_<end>``).  The long
+    one -- ``stay_id, charttime, concept, value_num`` -- is materialised,
+    digested and bound as a typed run input, and has no column names to parse,
+    so a run holding 19,067,154 verified trajectory rows still presented zero
+    trajectory variables here and had its whole plan refused.  Callers that can
+    see the bound tier say so with ``long_trajectory_bound``; the default keeps
+    the wide-column behaviour exactly for callers that cannot.
     """
 
-    return _normalise_token(plan.analysis_type) == "trajectory_clustering" and any(
+    if _normalise_token(plan.analysis_type) != "trajectory_clustering":
+        return False
+    if long_trajectory_bound:
+        return True
+    return any(
         variable.fixed_window_trajectory is not None
         for variable in (context.variables or [])
     )
