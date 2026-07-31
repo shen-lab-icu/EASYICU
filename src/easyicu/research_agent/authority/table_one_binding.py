@@ -20,8 +20,12 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..canonical_json import canonical_json as _canonical_json
 from ..methods.table_one import table_one_spec_sha256
-from ..research_context.prompt_variables import opaque_level_tokens
 from ..schema import AnalysisPlan, AnalysisStep, ResearchContext, TableOneSpec
+from .declared_levels import (
+    OPAQUE_LEVEL_PREFIX,
+    observed_levels_for,
+    resolve_typed_levels,
+)
 
 TABLE_ONE_EXECUTION_BINDING_SCHEMA = "easyicu.table_one_execution_binding/1"
 TABLE_ONE_PRIVATE_CHECKPOINT_SCHEMA = "easyicu.table_one_private_checkpoint/1"
@@ -55,80 +59,15 @@ class TableOneExecutionBinding(BaseModel):
         return self
 
 
-def _observed_levels(
-    *,
-    name: str,
-    variables: dict[str, Any],
-) -> list[Any]:
-    variable = variables.get(name)
-    if variable is None or not variable.observed_domain:
-        return []
-    domain = variable.observed_domain
-    levels = domain.get("levels")
-    if isinstance(levels, list):
-        return list(levels)
-    if not domain.get("is_binary"):
-        return []
-    dtype = str(variable.dtype or "").lower()
-    if dtype.startswith(("int", "uint")):
-        return [0, 1]
-    if dtype.startswith("bool"):
-        return [False, True]
-    if dtype.startswith(("float", "double")):
-        return [0.0, 1.0]
-    return []
-
-
 def _typed_token(value: Any) -> tuple[str, str]:
     return type(value).__name__, repr(value)
 
 
-def _resolve_levels(
-    *,
-    name: str,
-    declared: list[Any],
-    variables: dict[str, Any],
-) -> tuple[list[Any], list[Any]]:
-    observed = _observed_levels(name=name, variables=variables)
-    if not observed:
-        return list(declared), []
-    opaque = list(opaque_level_tokens(len(observed)))
-    if opaque and list(declared) == opaque:
-        return observed, observed
-    if {_typed_token(value) for value in declared} == {
-        _typed_token(value) for value in observed
-    }:
-        return list(declared), observed
-    # JSON has one ``number`` type even though Python/pandas distinguish
-    # integral and floating scalar representations.  A Planner declaration
-    # of ``[0, 1]`` therefore denotes the same closed binary domain as a
-    # float-backed cohort column whose verified levels are ``[0.0, 1.0]``.
-    # Canonicalise execution back to the host-observed scalar types; never
-    # apply this equivalence to booleans or categorical strings.
-    declared_numeric = all(
-        isinstance(value, (int, float)) and not isinstance(value, bool)
-        for value in declared
-    )
-    observed_numeric = all(
-        isinstance(value, (int, float)) and not isinstance(value, bool)
-        for value in observed
-    )
-    if (
-        declared_numeric
-        and observed_numeric
-        and len(declared) == len(observed)
-        and {float(value) for value in declared} == {float(value) for value in observed}
-    ):
-        return observed, observed
-    safe_expected = opaque or ["<host-observed numeric scalar types>"]
-    raise ValueError(
-        "Planner Table 1 levels for "
-        f"{name!r} must preserve the exact observed scalar types or use the "
-        f"exact host-safe tokens {safe_expected!r}; expected_count="
-        f"{len(observed)}, declared_count={len(declared)}, declared_types="
-        f"{[type(value).__name__ for value in declared]!r}. No observed "
-        "category literal is available to the Provider."
-    )
+# One ordering authority for every declared level set, not a Table 1 copy of
+# one: token ``N`` denotes the ``N``-th observed level for whoever reads it, so
+# a second ordering here would silently relabel another consumer's contrasts.
+_observed_levels = observed_levels_for
+_resolve_levels = resolve_typed_levels
 
 
 def bind_table_one_execution_spec(
@@ -354,7 +293,7 @@ def restore_table_one_private_checkpoint(
         for variable in spec.variables:
             levels.extend(variable.levels)
         return any(
-            isinstance(value, str) and value.startswith("__easyicu_level_")
+            isinstance(value, str) and value.startswith(OPAQUE_LEVEL_PREFIX)
             for value in levels
         )
 

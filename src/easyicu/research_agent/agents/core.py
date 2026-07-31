@@ -106,6 +106,7 @@ from ..authority.provider_budget import (
     StepProviderCallBudget,
     complete_with_provider_budget,
 )
+from ..authority.declared_levels import bind_step_declared_levels
 from ..authority.table_one_binding import bind_table_one_execution_spec
 from ..repairs.coordination import PatchTransportUnavailable, RepairCoordinator
 from ..repairs.reasons import (
@@ -931,6 +932,7 @@ def _validate_table_one_observed_levels(
 
     for step in plan.steps:
         bind_table_one_execution_spec(step, context)
+        bind_step_declared_levels(step, context)
 
 
 _PLANNER_PROMPT_BYTE_LIMIT = 80_000

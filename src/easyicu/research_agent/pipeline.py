@@ -141,6 +141,7 @@ from .research_context.builder import (
 from .research_context.typed import parse_research_context_json
 from .gates.preplan import preplan_data_failure_reason, preplan_data_findings
 from .authority.context_numeric_claims import register_context_numeric_claims
+from .authority.declared_levels import bind_step_declared_levels
 from .authority.table_one_binding import (
     bind_table_one_execution_spec,
     restore_table_one_private_checkpoint,
@@ -2793,6 +2794,11 @@ class ResearchAgentPipeline:
                     plan=plan,
                     context=agent_context,
                 )
+                # The resumed plan is the one on disk, so it still carries the
+                # host's opaque placeholders; a resume that skipped this would
+                # execute a different declaration than the first attempt did.
+                for resumed_step in plan.steps:
+                    bind_step_declared_levels(resumed_step, agent_context)
                 know_how_binding.verify_resume(
                     plan.know_how_decisions,
                     enabled=self._enable_know_how,
@@ -3278,6 +3284,7 @@ class ResearchAgentPipeline:
         )
         for planned_step in plan.steps:
             bind_table_one_execution_spec(planned_step, agent_context)
+            bind_step_declared_levels(planned_step, agent_context)
         write_table_one_private_checkpoint(run_dir=run_dir, plan=plan)
         if not reused_prior_plan:
             plan_path.write_text(plan.model_dump_json(indent=2), encoding="utf-8")
