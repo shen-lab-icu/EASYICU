@@ -1970,6 +1970,9 @@ class AnalysisStep(BaseModel):
     # It may contain digest-verified categorical labels that must never return
     # to Planner, Replanner, Coder, or repair prompts.
     _table_one_execution_binding: Any = PrivateAttr(default=None)
+    # Same rule, for every other level set the Planner declared in the host's
+    # own opaque placeholders (see authority/declared_levels.py).
+    _declared_level_binding: Any = PrivateAttr(default=None)
 
     step_id: str
     planned_analysis_role: PlannedAnalysisRole = Field(

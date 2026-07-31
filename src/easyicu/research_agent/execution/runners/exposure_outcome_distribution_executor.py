@@ -32,6 +32,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 
+from ...authority.declared_levels import execution_distribution_spec
 from ...schema import AnalysisStep, ExposureOutcomeDistributionSpec, _typed_level_key
 from .typed_input_binding import load_typed_cohort, run_dir_from_env
 
@@ -143,7 +144,11 @@ def exposure_outcome_distribution_executor_code(step: AnalysisStep) -> str:
         raise ValueError(
             "The step is not owned by the exposure-outcome distribution executor"
         )
-    spec = step.exposure_outcome_distribution_spec
+    # The design as it must EXECUTE.  The Planner declares levels in the
+    # host's own opaque placeholders whenever it was told a column's
+    # cardinality and not its values; two recorded runs died here and were
+    # rescued only by a replan that guessed ``[0, 1]``.
+    spec = execution_distribution_spec(step)
     assert spec is not None  # narrowed by owns_step
     return textwrap.dedent(
         f"""

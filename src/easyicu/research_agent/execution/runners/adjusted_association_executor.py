@@ -39,6 +39,7 @@ import textwrap
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from ...authority.declared_levels import execution_model_requirement, level_spelling
 from ...authority.plausibility import FlagOnlyPlausibilityScope
 from ...contracts.host_scaffold import HostScaffoldedScript
 from ...contracts.ownership_verdict import OwnershipVerdict
@@ -352,6 +353,12 @@ def adjusted_association_executor_scaffold(
         plausibility_scope.require_step(step.step_id)
     requirement = _requirement(step)
     assert requirement is not None
+    # The declaration as it must EXECUTE.  A categorical level set arrives in
+    # the host's own opaque placeholders whenever the Planner was told the
+    # column's cardinality and not its values, and only the host can put the
+    # levels back.  Reading ``requirement`` directly here is what handed the
+    # sandbox four placeholders and a cohort holding 0/1/2/3.
+    requirement = execution_model_requirement(step, requirement)
     kind = _estimator_kind(requirement)
     typed_cohort_input = sole_typed_cohort_input(step)
     receipt_code = (
@@ -531,28 +538,13 @@ class _DeclaredContrasts:
         return tuple(level for level in self.levels if level != self.reference)
 
 
-def _level_key(value: Any) -> str:
-    """One spelling for a level, whichever side it arrives from.
-
-    The plan declares levels as strings; the cohort column may hold them as
-    floats (a real AKI stage column is ``0.0/1.0/2.0/3.0``). Comparing the two
-    raw would make every declared level look absent, so both sides come through
-    here. A float that is a whole number keeps its integer spelling, because
-    ``"3"`` and ``"3.0"`` are the same stage and a reader should see one of
-    them.
-    """
-
-    if value is None:
-        return ""
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, float):
-        if value != value:  # NaN
-            return ""
-        if value.is_integer():
-            return str(int(value))
-        return repr(value)
-    return str(value).strip()
+# One spelling for a level, whichever side of the privacy boundary it arrives
+# from.  The plan declares levels as strings; the cohort column may hold them
+# as floats (a real AKI stage column is ``0.0/1.0/2.0/3.0``).  The authority
+# layer resolves the host's opaque placeholders into declared levels with this
+# same function, so a resolved declaration and the cohort it is checked against
+# cannot end up in two spellings of one level.
+_level_key = level_spelling
 
 
 def _declared_contrasts(

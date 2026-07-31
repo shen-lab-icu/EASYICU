@@ -4256,6 +4256,7 @@ def run_execute_phase(
         *,
         reason: str,
     ) -> Path:
+        from ..authority.declared_levels import bind_step_declared_levels
         from ..authority.table_one_binding import (
             bind_table_one_execution_spec,
             write_table_one_private_checkpoint,
@@ -4263,6 +4264,7 @@ def run_execute_phase(
 
         for revised_step in revised_plan.steps:
             bind_table_one_execution_spec(revised_step, context)
+            bind_step_declared_levels(revised_step, context)
         write_table_one_private_checkpoint(run_dir=run_dir, plan=revised_plan)
         revision_path = run_dir / f"analysis_plan_revision_{revised_plan.revision}.json"
         revision_path.write_text(
