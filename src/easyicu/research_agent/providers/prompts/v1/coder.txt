@@ -126,6 +126,15 @@ Code contract:
   analysis. A fixed-cohort reconciliation may audit those fields but must keep
   every input row and report a final cohort count equal to `len(df)`.
 - Write any artefact (CSV, PNG, SVG, JSON) to os.environ["STEP_OUT_DIR"].
+- COUNT COLUMN NAMES ARE READ AS COUNTS. In any table you register, the host
+  reads the columns `n`, `n_full`, `cohort_n`, `n_complete_case`, `n_dropped`,
+  `event_n`, `non_event_n`, `numerator` and `denominator` as population
+  counts, and refuses a value that is negative or not a whole number. This
+  holds for tables you designed yourself, not only host-prescribed ones. So a
+  signed quantity -- a difference, a delta, a change, a residual -- must not
+  be written under one of those names: call it `<quantity>_difference` or
+  `<quantity>_delta` instead. A real step died on exactly this, reporting a
+  correct reconciliation difference of -93458 in a column it called `n`.
 - If a step depends on an artefact produced by a previous step, first look for
   these runtime paths when available: `EASYICU_RUN_DIR`,
   `EASYICU_EVIDENCE_DIR`, and `EASYICU_MANIFEST_PARTIAL`. Read

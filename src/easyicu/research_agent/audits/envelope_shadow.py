@@ -21,6 +21,14 @@ from easyicu.research_agent.contracts.result_envelope import (
 )
 from easyicu.research_agent.schema import AnalysisStep, ValidationFinding
 
+_MAX_REPORTED_NORMALIZATION_ERRORS = 12
+"""How many distinct normalization errors the blocking finding spells out.
+
+Bounded because the message reaches a prompt, and stated rather than silently
+truncated: a report that stops without saying it stopped reads as the whole
+list.
+"""
+
 
 class _StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -175,18 +183,46 @@ def compare_validator_shadow_inputs(
                 detail=f"Envelope product {product_id!r} was not declared by the summary.",
             )
         )
-    error_codes = sorted(
-        {
-            issue.code
-            for issue in envelope.normalization_issues
-            if issue.severity == "error"
-        }
-    )
-    for code in error_codes:
+    # Per issue, not per code. Collapsing to a set of codes discarded the
+    # product and the field path the normalizer had already computed, and a
+    # real blocked step then read only "reported error 'invalid_registered_count'".
+    # Finding the cause meant hand-scanning four emitted CSVs; the issue itself
+    # said `row[4].n` of `table:cohort_input_reconciliation` all along.
+    rendered: list[str] = []
+    seen_details: set[str] = set()
+    for issue in envelope.normalization_issues:
+        if issue.severity != "error":
+            continue
+        where = " ".join(
+            part
+            for part in (
+                f"in {issue.product_id}" if issue.product_id else "",
+                f"at {issue.field_path}" if issue.field_path else "",
+            )
+            if part
+        )
+        detail = (
+            f"Canonical normalization reported error {issue.code!r}"
+            + (f" {where}" if where else "")
+            + f": {issue.message}"
+        )
+        if detail in seen_details:
+            continue
+        seen_details.add(detail)
+        rendered.append(detail)
+    for detail in rendered[:_MAX_REPORTED_NORMALIZATION_ERRORS]:
+        mismatches.append(
+            ValidatorShadowMismatch(code="normalization_error", detail=detail)
+        )
+    withheld = len(rendered) - _MAX_REPORTED_NORMALIZATION_ERRORS
+    if withheld > 0:
         mismatches.append(
             ValidatorShadowMismatch(
                 code="normalization_error",
-                detail=f"Canonical normalization reported error {code!r}.",
+                detail=(
+                    f"{withheld} further normalization error(s) were not listed; "
+                    "read the canonical envelope for the rest."
+                ),
             )
         )
     return ValidatorShadowComparison(
