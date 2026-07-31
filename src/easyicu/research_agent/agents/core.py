@@ -97,6 +97,10 @@ from ..contracts.declared_product import (
     typed_product as _canonical_typed_product,
 )
 from ..contracts.result_envelope import STATISTIC_PAYLOAD_KEY_ALIASES
+from ..planning.robustness_contract import (
+    COMPLETE_CASE_STRATEGY as _COMPLETE_CASE_STRATEGY,
+    COMPLETE_CASE_VARIABLES_KEY as _COMPLETE_CASE_VARIABLES_KEY,
+)
 from ..plan_utils import (
     _cohort_predicate_partition_safety_rules,
     _primary_analysis_cohort_canonical_schema_rules,
@@ -802,6 +806,18 @@ def _build_planner_user_prompt(
         + ". A sensitivity that does not fit one of these (for example an "
         "alternative model form or link function) is a separate analysis "
         "step, not a new axis value. "
+        # Published because it was enforced and never stated: the worked
+        # example below used to show `{"strategy": "complete_case"}` with no
+        # variable list, and half of all recorded complete-case specs copied
+        # it and were refused at execution. Which variables are held complete
+        # is a scientific choice, so the host asks rather than infers.
+        f"A `missing_override` whose `strategy` is '{_COMPLETE_CASE_STRATEGY}' "
+        f"MUST also carry `{_COMPLETE_CASE_VARIABLES_KEY}`: the exact list of "
+        "column names whose completeness defines the analysed set -- normally "
+        "the exposure, the outcome and every covariate of the primary model. "
+        "The host will not infer them from the model, because restricting on a "
+        "narrower or wider set than the model uses is a different analysis, and "
+        "a spec without them is refused. "
         "Add an auxiliary post-primary step with "
         "`method='robustness_sensitivity'` producing "
         "`table:robustness_matrix` and `statistic:robustness_summary`. "
@@ -949,7 +965,9 @@ def _build_planner_user_prompt(
         '      "axis": "missing",\n'
         '      "description": "Use complete-case handling for required variables.",\n'
         '      "cohort_override": null,\n'
-        '      "missing_override": {"strategy": "complete_case"},\n'
+        '      "missing_override": {"strategy": "complete_case", '
+        + f'"{_COMPLETE_CASE_VARIABLES_KEY}": '
+        + '["<exposure column>", "<outcome column>", "<each covariate>"]},\n'
         '      "outcome_override": null\n'
         "    }\n"
         "  ],\n"
