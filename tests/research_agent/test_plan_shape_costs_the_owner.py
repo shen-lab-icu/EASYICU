@@ -498,3 +498,78 @@ def test_a_step_promising_a_figure_alongside_its_tables_is_still_refused() -> No
         )
         is False
     )
+
+
+# --------------------------------------------------------------------------
+# one model per step -- the rule the host enforced but never published
+
+
+def test_bundling_a_second_model_costs_the_step_its_owner() -> None:
+    """The same shape as the bundled figure, one layer down, and unpublished.
+
+    The association owner refuses any step whose roster carries more than one
+    entry -- it writes one estimate row and one contract. Measured 2026-07-31
+    over the recorded plans: 8 steps declare two or more, and 7 of the 8 also
+    omit their covariates so they were refused twice over. The eighth is real
+    and current: E3's ``07_primary_adjusted_association_models`` in the newest
+    nine-task run declares its covariates properly and is refused for the
+    roster alone. Splitting it recovers the paper's primary estimate -- the
+    first entry, on its own, is claimed.
+    """
+
+    primary = {
+        "requirement_id": "primary_mortality_by_stage",
+        "outcome": "death",
+        "outcome_type": "binary",
+        "method_family": "logistic_regression",
+        "exposure_source": "stage_max",
+        "analysis_role": "primary",
+        "analysis_set": "complete_case",
+        "required_for_step_success": True,
+        "covariates": ["age", "sex"],
+    }
+    secondary = {
+        **primary,
+        "requirement_id": "secondary_stay_length_by_stage",
+        "outcome": "stay_length",
+        "outcome_type": "continuous",
+        "method_family": "linear_regression",
+        "analysis_role": "secondary",
+    }
+    payload = {
+        "step_id": "07_primary_adjusted_association_models",
+        "planned_analysis_role": "primary",
+        "intent": "Estimate the adjusted association across the exposure gradient.",
+        "inputs": ["artifact:analysis_cohort"],
+        "expected_outputs": [ADJUSTED_ASSOCIATION_OUTPUT],
+        "method": "adjusted_association_models",
+    }
+
+    bundled = AnalysisStep.model_validate(
+        {**payload, "model_requirements": [primary, secondary]}
+    )
+    assert adjusted_association_executor_owns_step(bundled) is False
+
+    # The only edit is removing the second entry; the science of the first is
+    # untouched, and it is the paper's primary estimate.
+    split = AnalysisStep.model_validate({**payload, "model_requirements": [primary]})
+    assert adjusted_association_executor_owns_step(split) is True
+
+
+def test_the_planner_prompt_states_the_one_model_per_step_rule() -> None:
+    """A rule enforced but never published is a rule no plan can meet.
+
+    The roster paragraph used to say "record each pre-specified estimand/model
+    in the roster" while the owner refused every roster with more than one --
+    the host asking for exactly what it would then refuse.
+    """
+
+    from easyicu.research_agent.agents.core import _build_planner_user_prompt
+
+    prompt = _build_planner_user_prompt(_context())
+
+    assert "ONE MODEL PER STEP" in prompt
+    assert "declare exactly one entry" in prompt
+    assert "is its own step with its own roster entry" in prompt
+    # ...and the sentence that contradicted it is gone.
+    assert "record each pre-specified estimand/model in the roster" not in prompt
