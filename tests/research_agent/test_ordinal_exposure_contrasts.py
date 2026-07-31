@@ -381,3 +381,143 @@ def test_the_planner_prompt_offers_the_capability() -> None:
     assert "`exposure_levels`" in prompt
     assert "`primary_contrast_level`" in prompt
     assert "All three together or none" in prompt
+
+
+# ---------------------------------------------------------------------------
+# canary13: the first run that ever reached this owner with a real plan
+#
+# The host's own primary-model contract refused the step it had just computed,
+# with five issues. Four were one cause and the fifth was a real scientific
+# defect that nothing else would have caught.
+# ---------------------------------------------------------------------------
+
+
+def test_a_contrast_term_reports_the_original_column_as_its_source() -> None:
+    """``<exposure>__is_<level>`` is a design column; no cohort carries it.
+
+    The primary-model contract reads ``source_variable`` as "the unique
+    original authoritative cohort column" and explicitly allows ``term`` to be
+    "an encoded or transformed design column". Reporting the indicator as its
+    own source made every contrast unresolvable -- three issues for three
+    stages, on a step whose numbers were right.
+    """
+
+    from easyicu.research_agent.execution.runners.adjusted_association_executor import (
+        _coefficient_rows,
+    )
+
+    class _Term:
+        def __init__(self, term: str, source: str) -> None:
+            self.term = term
+            self.source_variable = source
+            self.estimate = 1.0
+            self.ci_low = 0.5
+            self.ci_high = 2.0
+            self.se = 0.1
+
+    rows = _coefficient_rows(
+        [
+            _Term("const", "const"),
+            _Term("stage__is_1", "stage__is_1"),
+            _Term("stage__is_3", "stage__is_3"),
+            _Term("age", "age"),
+        ],
+        model_id="m",
+        exposure="stage",
+        adjustment=["age"],
+        effect_scale="odds_ratio",
+        exposure_contrast_columns=["stage__is_1", "stage__is_3"],
+    )
+
+    by_term = {row["term"]: row for row in rows}
+    assert by_term["stage__is_1"]["source_variable"] == "stage"
+    assert by_term["stage__is_3"]["source_variable"] == "stage"
+    # The term keeps the design column: the contract asks for the pair, and
+    # collapsing the term too would lose which contrast the row is.
+    assert by_term["stage__is_1"]["term"] == "stage__is_1"
+    assert by_term["age"]["source_variable"] == "age"
+    assert by_term["const"]["term_role"] == "intercept"
+
+
+def test_an_unobserved_exposure_is_not_pooled_into_the_reference(
+    tmp_path, monkeypatch
+) -> None:
+    """Treatment coding encodes a missing value exactly like the reference.
+
+    Every indicator is 0 for a row with no exposure, which is bit-for-bit the
+    reference encoding -- so the model answers "stage 0" for a patient whose
+    stage nobody recorded. canary13 had 8 such stays in 1000, and only the
+    host's own denominator recomputation (992, not 1000) ever made it visible.
+
+    This is a scientific property, not a formatting one: the assertion is on
+    the analysed row count AND on the reference group's own size, because a
+    test that checked only ``n`` would pass if the rows were dropped from the
+    wrong group.
+    """
+
+    import numpy as np
+
+    frame = _ordinal_cohort(n=600)
+    complete = _run(tmp_path, monkeypatch, frame=frame.copy())
+    assert {int(row["n"]) for row in complete} == {600}
+
+    frame.loc[frame.index[:9], "aki_stage"] = np.nan
+    rows = _run(tmp_path, monkeypatch, frame=frame)
+
+    # Nine rows lost their exposure, so nine rows leave the analysis. Pooling
+    # them into the reference would keep n at 600 and shift every contrast.
+    assert {int(row["n"]) for row in rows} == {591}
+    assert [row["contrast"] for row in rows] == ["1 vs 0", "2 vs 0", "3 vs 0"]
+
+    # ...and the estimates really move, so this cannot pass by the rows having
+    # been dropped somewhere harmless.
+    before = {row["contrast"]: float(row["estimate"]) for row in complete}
+    after = {row["contrast"]: float(row["estimate"]) for row in rows}
+    assert any(before[key] != after[key] for key in before)
+
+
+def test_every_contrast_indicator_is_missing_where_the_exposure_is() -> None:
+    """The design matrix must not assert a level for a row that has none.
+
+    Checking the analysed row count is not enough: complete-case drops a row on
+    a NaN in ANY column, so masking one indicator and leaving the others at 0
+    produces the same ``n`` while the unmasked columns still say "this row is
+    not stage 2" about a row whose stage is unknown. That mutant passed the
+    count test unchanged. The statement each indicator makes has to be true on
+    its own, because the design is a value the fit and every later reader see.
+    """
+
+    from easyicu.research_agent.execution.runners.adjusted_association_executor import (
+        _DeclaredContrasts,
+        _contrast_column,
+        _contrast_design,
+    )
+
+    import numpy as np
+
+    frame = pd.DataFrame(
+        {
+            "aki_stage": [0.0, 1.0, np.nan, 3.0],
+            "age": [60.0, 70.0, 80.0, 65.0],
+        }
+    )
+    contrasts = _DeclaredContrasts(
+        levels=("0", "1", "2", "3"), reference="0", primary="3"
+    )
+
+    design, focal = _contrast_design(
+        frame, exposure="aki_stage", adjustment=["age"], contrasts=contrasts
+    )
+
+    assert focal == _contrast_column("aki_stage", "3")
+    unobserved = 2
+    for level in ("1", "2", "3"):
+        column = design[_contrast_column("aki_stage", level)]
+        assert pd.isna(column.iloc[unobserved]), level
+        # ...and the observed rows keep their exact indicator, so masking has
+        # not blurred the rows that do have a stage.
+        assert column.iloc[0] == 0.0
+    assert design[_contrast_column("aki_stage", "1")].iloc[1] == 1.0
+    assert design[_contrast_column("aki_stage", "3")].iloc[3] == 1.0
+    # The adjustment column is untouched: only the exposure was unobserved.
+    assert not design["age"].isna().any()

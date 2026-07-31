@@ -502,6 +502,16 @@ def _coefficient_rows(
             role = "intercept"
         elif source == exposure or source in contrast_columns:
             role = "exposure"
+            # A treatment-coded indicator IS the exposure, encoded -- and the
+            # primary-model contract reads ``source_variable`` as "the unique
+            # original authoritative cohort column", allowing ``term`` itself
+            # to be "an encoded or transformed design column".
+            # ``<exposure>__is_<level>`` is a design column the host built and
+            # no cohort carries, so reporting it as the source made every
+            # contrast unresolvable: canary13's step 08 was computed correctly
+            # by this owner and then refused by that contract, three issues for
+            # three stages, over a name rather than a number.
+            source = exposure
         elif source in adjustment_set:
             role = "adjustment"
         else:
@@ -628,15 +638,27 @@ def _contrast_design(
     stage-2 and stage-3 estimates are conditional on each other exactly as the
     declared model says. Fitting each level separately would produce numbers
     that no single model ever computed.
+
+    A row whose exposure is UNOBSERVED is not the reference level.  Treatment
+    coding makes that mistake by default: every indicator is 0 for a missing
+    value, which is bit-for-bit the encoding of the reference, so the fit
+    silently answers "stage 0" for a patient whose stage nobody recorded.  On
+    canary13 that was 8 of 1000 stays -- the host's own primary-model contract
+    recomputed the complete-case denominator as 992 and refused the step over
+    the difference, which is the only reason the pooling was ever visible.
+    The indicators are therefore missing where the exposure is, so the
+    estimator drops those rows as complete-case rather than counting them in a
+    level they were never observed to be in.
     """
 
     import pandas as pd
 
     keys = model_frame[exposure].map(_level_key)
-    indicators = {
-        _contrast_column(exposure, level): (keys == level).astype(float)
-        for level in contrasts.contrast_levels
-    }
+    unobserved = keys.eq("")
+    indicators: Dict[str, Any] = {}
+    for level in contrasts.contrast_levels:
+        column = (keys == level).astype(float)
+        indicators[_contrast_column(exposure, level)] = column.mask(unobserved)
     design = pd.DataFrame(indicators, index=model_frame.index)
     for name in adjustment:
         design[name] = model_frame[name]
