@@ -323,6 +323,68 @@ def test_named_explicit_column_loop_can_share_one_generic_validator() -> None:
     assert _reasons_for_columns(looped, "marker", "second_marker") == set()
 
 
+def test_a_comprehension_over_the_scope_covers_what_the_same_loop_covers() -> None:
+    """A comprehension is a loop, and a spelling is not a defect.
+
+    M3 lost step 03 on canary7 here. The generated code declared a per-column
+    helper and called it from a dict comprehension over a seven-literal scope
+    list; the gate reported `covered_columns=[]` and the step died. Rewriting
+    the comprehension as a `for` -- same names, same helper, same program --
+    took it to seven of seven.
+
+    Asserted against the loop rather than against `set()` so the two spellings
+    cannot drift apart: whatever the loop is judged to cover, the
+    comprehension covers too.
+    """
+
+    call = 'validate_allowed_numeric(frame["marker"], "marker", manifest)'
+    looped = DECLARED.replace(
+        call,
+        'PLAUSIBILITY_COLUMNS = ["marker", "second_marker"]\n'
+        "for column in PLAUSIBILITY_COLUMNS:\n"
+        "    validate_allowed_numeric(frame[column], column, manifest)",
+    )
+    comprehended = DECLARED.replace(
+        call,
+        'PLAUSIBILITY_COLUMNS = ["marker", "second_marker"]\n'
+        "checked = [\n"
+        "    validate_allowed_numeric(frame[column], column, manifest)\n"
+        "    for column in PLAUSIBILITY_COLUMNS\n"
+        "]",
+    )
+    assert looped != DECLARED and comprehended != DECLARED
+
+    loop_reasons = _reasons_for_columns(looped, "marker", "second_marker")
+    assert loop_reasons == set(), "precondition: the loop spelling is accepted"
+    assert _reasons_for_columns(comprehended, "marker", "second_marker") == loop_reasons
+
+
+def test_a_comprehension_that_does_not_pass_its_own_target_credits_nothing() -> None:
+    """Iterating a list is not checking what is in it.
+
+    The comprehension below names both columns in the list it walks but calls
+    the validator on one fixed column, so the second is never checked. Crediting
+    it from the list alone would pass a script that looked at one of two.
+
+    Written this way rather than as "a comprehension over a shorter list" --
+    that version is satisfied by the literal list being short, and survives a
+    gate that ignores the loop target entirely.
+    """
+
+    comprehended = DECLARED.replace(
+        'validate_allowed_numeric(frame["marker"], "marker", manifest)',
+        'PLAUSIBILITY_COLUMNS = ["marker", "second_marker"]\n'
+        "checked = [\n"
+        '    validate_allowed_numeric(frame["marker"], "marker", manifest)\n'
+        "    for _unused in PLAUSIBILITY_COLUMNS\n"
+        "]",
+    )
+
+    assert _reasons_for_columns(comprehended, "marker", "second_marker") == {
+        "plausibility_scope_column_not_attributable"
+    }
+
+
 def test_named_column_loop_cannot_certify_an_omitted_scope_column() -> None:
     looped = DECLARED.replace(
         'validate_allowed_numeric(frame["marker"], "marker", manifest)',

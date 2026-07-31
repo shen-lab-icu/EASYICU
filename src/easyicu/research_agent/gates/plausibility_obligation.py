@@ -188,7 +188,9 @@ class _RuntimeReachability:
         while True:
             grew = False
             for node in ast.walk(self.tree):
-                if id(node) not in self.active_node_ids or not isinstance(node, ast.Call):
+                if id(node) not in self.active_node_ids or not isinstance(
+                    node, ast.Call
+                ):
                     continue
                 callee = node.func
                 if isinstance(callee, ast.Name):
@@ -1214,12 +1216,34 @@ def _expected_data_column_literals(
     }
 
 
+def _iteration_clauses(node: ast.AST) -> Optional[list[tuple[ast.AST, ast.AST]]]:
+    """The ``(target, iterable)`` pairs a loop-like construct binds, else ``None``.
+
+    A comprehension is a loop.  ``{c: receipt(frame[c], contracts[c]) for c in
+    SCOPE}`` and the ``for`` statement that builds the same dict are the same
+    program, and a check that credits one and refuses the other is refusing a
+    spelling, not a defect.  M3 lost step 03 on canary7 to exactly that: the
+    generated code declared a per-column helper, called it from a dict
+    comprehension over a seven-literal scope list, and was reported with
+    ``covered_columns=[]``.  Rewriting the comprehension as a ``for`` -- one
+    statement, same names, same helper -- took it to seven of seven.
+
+    A comprehension may bind more than once (``for a in X for b in Y``), so
+    every generator is returned rather than the first.
+    """
+
+    if isinstance(node, (ast.For, ast.AsyncFor)):
+        return [(node.target, node.iter)]
+    if isinstance(node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
+        return [(generator.target, generator.iter) for generator in node.generators]
+    return None
+
+
 def _target_names(node: ast.AST) -> Set[str]:
     return {
         inner.id
         for inner in ast.walk(node)
-        if isinstance(inner, ast.Name)
-        and isinstance(inner.ctx, (ast.Store, ast.Del))
+        if isinstance(inner, ast.Name) and isinstance(inner.ctx, (ast.Store, ast.Del))
     }
 
 
@@ -1324,8 +1348,7 @@ def _comparison_scope_coverage(
                 pending.extend(
                     inner.id
                     for inner in ast.walk(value)
-                    if isinstance(inner, ast.Name)
-                    and isinstance(inner.ctx, ast.Load)
+                    if isinstance(inner, ast.Name) and isinstance(inner.ctx, ast.Load)
                 )
         return seen_names
 
@@ -1353,10 +1376,9 @@ def _comparison_scope_coverage(
             return None
         return right if left_is_bound else comparison.left
 
-    def _loop_contract_key_names(loop: ast.For | ast.AsyncFor) -> Set[str]:
+    def _loop_contract_key_names(target: ast.AST, iterator: ast.AST) -> Set[str]:
         """Names that identify a contract key in this mapping iteration."""
 
-        iterator = loop.iter
         if isinstance(iterator, ast.Call) and isinstance(
             iterator.func,
             ast.Attribute,
@@ -1364,10 +1386,10 @@ def _comparison_scope_coverage(
             if iterator.func.attr == "values":
                 return set()
             if iterator.func.attr == "items":
-                if isinstance(loop.target, (ast.Tuple, ast.List)) and loop.target.elts:
-                    return _target_names(loop.target.elts[0])
+                if isinstance(target, (ast.Tuple, ast.List)) and target.elts:
+                    return _target_names(target.elts[0])
                 return set()
-        return _target_names(loop.target)
+        return _target_names(target)
 
     def _credit_from_enclosing_loop(comparison: ast.Compare) -> Set[str]:
         """Columns the loop this comparison sits in proves it covered.
@@ -1399,15 +1421,24 @@ def _comparison_scope_coverage(
         data_operand = _data_operand(comparison)
         if data_operand is None:
             return found
+        upstream = _upstream_names(data_operand)
         current = parent.get(id(comparison))
         while current is not None:
-            if isinstance(current, (ast.For, ast.AsyncFor)):
-                key_names = _loop_contract_key_names(current)
-                if key_names.intersection(_upstream_names(data_operand)):
-                    found.update(_upstream_literals(current.iter))
-                    if _reads_the_raw_contract_mapping(current.iter, assignments):
-                        found.update(expected)
-                break
+            clauses = _iteration_clauses(current)
+            if clauses is not None:
+                for target, iterator in clauses:
+                    if _loop_contract_key_names(target, iterator).intersection(
+                        upstream
+                    ):
+                        found.update(_upstream_literals(iterator))
+                        if _reads_the_raw_contract_mapping(iterator, assignments):
+                            found.update(expected)
+                # Only a statement loop ends the walk, exactly as before a
+                # comprehension was recognised at all.  Breaking on the
+                # comprehension too would stop short of an enclosing ``for``
+                # that used to be credited, turning an addition into a loss.
+                if isinstance(current, (ast.For, ast.AsyncFor)):
+                    break
             current = parent.get(id(current))
         return found
 
@@ -1434,25 +1465,23 @@ def _comparison_scope_coverage(
         ]
         for call in owner_calls:
             covered.update(_expected_column_literals(call, expected))
+            call_names = {
+                inner.id
+                for argument in _call_arguments(call)
+                for inner in ast.walk(argument)
+                if isinstance(inner, ast.Name) and isinstance(inner.ctx, ast.Load)
+            }
             current = parent.get(id(call))
             while current is not None and current is not owner:
-                if isinstance(current, (ast.For, ast.AsyncFor)):
-                    loop_names = _target_names(current.target)
-                    call_names = {
-                        inner.id
-                        for argument in _call_arguments(call)
-                        for inner in ast.walk(argument)
-                        if isinstance(inner, ast.Name)
-                        and isinstance(inner.ctx, ast.Load)
-                    }
-                    if loop_names.intersection(call_names):
-                        covered.update(_upstream_literals(current.iter))
-                        if _reads_the_raw_contract_mapping(
-                            current.iter,
-                            assignments,
-                        ):
-                            covered.update(expected)
-                    break
+                clauses = _iteration_clauses(current)
+                if clauses is not None:
+                    for target, iterator in clauses:
+                        if _target_names(target).intersection(call_names):
+                            covered.update(_upstream_literals(iterator))
+                            if _reads_the_raw_contract_mapping(iterator, assignments):
+                                covered.update(expected)
+                    if isinstance(current, (ast.For, ast.AsyncFor)):
+                        break
                 current = parent.get(id(current))
     return covered
 
@@ -2059,9 +2088,7 @@ def _tests_the_declared_action(
     if len(literal_positions) != 1:
         return None
     other = operands[1 - literal_positions[0]]
-    if not (
-        isinstance(other, ast.Name) and other.id in policy_action_names
-    ):
+    if not (isinstance(other, ast.Name) and other.id in policy_action_names):
         return None
     return isinstance(node.ops[0], ast.Eq)
 
@@ -2126,9 +2153,7 @@ def _query_expression_reads_a_declared_bound(
     ):
         return True
     for inner in ast.walk(node):
-        if not (
-            isinstance(inner, ast.Constant) and isinstance(inner.value, str)
-        ):
+        if not (isinstance(inner, ast.Constant) and isinstance(inner.value, str)):
             continue
         if any(
             re.search(
@@ -2177,30 +2202,20 @@ def _flag_only_range_transform(
     if operation == "drop":
         selectors = [
             *positional,
-            *(
-                value
-                for key, value in keywords.items()
-                if key in {"index", "labels"}
-            ),
+            *(value for key, value in keywords.items() if key in {"index", "labels"}),
         ]
         return operation if any(flow.rejects_on(value) for value in selectors) else None
 
     if operation in {"where", "mask"}:
         condition = positional[0] if positional else keywords.get("cond")
         return (
-            operation
-            if condition is not None and flow.rejects_on(condition)
-            else None
+            operation if condition is not None and flow.rejects_on(condition) else None
         )
 
     if operation == "clip":
         candidates = [
             *positional[:2],
-            *(
-                value
-                for key, value in keywords.items()
-                if key in {"lower", "upper"}
-            ),
+            *(value for key, value in keywords.items() if key in {"lower", "upper"}),
         ]
         return (
             operation
