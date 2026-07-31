@@ -983,8 +983,7 @@ def _row_identity_canonical_values(
     )
 
 
-def _row_identity_sha256(path: Path, *, identity_column: str) -> str:
-    canonical = _row_identity_canonical_values(path, identity_column=identity_column)
+def _digest_canonical_identity(canonical: tuple[str, ...]) -> str:
     return hashlib.sha256(
         json.dumps(
             canonical,
@@ -992,6 +991,29 @@ def _row_identity_sha256(path: Path, *, identity_column: str) -> str:
             separators=(",", ":"),
         ).encode("utf-8")
     ).hexdigest()
+
+
+def cohort_row_identity_sha256(values: Sequence[object]) -> str:
+    """The published recipe behind every receipt ``row_identity_sha256``.
+
+    The receipt carries this digest so an executing step can prove the frame it
+    loaded is the frame the host authorised.  A digest is only checkable by
+    whoever can reproduce it, so the recipe has to be callable rather than
+    merely described: a step that invents its own canonicalisation computes a
+    different digest and rejects a cohort that is exactly correct.  Generated
+    analysis code is told to call this function for that reason.
+
+    ``values`` are the identity values in stored order; order is part of the
+    digest.
+    """
+
+    return _digest_canonical_identity(_canonical_identity_values(list(values)))
+
+
+def _row_identity_sha256(path: Path, *, identity_column: str) -> str:
+    return _digest_canonical_identity(
+        _row_identity_canonical_values(path, identity_column=identity_column)
+    )
 
 
 def _row_identity_sha256_at(
@@ -1007,16 +1029,11 @@ def _row_identity_sha256_at(
         raise MaterializedMetadataError("cannot read cohort identity column") from exc
     except (OSError, ValueError, pa.ArrowException) as exc:
         raise MaterializedMetadataError("cannot read cohort identity column") from exc
-    canonical = _canonical_identity_values(
-        table.column(identity_column).combine_chunks().to_pylist()
+    return _digest_canonical_identity(
+        _canonical_identity_values(
+            table.column(identity_column).combine_chunks().to_pylist()
+        )
     )
-    return hashlib.sha256(
-        json.dumps(
-            canonical,
-            ensure_ascii=False,
-            separators=(",", ":"),
-        ).encode("utf-8")
-    ).hexdigest()
 
 
 def _descriptor(
