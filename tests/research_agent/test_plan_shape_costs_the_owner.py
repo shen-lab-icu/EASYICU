@@ -285,3 +285,216 @@ def test_the_planner_prompt_states_both_shape_rules() -> None:
     assert "loses the deterministic owner" in prompt
     assert "never declare the same name under two kinds" in prompt
     assert "`table:x` together with `statistic:x`" in prompt
+
+
+# --------------------------------------------------------------------------
+# answering half the question must not cost more than saying nothing
+
+
+def _robustness_step(spec: dict | None) -> AnalysisStep:
+    """A real recorded robustness shape, with the spec swapped in or out.
+
+    The products are the six-product bundle the Planner really emits, minus the
+    ``statistic:robustness_summary`` half of the collision, so the only thing
+    varying between the cases below is the declaration itself.
+    """
+
+    payload = {
+        "step_id": "09_robustness_replay",
+        "planned_analysis_role": "sensitivity",
+        "intent": "Re-estimate the locked robustness grid without changing the estimand.",
+        "inputs": ["artifact:analysis_cohort"],
+        "expected_outputs": [
+            "table:robustness_matrix",
+            "table:robustness_summary",
+            "statistic:primary_or",
+            "statistic:complete_case_n",
+            "log:missingness_strategy_notes",
+        ],
+        "method": "robustness_sensitivity",
+    }
+    if spec is not None:
+        payload["robustness_replay_spec"] = spec
+    return AnalysisStep.model_validate(payload)
+
+
+_PARTIAL_SPEC = {
+    "schema_version": "easyicu.robustness_replay/1",
+    "products": [
+        {"product_id": "robustness_matrix", "output": "robustness_matrix"},
+        {"product_id": "robustness_summary", "output": "robustness_summary"},
+    ],
+}
+
+
+def test_a_partial_declaration_does_not_cost_the_step_its_owner() -> None:
+    """Declaring half the products must be no worse than declaring none.
+
+    Until 2026-07-31 the spec branch returned instead of falling through, so a
+    step that filled the field partially was refused outright while the very
+    same step with the field left empty was claimed. Measured over the recorded
+    plans: 10 undeclared steps claimed, 8 partially-declared ones refused, and
+    every one of those 8 would have been claimed had the Planner said nothing.
+    The host was charging the Planner for trying.
+    """
+
+    from easyicu.research_agent.execution.phase import (
+        _robustness_sensitivity_runner_owns_step as owns,
+    )
+    from easyicu.research_agent.execution.runners.deterministic_robustness import (
+        robustness_replay_declaration_verdict,
+    )
+
+    undeclared = _robustness_step(None)
+    partial = _robustness_step(_PARTIAL_SPEC)
+
+    # The partial spec really is unemittable -- otherwise this test would pass
+    # for the wrong reason, on a declaration that was complete all along.
+    assert robustness_replay_spec_is_emittable(partial) is False
+
+    claimed_undeclared = owns(
+        str(undeclared.method),
+        undeclared.step_id,
+        undeclared.expected_outputs,
+        step=undeclared,
+    )
+    claimed_partial = owns(
+        str(partial.method),
+        partial.step_id,
+        partial.expected_outputs,
+        step=partial,
+    )
+    assert claimed_undeclared is True, "the fallback path must claim the bare shape"
+    assert claimed_partial is True, "answering partially must not remove the owner"
+
+    # ...and the gap is still reported, so the Planner is still asked to close
+    # it. Not punishing the step is not the same as pretending it is complete.
+    verdict = robustness_replay_declaration_verdict(partial)
+    assert verdict.claimed is False
+    assert verdict.missing_declarations == ("robustness_replay_spec.products",)
+    assert "primary_or" in verdict.reason
+
+
+def test_an_emittable_declaration_still_claims_without_the_label() -> None:
+    """The declaration path is what the label path exists to stop needing."""
+
+    from easyicu.research_agent.execution.phase import (
+        _robustness_sensitivity_runner_owns_step as owns,
+    )
+
+    full = _robustness_step(
+        {
+            "schema_version": "easyicu.robustness_replay/1",
+            "products": [
+                {"product_id": "robustness_matrix", "output": "robustness_matrix"},
+                {"product_id": "robustness_summary", "output": "robustness_summary"},
+                {"product_id": "primary_or", "output": "primary_effect"},
+                {"product_id": "complete_case_n", "output": "complete_case_n"},
+                {
+                    "product_id": "missingness_strategy_notes",
+                    "output": "missingness_strategy_notes",
+                },
+            ],
+        }
+    )
+    assert robustness_replay_spec_is_emittable(full) is True
+    # A method label no allowlist contains: the declaration alone must carry it.
+    assert (
+        owns(
+            "a_method_no_allowlist_has_ever_seen",
+            full.step_id,
+            full.expected_outputs,
+            step=full,
+        )
+        is True
+    )
+
+
+def test_a_step_promising_a_figure_alongside_its_tables_is_still_refused() -> None:
+    """Falling through must not reopen the one gate that was never about labels.
+
+    There is no longer an explicit `figure:` guard to test -- it was deleted on
+    2026-07-31 once measured unreachable: `figure` is not one of the three
+    auxiliary output kinds, so the product check refuses any step promising one,
+    and no replay output names a figure, so the declaration path refuses it too.
+    Deleting a guard is only safe while the property it claimed still holds, so
+    this test asserts the PROPERTY over the shapes that reach each path, and
+    fails if either structural rule is ever relaxed.
+
+    A first version promised the figure alone and passed on the product check --
+    it survived deleting the guard, which is how the guard was found to be dead.
+    """
+
+    from easyicu.research_agent.execution.phase import (
+        _robustness_sensitivity_runner_owns_step as owns,
+    )
+
+    step = AnalysisStep.model_validate(
+        {
+            "step_id": "07_robustness_replay_and_figure",
+            "planned_analysis_role": "sensitivity",
+            "intent": "Replay the locked grid and draw it.",
+            "inputs": ["artifact:analysis_cohort"],
+            "expected_outputs": [
+                "table:robustness_matrix",
+                "table:robustness_summary",
+                # NOT `figure:robustness_plot`: that bare name is not one of
+                # the runner's products, so the product check alone would
+                # refuse it and this test would pass without ever exercising
+                # the kind rule. `figure:robustness_summary` is the shape 5
+                # recorded steps really use, and its bare name IS supported --
+                # so only `figure` being a non-auxiliary kind refuses it.
+                "figure:robustness_summary",
+            ],
+            "method": "robustness_sensitivity",
+        }
+    )
+    assert (
+        owns(str(step.method), step.step_id, step.expected_outputs, step=step) is False
+    )
+    # ...and it is the FIGURE that refuses it: the same step without one is claimed.
+    without_figure = step.model_copy(
+        update={
+            "expected_outputs": [
+                "table:robustness_matrix",
+                "table:robustness_summary",
+            ]
+        }
+    )
+    assert (
+        owns(
+            str(without_figure.method),
+            without_figure.step_id,
+            without_figure.expected_outputs,
+            step=without_figure,
+        )
+        is True
+    )
+
+    # The declaration path, which the product check never sees: an otherwise
+    # complete spec cannot make a promised figure emittable either.
+    declaring = AnalysisStep.model_validate(
+        {
+            **step.model_dump(),
+            "robustness_replay_spec": {
+                "schema_version": "easyicu.robustness_replay/1",
+                "products": [
+                    {"product_id": "robustness_matrix", "output": "robustness_matrix"},
+                    {
+                        "product_id": "robustness_summary",
+                        "output": "robustness_summary",
+                    },
+                ],
+            },
+        }
+    )
+    assert robustness_replay_spec_is_emittable(declaring) is False
+    assert (
+        owns(
+            "a_method_no_allowlist_has_ever_seen",
+            declaring.step_id,
+            declaring.expected_outputs,
+            step=declaring,
+        )
+        is False
+    )

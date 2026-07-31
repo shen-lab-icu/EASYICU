@@ -2225,20 +2225,44 @@ def _robustness_sensitivity_runner_owns_step(
 ) -> bool:
     """True for a separate prespecified robustness-comparison owner.
 
-    A step carrying ``robustness_replay_spec`` has stated outright that it is
-    the locked-grid replay, so neither the method label below nor the product
-    names decide anything for it.  Both were string sets, and over the recorded
-    corpus the method set is the one that bled: 182 robustness steps that were
-    neither figures nor claimed by the agent-owned validation gate were turned
-    away by it.
+    A step carrying an EMITTABLE ``robustness_replay_spec`` has stated outright
+    that it is the locked-grid replay, so neither the method label below nor the
+    product names need decide anything for it.  Both were string sets, and over
+    the recorded corpus the method set is the one that bled: 182 robustness
+    steps that were neither figures nor claimed by the agent-owned validation
+    gate were turned away by it.
+
+    AN INCOMPLETE DECLARATION MUST NOT COST THE STEP ITS OWNER.  Until
+    2026-07-31 the spec branch *returned* rather than fell through, so declaring
+    a spec replaced the label path outright -- and a spec that did not yet back
+    every promised product answered ``False``, permanently.  Measured over the
+    recorded plans: 10 steps that declare NO spec are claimed by the label path,
+    and 8 that declare a PARTIAL one are refused -- every one of which the label
+    path would have claimed had the field simply been left empty.  The host was
+    punishing the Planner for answering half its question, which teaches exactly
+    the wrong lesson and is invisible from the plan.
+
+    So an unemittable spec now falls through to the same path an absent one
+    takes: no better off, and no worse.  The gap is still reported --
+    ``robustness_replay_declaration_verdict`` names the unbacked products for
+    the plan-time gate -- so the Planner is still asked to close it, but the
+    step is not left to the Coder in the meantime for having tried.
     """
 
     del step_id
-    outputs = {str(item or "").lower() for item in (expected_outputs or [])}
-    if any(item.startswith("figure:") for item in outputs):
-        return False
-    if step is not None and step.robustness_replay_spec is not None:
-        return robustness_replay_spec_is_emittable(step)
+    # A promised figure is refused structurally by both paths below, so the
+    # explicit `figure:` guard that used to stand here was unreachable and was
+    # deleted (verified 2026-07-31): `figure` is not one of the three
+    # `_AUXILIARY_OUTPUT_KINDS`, so `_closed_auxiliary_output_products` returns
+    # None for any step promising one, and no replay `output` names a figure,
+    # so `robustness_replay_spec_is_emittable` is False for one too. The
+    # property is locked by a test rather than by a guard that never fires.
+    if (
+        step is not None
+        and step.robustness_replay_spec is not None
+        and robustness_replay_spec_is_emittable(step)
+    ):
+        return True
     method_head = _method_head(method)
     if method_head not in _ROBUSTNESS_SENSITIVITY_METHODS:
         return False
