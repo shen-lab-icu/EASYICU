@@ -34,7 +34,11 @@ import pandas as pd
 
 from ...authority.declared_levels import execution_distribution_spec
 from ...schema import AnalysisStep, ExposureOutcomeDistributionSpec, _typed_level_key
-from .typed_input_binding import load_typed_cohort, run_dir_from_env
+from .typed_input_binding import (
+    load_typed_cohort,
+    run_dir_from_env,
+    sole_typed_cohort_input,
+)
 
 __all__ = [
     "EXPOSURE_OUTCOME_DISTRIBUTION_COLUMNS",
@@ -105,24 +109,13 @@ def _typed_cohort_input(step: AnalysisStep) -> str:
     contract and no named producer for the rows it counted, so the table it
     would emit could not be bound to the plan that asked for it -- and calling
     that "deterministically owned" would be a claim the run cannot support.
+
+    Only that last policy is this owner's own: *which* keys name the closed
+    cohort product is one published vocabulary, so it is read from there rather
+    than spelled out again here.
     """
 
-    typed_inputs = {
-        str(value or "").strip()
-        for value in step.inputs
-        if ":" in str(value or "").strip()
-    }
-    if len(typed_inputs) != 1:
-        return ""
-    input_key = next(iter(typed_inputs))
-    kind, separator, product = input_key.partition(":")
-    if (
-        separator
-        and product
-        and (kind == "cohort" or input_key == "artifact:analysis_cohort")
-    ):
-        return input_key
-    return ""
+    return sole_typed_cohort_input(step) or ""
 
 
 def exposure_outcome_distribution_executor_owns_step(step: AnalysisStep) -> bool:
