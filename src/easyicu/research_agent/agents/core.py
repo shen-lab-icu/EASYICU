@@ -582,9 +582,8 @@ def _build_planner_user_prompt(
         "a numeric level. "
         "A primary cohort construction/eligibility + attrition step is also a "
         "strict execution boundary: it must declare exactly one materialised "
-        "closed cohort product (`artifact:analysis_cohort`, "
-        "`dataset:analysis_cohort`, `cohort:analysis_set`, or "
-        "`cohort:<exact cohort.name>`) plus only canonical attrition or "
+        "closed cohort product (" + _closed_cohort_product_sentence() + ") "
+        "plus only canonical attrition or "
         "denominator tables. Do not place a baseline/cohort summary, Table 1, "
         "model, statistic, figure, or other side output in that raw-universe "
         "step. Put each such output in a downstream step that consumes the "
@@ -781,12 +780,14 @@ def _build_planner_user_prompt(
         "an intentional full-input population from omitted free-text 纳排.\n\n"
         "If a cohort-definition or eligibility step also reports attrition, "
         "its `expected_outputs` MUST declare exactly one materialised closed "
-        "primary-cohort product: `artifact:analysis_cohort`, "
-        "`dataset:analysis_cohort`, `table:analysis_cohort`, "
-        "`cohort:analysis_set`, or `cohort:<exact cohort.name>`. A definition, "
+        "primary-cohort product: " + _closed_cohort_product_sentence() + ". "
+        "A definition, "
         "protocol, or status output such as `artifact:cohort_defined` is not a "
         "cohort dataset and cannot replace that product. The other outputs in "
-        "that step may only be canonical attrition/flow tables.\n\n"
+        "that step may only be canonical attrition/flow tables. Every "
+        "downstream step consuming that cohort declares the SAME key in its "
+        "`inputs`; a step whose row authority is the closed cohort product but "
+        "which spells it any other way is executed by nobody.\n\n"
         "When robustness is required, pre-specify one or more executable, "
         "task-supported `robustness_specs`; never invent an unsupported axis, "
         "endpoint, or variable. "
@@ -4465,6 +4466,25 @@ def _robustness_axis_vocabulary() -> tuple:
             "values explicitly at their new source instead of guessing."
         )
     return values
+
+
+def _closed_cohort_product_sentence() -> str:
+    """List the closed-cohort spellings, read off the predicate enforcing them.
+
+    Two directives used to transcribe this list, one of them incompletely, and
+    the ownership predicate accepted a narrower set than either. A step is
+    executed deterministically only when its typed row authority is a key that
+    predicate can read, so a spelling the Planner is offered but the predicate
+    refuses sends the step to the Coder with nobody told why. Rendering the
+    sentence from the same object removes the possibility.
+    """
+
+    from ..execution.runners.typed_input_binding import (
+        closed_cohort_product_vocabulary,
+    )
+
+    spellings = [f"`{value}`" for value in closed_cohort_product_vocabulary()]
+    return ", ".join(spellings[:-1]) + f", or {spellings[-1]}"
 
 
 def _declared_field_names(model: type) -> set:

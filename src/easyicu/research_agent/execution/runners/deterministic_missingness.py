@@ -48,6 +48,7 @@ from ...authority.plausibility import FlagOnlyPlausibilityScope
 from ...icu_rules import companion_count_column_for_measured
 from ...schema import AnalysisStep, spec_backs_every_declared_product
 from .plausibility_receipt import render_standard_plausibility_receipt_code
+from .typed_input_binding import sole_typed_cohort_input
 
 __all__ = [
     "MEASUREMENT_AUDIT_KIND_FILES",
@@ -427,26 +428,19 @@ def declared_audit_spec_is_emittable(step: AnalysisStep) -> bool:
 
 
 def _cohort_input_scope(step: AnalysisStep) -> tuple[bool, str | None]:
-    """Resolve an optional single typed row-membership authority."""
+    """Resolve an optional single typed row-membership authority.
 
-    typed_inputs = {
-        str(value or "").strip()
-        for value in step.inputs
-        if ":" in str(value or "").strip()
-    }
-    if not typed_inputs:
+    This audit may run without one, so it keeps its own arity policy (absent is
+    supported); *which* keys name the closed cohort product is the published
+    vocabulary and is read from its one owner.
+    """
+
+    input_key = sole_typed_cohort_input(step)
+    if input_key is None:
         return True, None
-    if len(typed_inputs) != 1:
+    if not input_key:
         return False, None
-    input_key = next(iter(typed_inputs))
-    kind, separator, product = input_key.partition(":")
-    if (
-        separator
-        and product
-        and (kind == "cohort" or input_key == "artifact:analysis_cohort")
-    ):
-        return True, input_key
-    return False, None
+    return True, input_key
 
 
 def missingness_audit_input_scope_supported(step: AnalysisStep) -> bool:
