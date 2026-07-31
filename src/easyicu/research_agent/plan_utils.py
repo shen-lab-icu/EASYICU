@@ -84,6 +84,7 @@ from .trajectory.contract import (
 )
 from .trajectory.plan_contract import trajectory_plan_contract_applies
 
+
 def _migrate_render_step_contract(
     child: AnalysisStep,
     source_tokens: Sequence[str],
@@ -1017,6 +1018,7 @@ def _enforce_advanced_plan_contract(
     *,
     plan: AnalysisPlan,
     context: ResearchContext,
+    long_trajectory_bound: bool = False,
 ) -> tuple[AnalysisPlan, List[ValidationFinding]]:
     """Constrain advanced plan shape while leaving analysis code to the agent."""
 
@@ -1027,6 +1029,7 @@ def _enforce_advanced_plan_contract(
     if trajectory_plan_contract_applies(
         plan=plan,
         context=context,
+        long_trajectory_bound=long_trajectory_bound,
     ) and not any(
         trajectory_phenotyping_contract_applies(context=context, step=step)
         for step in (plan.steps or [])
@@ -4764,8 +4767,7 @@ def _step_contract_repair_guidance(
             guidance.append(
                 "Every step_summary.input_bindings receipt must use one of these "
                 "exact host-resolved typed input keys, with no aliases or raw-column "
-                "receipts: "
-                + json.dumps(exact_input_keys, ensure_ascii=False)
+                "receipts: " + json.dumps(exact_input_keys, ensure_ascii=False)
             )
         else:
             guidance.append(

@@ -756,6 +756,35 @@ class StagedTrajectoryBinding:
                 "legacy trajectory receipt does not bind the staged artifact"
             )
 
+    @property
+    def verified_authority_sha256(self) -> Optional[str]:
+        """The digest of whatever authority verified this binding, if any.
+
+        ``__post_init__`` forbids holding both, so at most one branch applies.
+        """
+
+        if self.authority_ref is not None:
+            return self.authority_ref.sha256
+        if self.legacy_capsule_receipt is not None:
+            return self.legacy_capsule_receipt.capsule_sha256
+        return None
+
+
+def long_trajectory_is_bound(binding: Optional[StagedTrajectoryBinding]) -> bool:
+    """Whether this run has a verified long-format trajectory to analyse.
+
+    The plan phase and the execution phase both have to answer this, and they
+    reach the binding by different routes -- ``run()`` passes it into planning,
+    ``ExecutionInputAuthorityState`` carries it into execution.  Two spellings
+    of one question is how a run ends up planning against a trajectory it will
+    not be allowed to use, so both sides call this.
+
+    A staged file alone is not enough: the answer is about a binding some
+    authority verified, not about a path that happens to exist.
+    """
+
+    return binding is not None and binding.verified_authority_sha256 is not None
+
 
 def materialized_trajectory_provenance_path(trajectory_path: Path) -> Path:
     path = Path(trajectory_path)
@@ -1934,6 +1963,7 @@ __all__ = [
     "MaterializedTrajectoryAuthorityRef",
     "MaterializedTrajectoryError",
     "StagedTrajectoryBinding",
+    "long_trajectory_is_bound",
     "TrajectoryConceptBinding",
     "TrajectoryWindow",
     "VerifiedMaterializedTrajectoryAuthority",

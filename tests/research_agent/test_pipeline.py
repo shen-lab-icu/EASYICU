@@ -58,7 +58,7 @@ def _disable_article_contract(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         pipeline_module,
         "_enforce_advanced_plan_contract",
-        lambda *, plan, context: (plan, []),
+        lambda *, plan, context, **_kwargs: (plan, []),
     )
     monkeypatch.setattr(
         pipeline_module,
@@ -68,7 +68,7 @@ def _disable_article_contract(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         pipeline_module,
         "_ensure_audit_panel_step_in_plan",
-        lambda *, plan, context: (plan, []),
+        lambda *, plan, context, **_kwargs: (plan, []),
     )
 
 
