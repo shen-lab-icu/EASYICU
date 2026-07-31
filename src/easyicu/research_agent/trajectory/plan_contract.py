@@ -750,6 +750,73 @@ def _trajectory_candidate_schema_findings(
     ]
 
 
+@dataclass(frozen=True)
+class TrajectoryRoleRequirement:
+    """What a step must declare to own one trajectory role.
+
+    ``_role_qualifies`` decides ownership from method-family tokens plus typed
+    products, and every one of those sets is a literal in this module.  The
+    refusal used to say only "missing one structured scientific role", which
+    names the gap without naming anything the Planner can declare -- and none
+    of the four role names appears anywhere in the Planner prompt, so the
+    contract was enforced without ever being stated.  Rendering the sets here
+    keeps the message and the predicate the same fact.
+    """
+
+    role: str
+    method_tokens: tuple[str, ...]
+    product_groups: tuple[frozenset[str], ...]
+
+    def sentence(self) -> str:
+        groups = "; and ".join(
+            "one of " + ", ".join(sorted(group)) for group in self.product_groups
+        )
+        return (
+            "An owner needs a method naming one of "
+            f"{', '.join(self.method_tokens)} and expected_outputs containing "
+            f"{groups}."
+        )
+
+
+def _spelled(products: frozenset[Tuple[str, str]]) -> frozenset[str]:
+    return frozenset(f"{kind}:{name}" for kind, name in products)
+
+
+def role_declaration_requirement(role: str) -> TrajectoryRoleRequirement:
+    """The canonical, unambiguous way to own ``role``.
+
+    Each role also has token-heuristic branches; those stay available but are
+    not published, because a published set has to be one a Planner can copy
+    exactly rather than a rule it has to re-derive.
+    """
+
+    if role == "representation":
+        return TrajectoryRoleRequirement(
+            role,
+            ("representation", "functional basis/features"),
+            (_spelled(_REPRESENTATION_PRODUCTS),),
+        )
+    if role == "candidate_selection":
+        return TrajectoryRoleRequirement(
+            role,
+            ("cluster", "clustering", "phenotyping", "kmeans", "latent class"),
+            (_spelled(_SELECTION_PRODUCTS), _spelled(_CANDIDATE_SOLUTION_PRODUCTS)),
+        )
+    if role == "stability_freeze":
+        return TrajectoryRoleRequirement(
+            role,
+            ("cluster stability", "consensus", "bootstrap", "resampling"),
+            (_spelled(_STABILITY_PRODUCTS), _spelled(_STABILITY_ASSIGNMENT_PRODUCTS)),
+        )
+    if role == "characterization":
+        return TrajectoryRoleRequirement(
+            role,
+            ("characterization", "descriptive profile/phenotype"),
+            (_spelled(_CHARACTERIZATION_PRODUCTS),),
+        )
+    raise ValueError(f"Unknown trajectory role: {role}")
+
+
 def trajectory_plan_contract_applies(
     *,
     plan: AnalysisPlan,
@@ -859,11 +926,17 @@ def evaluate_trajectory_plan_dag(
         if len(candidates) == 1:
             role_owners[role] = candidates[0]
         elif not candidates:
+            requirement = role_declaration_requirement(role)
             findings.append(
                 _finding(
                     "trajectory_role_missing",
-                    "The trajectory plan is missing one structured scientific role.",
+                    "The trajectory plan declares no owner for the "
+                    f"{role!r} role. {requirement.sentence()}",
                     role=role,
+                    required_method_family_tokens=list(requirement.method_tokens),
+                    qualifying_products=[
+                        sorted(group) for group in requirement.product_groups
+                    ],
                 )
             )
         else:
@@ -1815,6 +1888,8 @@ __all__ = [
     "TrajectoryPlanDagEvaluation",
     "augment_trajectory_plan_products",
     "evaluate_trajectory_plan_dag",
+    "TrajectoryRoleRequirement",
+    "role_declaration_requirement",
     "trajectory_plan_contract_applies",
     "trajectory_plan_dag_findings",
     "trajectory_planner_contract_guide",
