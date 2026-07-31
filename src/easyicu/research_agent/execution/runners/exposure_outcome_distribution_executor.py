@@ -65,6 +65,7 @@ EXPOSURE_OUTCOME_DISTRIBUTION_DESIGN_COLUMNS = (
     "outcome_positive_index",
     "level_match_policy",
     "denominator_policy",
+    "missing_exposure_policy",
     "missing_outcome_policy",
     "interval_method",
     "confidence_level",
@@ -86,6 +87,10 @@ EXPOSURE_OUTCOME_DISTRIBUTION_COLUMNS = (
     "outcome_rate_pct",
     "ci_low_pct",
     "ci_high_pct",
+    # How many rows the exposure could not place. Repeated on every row, the
+    # way Table 1 carries ``group_missing_excluded_n``: a denominator that
+    # silently shrank is a denominator a reader cannot check.
+    "missing_exposure_excluded_n",
 ) + EXPOSURE_OUTCOME_DISTRIBUTION_DESIGN_COLUMNS
 
 _OVERALL_ROLE = "overall"
@@ -374,6 +379,7 @@ def _design_fields(spec: ExposureOutcomeDistributionSpec) -> Dict[str, Any]:
         ].index(_typed_level_key(spec.outcome_positive_value)),
         "level_match_policy": spec.level_match_policy,
         "denominator_policy": spec.denominator_policy,
+        "missing_exposure_policy": spec.missing_exposure_policy,
         "missing_outcome_policy": spec.missing_outcome_policy,
         "interval_method": spec.interval_method,
         "confidence_level": spec.confidence_level,
@@ -396,20 +402,29 @@ def _distribution_rows(
     # described, the other means the study has rows it cannot group at all.
     # Reporting the second as the first sends someone hunting for a stray code
     # that does not exist.
-    if spec.missing_exposure_policy != "fail_closed":
-        raise RuntimeError(
-            "exposure_outcome_distribution only implements "
-            f"missing_exposure_policy='fail_closed', not "
-            f"{spec.missing_exposure_policy!r}"
-        )
     missing_exposure_rows = int((~observed_exposure).sum())
-    if missing_exposure_rows:
+    if missing_exposure_rows and spec.missing_exposure_policy == "fail_closed":
         raise RuntimeError(
             f"{missing_exposure_rows} rows have no observed value for "
             f"{spec.exposure!r}; the spec declares missing_exposure_policy="
             "'fail_closed', so they are neither dropped nor pooled into a "
             "declared exposure level"
         )
+    if missing_exposure_rows:
+        # Complete-case on the exposure. The rows leave the frame entirely --
+        # every denominator below is then taken over the same rows, which is
+        # the property a reader checks -- and the count they left behind
+        # travels in the product so the shrink is visible rather than inferred
+        # from a total that does not add up.
+        #
+        # canary13 is why this option exists at all: 8 of 1000 stays had no
+        # AKI stage, `fail_closed` was the ONLY value the field could take, and
+        # the step died with no result the Planner had any way to avoid.
+        frame = frame.loc[observed_exposure]
+        exposure_values = frame[spec.exposure]
+        outcome_values = frame[spec.outcome]
+        observed_outcome = outcome_values.notna()
+        observed_exposure = exposure_values.notna()
     exposure_masks = _closed_level_masks(
         exposure_values,
         spec.exposure_levels,
@@ -442,7 +457,12 @@ def _distribution_rows(
 
     total_rows = int(len(frame))
     exposure_denominator = total_rows
-    design = _design_fields(spec)
+    # Carried beside the declaration on every row, not merged into it: the
+    # policy is what the plan asked for, this is what the data cost.
+    design = {
+        **_design_fields(spec),
+        "missing_exposure_excluded_n": missing_exposure_rows,
+    }
 
     rows: List[Dict[str, Any]] = []
     for level in spec.exposure_levels:

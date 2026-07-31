@@ -1571,7 +1571,19 @@ class ExposureOutcomeDistributionSpec(BaseModel):
         ),
     )
     denominator_policy: Literal["all_declared_rows", "observed_outcome_rows"]
-    missing_exposure_policy: Literal["fail_closed"] = "fail_closed"
+    missing_exposure_policy: Literal["fail_closed", "exclude_from_denominator"] = Field(
+        default="fail_closed",
+        description=(
+            "What a row with no observed exposure means. 'fail_closed' stops "
+            "the step. 'exclude_from_denominator' is complete-case on the "
+            "exposure: those rows leave the table and their count travels in "
+            "it, so the denominator change is visible rather than inferred. "
+            "There is deliberately NO option to pool them into a level -- an "
+            "unobserved exposure is not the reference and not any other "
+            "category, and encoding it as one reports a stay under a stage "
+            "nobody recorded."
+        ),
+    )
     missing_outcome_policy: Literal[
         "fail_closed",
         "exclude_from_denominator",
