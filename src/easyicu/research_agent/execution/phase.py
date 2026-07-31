@@ -12080,6 +12080,7 @@ def run_execute_phase(
             evidence=evidence,
             run_dir=run_dir,
             cohort_path=cohort_path,
+            long_trajectory_bound=long_trajectory_bound,
         )
         findings.extend(run_level_trajectory_findings)
         _flush_partial_manifest(
