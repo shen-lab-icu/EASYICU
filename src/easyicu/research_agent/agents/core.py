@@ -804,7 +804,25 @@ def _build_planner_user_prompt(
         "Add an auxiliary post-primary step with "
         "`method='robustness_sensitivity'` producing "
         "`table:robustness_matrix` and `statistic:robustness_summary`. "
-        "Variants must not change the primary analysis.\n\n"
+        "Variants must not change the primary analysis. "
+        # The step this sentence asks for IS the step that re-estimates the
+        # locked grid, and saying so here is the whole point: a real run
+        # declared the grid, created this step, left robustness_replay_spec
+        # unset because that field is described ninety lines earlier behind a
+        # warning about new science, and ended with "locked robustness
+        # specifications that no step estimated" -- blank panel rows and a step
+        # that blocked itself with n_converged_variants=0 after producing every
+        # other output. Generic refitting is deliberately disabled, so the
+        # declaration is the ONLY route to an estimate.
+        "THAT STEP MUST CARRY `robustness_replay_spec`: declaring "
+        "`robustness_specs` obliges exactly one step to re-estimate them, and "
+        "with no such declaration the locked grid is reported as estimated by "
+        "nobody and the step fails. Its `products[*].product_id` are this "
+        "step's OWN declared output names with the `kind:` prefix removed "
+        "(declare `table:robustness_matrix`, write `product_id` "
+        "'robustness_matrix'), which is a different field from `output` -- "
+        "naming an `output` value the step does not itself declare is "
+        "refused.\n\n"
         + locked_analysis_type_guide(infer_analysis_type(context))
         + "\n\n"
         + planner_analysis_type_guide(detail=catalog_detail)
