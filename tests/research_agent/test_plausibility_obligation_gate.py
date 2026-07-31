@@ -215,6 +215,36 @@ def test_a_script_that_records_the_count_in_a_written_output_passes():
     assert _reasons(DECLARED) == set()
 
 
+def test_a_kept_count_still_counts_when_the_mask_is_named_first():
+    """The shape the deterministic repair actually emits.
+
+    Moved here from `test_flag_only_plausibility_repair.py`, where it was the
+    one property no other test named. It had stopped running when the gate
+    moved out of `audits/validators.py` on 2026-07-28 and the old private
+    helper it called went with it.
+
+    Naming the mask before counting it is the same evidence as counting the
+    comparison inline. A check that credits only the inline spelling would
+    refuse the repair's own output.
+    """
+
+    mask_first = DECLARED.replace(
+        """        plausibility_audit[column] = {
+            "below_n": int((numeric < float(lower)).sum()) if lower is not None else 0,
+            "above_n": int((numeric > float(upper)).sum()) if upper is not None else 0,
+        }""",
+        """        below_mask = (numeric < float(lower)) if lower is not None else None
+        above_mask = (numeric > float(upper)) if upper is not None else None
+        plausibility_audit[column] = {
+            "below_n": int(below_mask.sum()) if below_mask is not None else 0,
+            "above_n": int(above_mask.sum()) if above_mask is not None else 0,
+        }""",
+    )
+    assert mask_first != DECLARED, "precondition: the mask-first rewrite applied"
+
+    assert _reasons(mask_first) == set()
+
+
 def test_empty_mapping_fallback_keeps_the_sealed_range_attributable() -> None:
     """``range = contract.get(...) or {}`` is the real E1 repair shape."""
 
@@ -437,8 +467,8 @@ def test_pandas_range_transform_spellings_are_blocked(
     [
         '        projection = frame.drop(columns=["unused"], errors="ignore")\n',
         '        eligible = frame.query("eligible == 1")\n',
-        "        display = frame[\"display\"].clip(lower=0, upper=1)\n",
-        "        labelled = frame[\"marker\"].where(frame[\"eligible\"] == 1)\n",
+        '        display = frame["display"].clip(lower=0, upper=1)\n',
+        '        labelled = frame["marker"].where(frame["eligible"] == 1)\n',
     ],
 )
 def test_unrelated_pandas_transforms_are_not_plausibility_rejections(
@@ -1267,7 +1297,9 @@ def test_the_gate_runs_inside_the_shared_deterministic_code_gate():
 # coverage, and none loses any -- the crediting can only widen.
 
 
-_INLINE_LOOP_IN_MAIN = HEADER + """
+_INLINE_LOOP_IN_MAIN = (
+    HEADER
+    + """
 
 PLAUSIBILITY_SCOPE = ["marker", "second_marker"]
 
@@ -1293,6 +1325,7 @@ def main():
 
 main()
 """
+)
 
 
 def test_an_inline_loop_inside_a_function_covers_the_columns_it_names() -> None:
@@ -1304,9 +1337,9 @@ def test_an_inline_loop_inside_a_function_covers_the_columns_it_names() -> None:
     owner, and nothing looked there.
     """
 
-    assert _reasons_for_columns(
-        _INLINE_LOOP_IN_MAIN, "marker", "second_marker"
-    ) == set()
+    assert (
+        _reasons_for_columns(_INLINE_LOOP_IN_MAIN, "marker", "second_marker") == set()
+    )
 
 
 def test_the_inline_loop_cannot_certify_a_column_its_list_omits() -> None:
@@ -1320,19 +1353,19 @@ def test_the_inline_loop_cannot_certify_a_column_its_list_omits() -> None:
 def test_an_inline_loop_at_module_level_covers_its_columns_too() -> None:
     """Same crediting whether or not the work sits in a function."""
 
-    module_level = _INLINE_LOOP_IN_MAIN.replace(
-        "def main():\n", "if True:\n"
-    ).replace("\n\nmain()\n", "\n")
+    module_level = _INLINE_LOOP_IN_MAIN.replace("def main():\n", "if True:\n").replace(
+        "\n\nmain()\n", "\n"
+    )
 
-    assert _reasons_for_columns(
-        module_level, "marker", "second_marker"
-    ) == set()
+    assert _reasons_for_columns(module_level, "marker", "second_marker") == set()
 
 
 def test_a_comparison_that_names_no_column_is_still_not_attributable() -> None:
     """The fix credits named columns; it does not credit an unnamed check."""
 
-    unnamed = HEADER + """
+    unnamed = (
+        HEADER
+        + """
 
 
 def main():
@@ -1347,6 +1380,7 @@ def main():
 
 main()
 """
+    )
 
     assert _reasons_for_columns(unnamed, "second_marker") == {
         "plausibility_scope_column_not_attributable"
@@ -1362,7 +1396,9 @@ def test_a_loop_whose_key_is_unrelated_to_the_compared_data_credits_nothing() ->
     certify every one of them.
     """
 
-    unrelated = HEADER + """
+    unrelated = (
+        HEADER
+        + """
 
 OTHER_COLUMNS = ["marker", "second_marker"]
 
@@ -1380,6 +1416,7 @@ def main():
 
 main()
 """
+    )
 
     assert _reasons_for_columns(unrelated, "second_marker") == {
         "plausibility_scope_column_not_attributable"

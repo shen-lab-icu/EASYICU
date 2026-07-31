@@ -245,8 +245,8 @@ publish(df)
 
     assert names == ["flag_only_plausibility_range_retention_v1"]
     assert repaired.count("_easyicu_flag_only_plausibility_range_retained_v1") == 2
-    assert "raise ValueError(\"below plausibility range\")" not in repaired
-    assert "raise ValueError(\"above plausibility range\")" not in repaired
+    assert 'raise ValueError("below plausibility range")' not in repaired
+    assert 'raise ValueError("above plausibility range")' not in repaired
     assert "(numeric_observed < minimum).any()" in repaired
     assert "(numeric_observed > maximum).any()" in repaired
     assert "publish(df)" in repaired
@@ -460,165 +460,21 @@ def test_the_repair_marker_alone_does_not_claim_the_flagging_half(tmp_path) -> N
     assert repaired.count("_easyicu_flag_only_plausibility_range_retained_v1") == 2
 
 
-# --- the flagging half is now gated, not merely noted ------------------------
+# The flagging half moved out of this module on 2026-07-28 (a26fc0e), together
+# with the 310 lines it checked, into `gates/plausibility_obligation.py` under
+# a host-sealed step scope. Nine tests here kept importing the private helper
+# it left behind and so raised ImportError instead of running -- for three days,
+# over the exact gate that was blocking a real task, while that gate was
+# changed twice. They are removed rather than re-pointed, because the design
+# they pin was deliberately replaced:
 #
-# `retain_and_flag` is two obligations. The host downgrade settles retention by
-# overriding the auditor's demand to exclude; flagging is the generated
-# script's declared output. Until something observed it, "no error" meant only
-# that nobody had looked -- a step could retain the values, flag nothing, and
-# pass. These pin what the check can and cannot see.
-
-
-def _records(script: str, variable: str = "lactate"):
-    from easyicu.research_agent.audits.validators import (
-        _records_out_of_range_evidence,
-    )
-
-    return _records_out_of_range_evidence(script_text=script, variable=variable)
-
-
-def test_a_bound_comparison_whose_result_is_discarded_is_not_a_flag():
-    assert (
-        _records(
-            """
-numeric = pd.to_numeric(df["lactate"])
-if lower is not None and (numeric < float(lower)).any():
-    pass  # _easyicu_flag_only_plausibility_range_retained_v1
-"""
-        )
-        is False
-    )
-
-
-def test_a_count_computed_only_to_reject_is_not_a_flag():
-    assert (
-        _records(
-            """
-numeric = pd.to_numeric(df["lactate"])
-if int((numeric > 30.0).sum()) > 0:
-    raise ValueError("out of range")
-"""
-        )
-        is False
-    )
-
-
-def test_an_indicator_column_counts_as_the_flag():
-    assert (
-        _records(
-            """
-numeric = df["lactate"].astype(float)
-df["lactate_out_of_range"] = (numeric < 0.1) | (numeric > 30.0)
-"""
-        )
-        is True
-    )
-
-
-def test_a_kept_count_counts_as_the_flag_even_when_the_mask_is_named_first():
-    """The counted shape the deterministic repair leaves behind."""
-
-    assert (
-        _records(
-            """
-numeric = pd.to_numeric(df["lactate"])
-mask = (numeric < 0.1) | (numeric > 30.0)
-n_out = int(mask.sum())
-summary = {"lactate_out_of_range_n": n_out}
-"""
-        )
-        is True
-    )
-
-
-def test_the_repair_marker_comment_is_not_mistaken_for_a_flag():
-    """The marker contains the substring `_flag`, and is a comment.
-
-    A text search over the repaired script reports the repair's own marker as
-    structured-flag evidence -- that false positive is exactly what an earlier
-    replay of a real Step 06 script turned up. Parsing rather than grepping
-    makes it structurally impossible: comments are not in the tree.
-    """
-
-    script = """
-numeric = pd.to_numeric(df["lactate"])
-pass  # _easyicu_flag_only_plausibility_range_retained_v1
-"""
-
-    assert "_flag" in script, "precondition: the marker is textually present"
-    assert _records(script) is None
-
-
-def test_another_variables_flag_does_not_settle_this_ones():
-    assert (
-        _records(
-            """
-other = pd.to_numeric(df["sodium"])
-df["sodium_out_of_range"] = other > 150.0
-"""
-        )
-        is None
-    )
-
-
-def test_an_unobservable_flag_abstains_rather_than_blocking():
-    """No comparison on the variable at all: the check has nothing to say.
-
-    Deciding here would block a compliant script whose shape this parse does
-    not model, so it abstains -- and the finding detail records that it
-    abstained, which is the difference between reporting what was observed and
-    letting silence read as compliance.
-    """
-
-    assert _records('df = df.dropna(subset=["lactate"])') is None
-    assert _records("x = 1") is None
-
-
-def test_the_generic_per_column_helper_shape_is_still_attributable():
-    """The shape real generated code uses, where the column is a parameter.
-
-    Taken from the r25 Step 06 quarantine draft: plausibility is checked in a
-    helper that receives the series, so the audited variable's name appears
-    nowhere near the comparison and matching on the series alone abstained on
-    exactly the script that matters. Falling back to the sealed
-    `analysis_plausibility_range` bound identifies the check whatever the
-    column is called.
-    """
-
-    rejects = """
-bounds = contract.get("analysis_plausibility_range")
-if bounds is not None:
-    lower = bounds.get("minimum")
-    upper = bounds.get("maximum")
-    numeric = observed.astype(float)
-    if lower is not None and (numeric < float(lower)).any():
-        raise RuntimeError(f"{column} below analysis plausibility minimum")
-    if upper is not None and (numeric > float(upper)).any():
-        raise RuntimeError(f"{column} above analysis plausibility maximum")
-"""
-    assert _records(rejects, "age") is False
-
-    records = """
-bounds = contract.get("analysis_plausibility_range")
-if bounds is not None:
-    lower = bounds.get("minimum")
-    numeric = observed.astype(float)
-    if lower is not None:
-        audit[f"{column}_below_minimum_n"] = int((numeric < float(lower)).sum())
-"""
-    assert _records(records, "age") is True
-
-
-def test_a_threshold_that_is_not_a_sealed_bound_is_not_a_plausibility_check():
-    """The fallback keys on the sealed range, not on any comparison at all.
-
-    Without this, a cohort rule against an unrelated local would be read as a
-    plausibility check and its absence of flagging would block the step.
-    """
-
-    cohort_rule = """
-threshold = settings.get("minimum")
-numeric = observed.astype(float)
-adults = numeric >= float(threshold)
-"""
-    assert _records(cohort_rule, "age") is None
+#   * "no comparison on the column abstains rather than blocking" and "another
+#     variable's flag does not settle this one's" now BLOCK (verified against
+#     the live gate). That is the point of a26fc0e -- the host seal says which
+#     columns owe a receipt, so silence stopped counting as compliance.
+#   * the discarded comparison, the reject-only count, the indicator column,
+#     the generic per-column helper and the unsealed threshold are all pinned
+#     by `test_plausibility_obligation_gate.py` against the real gate.
+#   * the one property that was live here and named nowhere else -- the
+#     mask-named-first shape the deterministic repair actually emits -- was
+#     verified still passing and moved to that file rather than dropped.
