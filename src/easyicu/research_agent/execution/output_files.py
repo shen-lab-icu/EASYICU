@@ -10,7 +10,7 @@ import os
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, Mapping
+from typing import Any, Dict, List, Mapping, Optional
 
 
 def _has_figure_exports(out_dir: Path) -> bool:
@@ -203,8 +203,39 @@ def _bind_registered_primary_or_statistic(
         )
 
 
+#: Spellings of "yes" a CSV round-trip can produce for a boolean column.
+_TRUE_TOKENS = frozenset({"true", "1", "yes"})
+
+
+def _headline_association_row(rows: List[Dict[str, str]]) -> Optional[Dict[str, str]]:
+    """The one row the manuscript quotes, or None when that is ambiguous.
+
+    A binary or continuous exposure yields one row and this returns it, which
+    is what every recorded table before 2026-07-31 looks like.
+
+    A CATEGORICAL exposure yields one row per non-reference level -- a
+    four-level AKI stage is three contrasts -- and only the plan knows which of
+    them is the headline, so the producer marks it in ``is_primary_contrast``
+    and this reads the mark. It never takes the first row or the largest
+    estimate: picking by position is picking a scientific claim, and picking by
+    magnitude picks the most impressive one.
+
+    Ambiguity returns None, and the caller then binds no primary estimate at
+    all rather than binding a contrast nobody nominated.
+    """
+
+    marked = [
+        row
+        for row in rows
+        if str(row.get("is_primary_contrast") or "").strip().lower() in _TRUE_TOKENS
+    ]
+    if marked:
+        return marked[0] if len(marked) == 1 else None
+    return rows[0] if len(rows) == 1 else None
+
+
 def bind_primary_output(step_summary: Any, out_dir: Path) -> Dict[str, Any]:
-    """Bind one registered adjusted-association row into canonical scalars."""
+    """Bind the headline adjusted-association row into canonical scalars."""
 
     payload = (
         dict(step_summary) if isinstance(step_summary, dict) else {"raw": step_summary}
@@ -224,9 +255,9 @@ def bind_primary_output(step_summary: Any, out_dir: Path) -> Dict[str, Any]:
     try:
         with source.open(newline="", encoding="utf-8") as handle:
             rows = list(csv.DictReader(handle))
-        if len(rows) != 1 or rows[0].get("fit_status") != "fitted":
+        row = _headline_association_row(rows)
+        if row is None or row.get("fit_status") != "fitted":
             return payload
-        row = rows[0]
         estimate, low, high = map(
             float, (row["estimate"], row["ci_low"], row["ci_high"])
         )

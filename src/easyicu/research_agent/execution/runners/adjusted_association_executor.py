@@ -31,12 +31,13 @@ contract.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
 import math
 import os
 import textwrap
 from pathlib import Path
-from typing import Any, Dict, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from ...authority.plausibility import FlagOnlyPlausibilityScope
 from ...contracts.host_scaffold import HostScaffoldedScript
@@ -94,6 +95,26 @@ ADJUSTED_ASSOCIATION_ESTIMATES_COLUMNS = (
     "n_events",
     "standard_error",
     "notes",
+    # --- the contrast this row reports -------------------------------------
+    # A binary or continuous exposure has one contrast and one row, so these
+    # describe it rather than change it: ``exposure_level`` and
+    # ``reference_level`` are empty and ``is_primary_contrast`` is true.
+    #
+    # A CATEGORICAL OR ORDINAL exposure has one row per non-reference level,
+    # and that is why these columns exist. A four-level AKI stage is three
+    # contrasts, not one number, and collapsing it to a single term reports a
+    # per-unit trend under the name of a stage comparison -- a different
+    # scientific quantity carrying the declared estimand's label.
+    #
+    # ``is_primary_contrast`` marks the row the manuscript quotes. With more
+    # than two levels that choice is the planner's (highest stage against the
+    # reference? each adjacent step?), so the host reads the mark instead of
+    # taking a row position, and every consumer -- the primary-output binding,
+    # the robustness replay, the figure -- reads the same one.
+    "exposure_level",
+    "reference_level",
+    "contrast",
+    "is_primary_contrast",
 )
 
 _COEFFICIENT_FILENAME = "adjusted_association_coefficients.csv"
@@ -364,6 +385,13 @@ def adjusted_association_executor_scaffold(
             "analysis_set": {requirement.analysis_set!r},
             "analysis_role": {requirement.analysis_role!r},
             "method_family": {requirement.method_family!r},
+            "exposure_levels": {
+                list(requirement.exposure_levels)
+                if requirement.exposure_levels is not None
+                else None
+            !r},
+            "exposure_reference_level": {requirement.exposure_reference_level!r},
+            "primary_contrast_level": {requirement.primary_contrast_level!r},
         }}
 
         frame, cohort_path = load_step_cohort_frame(
@@ -441,6 +469,7 @@ def _coefficient_rows(
     exposure: str,
     adjustment: Sequence[str],
     effect_scale: str,
+    exposure_contrast_columns: Sequence[str] = (),
 ) -> list[Dict[str, Any]]:
     """Label each fitted coefficient by the role the plan gave its source.
 
@@ -452,12 +481,19 @@ def _coefficient_rows(
     """
 
     adjustment_set = {str(name) for name in adjustment}
+    # A treatment-coded exposure reaches the fit as one indicator per level, so
+    # the estimator reports each indicator's own name as its source. The
+    # declared contrast columns are the exposure -- the host built them from it
+    # -- and saying so here is not name-matching: the set comes from the
+    # declaration, so a column the plan did not declare still has no role and
+    # is still refused.
+    contrast_columns = {str(name) for name in (exposure_contrast_columns or ())}
     rows: list[Dict[str, Any]] = []
     for term in terms:
         source = str(term.source_variable)
         if term.term == "const":
             role = "intercept"
-        elif source == exposure:
+        elif source == exposure or source in contrast_columns:
             role = "exposure"
         elif source in adjustment_set:
             role = "adjustment"
@@ -482,6 +518,191 @@ def _coefficient_rows(
     return rows
 
 
+@dataclass(frozen=True, slots=True)
+class _DeclaredContrasts:
+    """The level set a categorical exposure was declared with."""
+
+    levels: Tuple[str, ...]
+    reference: str
+    primary: str
+
+    @property
+    def contrast_levels(self) -> Tuple[str, ...]:
+        return tuple(level for level in self.levels if level != self.reference)
+
+
+def _level_key(value: Any) -> str:
+    """One spelling for a level, whichever side it arrives from.
+
+    The plan declares levels as strings; the cohort column may hold them as
+    floats (a real AKI stage column is ``0.0/1.0/2.0/3.0``). Comparing the two
+    raw would make every declared level look absent, so both sides come through
+    here. A float that is a whole number keeps its integer spelling, because
+    ``"3"`` and ``"3.0"`` are the same stage and a reader should see one of
+    them.
+    """
+
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, float):
+        if value != value:  # NaN
+            return ""
+        if value.is_integer():
+            return str(int(value))
+        return repr(value)
+    return str(value).strip()
+
+
+def _declared_contrasts(
+    column: Any,
+    *,
+    exposure: str,
+    levels: Optional[Sequence[str]],
+    reference: Optional[str],
+    primary: Optional[str],
+) -> Optional[_DeclaredContrasts]:
+    """Return the declared contrasts, or None for a single-term exposure.
+
+    The declaration is checked against the cohort, not trusted: a level the
+    plan declared that no stay has cannot be estimated, and a level the cohort
+    holds that the plan never declared means the pre-specified level set and
+    the analysed population disagree. Either way the fitted model would not be
+    the declared one, so both fail closed rather than quietly analysing
+    whichever levels happened to be present.
+    """
+
+    if levels is None and reference is None and primary is None:
+        return None
+    if levels is None or reference is None or primary is None:
+        raise AdjustedAssociationError(
+            "a categorical exposure needs its levels, its reference and its "
+            "primary contrast together; the host will not choose which "
+            "contrast the manuscript reports"
+        )
+
+    declared = tuple(_level_key(level) for level in levels)
+    reference_key = _level_key(reference)
+    primary_key = _level_key(primary)
+    if len(set(declared)) != len(declared) or any(not item for item in declared):
+        raise AdjustedAssociationError(
+            f"declared exposure levels for {exposure!r} must be unique and non-empty"
+        )
+    if reference_key not in declared or primary_key not in declared:
+        raise AdjustedAssociationError(
+            f"the reference and primary contrast for {exposure!r} must both be "
+            "declared levels"
+        )
+    if reference_key == primary_key:
+        raise AdjustedAssociationError(
+            "the primary contrast must not be the reference level"
+        )
+
+    observed = {_level_key(value) for value in column.dropna().unique().tolist()}
+    unexpected = sorted(observed - set(declared))
+    absent = sorted(set(declared) - observed)
+    if unexpected:
+        raise AdjustedAssociationError(
+            f"the bound cohort holds levels of {exposure!r} the plan never "
+            "declared: " + ", ".join(repr(item) for item in unexpected)
+        )
+    if absent:
+        raise AdjustedAssociationError(
+            f"the plan declared levels of {exposure!r} no stay has: "
+            + ", ".join(repr(item) for item in absent)
+        )
+    return _DeclaredContrasts(
+        levels=declared, reference=reference_key, primary=primary_key
+    )
+
+
+def _contrast_column(exposure: str, level: str) -> str:
+    """The design-matrix name for one level's indicator."""
+
+    return f"{exposure}__is_{level}"
+
+
+def _contrast_design(
+    model_frame: Any,
+    *,
+    exposure: str,
+    adjustment: Sequence[str],
+    contrasts: _DeclaredContrasts,
+) -> Tuple[Any, str]:
+    """Treatment-code the exposure against its declared reference.
+
+    One design, one fit: every contrast comes from the same model, so the
+    stage-2 and stage-3 estimates are conditional on each other exactly as the
+    declared model says. Fitting each level separately would produce numbers
+    that no single model ever computed.
+    """
+
+    import pandas as pd
+
+    keys = model_frame[exposure].map(_level_key)
+    indicators = {
+        _contrast_column(exposure, level): (keys == level).astype(float)
+        for level in contrasts.contrast_levels
+    }
+    design = pd.DataFrame(indicators, index=model_frame.index)
+    for name in adjustment:
+        design[name] = model_frame[name]
+    return design, _contrast_column(exposure, contrasts.primary)
+
+
+def _contrast_rows(
+    terms: Sequence[Any],
+    *,
+    shared: Dict[str, Any],
+    exposure: str,
+    contrasts: _DeclaredContrasts,
+    requirement_id: str,
+) -> List[Dict[str, Any]]:
+    """One estimates row per declared contrast, in the declared level order.
+
+    Every row comes from the SAME fit, so the contrasts are mutually adjusted
+    exactly as the declared model says. A contrast the fit did not return, or
+    one it returned without a usable interval, raises rather than being written
+    as a null row: an ordinal gradient with a hole in it is not a weaker
+    gradient, it is a different one, and a reader comparing stages would not
+    see that the missing stage was never estimated.
+    """
+
+    by_term = {str(item.term): item for item in terms}
+    rows: List[Dict[str, Any]] = []
+    for level in contrasts.contrast_levels:
+        name = _contrast_column(exposure, level)
+        term = by_term.get(name)
+        estimate = _finite(getattr(term, "estimate", None)) if term else None
+        low = _finite(getattr(term, "ci_low", None)) if term else None
+        high = _finite(getattr(term, "ci_high", None)) if term else None
+        if estimate is None or low is None or high is None:
+            raise AdjustedAssociationError(
+                f"declared model {requirement_id!r} returned no usable estimate "
+                f"for the contrast {level!r} vs {contrasts.reference!r}; a "
+                "gradient missing one of its levels is not the declared model"
+            )
+        rows.append(
+            {
+                **shared,
+                "estimate": estimate,
+                "ci_low": low,
+                "ci_high": high,
+                "standard_error": _finite(getattr(term, "se", None)),
+                "exposure_level": level,
+                "reference_level": contrasts.reference,
+                "contrast": f"{level} vs {contrasts.reference}",
+                "is_primary_contrast": level == contrasts.primary,
+            }
+        )
+    if sum(1 for row in rows if row["is_primary_contrast"]) != 1:
+        raise AdjustedAssociationError(
+            "exactly one contrast must carry the primary mark the manuscript " "quotes"
+        )
+    return rows
+
+
 def run_adjusted_association_from_env(
     *,
     requirement_id: str,
@@ -492,12 +713,21 @@ def run_adjusted_association_from_env(
     analysis_set: str,
     analysis_role: str,
     method_family: str,
+    exposure_levels: Optional[Sequence[str]] = None,
+    exposure_reference_level: Optional[str] = None,
+    primary_contrast_level: Optional[str] = None,
     typed_cohort_input: Optional[str] = None,
     frame: Any = None,
     cohort_path: Any = None,
     emit_step_summary: bool = True,
 ) -> Dict[str, Any]:
-    """Fit the declared model and write the one-row estimates table.
+    """Fit the declared model and write the estimates table.
+
+    One row for a binary or continuous exposure; one row per non-reference
+    level when the planner declared a categorical or ordinal one. The declared
+    ``primary_contrast_level`` is the row every downstream consumer reads as
+    the headline -- see the column block above for why that is declared rather
+    than inferred.
 
     A model that cannot be fitted as declared raises rather than writing a row
     with a null estimate.  A null primary effect is not a weaker result: it is
@@ -523,12 +753,29 @@ def run_adjusted_association_from_env(
         )
 
     model_frame = frame[needed]
+    contrasts = _declared_contrasts(
+        model_frame[exposure],
+        exposure=exposure,
+        levels=exposure_levels,
+        reference=exposure_reference_level,
+        primary=primary_contrast_level,
+    )
+    if contrasts is None:
+        design = model_frame[[exposure, *adjustment]]
+        focal_term = exposure
+    else:
+        design, focal_term = _contrast_design(
+            model_frame,
+            exposure=exposure,
+            adjustment=adjustment,
+            contrasts=contrasts,
+        )
     result = fit_estimator(
         cohort=None,
-        X=model_frame[[exposure, *adjustment]],
+        X=design,
         y=model_frame[outcome],
         kind=estimator_kind,
-        term=exposure,
+        term=focal_term,
     )
     estimate = _finite(result.point_estimate)
     ci_low = _finite(result.ci_low)
@@ -555,11 +802,8 @@ def run_adjusted_association_from_env(
             "reporting the events among the rows it used; refusing to report a "
             "denominator without its numerator"
         )
-    row = {
+    shared = {
         "fit_status": "fitted",
-        "estimate": estimate,
-        "ci_low": ci_low,
-        "ci_high": ci_high,
         "effect_scale": _effect_scale(estimator_kind),
         "exposure": exposure,
         "requirement_id": requirement_id,
@@ -569,9 +813,30 @@ def run_adjusted_association_from_env(
         "analysis_set": analysis_set,
         "n": int(result.n),
         "n_events": n_events,
-        "standard_error": _finite(result.se),
         "notes": result.notes or "",
     }
+    if contrasts is None:
+        rows = [
+            {
+                **shared,
+                "estimate": estimate,
+                "ci_low": ci_low,
+                "ci_high": ci_high,
+                "standard_error": _finite(result.se),
+                "exposure_level": "",
+                "reference_level": "",
+                "contrast": "",
+                "is_primary_contrast": True,
+            }
+        ]
+    else:
+        rows = _contrast_rows(
+            result.terms,
+            shared=shared,
+            exposure=exposure,
+            contrasts=contrasts,
+            requirement_id=requirement_id,
+        )
 
     coefficient_rows = _coefficient_rows(
         result.terms,
@@ -579,21 +844,35 @@ def run_adjusted_association_from_env(
         exposure=exposure,
         adjustment=adjustment,
         effect_scale=_effect_scale(estimator_kind),
+        exposure_contrast_columns=(
+            ()
+            if contrasts is None
+            else [
+                _contrast_column(exposure, level) for level in contrasts.contrast_levels
+            ]
+        ),
     )
     exposure_terms = [
         item for item in coefficient_rows if item["term_role"] == "exposure"
     ]
-    if len(exposure_terms) != 1:
+    # One fitted term per contrast the plan declared -- one for a binary or
+    # continuous exposure, and one per non-reference level for a categorical
+    # one. The count is checked against the DECLARATION rather than fixed at
+    # one, because a four-level exposure legitimately fits three, while a
+    # single-term model fitting two still means the design and the plan
+    # disagree.
+    expected_terms = 1 if contrasts is None else len(contrasts.contrast_levels)
+    if len(exposure_terms) != expected_terms:
         raise AdjustedAssociationError(
             f"declared model {requirement_id!r} fitted {len(exposure_terms)} "
-            f"terms for exposure {exposure!r}; exactly one is required to report "
-            "a single primary effect"
+            f"terms for exposure {exposure!r}; the declaration calls for "
+            f"{expected_terms}"
         )
 
     out_dir = Path(os.environ["STEP_OUT_DIR"])
     out_dir.mkdir(parents=True, exist_ok=True)
     table_path = out_dir / _TABLE_FILENAME
-    pd.DataFrame([row], columns=list(ADJUSTED_ASSOCIATION_ESTIMATES_COLUMNS)).to_csv(
+    pd.DataFrame(rows, columns=list(ADJUSTED_ASSOCIATION_ESTIMATES_COLUMNS)).to_csv(
         table_path, index=False
     )
     coefficient_path = out_dir / _COEFFICIENT_FILENAME

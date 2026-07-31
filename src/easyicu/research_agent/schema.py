@@ -1018,6 +1018,27 @@ class PlannedModelRequirement(BaseModel):
             "is not the same statement as null."
         ),
     )
+    exposure_levels: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "The closed, ordered level set of a categorical or ordinal exposure, "
+            "or null for a binary or continuous one. Declaring it commits the "
+            "model to one contrast per non-reference level."
+        ),
+    )
+    exposure_reference_level: Optional[str] = Field(
+        default=None,
+        description="Which declared level every contrast is taken against.",
+    )
+    primary_contrast_level: Optional[str] = Field(
+        default=None,
+        description=(
+            "Which contrast is the headline estimate the manuscript reports. "
+            "With more than two levels this cannot be inferred: the highest "
+            "level against the reference and a per-level trend are different "
+            "scientific claims, and choosing between them is the planner's."
+        ),
+    )
 
     @field_validator(
         "requirement_id",
@@ -1096,7 +1117,77 @@ class PlannedModelRequirement(BaseModel):
                     f"{self.exposure_source!r}; adjusting for the exposure "
                     "removes the association the requirement declares"
                 )
+        self._check_declared_exposure_levels()
         return self
+
+    def _check_declared_exposure_levels(self) -> None:
+        """A level set is declared whole, or not at all.
+
+        Three fields describe one decision -- which levels exist, which is the
+        reference, and which contrast the manuscript reports -- so a partial
+        answer is not a smaller version of it. Whichever of the three is
+        missing, the model cannot be fitted as declared.
+
+        THIS IS DELIBERATELY THE OPPOSITE CALL FROM THE ROBUSTNESS REPLAY SPEC,
+        and the difference is worth stating so it is not "fixed" later by
+        analogy. There, a partial declaration was refused while an ABSENT one
+        was claimed by an equally correct fallback path, so refusing charged
+        the planner for trying and the fix was to fall through. Here the
+        fallback is not equally correct: with the levels absent the executor
+        fits the exposure as a single term, which on a four-level ordinal scale
+        is a *different scientific quantity* -- a per-unit trend rather than a
+        set of stage contrasts -- reported under the declared estimand's name.
+        A wrong number under the right label is exactly what must not happen
+        silently, so an incomplete level declaration fails closed and names the
+        field that is missing.
+        """
+
+        declared = {
+            "exposure_levels": self.exposure_levels,
+            "exposure_reference_level": self.exposure_reference_level,
+            "primary_contrast_level": self.primary_contrast_level,
+        }
+        present = {name for name, value in declared.items() if value is not None}
+        if not present:
+            return
+        missing = sorted(set(declared) - present)
+        if missing:
+            raise ValueError(
+                "a categorical exposure is declared by "
+                + ", ".join(sorted(declared))
+                + " together; this requirement is missing "
+                + ", ".join(repr(name) for name in missing)
+                + ", so the host cannot tell which contrast the manuscript "
+                "reports and must not choose one"
+            )
+
+        levels = [str(value or "").strip() for value in self.exposure_levels or []]
+        if any(not level for level in levels):
+            raise ValueError("exposure_levels must not contain a blank level")
+        if len(levels) != len(set(levels)):
+            raise ValueError("exposure_levels must not repeat a level")
+        if len(levels) < 2:
+            raise ValueError(
+                "exposure_levels needs at least two levels; a contrast is "
+                "between two of them"
+            )
+        reference = str(self.exposure_reference_level or "").strip()
+        primary = str(self.primary_contrast_level or "").strip()
+        if reference not in levels:
+            raise ValueError(
+                f"exposure_reference_level {reference!r} is not one of the "
+                "declared exposure_levels"
+            )
+        if primary not in levels:
+            raise ValueError(
+                f"primary_contrast_level {primary!r} is not one of the "
+                "declared exposure_levels"
+            )
+        if primary == reference:
+            raise ValueError(
+                "primary_contrast_level must not be the reference level; a "
+                "level contrasted against itself is not an estimate"
+            )
 
 
 _DEFAULT_STABILITY_BASE_SEED = 1729
