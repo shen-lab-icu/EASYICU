@@ -1255,3 +1255,132 @@ def test_the_gate_runs_inside_the_shared_deterministic_code_gate():
     )
 
     assert obligations[0].validator in DETERMINISTIC_CODE_GATE_VALIDATORS
+
+
+# ---------------------------------------------------------------------------
+# The comparison written straight into the loop body, inside a function.
+#
+# canary6 (2026-07-30) lost M3 step 04 here.  The step wrote the audit itself
+# rather than calling a per-column validator, and every column was reported
+# `covered_columns=[]`.  Sweeping the 473 recorded generated scripts before and
+# after the fix: 16 of the 133 that carry a plausibility comparison gain
+# coverage, and none loses any -- the crediting can only widen.
+
+
+_INLINE_LOOP_IN_MAIN = HEADER + """
+
+PLAUSIBILITY_SCOPE = ["marker", "second_marker"]
+
+
+def main():
+    contracts = manifest["raw_input_contracts"]["contracts"]
+    audit = {}
+    for column in PLAUSIBILITY_SCOPE:
+        bounds = contracts[column]["analysis_plausibility_range"]
+        lower = bounds.get("minimum")
+        upper = bounds.get("maximum")
+        numeric = frame[column].dropna().astype(float)
+        below_n = int((numeric < float(lower)).sum()) if lower is not None else 0
+        above_n = int((numeric > float(upper)).sum()) if upper is not None else 0
+        audit[column] = {
+            "policy": "retain_and_flag",
+            "below_minimum_n": below_n,
+            "above_maximum_n": above_n,
+            "out_of_range_n": below_n + above_n,
+        }
+    write_json(SUMMARY_PATH, {"plausibility_audit": audit})
+
+
+main()
+"""
+
+
+def test_an_inline_loop_inside_a_function_covers_the_columns_it_names() -> None:
+    """The real M3 shape: no per-column helper, the loop is inside ``main``.
+
+    Being inside a function used to send this down the helper-call branch,
+    which looks for the loop around the *call* -- and ``main()`` is called once,
+    at module level, not per column. The loop that does the work is inside the
+    owner, and nothing looked there.
+    """
+
+    assert _reasons_for_columns(
+        _INLINE_LOOP_IN_MAIN, "marker", "second_marker"
+    ) == set()
+
+
+def test_the_inline_loop_cannot_certify_a_column_its_list_omits() -> None:
+    """Crediting is per literal, so an omitted column is still reported."""
+
+    assert _reasons_for_columns(
+        _INLINE_LOOP_IN_MAIN, "marker", "second_marker", "third_marker"
+    ) == {"plausibility_scope_column_not_attributable"}
+
+
+def test_an_inline_loop_at_module_level_covers_its_columns_too() -> None:
+    """Same crediting whether or not the work sits in a function."""
+
+    module_level = _INLINE_LOOP_IN_MAIN.replace(
+        "def main():\n", "if True:\n"
+    ).replace("\n\nmain()\n", "\n")
+
+    assert _reasons_for_columns(
+        module_level, "marker", "second_marker"
+    ) == set()
+
+
+def test_a_comparison_that_names_no_column_is_still_not_attributable() -> None:
+    """The fix credits named columns; it does not credit an unnamed check."""
+
+    unnamed = HEADER + """
+
+
+def main():
+    bounds = manifest["raw_input_contracts"]["contracts"]["marker"][
+        "analysis_plausibility_range"
+    ]
+    lower = bounds.get("minimum")
+    numeric = frame[some_column].dropna().astype(float)
+    below_n = int((numeric < float(lower)).sum())
+    write_json(SUMMARY_PATH, {"below": below_n})
+
+
+main()
+"""
+
+    assert _reasons_for_columns(unnamed, "second_marker") == {
+        "plausibility_scope_column_not_attributable"
+    }
+
+
+def test_a_loop_whose_key_is_unrelated_to_the_compared_data_credits_nothing() -> None:
+    """The guard that keeps the loop crediting honest.
+
+    Iterating a list of column names near a comparison proves nothing unless
+    the loop variable is what selects the data being compared. Without this,
+    any script that happens to loop over its column names anywhere would
+    certify every one of them.
+    """
+
+    unrelated = HEADER + """
+
+OTHER_COLUMNS = ["marker", "second_marker"]
+
+
+def main():
+    bounds = manifest["raw_input_contracts"]["contracts"]["marker"][
+        "analysis_plausibility_range"
+    ]
+    lower = bounds.get("minimum")
+    numeric = frame[fixed_column].dropna().astype(float)
+    for label in OTHER_COLUMNS:
+        below_n = int((numeric < float(lower)).sum())
+        write_json(SUMMARY_PATH, {label: below_n})
+
+
+main()
+"""
+
+    assert _reasons_for_columns(unrelated, "second_marker") == {
+        "plausibility_scope_column_not_attributable"
+    }
