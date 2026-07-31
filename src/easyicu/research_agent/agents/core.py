@@ -2481,6 +2481,47 @@ def _declared_output_scope_contract(step: AnalysisStep) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _declares_no_measurement_provenance_pair(step: AnalysisStep) -> bool:
+    """Whether the preflight gate will refuse any provenance call in this step.
+
+    Computed with the gate's own rule rather than restated: a pair needs two
+    BARE column names in ``step.inputs`` -- a measured column and its companion
+    count. A step consuming typed products (``table:x``) therefore has no pair
+    at all, which is every figure step.
+
+    That mattered because the negative sentence below used to be emitted only
+    when the step declared NO inputs whatsoever. Every real figure step has
+    inputs, so no figure step was ever told, while the coder prompt says in
+    bold that "every result step declaring a measured/count pair must call the
+    host ``measurement_provenance_receipt`` ... this requirement is not limited
+    to a component-QC step". Measured on canary9's E3: the Coder called it, and
+    the gate quarantined the step before it ran, for a rule the host had
+    demanded in general and exempted only in a branch that never fired.
+    """
+
+    from ..icu_rules import companion_count_column_for_measured
+
+    bare = {
+        str(value).strip()
+        for value in step.inputs or []
+        if ":" not in str(value) and str(value).strip()
+    }
+    return not any(
+        (companion := companion_count_column_for_measured(name)) and companion in bare
+        for name in bare
+    )
+
+
+_NO_PROVENANCE_PAIR_RULE = (
+    "- No measured/count provenance pair is declared for this step. Do not "
+    "read those companions, call `measurement_provenance_receipt`, or "
+    "hand-roll an equivalent audit. A pair is two bare column names in this "
+    "step's inputs; a step consuming typed products (`table:...`) has none, "
+    "so a rendering-only figure never calls it -- it draws the values its "
+    "digest-bound inputs already carry.\n"
+)
+
+
 def _typed_input_scope_contract(step: AnalysisStep) -> str:
     """Bind Planner-owned consumer scope to run-authoritative input files."""
 
@@ -2494,11 +2535,7 @@ def _typed_input_scope_contract(step: AnalysisStep) -> str:
             "- A separately attached host-owned execution receipt may authorize "
             "only the exact coordinates it enumerates. It does not authorize "
             "related `*_measured`, `*_n`, status, timing, or sibling-summary "
-            "columns.\n"
-            "- No measured/count provenance pair is declared for this step. Do "
-            "not read those companions, call `measurement_provenance_receipt`, "
-            "or hand-roll an equivalent audit. Exact Planner-declared inputs "
-            "for this step: [].\n"
+            "columns.\n" + _NO_PROVENANCE_PAIR_RULE
         )
     typed_inputs = []
     raw_inputs = []
@@ -2534,6 +2571,14 @@ def _typed_input_scope_contract(step: AnalysisStep) -> str:
             "table because an unused nullable field is blank. Never drop such rows or "
             "replace semantic missingness with zero merely to pass validation.\n"
         )
+    # Emitted whenever the gate would refuse a provenance call, which is every
+    # step without a bare measured/count pair -- not only the steps with no
+    # inputs at all. See _declares_no_measurement_provenance_pair.
+    no_provenance_pair_contract = (
+        _NO_PROVENANCE_PAIR_RULE
+        if _declares_no_measurement_provenance_pair(step)
+        else ""
+    )
     raw_input_contract = ""
     if raw_inputs:
         raw_input_contract = (
@@ -2633,6 +2678,7 @@ def _typed_input_scope_contract(step: AnalysisStep) -> str:
         "to be non-missing. Never compare value availability with the companion "
         "pair or add it to provenance discordance.\n"
         f"{typed_cohort_contract}"
+        f"{no_provenance_pair_contract}"
         f"- Exact Planner-declared inputs for this step: {declared_inputs}\n"
         f"- Exact typed inputs for this step: {typed_inputs}\n"
     )
