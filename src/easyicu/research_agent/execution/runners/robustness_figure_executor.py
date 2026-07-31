@@ -55,6 +55,8 @@ from ...figures.publication import (
     save_publication_figure,
 )
 from ...schema import AnalysisStep
+from .deterministic_robustness import _MATRIX_COLUMNS
+from .effect_scale import describe_effect_scale
 from .figure_input_capability import TypedInputCapability
 
 __all__ = [
@@ -117,39 +119,85 @@ ROBUSTNESS_FIGURE_CAPABILITY = TypedInputCapability(
 )
 
 
-def robustness_figure_executor_owns_step(step: AnalysisStep) -> bool:
+#: The replay owner's own header, imported rather than restated, so a producer
+#: that changes its contract changes this gate with it.
+_PRODUCER_CONTRACT_COLUMNS = frozenset(_MATRIX_COLUMNS)
+
+
+def _binding_is_producer_contract(binding: Any) -> bool:
+    """Whether this binding is the deterministic replay owner's own matrix."""
+
+    if not isinstance(binding, Mapping):
+        return False
+    contract = binding.get("product_contract")
+    if not isinstance(contract, Mapping):
+        return False
+    columns = contract.get("columns")
+    if not isinstance(columns, list) or not all(
+        isinstance(value, str) for value in columns
+    ):
+        return False
+    return _PRODUCER_CONTRACT_COLUMNS <= set(columns)
+
+
+def robustness_figure_executor_owns_step(
+    step: AnalysisStep,
+    *,
+    resolved_bindings: Mapping[str, Any] | None = None,
+) -> bool:
     """Return whether every scientific choice is already fixed upstream.
 
     No clause names a figure product. What makes the step renderable is that
     it consumes the replay owner's matrix and promises exactly one figure; the
     specification grid, effect scale, estimates and intervals were all decided
     by the plan and computed by the producer.
+
+    THE PRODUCER CLAUSE IS NOT OPTIONAL, and its absence was a live defect.
+    This renderer first shipped claiming the step from the input key alone, on
+    the belief that only the deterministic replay owner ever writes
+    ``robustness_matrix``. Measured 2026-07-31 against the five real matrices
+    on disk, that was false: four were Coder-authored under three different
+    headers -- a two-by-two audit table, a complete-case comparison row -- and
+    for those the renderer would have claimed the step and then raised at load,
+    turning four steps the Coder was drawing successfully into four dead ones.
+    Claiming a step is a promise to produce its figure, so the check that the
+    bound table is really the producer's belongs here, before the promise, not
+    only inside the sandbox after it.
     """
 
     products = [_figure_product(value) for value in step.expected_outputs]
-    return bool(
+    if not (
         step.planned_analysis_role == "auxiliary"
         and _method_head(step.method) == "visualization"
         and ROBUSTNESS_FIGURE_CAPABILITY.admits_step(step)
         and len(products) == 1
         and products[0] is not None
-        # A renderer that also fitted a model, built a Table 1 or froze a
-        # clustering would be choosing science; those declarations belong to
-        # other owners and their presence means this is not a pure rendering
-        # step.
-        and not step.model_requirements
-        and step.table_one_spec is None
+        # A renderer that also froze a clustering would be choosing science.
+        # ``model_requirements`` and ``table_one_spec`` are not checked because
+        # ``AnalysisStep`` already refuses both on a visualization step whose
+        # sole output is one figure (verified 2026-07-31); a guard the type
+        # system enforces reads as protection while protecting nothing.
         and step.trajectory_stability_spec is None
-    )
+    ):
+        return False
+    if not isinstance(resolved_bindings, Mapping):
+        return False
+    return _binding_is_producer_contract(resolved_bindings.get(ROBUSTNESS_FIGURE_INPUT))
 
 
 def robustness_figure_executor_code(step: AnalysisStep) -> str:
     """Return the small sandbox entrypoint for the exact declared figure."""
 
-    if not robustness_figure_executor_owns_step(step):
+    # Ownership is NOT re-derived here. The selector consulted this owner with
+    # the step's resolved bindings; a second evaluation without them cannot see
+    # what the selector saw and would answer differently -- which it did, once
+    # the producer clause landed. What this builder checks is its own input:
+    # that the step names exactly one canonical figure product to render.
+    product = (
+        _figure_product(step.expected_outputs[0]) if step.expected_outputs else None
+    )
+    if product is None:
         raise ValueError("The step is not owned by the robustness renderer")
-    product = _figure_product(step.expected_outputs[0])
-    assert product is not None
     return textwrap.dedent(
         f"""
         import os
@@ -239,6 +287,14 @@ def _load_matrix(
         raise ValueError("robustness matrix must be a regular bound CSV")
     if _canonical_sha256(path) != expected_sha256:
         raise ValueError("robustness matrix digest verification failed")
+
+    # The clause selection already applied, re-asked of the manifest the
+    # sandbox actually received. Selection decides who runs; this decides what
+    # may be drawn, and it does not take the earlier answer on trust.
+    if not _binding_is_producer_contract(binding):
+        raise ValueError(
+            "robustness matrix was not written by the deterministic replay owner"
+        )
 
     columns = product_contract.get("columns")
     row_count = product_contract.get("row_count")
@@ -352,28 +408,6 @@ def _validated_rows(frame: pd.DataFrame) -> tuple[pd.DataFrame, str, bool]:
     return rows, effect_scale, bool((~rows["__drawable"]).any())
 
 
-def _null_value(effect_scale: str) -> float | None:
-    """The no-effect line for the declared scale, or None when it has none.
-
-    Ratio scales are null at 1 and difference scales at 0. An unrecognised
-    scale gets no line rather than a guessed one: drawing the wrong null is a
-    claim about the result, and abstaining is visible while a wrong line is not.
-    """
-
-    scale = effect_scale.strip().lower()
-    if scale in {
-        "odds_ratio",
-        "hazard_ratio",
-        "risk_ratio",
-        "rate_ratio",
-        "incidence_rate_ratio",
-    }:
-        return 1.0
-    if scale in {"risk_difference", "mean_difference", "coefficient", "log_odds"}:
-        return 0.0
-    return None
-
-
 def _reader_label(value: str) -> str:
     return str(value).replace("_", " ").strip()
 
@@ -440,7 +474,7 @@ def run_robustness_figure(
         capsize=2.0,
         markersize=4.2,
     )
-    null_value = _null_value(effect_scale)
+    null_value = describe_effect_scale(effect_scale).null_value
     if null_value is not None:
         ax.axvline(
             null_value,
@@ -551,6 +585,11 @@ def run_robustness_figure(
         "source_rows_consumed": int(len(frame)),
         "source_table": "robustness_matrix.csv",
         "effect_scale": effect_scale,
+        # Whether the figure carries a line at no effect. Recorded because its
+        # absence is exactly what a reader of the figure cannot see: an
+        # unrecognised scale spelling silently removed the anchor every
+        # interval is judged against, and nothing said so.
+        "null_line_drawn": null_value is not None,
         "specifications_drawn": int(len(drawn)),
         "specifications_not_estimable": int(len(rows) - len(drawn)),
         "any_specification_not_estimable": bool(has_gap),

@@ -49,6 +49,11 @@ from .robustness_figure_executor import (
     robustness_figure_executor_code,
     robustness_figure_executor_owns_step,
 )
+from .adjusted_association_figure_executor import (
+    ADJUSTED_ASSOCIATION_FIGURE_INPUT,
+    adjusted_association_figure_executor_code,
+    adjusted_association_figure_executor_owns_step,
+)
 from .prevalence_outcome_figure_executor import (
     PREVALENCE_OUTCOME_FIGURE_INPUT,
     prevalence_outcome_figure_executor_code,
@@ -271,7 +276,7 @@ def select_standard_executor(
             )
         )
     _missed("prevalence_outcome_figure")
-    if robustness_figure_executor_owns_step(step):
+    if robustness_figure_executor_owns_step(step, resolved_bindings=resolved_bindings):
         if receipt_required:
             _receipt_declined("robustness_figure")
             return None
@@ -285,6 +290,24 @@ def select_standard_executor(
             )
         )
     _missed("robustness_figure")
+    if adjusted_association_figure_executor_owns_step(
+        step, resolved_bindings=resolved_bindings
+    ):
+        if receipt_required:
+            _receipt_declined("adjusted_association_figure")
+            return None
+        return _selected(
+            StandardExecutorSelection(
+                analysis_kind="adjusted_association_figure",
+                selection_reason="adjusted_association_figure_contract_preflight",
+                progress_message=(
+                    "Using planner-scoped adjusted association figure executor"
+                ),
+                code=adjusted_association_figure_executor_code(step),
+                consumed_input_keys=(ADJUSTED_ASSOCIATION_FIGURE_INPUT,),
+            )
+        )
+    _missed("adjusted_association_figure")
     if prevalence_mortality_figure_executor_owns_step(step):
         if receipt_required:
             _receipt_declined("prevalence_mortality_figure")
