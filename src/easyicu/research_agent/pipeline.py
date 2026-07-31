@@ -206,6 +206,7 @@ from .intake.materialized_trajectory import (
     VerifiedLegacyTrajectoryCapsuleReceipt,
     VerifiedMaterializedTrajectoryAuthority,
     load_verified_materialized_trajectory_authority,
+    long_trajectory_is_bound,
     stage_legacy_trajectory_exact,
     stage_materialized_trajectory_authority,
 )
@@ -247,7 +248,9 @@ from .audits.manuscript_claims import (  # noqa: E402,F401
     _extract_percent_claims_near,
 )
 
-_audit_manuscript_numeric_claims = audit_manuscript_numeric_claims  # noqa: F841 (legacy alias)
+_audit_manuscript_numeric_claims = (
+    audit_manuscript_numeric_claims  # noqa: F841 (legacy alias)
+)
 
 from .authority.evidence_store import (
     EvidenceEnforcementError,
@@ -1427,9 +1430,7 @@ class ResearchAgentPipeline:
             "max_estimated_cost_usd_per_batch": (
                 config.max_estimated_cost_usd_per_batch
             ),
-            "max_wall_clock_seconds_per_task": (
-                config.max_wall_clock_seconds_per_task
-            ),
+            "max_wall_clock_seconds_per_task": (config.max_wall_clock_seconds_per_task),
             "input_cost_usd_per_million_tokens": (
                 config.provider_input_cost_usd_per_million_tokens
             ),
@@ -2143,6 +2144,13 @@ class ResearchAgentPipeline:
         emit_progress: Callable[..., None],
     ) -> _PlanPhaseResult:
         """Build context, attach memory, and emit an execution plan."""
+        # The Planner is refused a trajectory design unless the host can see a
+        # trajectory, and ResearchContext only ever shows the wide fixed-window
+        # representation.  Answering here, from the same predicate the execution
+        # phase uses, is what lets the trajectory contract be raised while the
+        # Planner can still act on it -- H3 previously met that contract only
+        # after its last revision, so it never got to satisfy it.
+        long_trajectory_bound = long_trajectory_is_bound(trajectory_binding)
         context_path = run_dir / "research_context.json"
         if resume_context_evidence_path is not None:
             # Resume context authority is the digest-verified evidence copy,
@@ -2747,6 +2755,7 @@ class ResearchAgentPipeline:
                 if self._cost_price_table is not None
                 else CostMeter(runtime_dir=run_dir / ".runtime")
             )
+
             # Order: envelope -> hard stop -> meter. The hard-stop wrapper
             # reserves every raw transport retry before delivery; the meter
             # receives usage from that same call for the normal run manifest.
@@ -3112,6 +3121,7 @@ class ResearchAgentPipeline:
             plan, plan_contract_findings = _enforce_advanced_plan_contract(
                 plan=plan,
                 context=context,
+                long_trajectory_bound=long_trajectory_bound,
             )
             findings.extend(plan_contract_findings)
             plan, split_findings = _split_table_and_figure_outputs_in_plan(plan=plan)
@@ -3164,6 +3174,7 @@ class ResearchAgentPipeline:
                 for finding in trajectory_plan_dag_findings(
                     plan=plan,
                     context=context,
+                    long_trajectory_bound=long_trajectory_bound,
                 )
             )
             plan = ensure_cohort_definition(plan)

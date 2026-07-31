@@ -115,7 +115,7 @@ def _trajectory_test_pipeline(ra, tmp_path, monkeypatch, *, runner_factory):
     monkeypatch.setattr(
         pipeline_module,
         "_enforce_advanced_plan_contract",
-        lambda *, plan, context: (plan, []),
+        lambda *, plan, context, **_kwargs: (plan, []),
     )
     return ra.ResearchAgentPipeline(
         workdir=tmp_path / "work",

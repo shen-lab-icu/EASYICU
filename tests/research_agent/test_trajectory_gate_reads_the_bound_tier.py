@@ -22,6 +22,8 @@ and the flag must not become a way to say otherwise.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from easyicu.research_agent.schema import (
@@ -373,6 +375,66 @@ def test_the_hops_below_the_phase_carry_it_too():
             any(keyword.arg == "long_trajectory_bound" for keyword in call.keywords)
             for call in calls
         ), f"a call to {callee} drops the bound-tier flag"
+
+
+def test_the_plan_phase_answers_the_same_question_before_the_planner_is_done():
+    """The findings have to arrive while a revision can still use them.
+
+    H3 reached revision 2 and only met the role contract during execution, so
+    the replan it did get was driven by something else. The plan phase now
+    derives the answer from the same predicate, and both gate calls inside it
+    carry it.
+    """
+
+    import inspect
+
+    from easyicu.research_agent import pipeline
+
+    source = inspect.getsource(pipeline.ResearchAgentPipeline._run_plan_phase)
+    assert "long_trajectory_is_bound(trajectory_binding)" in source
+    for callee in ("trajectory_plan_dag_findings", "_enforce_advanced_plan_contract"):
+        calls = _calls_in(source, callee)
+        assert calls, f"the plan phase no longer calls {callee}"
+        assert all(
+            any(keyword.arg == "long_trajectory_bound" for keyword in call.keywords)
+            for call in calls
+        ), f"the plan phase calls {callee} without the bound-tier flag"
+
+
+def test_both_phases_ask_one_predicate_not_two_spellings_of_it():
+    """Two spellings is how a run plans against data it may not use."""
+
+    import inspect
+
+    from easyicu.research_agent.authority.execution_input import (
+        ExecutionInputAuthorityState,
+    )
+
+    source = inspect.getsource(
+        ExecutionInputAuthorityState.trajectory_authority_sha256.fget
+    )
+
+    assert "verified_authority_sha256" in source
+    assert "authority_ref.sha256" not in source
+
+
+def test_a_staged_file_without_a_verified_authority_is_not_bound():
+    """The answer is about a verified binding, never about a path existing."""
+
+    from easyicu.research_agent.intake.materialized_trajectory import (
+        StagedTrajectoryBinding,
+        long_trajectory_is_bound,
+    )
+
+    unverified = StagedTrajectoryBinding(
+        path=Path("cohort_trajectory.parquet"),
+        sha256="0" * 64,
+        size=1,
+    )
+
+    assert unverified.verified_authority_sha256 is None
+    assert not long_trajectory_is_bound(unverified)
+    assert not long_trajectory_is_bound(None)
 
 
 def test_the_flag_is_bound_before_the_first_gate_call_that_uses_it():
