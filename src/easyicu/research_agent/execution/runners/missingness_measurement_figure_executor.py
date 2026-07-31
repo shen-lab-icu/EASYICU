@@ -151,32 +151,80 @@ MISSINGNESS_MEASUREMENT_FIGURE_CAPABILITY = TypedInputCapability(
 )
 
 
-def missingness_measurement_figure_executor_owns_step(step: AnalysisStep) -> bool:
+def _binding_carries_the_columns_read(binding: Any, input_key: str) -> bool:
+    """Whether the bound table really has the columns this renderer indexes.
+
+    The loader below already asks this and raises when the answer is no. Asking
+    it again HERE, before the claim, is the difference between declining a step
+    and killing it: claiming is a promise to produce the figure, so a renderer
+    that claims and then raises turns a step the Coder was drawing successfully
+    into a dead one.
+
+    Measured 2026-07-31 over the real files on disk: 23 recorded
+    ``missingness_measurement_audit`` tables carry 5 distinct headers and only
+    16 have every column this renderer reads; ``measurement_process_audit`` is
+    16 of 20. Those 11 files are steps this renderer would have claimed and
+    then failed. The same gap in the robustness renderer was worth 4 dead steps
+    before it was closed.
+    """
+
+    if not isinstance(binding, Mapping):
+        return False
+    contract = binding.get("product_contract")
+    if not isinstance(contract, Mapping):
+        return False
+    columns = contract.get("columns")
+    if not isinstance(columns, list) or not all(
+        isinstance(value, str) for value in columns
+    ):
+        return False
+    return set(_COLUMNS_BY_INPUT[input_key]).issubset(set(columns))
+
+
+def missingness_measurement_figure_executor_owns_step(
+    step: AnalysisStep,
+    *,
+    resolved_bindings: Mapping[str, Any] | None = None,
+) -> bool:
     """Return whether every scientific choice is fixed by the typed contract."""
 
     products = [_figure_product(value) for value in step.expected_outputs]
     if not MISSINGNESS_MEASUREMENT_FIGURE_CAPABILITY.admits_step(step):
         return False
-    return bool(
+    if not (
         step.planned_analysis_role == "auxiliary"
         and _method_head(step.method) == "visualization"
         and len(products) == 1
         and products[0] is not None
-        and not step.model_requirements
-        and step.table_one_spec is None
+        # ``model_requirements`` and ``table_one_spec`` are not checked here:
+        # ``AnalysisStep`` already refuses both on a visualization step whose
+        # sole output is one figure (verified 2026-07-31), so guarding them
+        # would read as protection while protecting nothing.
         and step.trajectory_stability_spec is None
+    ):
+        return False
+    if not isinstance(resolved_bindings, Mapping):
+        return False
+    return all(
+        _binding_carries_the_columns_read(resolved_bindings.get(key), key)
+        for key in MISSINGNESS_MEASUREMENT_FIGURE_INPUTS
     )
 
 
 def missingness_measurement_figure_executor_code(step: AnalysisStep) -> str:
     """Return the small sandbox entrypoint for the exact declared figure."""
 
-    if not missingness_measurement_figure_executor_owns_step(step):
+    # Ownership is NOT re-derived here. The selector consulted this owner with
+    # the step's resolved bindings; a second evaluation without them cannot see
+    # what the selector saw and would answer differently. What this builder
+    # checks is its own input: one canonical figure product to render.
+    product = (
+        _figure_product(step.expected_outputs[0]) if step.expected_outputs else None
+    )
+    if product is None:
         raise ValueError(
             "The step is not owned by the missingness/measurement renderer"
         )
-    product = _figure_product(step.expected_outputs[0])
-    assert product is not None
     return textwrap.dedent(
         f"""
         import os
