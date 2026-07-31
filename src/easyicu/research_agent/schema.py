@@ -43,7 +43,7 @@ from .planning.cohort_contract import (
 from .planning.robustness_contract import (
     RobustnessPlanError,
     RobustnessSpec,
-    validate_robustness_specs,
+    validate_planner_robustness_specs,
 )
 
 PlannedAnalysisRole = Literal[
@@ -2434,7 +2434,7 @@ class AnalysisPlan(BaseModel):
                 )
         if self.robustness_specs:
             try:
-                validate_robustness_specs(self.robustness_specs)
+                validate_planner_robustness_specs(self.robustness_specs)
             except RobustnessPlanError as exc:
                 raise ValueError(str(exc)) from exc
         return self

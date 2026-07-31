@@ -51,6 +51,10 @@ from ...robustness.panel import (
 )
 from ...contracts.ownership_verdict import OwnershipVerdict
 from ...contracts.result_envelope import model_summary_coefficient_filename
+from ...planning.robustness_contract import (
+    COMPLETE_CASE_VARIABLES_KEY,
+    complete_case_variables,
+)
 from ...schema import AnalysisStep, spec_backs_every_declared_product
 from ...contracts.host_scaffold import HostScaffoldedScript
 from .plausibility_receipt import render_standard_plausibility_receipt_code
@@ -1392,18 +1396,16 @@ def _verified_complete_case_equivalence(
     """Reuse a fit only after proving the locked complete-case set is identical."""
 
     override = spec.missing_override or {}
-    raw_variables = override.get("variables")
-    if (
-        str(override.get("strategy") or "").strip().lower() != "complete_case"
-        or not isinstance(raw_variables, list)
-        or not raw_variables
-        or any(
-            not isinstance(value, str) or not value.strip() for value in raw_variables
+    # One reader, shared with the plan-time requirement: the two used to name
+    # the key independently and only the executor's copy was enforced, so a
+    # plan the host had accepted died here after every other step had run.
+    variables = complete_case_variables(spec)
+    if variables is None:
+        error = (
+            "complete-case equivalence requires explicit locked variables in "
+            f"missing_override.{COMPLETE_CASE_VARIABLES_KEY}"
         )
-    ):
-        error = "complete-case equivalence requires explicit locked variables"
         return _blocked_panel_row(spec.spec_id, spec.axis, error), [], None, error
-    variables = [value.strip() for value in raw_variables]
     if len(variables) != len(set(variables)):
         error = "complete-case equivalence variables are not unique"
         return _blocked_panel_row(spec.spec_id, spec.axis, error), [], None, error

@@ -35,7 +35,13 @@ def test_planner_accepts_one_task_supported_robustness_axis() -> None:
                 "axis": "missing",
                 "description": "Complete cases only.",
                 "cohort_override": None,
-                "missing_override": {"strategy": "complete_case"},
+                # A complete-case spec names the variables whose completeness
+                # defines the set; without them the run reaches the robustness
+                # step and blocks, so the plan is refused here instead.
+                "missing_override": {
+                    "strategy": "complete_case",
+                    "variables": ["severity", "mortality"],
+                },
                 "outcome_override": None,
             }
         ],

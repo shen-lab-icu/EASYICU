@@ -37,10 +37,15 @@ def test_robustness_contract_runtime_exports_are_identical() -> None:
 def test_schema_uses_the_pure_robustness_contract() -> None:
     assert schema.RobustnessPlanError is robustness_contract.RobustnessPlanError
     assert schema.RobustnessSpec is robustness_contract.RobustnessSpec
+    # The validator schema actually calls. It is the planner-scoped one:
+    # the shared structural validator is also asked about locks and about
+    # case-neutral placeholders, so a Planner-output requirement does not
+    # belong on it.
     assert (
-        schema.validate_robustness_specs
-        is robustness_contract.validate_robustness_specs
+        schema.validate_planner_robustness_specs
+        is robustness_contract.validate_planner_robustness_specs
     )
+    assert not hasattr(schema, "_validate_robustness_specs_locally")
 
 
 def test_robustness_contract_has_no_runtime_or_evidence_dependency() -> None:
