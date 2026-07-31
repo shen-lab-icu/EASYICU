@@ -59,6 +59,7 @@ from ..execution.method_capabilities import coder_method_capability_block
 from ..resources import ContextBudgetExceeded, bounded_request_metrics
 from ..cohort.schema import (
     ALLOWED_CTAS_AGGREGATIONS,
+    _resolve_predicate_column,
     known_concept_ids,
     validate_plan_typed_bindings_against_context,
 )
@@ -374,10 +375,65 @@ def _outbound_repair_diagnosis(
 # ---------------------------------------------------------------------------
 
 
-def _format_concept_id_allowlist() -> str:
+_COHORT_PREDICATE_AGGREGATIONS = (
+    "max",
+    "min",
+    "first",
+    "last",
+    "mean",
+    "median",
+    "any",
+    "sum",
+    "count",
+)
+
+
+def _bindable_concept_ids(columns: Sequence[str]) -> list[str]:
+    """The concept ids that resolve against THIS run's sealed columns.
+
+    A cohort predicate is checked by ``cohort/schema.py`` against the sealed
+    input, so the dictionary is the wrong set to publish: it is what EasyICU
+    can define, not what this export contains.
+
+    MEASURED on canary12's E3 cohort (104 columns): the prompt published 264
+    ids as "the ONLY values acceptable" and 15 of them bound -- 94.3% of the
+    menu was unusable. The Planner picked ``kdigo_aki``, the scientifically
+    correct concept for an AKI-stage cohort, from the list the host handed it,
+    and the host then refused it for having no bound column; the next attempt
+    improvised ``aki_stage``, which is not a concept at all. Two of five
+    planning attempts spent on a menu that was wrong to begin with.
+    """
+
+    resolve = _resolve_predicate_column
+    names = [str(column) for column in columns if str(column).strip()]
+    if not names:
+        return []
+    return sorted(
+        concept_id
+        for concept_id in known_concept_ids()
+        if any(
+            resolve(names, concept_id, aggregation, column_bindings={}) is not None
+            for aggregation in _COHORT_PREDICATE_AGGREGATIONS
+        )
+    )
+
+
+def _format_concept_id_allowlist(columns: Sequence[str] = ()) -> str:
     """Render legal EasyICU concept ids for CTAS planner prompts."""
 
-    concept_ids = sorted(known_concept_ids())
+    concept_ids = _bindable_concept_ids(columns)
+    scope = (
+        "that bind against this run's sealed export"
+        if concept_ids
+        # No sealed columns to check against -- publish the dictionary rather
+        # than an empty menu, which would make the cohort unwritable. The
+        # binder still refuses an unbound predicate downstream, so this is
+        # permissive in the prompt only.
+        else "in the concept dictionary (this run's sealed columns were not "
+        "available to narrow them)"
+    )
+    if not concept_ids:
+        concept_ids = sorted(known_concept_ids())
     if not concept_ids:
         return (
             "ALLOWED concept_ids — no concept dictionary entries were loaded. "
@@ -385,8 +441,10 @@ def _format_concept_id_allowlist() -> str:
             "dictionary before emitting a CohortDefinition."
         )
     lines = [
-        "ALLOWED concept_ids — the ONLY values acceptable in any "
-        "CohortDefinition or RobustnessSpec.cohort_override.concept_id field. "
+        f"ALLOWED concept_ids — the ONLY values acceptable in any "
+        f"CohortDefinition or RobustnessSpec.cohort_override.concept_id field. "
+        f"This is the set {scope}; a concept EasyICU can define but this "
+        "export does not carry is not on it, however apt it sounds. "
         'Synthesizing new names (e.g. "score_at_admission", '
         '"concept_peak_window", "condition_onset_window") is forbidden — these '
         "are operationalizations, not concepts. To operationalize a concept "
@@ -694,7 +752,9 @@ def _build_planner_user_prompt(
         "Keep eligibility separate from exposure: primary-cohort predicates "
         "must preserve every closed level compared by a downstream Table 1 or "
         "required primary estimand, including prevalence denominators.\n\n"
-        + _format_concept_id_allowlist()
+        + _format_concept_id_allowlist(
+            [variable.name for variable in context.variables]
+        )
         + "\n\n"
         + _format_ctas_schema_constraints()
         + "\n\n"
