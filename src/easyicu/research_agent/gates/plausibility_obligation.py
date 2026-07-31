@@ -1369,6 +1369,48 @@ def _comparison_scope_coverage(
                 return set()
         return _target_names(loop.target)
 
+    def _credit_from_enclosing_loop(comparison: ast.Compare) -> Set[str]:
+        """Columns the loop this comparison sits in proves it covered.
+
+        Runs for a comparison written straight into a step body and for one
+        written inside a function.  It used to run only in the first case, and
+        M3 lost step 04 on canary6 to the difference: its loop is inside
+        ``main``, so ``_owner`` was not None and the loop was never looked at.
+        The code was::
+
+            for column in PLAUSIBILITY_SCOPE:      # six literals
+                contract = raw_contracts.get(column)
+                ... numeric < float(minimum) ...
+
+        which names every column *more* precisely than iterating the mapping,
+        and was reported with ``covered_columns=[]``.  ``column`` is a loop
+        target rather than an assignment, so the upstream walk could never
+        reach the literal list on its own.
+
+        No boundary parameter: a comparison inside a helper walks up to that
+        helper's ``FunctionDef`` and then to the module, never to the call
+        site, which lives elsewhere in the tree.  A stop-at-owner guard was
+        written here and deleted after mutation showed it could not change any
+        answer -- a per-column helper is still judged by its own call sites,
+        below, because that is a different walk.
+        """
+
+        found: Set[str] = set()
+        data_operand = _data_operand(comparison)
+        if data_operand is None:
+            return found
+        current = parent.get(id(comparison))
+        while current is not None:
+            if isinstance(current, (ast.For, ast.AsyncFor)):
+                key_names = _loop_contract_key_names(current)
+                if key_names.intersection(_upstream_names(data_operand)):
+                    found.update(_upstream_literals(current.iter))
+                    if _reads_the_raw_contract_mapping(current.iter, assignments):
+                        found.update(expected)
+                break
+            current = parent.get(id(current))
+        return found
+
     covered: Set[str] = set()
     for comparison in comparisons:
         owner = _owner(comparison)
@@ -1380,24 +1422,10 @@ def _comparison_scope_coverage(
             if current is not None:
                 statement = current
             covered.update(_upstream_literals(statement))
-            data_operand = _data_operand(comparison)
-            current = parent.get(id(comparison))
-            while current is not None:
-                if isinstance(current, (ast.For, ast.AsyncFor)):
-                    key_names = _loop_contract_key_names(current)
-                    if (
-                        data_operand is not None
-                        and key_names.intersection(_upstream_names(data_operand))
-                        and _reads_the_raw_contract_mapping(
-                            current.iter,
-                            assignments,
-                        )
-                    ):
-                        covered.update(expected)
-                    break
-                current = parent.get(id(current))
+            covered.update(_credit_from_enclosing_loop(comparison))
             continue
 
+        covered.update(_credit_from_enclosing_loop(comparison))
         covered.update(_expected_data_column_literals(owner, expected))
         owner_calls = [
             call
