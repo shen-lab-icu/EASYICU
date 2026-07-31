@@ -24,8 +24,11 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from pydantic import ValidationError
+
 from easyicu.research_agent.execution.runners.exposure_outcome_distribution_executor import (
     EXPOSURE_OUTCOME_DISTRIBUTION_COLUMNS,
+    _distribution_rows,
     exposure_outcome_distribution_executor_code,
     exposure_outcome_distribution_executor_owns_step,
     run_exposure_outcome_distribution_from_env,
@@ -604,3 +607,114 @@ def test_a_declared_column_absent_from_the_cohort_is_refused(
     frame = pd.DataFrame({EXPOSURE: [0, 1], "something_else": [0, 1]})
     with pytest.raises(RuntimeError, match="absent from the bound cohort"):
         _run(monkeypatch, tmp_path, frame)
+
+
+# ---------------------------------------------------------------------------
+# canary13: the host demanded a policy choice it did not offer
+#
+# Step 05 died with "8 rows have no observed value for 'aki_stage_max'; the
+# spec declares missing_exposure_policy='fail_closed'". The field was
+# Literal["fail_closed"] -- there was no other value the Planner could have
+# written. So the owner could not be used on any cohort whose exposure had a
+# single missing value, and nothing about the plan was wrong.
+# ---------------------------------------------------------------------------
+
+
+def _frame_with_unobserved_exposure():
+    import numpy as np
+
+    frame = pd.DataFrame(
+        {
+            "sep3": [0.0, 0.0, 1.0, 1.0, 1.0, np.nan, np.nan],
+            "death": [0, 1, 0, 1, 1, 1, 0],
+        }
+    )
+    return frame
+
+
+def _distribution_spec(**overrides):
+    payload = dict(
+        schema_version="easyicu.exposure_outcome_distribution/2",
+        exposure="sep3",
+        exposure_levels=[0.0, 1.0],
+        outcome="death",
+        outcome_levels=[0, 1],
+        outcome_positive_value=1,
+        level_match_policy="exact_typed",
+        denominator_policy="all_declared_rows",
+        missing_outcome_policy="fail_closed",
+        confidence_level=0.95,
+    )
+    payload.update(overrides)
+    return ExposureOutcomeDistributionSpec.model_validate(payload)
+
+
+def test_a_missing_exposure_can_now_be_declared_complete_case() -> None:
+    """The Planner has a second answer, and it is the standard one."""
+
+    spec = _distribution_spec(missing_exposure_policy="exclude_from_denominator")
+
+    rows = _distribution_rows(_frame_with_unobserved_exposure(), spec=spec)
+
+    overall = next(row for row in rows if row["row_role"] == "overall")
+    # Seven stays, two with no exposure: five are analysed, and every
+    # denominator is over those same five.
+    assert overall["n_rows"] == 5
+    assert overall["exposure_denominator"] == 5
+    assert (
+        sum(row["n_rows"] for row in rows if row["row_role"] == "exposure_level") == 5
+    )
+
+
+def test_the_rows_that_left_are_counted_in_the_product() -> None:
+    """A denominator that silently shrank is one a reader cannot check.
+
+    The count travels on every row, the way Table 1 carries
+    ``group_missing_excluded_n`` -- so a reader holding only this CSV can tell
+    5-of-7 from 5-of-5.
+    """
+
+    spec = _distribution_spec(missing_exposure_policy="exclude_from_denominator")
+
+    rows = _distribution_rows(_frame_with_unobserved_exposure(), spec=spec)
+
+    assert {row["missing_exposure_excluded_n"] for row in rows} == {2}
+    assert {row["missing_exposure_policy"] for row in rows} == {
+        "exclude_from_denominator"
+    }
+    assert "missing_exposure_excluded_n" in EXPOSURE_OUTCOME_DISTRIBUTION_COLUMNS
+
+
+def test_fail_closed_is_still_the_default_and_still_stops_the_step() -> None:
+    """The new option is opt-in; silence still means refuse."""
+
+    assert _distribution_spec().missing_exposure_policy == "fail_closed"
+
+    with pytest.raises(RuntimeError, match="fail_closed"):
+        _distribution_rows(_frame_with_unobserved_exposure(), spec=_distribution_spec())
+
+
+def test_a_fully_observed_exposure_reports_zero_excluded() -> None:
+    """Zero is a result: its absence cannot be told from never having looked."""
+
+    frame = _frame_with_unobserved_exposure().dropna(subset=["sep3"])
+
+    rows = _distribution_rows(frame, spec=_distribution_spec())
+
+    assert {row["missing_exposure_excluded_n"] for row in rows} == {0}
+
+
+def test_there_is_no_policy_that_pools_an_unobserved_exposure() -> None:
+    """The third option a reader might expect is the one that must not exist.
+
+    An unobserved exposure is not the reference and not any other category.
+    The adjusted-association owner made exactly that mistake by accident --
+    treatment coding encodes a missing value identically to the reference --
+    and it reported 8 stays under a stage nobody recorded. Offering it here as
+    a *declarable* policy would make that a supported feature.
+    """
+
+    with pytest.raises(ValidationError):
+        _distribution_spec(missing_exposure_policy="structural_absence_is_reference")
+    with pytest.raises(ValidationError):
+        _distribution_spec(missing_exposure_policy="pool_into_reference")
