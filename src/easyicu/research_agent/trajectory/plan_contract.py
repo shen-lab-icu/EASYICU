@@ -883,15 +883,27 @@ def evaluate_trajectory_plan_dag(
     *,
     plan: AnalysisPlan,
     context: ResearchContext,
+    long_trajectory_bound: bool = False,
 ) -> TrajectoryPlanDagEvaluation:
-    """Validate the agent-declared trajectory plan without rewriting it."""
+    """Validate the agent-declared trajectory plan without rewriting it.
+
+    This re-asks the applicability question itself, so a caller that threaded
+    ``long_trajectory_bound`` into its own guard but not into here still gets
+    the wide-column answer.  H3 was refused a second time for exactly that: the
+    outer guard had the flag, this call did not, and the run ended on the same
+    "no validated fixed-window trajectory contract" it started with.
+    """
 
     spec_steps = [
         step
         for step in (plan.steps or [])
         if step.trajectory_stability_spec is not None
     ]
-    if not trajectory_plan_contract_applies(plan=plan, context=context):
+    if not trajectory_plan_contract_applies(
+        plan=plan,
+        context=context,
+        long_trajectory_bound=long_trajectory_bound,
+    ):
         findings = (
             (
                 _finding(

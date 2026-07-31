@@ -211,3 +211,126 @@ def test_the_execution_phase_passes_the_flag_to_the_gate():
         for call in calls
         for keyword in call.keywords
     ), "the execution phase calls the gate without the bound-tier flag"
+
+
+# --- the miss this file did not catch the first time -------------------------
+
+
+def _stability_spec_plan() -> AnalysisPlan:
+    """H3's shape: a stability spec attached, and no wide column anywhere."""
+
+    from easyicu.research_agent.schema import TrajectoryStabilitySpec
+
+    return AnalysisPlan(
+        research_question="Do trajectory subgroups differ?",
+        analysis_type="trajectory_clustering",
+        steps=[
+            AnalysisStep(
+                step_id="04_trajectory_clustering_and_stability",
+                intent="Cluster trajectories and assess stability.",
+                method="trajectory_clustering",
+                expected_outputs=["table:cluster_assignments"],
+                inputs=[],
+                trajectory_stability_spec=TrajectoryStabilitySpec(
+                    n_resamples=10,
+                    sample_fraction=0.8,
+                    base_seed=7,
+                    minimum_mean_stability=0.7,
+                ),
+            )
+        ],
+    )
+
+
+def test_the_evaluator_stops_raising_the_refusal_h3_actually_got():
+    """The regression that shipped: the outer guard had the flag, this did not.
+
+    canary14 ran with the gate change in place and H3 still ended on
+    "A trajectory stability spec is attached to a plan that has no validated
+    fixed-window trajectory contract" -- because evaluate_trajectory_plan_dag
+    re-asks applicability itself and was still using the default.
+    """
+
+    from easyicu.research_agent.trajectory.plan_contract import (
+        evaluate_trajectory_plan_dag,
+    )
+
+    plan = _stability_spec_plan()
+    context = _context(wide_trajectory=False)
+
+    def kinds(**kwargs):
+        return {
+            (finding.detail or {}).get("kind")
+            for finding in evaluate_trajectory_plan_dag(
+                plan=plan, context=context, **kwargs
+            ).findings
+        }
+
+    without = kinds()
+    with_binding = kinds(long_trajectory_bound=True)
+
+    assert "trajectory_stability_spec_without_trajectory_plan" in without
+    assert "trajectory_stability_spec_without_trajectory_plan" not in with_binding
+
+
+def test_the_bound_tier_moves_the_plan_into_real_role_validation():
+    """Not just a different message -- a different stage of the contract.
+
+    Without the binding the evaluator stops at the one stability-spec refusal
+    and never inspects roles.  With it, the plan reaches the role/DAG contract
+    and comes back with findings a replan can act on.  (``applies`` is not the
+    property to assert here: in the not-applicable branch it is set from
+    whether any spec step existed to complain about, not from the contract.)
+    """
+
+    from easyicu.research_agent.trajectory.plan_contract import (
+        evaluate_trajectory_plan_dag,
+    )
+
+    plan = _stability_spec_plan()
+    context = _context(wide_trajectory=False)
+
+    without = evaluate_trajectory_plan_dag(plan=plan, context=context)
+    with_binding = evaluate_trajectory_plan_dag(
+        plan=plan, context=context, long_trajectory_bound=True
+    )
+
+    without_kinds = {(f.detail or {}).get("kind") for f in without.findings}
+    with_kinds = {(f.detail or {}).get("kind") for f in with_binding.findings}
+
+    assert without_kinds == {"trajectory_stability_spec_without_trajectory_plan"}
+    assert "trajectory_role_missing" in with_kinds
+
+
+def test_every_hop_between_the_phase_and_the_evaluator_carries_the_flag():
+    """One un-threaded hop is what made the first fix invisible in a real run."""
+
+    import ast
+    import inspect
+
+    from easyicu.research_agent.execution import phase
+    from easyicu.research_agent.trajectory import bundle
+
+    hops = {
+        "trajectory_bundle_findings": inspect.getsource(phase.run_execute_phase),
+        "resolve_trajectory_bundle_plan_authority": inspect.getsource(
+            bundle.trajectory_bundle_findings
+        ),
+        "evaluate_trajectory_plan_dag": inspect.getsource(
+            bundle.resolve_trajectory_bundle_plan_authority
+        ),
+    }
+    for callee, source in hops.items():
+        tree = ast.parse(source.lstrip())
+        calls = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == callee
+        ]
+        assert calls, f"the chain no longer calls {callee}"
+        assert all(
+            any(keyword.arg == "long_trajectory_bound" for keyword in call.keywords)
+            for call in calls
+        ), f"a call to {callee} drops the bound-tier flag"
