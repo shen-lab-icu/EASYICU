@@ -1331,10 +1331,17 @@ def trajectory_plan_dag_findings(
     *,
     plan: AnalysisPlan,
     context: ResearchContext,
+    long_trajectory_bound: bool = False,
 ) -> List[ValidationFinding]:
     """Return plan-contract errors for a stamped fixed-window trajectory DAG."""
 
-    return list(evaluate_trajectory_plan_dag(plan=plan, context=context).findings)
+    return list(
+        evaluate_trajectory_plan_dag(
+            plan=plan,
+            context=context,
+            long_trajectory_bound=long_trajectory_bound,
+        ).findings
+    )
 
 
 def _normalise_redundant_split_role_outputs(

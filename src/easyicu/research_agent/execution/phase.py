@@ -4033,6 +4033,13 @@ def run_execute_phase(
     run_input_authority_state.require_trajectory_integrity(
         step_id="execute_phase_initialization",
     )
+    # The context can only ever show the wide fixed-window representation; the
+    # long tier is a verified typed run input this scope can see and it cannot.
+    # Derived here, beside the integrity check, because the trajectory contract
+    # is consulted from several points below and every one of them needs it.
+    long_trajectory_bound = (
+        run_input_authority_state.trajectory_authority_sha256 is not None
+    )
 
     if (
         pipeline._development_sample_size is not None
@@ -4846,6 +4853,7 @@ def run_execute_phase(
         trajectory_preflight = trajectory_plan_dag_findings(
             plan=plan,
             context=context,
+            long_trajectory_bound=long_trajectory_bound,
         )
         declared_input_preflight = declared_raw_input_plan_findings(
             plan=plan,
@@ -4998,6 +5006,7 @@ def run_execute_phase(
     final_trajectory_plan_findings = trajectory_plan_dag_findings(
         plan=plan,
         context=context,
+        long_trajectory_bound=long_trajectory_bound,
     )
     if final_trajectory_plan_findings:
         trajectory_plan_blocked = True
@@ -12059,11 +12068,6 @@ def run_execute_phase(
             flush_partial_manifest=_flush_partial_manifest,
         )
 
-    # The context can only ever show the wide fixed-window representation; the
-    # long tier is a verified typed run input this scope can see and it cannot.
-    long_trajectory_bound = (
-        run_input_authority_state.trajectory_authority_sha256 is not None
-    )
     if (
         not trajectory_plan_blocked
         and not typed_plan_dag_blocked
