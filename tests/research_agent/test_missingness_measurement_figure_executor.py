@@ -17,6 +17,8 @@ from easyicu.research_agent.execution.runners.missingness_measurement_figure_exe
     MEASUREMENT_PROCESS_AUDIT_INPUT,
     MISSINGNESS_MEASUREMENT_AUDIT_INPUT,
     MISSINGNESS_MEASUREMENT_FIGURE_INPUTS,
+    missingness_measurement_figure_executor_code,
+    _COLUMNS_BY_INPUT,
     _validate_audit_rows,
     _validate_process_rows,
     missingness_measurement_figure_executor_owns_step,
@@ -85,6 +87,44 @@ def _step(**updates) -> AnalysisStep:
     }
     payload.update(updates)
     return AnalysisStep.model_validate(payload)
+
+
+#: The typed-input binding map the selector really hands this owner. Ownership
+#: now requires it: the renderer's loader has always refused a bound table
+#: missing the columns it reads, and asking that BEFORE the claim is what stops
+#: a claimed step from dying at load. Measured 2026-07-31, 8 of the 10 recorded
+#: steps the old predicate claimed carried a table it could not read.
+def _readable_bindings(**overrides) -> dict:
+    from easyicu.research_agent.execution.runners.missingness_measurement_figure_executor import (
+        MISSINGNESS_MEASUREMENT_FIGURE_INPUTS as _KEYS,
+        _COLUMNS_BY_INPUT as _COLS,
+    )
+
+    bindings = {
+        key: {"product_contract": {"columns": list(_COLS[key])}} for key in _KEYS
+    }
+    bindings.update(overrides)
+    return bindings
+
+
+def _owns(step, *, resolved_bindings=None) -> bool:
+    """Ask the real predicate, defaulting to a readable binding map.
+
+    Ownership requires that map as of 2026-07-31: the loader has always refused
+    a bound table missing the columns this renderer reads, and asking the same
+    question BEFORE the claim is what stops a claimed step from dying at load.
+    Measured over the recorded plans, 8 of the 10 steps the old predicate
+    claimed carried a table it could not read. Tests about the STEP shape pass
+    the readable map so the shape is what they vary; tests about the BINDING
+    pass their own.
+    """
+
+    return missingness_measurement_figure_executor_owns_step(
+        step,
+        resolved_bindings=(
+            _readable_bindings() if resolved_bindings is None else resolved_bindings
+        ),
+    )
 
 
 def _audit_row(
@@ -262,10 +302,13 @@ def _run(run_dir: Path, manifest: dict) -> tuple[Path, dict]:
 
 def test_exact_closed_contract_selects_standard_executor() -> None:
     step = _step()
-    assert missingness_measurement_figure_executor_owns_step(step)
+    assert _owns(step)
+    # The selector must be given the same binding map the predicate needs;
+    # without it this owner declines, which is the whole point of the clause.
     selection = select_standard_executor(
         step,
         plan=AnalysisPlan(research_question="Test", steps=[step]),
+        resolved_bindings=_readable_bindings(),
     )
     assert selection is not None
     assert selection.analysis_kind == "missingness_measurement_figure"
@@ -273,10 +316,8 @@ def test_exact_closed_contract_selects_standard_executor() -> None:
 
 
 def test_owner_is_order_insensitive_but_never_widened() -> None:
-    assert missingness_measurement_figure_executor_owns_step(
-        _step(inputs=list(reversed(MISSINGNESS_MEASUREMENT_FIGURE_INPUTS)))
-    )
-    assert not missingness_measurement_figure_executor_owns_step(
+    assert _owns(_step(inputs=list(reversed(MISSINGNESS_MEASUREMENT_FIGURE_INPUTS))))
+    assert not _owns(
         _step(
             inputs=[*MISSINGNESS_MEASUREMENT_FIGURE_INPUTS, "table:other"],
             input_consumption_contracts=[
@@ -285,7 +326,7 @@ def test_owner_is_order_insensitive_but_never_widened() -> None:
             ],
         )
     )
-    assert not missingness_measurement_figure_executor_owns_step(
+    assert not _owns(
         _step(
             inputs=[MISSINGNESS_MEASUREMENT_AUDIT_INPUT],
             input_consumption_contracts=[
@@ -299,19 +340,11 @@ def test_owner_is_order_insensitive_but_never_widened() -> None:
 
 
 def test_owner_rejects_unbound_or_scientific_contracts() -> None:
-    assert not missingness_measurement_figure_executor_owns_step(
-        _step(planned_analysis_role="primary")
-    )
-    assert not missingness_measurement_figure_executor_owns_step(
-        _step(method="adjusted_association_models")
-    )
-    assert not missingness_measurement_figure_executor_owns_step(
-        _step(expected_outputs=["table:missingness_measurement_audit"])
-    )
-    assert not missingness_measurement_figure_executor_owns_step(
-        _step(expected_outputs=[f"figure:{PRODUCT}", "figure:extra"])
-    )
-    assert not missingness_measurement_figure_executor_owns_step(
+    assert not _owns(_step(planned_analysis_role="primary"))
+    assert not _owns(_step(method="adjusted_association_models"))
+    assert not _owns(_step(expected_outputs=["table:missingness_measurement_audit"]))
+    assert not _owns(_step(expected_outputs=[f"figure:{PRODUCT}", "figure:extra"]))
+    assert not _owns(
         _step(
             input_consumption_contracts=[
                 ArtifactConsumptionContract(
@@ -783,9 +816,7 @@ def test_any_legal_product_id_is_owned_when_the_typed_contract_closes(
 ) -> None:
     """The spelling of the label is not a capability question."""
 
-    assert missingness_measurement_figure_executor_owns_step(
-        _step(expected_outputs=[f"figure:{product}"])
-    )
+    assert _owns(_step(expected_outputs=[f"figure:{product}"]))
 
 
 def test_the_real_plans_figure_step_is_owned() -> None:
@@ -797,9 +828,11 @@ def test_the_real_plans_figure_step_is_owned() -> None:
     """
 
     step = AnalysisStep.model_validate(_REAL_PLAN_FIGURE_STEP)
-    assert missingness_measurement_figure_executor_owns_step(step)
+    assert _owns(step)
     selection = select_standard_executor(
-        step, plan=AnalysisPlan(research_question="Test", steps=[step])
+        step,
+        plan=AnalysisPlan(research_question="Test", steps=[step]),
+        resolved_bindings=_readable_bindings(),
     )
     assert selection is not None
     assert selection.analysis_kind == "missingness_measurement_figure"
@@ -823,15 +856,11 @@ def test_the_real_plans_figure_step_is_owned() -> None:
 def test_an_unsafe_or_malformed_product_id_is_refused_by_the_selector(
     output: str,
 ) -> None:
-    assert not missingness_measurement_figure_executor_owns_step(
-        _step(expected_outputs=[output])
-    )
+    assert not _owns(_step(expected_outputs=[output]))
 
 
 def test_two_declared_figures_are_refused_even_when_both_are_legal() -> None:
-    assert not missingness_measurement_figure_executor_owns_step(
-        _step(expected_outputs=["figure:one", "figure:two"])
-    )
+    assert not _owns(_step(expected_outputs=["figure:one", "figure:two"]))
 
 
 @pytest.mark.parametrize(
@@ -887,3 +916,91 @@ def test_the_renderer_carries_no_case_specific_branch() -> None:
         assert (
             token not in source.lower()
         ), f"case-specific token in production: {token}"
+
+
+# --------------------------------------------------------------------------
+# claiming is a promise: a table this renderer cannot read must not be claimed
+
+
+#: A real recorded header for this product, from a run where the Coder wrote
+#: the audit rather than the deterministic producer. It shares `variable` and
+#: `n_total` with the contract and is missing everything this renderer indexes.
+_CODER_AUDIT_HEADER = [
+    "variable",
+    "n_total",
+    "n_missing",
+    "pct_missing",
+    "first_measured_hours_from_admission",
+    "note",
+]
+
+
+def test_it_declines_a_bound_table_it_cannot_read() -> None:
+    """The measured defect: 8 of 10 recorded claims would have died at load.
+
+    The loader has always refused this table. Refusing it HERE instead is the
+    difference between the step going to the Coder -- which was drawing it
+    successfully -- and the step being dead.
+    """
+
+    step = _step()
+    assert _owns(step) is True
+    unreadable = _readable_bindings(
+        **{
+            MISSINGNESS_MEASUREMENT_AUDIT_INPUT: {
+                "product_contract": {"columns": list(_CODER_AUDIT_HEADER)}
+            }
+        }
+    )
+    assert _owns(step, resolved_bindings=unreadable) is False
+
+
+def test_one_unreadable_input_is_enough_to_decline() -> None:
+    """Both panels are drawn, so both bindings have to be readable."""
+
+    step = _step()
+    for key in MISSINGNESS_MEASUREMENT_FIGURE_INPUTS:
+        bindings = _readable_bindings(
+            **{key: {"product_contract": {"columns": ["variable", "n_total"]}}}
+        )
+        assert _owns(step, resolved_bindings=bindings) is False, key
+
+
+def test_it_declines_when_the_selector_supplied_no_bindings() -> None:
+    """Without the map this owner cannot know whether it can read the table.
+
+    Both shapes matter and they take different branches: an EMPTY map has no
+    binding for either input, and NO map at all is the older call signature
+    every caller used before 2026-07-31. The real predicate is called directly
+    here because the wrapper's default is a readable map -- routing through it
+    would have tested the default instead of the absence.
+    """
+
+    assert _owns(_step(), resolved_bindings={}) is False
+    assert (
+        missingness_measurement_figure_executor_owns_step(
+            _step(), resolved_bindings=None
+        )
+        is False
+    )
+
+
+def test_a_producer_may_add_columns_without_losing_its_renderer() -> None:
+    """Containment, not equality: a new diagnostic field must not break it."""
+
+    wider = {
+        key: {
+            "product_contract": {
+                "columns": [*_COLUMNS_BY_INPUT[key], "a_future_diagnostic"]
+            }
+        }
+        for key in MISSINGNESS_MEASUREMENT_FIGURE_INPUTS
+    }
+    assert _owns(_step(), resolved_bindings=wider) is True
+
+
+def test_the_entrypoint_does_not_re_derive_ownership() -> None:
+    """It cannot see the bindings the selector had, so it must not try."""
+
+    code = missingness_measurement_figure_executor_code(_step())
+    assert "run_missingness_measurement_figure(" in code

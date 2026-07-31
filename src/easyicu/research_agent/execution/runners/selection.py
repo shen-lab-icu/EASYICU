@@ -327,7 +327,9 @@ def select_standard_executor(
             )
         )
     _missed("prevalence_mortality_figure")
-    if missingness_measurement_figure_executor_owns_step(step):
+    if missingness_measurement_figure_executor_owns_step(
+        step, resolved_bindings=resolved_bindings
+    ):
         if receipt_required:
             _receipt_declined("missingness_measurement_figure")
             return None
