@@ -68,6 +68,7 @@ from .plausibility_receipt import render_standard_plausibility_receipt_code
 
 __all__ = [
     "ROBUSTNESS_REPLAY_OUTPUT_FILES",
+    "declared_robustness_product_registrations",
     "replay_locked_memberships",
     "ROBUSTNESS_REPLAY_ANALYSIS_KIND",
     "ROBUSTNESS_REPLAY_OUTPUT_KINDS",
@@ -211,6 +212,61 @@ def robustness_replay_spec_is_emittable(step: AnalysisStep) -> bool:
         lookup="output_for",
         allowed_kinds=ROBUSTNESS_REPLAY_OUTPUT_KINDS,
     )
+
+
+def declared_robustness_product_registrations(
+    step: AnalysisStep | None,
+) -> Dict[str, str]:
+    """The identity the plan promised -> the file this runner writes for it.
+
+    The Planner is told, in the replanner directive that publishes this
+    contract: "Name the step and its products whatever your reader should see;
+    the ``output`` field is what the execution layer reads."  ``product_id`` is
+    a label, ``output`` is the claim.  The execution layer did not read
+    ``output`` at all -- it registered its own internal file stems -- so a plan
+    that took the directive at its word promised a product that was written to
+    disk and registered under a name nobody had asked for.
+
+    Measured 2026-08-01 over the 32 distinct recorded steps carrying a replay
+    spec: 28 are emittable, 22 happen to label every product exactly as the
+    stem is spelled, and **6 do not**.  ``table:robustness_grid`` x4 and
+    ``table:specification_grid`` x1 both resolve to
+    ``sensitivity_specification_grid.csv``; ``statistic:primary_effect`` x1
+    resolves to ``primary_or.json``.  Each of the 6 raises
+    ``declared_product_missing`` on a file sitting in its own output directory,
+    which costs two LLM contract repairs and then kills the step -- canary32's
+    E1 lost the replay, its figure, the robustness figure and the missingness
+    figure to exactly this, after the deterministic runner had already written
+    a complete and valid ``status: ok`` result.
+
+    Only the promised identity is returned.  The runner's internal stems keep
+    their own registrations because a step that declares no spec still has
+    nothing else, so this is "the contract name when the plan declared one",
+    not a second spelling of one contract.
+    """
+
+    # No ``step is None`` guard: ``getattr`` already answers ``None`` for it and
+    # the spec check below returns.  Mutation 2026-08-01 proved an explicit one
+    # protects nothing.
+    spec = getattr(step, "robustness_replay_spec", None)
+    if spec is None:
+        return {}
+    registrations: Dict[str, str] = {}
+    for declared in step.expected_outputs or []:
+        kind, sep, product_id = str(declared or "").strip().partition(":")
+        if not sep or kind not in ROBUSTNESS_REPLAY_OUTPUT_KINDS:
+            continue
+        output = spec.output_for(product_id)
+        if output is None:
+            continue
+        filename = ROBUSTNESS_REPLAY_OUTPUT_FILES.get(output)
+        if filename is None:
+            # ``robustness_replay_spec_is_emittable`` already refuses this
+            # step; registering a promise no file backs would be worse than
+            # the missing product it replaces.
+            continue
+        registrations[f"{kind}:{product_id}"] = filename
+    return registrations
 
 
 def robustness_replay_declaration_verdict(step: AnalysisStep) -> OwnershipVerdict:
@@ -464,24 +520,69 @@ def robustness_sensitivity_preflight_scaffold(
         if plausibility_scope is not None
         else ""
     )
+    persist_plausibility_audit = bool(
+        plausibility_scope is not None and plausibility_scope.expected_columns
+    )
+    declared_registrations = declared_robustness_product_registrations(step)
+    # One read-modify-write, not two.  The plausibility receipt and the
+    # promised-product registration both patch ``step_summary.json`` after the
+    # body has written it; a second block would be a second canonical write for
+    # the static obligation gate to reason about.
     receipt_persistence = (
-        textwrap.dedent(
-            """
-            summary_path = Path(os.environ["STEP_OUT_DIR"]) / "step_summary.json"
-            summary = json.loads(summary_path.read_text(encoding="utf-8"))
-            summary["plausibility_audit"] = plausibility_audit
-            summary_path.write_text(
-                json.dumps(
-                    summary,
-                    ensure_ascii=False,
-                    sort_keys=True,
-                    allow_nan=False,
-                ),
-                encoding="utf-8",
+        (
+            textwrap.dedent(
+                """
+                summary_path = Path(os.environ["STEP_OUT_DIR"]) / "step_summary.json"
+                summary = json.loads(summary_path.read_text(encoding="utf-8"))
+                """
+            ).strip()
+            + (
+                "\n" + 'summary["plausibility_audit"] = plausibility_audit'
+                if persist_plausibility_audit
+                else ""
             )
-            """
-        ).strip()
-        if plausibility_scope is not None and plausibility_scope.expected_columns
+            + (
+                "\n"
+                + textwrap.dedent(
+                    f"""
+                    declared_product_files = {declared_registrations!r}
+                    registered_products = summary.setdefault("output_files", {{}})
+                    product_aliases = summary.setdefault("aliases", {{}})
+                    for product_identity, product_filename in (
+                        declared_product_files.items()
+                    ):
+                        product_path = (
+                            Path(os.environ["STEP_OUT_DIR"]) / product_filename
+                        )
+                        if not product_path.is_file():
+                            continue
+                        registered_products.setdefault(
+                            product_identity, product_filename
+                        )
+                        product_aliases.setdefault(
+                            product_identity.split(":", 1)[1], product_filename
+                        )
+                    """
+                ).strip()
+                if declared_registrations
+                else ""
+            )
+            + "\n"
+            + textwrap.dedent(
+                """
+                summary_path.write_text(
+                    json.dumps(
+                        summary,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        allow_nan=False,
+                    ),
+                    encoding="utf-8",
+                )
+                """
+            ).strip()
+        )
+        if persist_plausibility_audit or declared_registrations
         else ""
     )
     prologue = (
