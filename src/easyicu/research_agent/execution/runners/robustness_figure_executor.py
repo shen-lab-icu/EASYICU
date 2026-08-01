@@ -45,7 +45,7 @@ import math
 from pathlib import Path
 import re
 import textwrap
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 import pandas as pd
 
@@ -316,6 +316,61 @@ def _load_matrix(
     return frame, binding, inputs
 
 
+ROBUSTNESS_SUMMARY_TABLE_INPUT = "table:robustness_summary"
+
+
+def _write_bound_parent_source_data(
+    *,
+    out_dir: Path,
+    run_dir: Path,
+    figure_product: str,
+    bound_inputs: Mapping[str, Any],
+    bound_statistics: Sequence[tuple[str, bool, float | None]],
+) -> list[str]:
+    """Write one source-data companion per bound parent beyond the matrix.
+
+    Returns the file names, in a stable order, for the figure contract.
+
+    Only parents that are actually bound produce a file: an absent optional
+    input is not a coverage gap, and inventing an empty table for it would
+    claim evidence for something the plan never supplied.  A bound statistic
+    whose recorded value is null is likewise skipped -- there is no value to
+    verify, and ``complete_case_n.json`` really is null in recorded runs.
+    """
+
+    written: list[str] = []
+
+    summary_binding = bound_inputs.get(ROBUSTNESS_SUMMARY_TABLE_INPUT)
+    if isinstance(summary_binding, dict):
+        relative_path = str(summary_binding.get("relative_path") or "")
+        if relative_path:
+            summary_path = (run_dir.resolve() / relative_path).resolve()
+            try:
+                summary_path.relative_to(run_dir.resolve())
+            except ValueError as exc:
+                raise ValueError(
+                    f"{ROBUSTNESS_SUMMARY_TABLE_INPUT} binding escapes the run "
+                    "directory"
+                ) from exc
+            if summary_path.is_file() and not summary_path.is_symlink():
+                companion = (
+                    out_dir / f"{figure_product}_robustness_summary_source_data.csv"
+                )
+                pd.read_csv(summary_path).to_csv(companion, index=False)
+                written.append(companion.name)
+
+    rows = [
+        {"statistic": input_key.split(":", 1)[-1], "value": value}
+        for input_key, bound, value in bound_statistics
+        if bound and value is not None
+    ]
+    if rows:
+        companion = out_dir / f"{figure_product}_bound_statistics_source_data.csv"
+        pd.DataFrame(rows).to_csv(companion, index=False)
+        written.append(companion.name)
+    return written
+
+
 def _load_statistic(
     *,
     run_dir: Path,
@@ -445,6 +500,25 @@ def run_robustness_figure(
 
     source_path = out_dir / f"{figure_product}_source_data.csv"
     frame.to_csv(source_path, index=False)
+    # Evidence every parent this renderer READ, not only the matrix it plots.
+    #
+    # The module contract above already says "optional may never mean
+    # ignored", and these values are read: the primary estimate becomes the
+    # anchor line and the complete-case denominator is reported. But only the
+    # matrix had source data, so ``figure_source_data`` -- which requires each
+    # bound parent to be independently value-verified -- reported the rest as
+    # ``incomplete_source_lineage_coverage`` and failed the step closed.
+    companion_sources = _write_bound_parent_source_data(
+        out_dir=out_dir,
+        run_dir=Path(run_dir),
+        figure_product=figure_product,
+        bound_inputs=bound_inputs,
+        bound_statistics=(
+            (ROBUSTNESS_PRIMARY_ESTIMATE_INPUT, anchor_bound, anchor_value),
+            (ROBUSTNESS_COMPLETE_CASE_INPUT, complete_case_bound, complete_case_n),
+        ),
+    )
+    source_data_names = [source_path.name, *companion_sources]
 
     import matplotlib
 
@@ -547,14 +621,14 @@ def run_robustness_figure(
                     "effect scale. Specifications whose refit did not converge "
                     "are labelled rather than omitted."
                 ),
-                "evidence_ids": [source_path.name],
+                "evidence_ids": list(source_data_names),
                 "metadata": {
                     "chart_type": "forest_interval_robustness",
-                    "source_data": [source_path.name],
+                    "source_data": list(source_data_names),
                 },
             }
         ],
-        source_data=[source_path.name],
+        source_data=list(source_data_names),
         statistics_note=(
             "Estimates and intervals are reproduced from the bound robustness "
             "matrix without recomputation. The executor introduces no cohort, "
@@ -597,7 +671,7 @@ def run_robustness_figure(
         "primary_estimate_drawn": anchor_value is not None,
         "complete_case_n_bound": bool(complete_case_bound),
         "complete_case_n": complete_case_n,
-        "source_data_files": [source_path.name],
+        "source_data_files": list(source_data_names),
         "figure_files": figure_files,
         "figure_path": f"{figure_product}.png",
         "figure_contract": f"{figure_product}.figure_contract.json",
