@@ -87,6 +87,18 @@ ADJUSTED_ASSOCIATION_ESTIMATES_COLUMNS = (
     "ci_high",
     "effect_scale",
     "exposure",
+    # --- which model these rows came from -----------------------------------
+    # ``model_id`` is the identity this step's own model contract publishes and
+    # the first column of its sibling coefficient table.  A reader that has
+    # only the product name ``adjusted_association_estimates`` cannot tell
+    # whether these rows are the primary, a secondary or a sensitivity
+    # estimate; the figure-lineage reader answers that by matching this column
+    # against the parent's ``model_contracts``, and with no such column it
+    # inherits no estimand tier and a primary result figure fails its own
+    # effect obligation.  ``requirement_id`` answers a different question --
+    # which planned requirement these rows satisfy -- and the contract
+    # publishes both for the same reason.
+    "model_id",
     "requirement_id",
     "outcome",
     "covariates",
@@ -820,6 +832,9 @@ def run_adjusted_association_from_env(
         "fit_status": "fitted",
         "effect_scale": _effect_scale(estimator_kind),
         "exposure": exposure,
+        # The same expression the model contract below publishes, so the rows
+        # and the contract can never name the model differently.
+        "model_id": requirement_id,
         "requirement_id": requirement_id,
         "outcome": outcome,
         "covariates": ";".join(adjustment),
