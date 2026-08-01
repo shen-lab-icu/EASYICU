@@ -29,6 +29,7 @@ from ..contracts.artifact_consumption import (
     ArtifactConsumptionError,
     verify_artifact_consumption,
 )
+from ..contracts.cohort_receipt import cohort_receipt_authorized_columns
 from ..authority.evidence_store import sha256_of_file
 from ..authority.development_projection import (
     DEVELOPMENT_PRIMARY_COHORT_CONFIRMATION_ROLE,
@@ -1320,11 +1321,15 @@ def _write_resolved_inputs_manifest(
         validated_cohort_receipt = _validated_primary_cohort_execution_receipt(
             host_verified_cohort_execution_receipt
         )
-        receipt_raw_inputs = {
-            str(row["resolved_column"])
-            for row in validated_cohort_receipt["ordered_predicate_flow"]
-            if row.get("resolved_column") is not None
-        }
+        # Both fields, from the one declaration the producer also reads.  This
+        # side used to take ``resolved_column`` alone while
+        # ``raw_contract_inputs_for_step`` already authorized the event-time
+        # column too, so a plan whose cohort predicate carried a time window
+        # produced contracts this check called unauthorized and killed the run
+        # at its first step.
+        receipt_raw_inputs = cohort_receipt_authorized_columns(
+            validated_cohort_receipt["ordered_predicate_flow"]
+        )
     if raw_input_contracts is not None:
         raw_payload = dict(raw_input_contracts)
         contracts = raw_payload.get("contracts")

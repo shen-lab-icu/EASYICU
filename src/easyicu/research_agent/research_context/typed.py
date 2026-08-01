@@ -37,6 +37,7 @@ from ..intake.materialized_trajectory import (
     TrajectoryConceptBinding,
     VerifiedMaterializedTrajectoryAuthority,
 )
+from ..contracts.cohort_receipt import COHORT_RECEIPT_COLUMN_FIELDS
 from ..icu_rules import ICU_RULES
 from .implementation_identity import metadata_implementation_identity
 from ..schema import ConceptDescriptor, ResearchContext
@@ -1054,16 +1055,11 @@ def raw_contract_inputs_for_step(
             raise MaterializedMetadataError(
                 "primary cohort execution receipt contains an invalid predicate"
             )
-        for field, reason in (
-            ("resolved_column", "resolved column"),
-            ("event_time_column", "predicate event-time column"),
-        ):
+        for field, reason in COHORT_RECEIPT_COLUMN_FIELDS:
             column = row.get(field)
             if column is None:
                 continue
-            if not (
-                isinstance(column, str) and column.strip() and ":" not in column
-            ):
+            if not (isinstance(column, str) and column.strip() and ":" not in column):
                 raise MaterializedMetadataError(
                     f"primary cohort execution receipt has an invalid {reason}"
                 )
