@@ -261,7 +261,10 @@ _STROBE_TEMPLATE: Tuple[Dict[str, Any], ...] = (
         "section": "Results",
         "statement": "Report numbers of individuals at each stage of study.",
         "required_evidence_aliases": (
-            "cohort_attrition", "attrition", "cohort_flow", "participant_flow",
+            "cohort_attrition",
+            "attrition",
+            "cohort_flow",
+            "participant_flow",
             "study_flow",
         ),
     },
@@ -274,7 +277,9 @@ _STROBE_TEMPLATE: Tuple[Dict[str, Any], ...] = (
         "section": "Results",
         "statement": "Give characteristics of study participants and information on exposures and potential confounders.",
         "required_evidence_aliases": (
-            "table_one", "baseline_characteristics", "cohort_characteristics",
+            "table_one",
+            "baseline_characteristics",
+            "cohort_characteristics",
         ),
     },
     {
@@ -282,8 +287,21 @@ _STROBE_TEMPLATE: Tuple[Dict[str, Any], ...] = (
         "section": "Results",
         "statement": "Report numbers of outcome events or summary measures over time.",
         "required_evidence_aliases": (
-            "outcome_rate", "outcome_incidence", "outcome_events",
-            "mortality_by_exposure", "event_counts",
+            "outcome_rate",
+            "outcome_incidence",
+            "outcome_events",
+            "mortality_by_exposure",
+            "event_counts",
+            # The host's own typed product for exactly this question: the
+            # exposure-outcome distribution owner emits n, events, rate and
+            # interval per exposure level and registers it as
+            # ``table:exposure_outcome_distribution``. The five names above are
+            # what an agent might call it; this one is what the host DOES call
+            # it, and leaving it out reported the item open on runs whose
+            # deterministic owner had produced it. The module stays
+            # import-free by design, so the tie to that constant is a boundary
+            # contract test rather than an import.
+            "exposure_outcome_distribution",
         ),
     },
     {
@@ -296,9 +314,13 @@ _STROBE_TEMPLATE: Tuple[Dict[str, Any], ...] = (
         "section": "Results",
         "statement": "Give unadjusted estimates and, if applicable, confounder-adjusted estimates and their precision.",
         "required_evidence_aliases": (
-            "primary_association", "final_results_summary", "adjusted_association",
-            "association_estimates", "evidence_bound_answer_to_research",
-            "robustness_panel", "robustness_summary",
+            "primary_association",
+            "final_results_summary",
+            "adjusted_association",
+            "association_estimates",
+            "evidence_bound_answer_to_research",
+            "robustness_panel",
+            "robustness_summary",
         ),
     },
     {
@@ -773,7 +795,7 @@ def _semantic_aliases_from_record(rec: Any) -> set:
         stem = rec_id
         for pfx in _ARTIFACT_ID_PREFIXES:
             if stem.startswith(pfx):
-                stem = stem[len(pfx):]
+                stem = stem[len(pfx) :]
                 break
         stem = _HASH_SUFFIX.sub("", stem)
         if stem:
@@ -849,7 +871,8 @@ def _autofill_item(
     manuscript_text: str,
 ) -> None:
     matched_evidence = [
-        a for a in item.required_evidence_aliases
+        a
+        for a in item.required_evidence_aliases
         if _alias_satisfied(a, available_aliases)
     ]
     matched_keywords = [
