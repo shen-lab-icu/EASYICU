@@ -42,6 +42,7 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
+from ..audits.aggregate_row import unlabelled_aggregate_row_findings
 from ..audits.step_summary_integrity import StepSummaryIntegrityValidator
 from ..audits.envelope_consumers import StepSummaryFractionEnvelopeDualReader
 from ..audits.validators import (
@@ -769,6 +770,14 @@ def _step_deterministic_contract_findings(
     findings += cross_step_reconciliation_trace_validator.audit(
         step=step,
         step_summary=step_summary,
+        out_dir=out_dir,
+    )
+    # Runs beside the reconciliation trace because it is the same failure seen
+    # one step earlier: that validator catches a consumer that bound the wrong
+    # parent row, this one catches the producer that made the rows
+    # indistinguishable in the first place.
+    findings += unlabelled_aggregate_row_findings(
+        step_id=step.step_id,
         out_dir=out_dir,
     )
     findings += step_summary_integrity_validator.audit(
