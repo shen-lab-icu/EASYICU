@@ -399,10 +399,15 @@ Code contract:
   and confidence bound for one of those quantities must remain inside [0, 1].
   For a binomial risk or prevalence interval, use the vetted
   `easyicu.research_agent.methods.ordered_trends.wilson_interval` helper, which
-  normalises floating-point boundary artefacts before serialization. Never
-  clip a genuinely invalid estimate to make it pass a range check. This rule
-  does not apply to effect scales such as risk ratios, odds ratios, hazard
-  ratios, or risk differences.
+  normalises floating-point boundary artefacts before serialization. It returns
+  a `WilsonInterval` dataclass: read its bounds from `ci.ci_low` and
+  `ci.ci_high` -- never `ci.lower`/`ci.upper`, never
+  `ci.lower_bound`/`ci.upper_bound`, and never by indexing or unpacking it. A
+  different helper of the same name inside the distribution executor returns a
+  `(low, high)` tuple; this one does not, so do not carry that shape over.
+  Never clip a genuinely invalid estimate to make it pass a range check.
+  This rule does not apply to effect scales such as
+  risk ratios, odds ratios, hazard ratios, or risk differences.
 - When reporting a source-status count map, always include the complete four
   category schema: valid observed; no source; measured/source present but
   summary missing; and contradictory/invalid. Preserve zero-frequency
