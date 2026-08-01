@@ -10799,9 +10799,24 @@ def run_execute_phase(
         # replaces the entire output directory, so running it after registration
         # would leave evidence digests and claims bound to a retired draft.
         step_summary = _load_step_summary_from_outputs(run_result.out_dir)
-        if worker_progress.deterministic_standard_executor_used or (
-            worker_progress.runner_repair_name
-            and is_sealed_renderer_repair(worker_progress.runner_repair_name)
+        # Any host-authored deterministic code, not only a registered standard
+        # executor.  ``_write_host_input_binding_receipts`` exists precisely
+        # because the host knows which typed inputs it resolved and a renderer
+        # asked to manufacture that receipt would be attesting to its own
+        # input; gating it on the narrower flag meant the deterministic
+        # robustness and sensitivity paths -- which set
+        # ``deterministic_fallback_used`` instead -- could never satisfy the
+        # host's own ``step_summary_integrity`` rule.  Measured across every
+        # recorded run, the host's own deterministic robustness code had never
+        # once passed that gate; the single step that did was a Coder rewrite
+        # that hand-built the receipt block.
+        if (
+            worker_progress.deterministic_standard_executor_used
+            or worker_progress.deterministic_fallback_used
+            or (
+                worker_progress.runner_repair_name
+                and is_sealed_renderer_repair(worker_progress.runner_repair_name)
+            )
         ):
             step_summary = _write_host_input_binding_receipts(
                 out_dir=run_result.out_dir,

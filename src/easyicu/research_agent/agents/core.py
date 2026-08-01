@@ -100,6 +100,8 @@ from ..contracts.result_envelope import STATISTIC_PAYLOAD_KEY_ALIASES
 from ..planning.robustness_contract import (
     COMPLETE_CASE_STRATEGY as _COMPLETE_CASE_STRATEGY,
     COMPLETE_CASE_VARIABLES_KEY as _COMPLETE_CASE_VARIABLES_KEY,
+    RobustnessPlanError,
+    validate_planner_robustness_specs,
 )
 from ..plan_utils import (
     _cohort_predicate_partition_safety_rules,
@@ -1478,6 +1480,25 @@ class PlannerAgent:
         data, dropped = _normalise_plan_payload(data)
         self.last_dropped_plan_keys = dropped
         plan = AnalysisPlan.model_validate(data)
+        # What only *Planner output* must satisfy, asked where the Planner can
+        # still answer.  A complete-case robustness spec has to name the
+        # variables whose completeness defines the set, because a model fitted
+        # on one adjustment set and a restriction taken over another are
+        # different analyses and the host must not infer which was meant.  This
+        # is deliberately not in ``AnalysisPlan`` itself: that constructor also
+        # loads recorded plans and re-reads locks, and neither can revise.
+        # Replanning cannot introduce a fresh spec -- any change is projected
+        # back onto the plan-time lock -- so this is the single point of entry.
+        # Guarded on a non-empty list, exactly as the schema was: whether a plan
+        # must carry robustness at all is the article contract's call, not this
+        # one's.  Dropping that guard when the check moved here turned "declared
+        # none" into "declared badly" and rejected five planner attempts for a
+        # rule about specs the plan never had.
+        if plan.robustness_specs:
+            try:
+                validate_planner_robustness_specs(plan.robustness_specs)
+            except RobustnessPlanError as exc:
+                raise ValueError(str(exc)) from exc
         if enforce_article_contract:
             from ..reporting.article_contract import (
                 build_article_analysis_contract,

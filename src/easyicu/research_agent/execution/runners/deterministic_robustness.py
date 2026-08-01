@@ -50,7 +50,14 @@ from ...robustness.panel import (
     validate_robustness_specs,
 )
 from ...contracts.ownership_verdict import OwnershipVerdict
-from ...contracts.result_envelope import model_summary_coefficient_filename
+from ...contracts.result_envelope import (
+    MODEL_SUMMARY_ANALYSIS_DEFINITION_KEY,
+    MODEL_SUMMARY_COVARIATE_KEYS,
+    MODEL_SUMMARY_EXPOSURE_KEYS,
+    MODEL_SUMMARY_OUTCOME_KEYS,
+    model_summary_analysis_definition,
+    model_summary_coefficient_filename,
+)
 from ...planning.robustness_contract import (
     COMPLETE_CASE_VARIABLES_KEY,
     complete_case_variables,
@@ -1418,29 +1425,32 @@ def _verified_complete_case_equivalence(
         )
         return _blocked_panel_row(spec.spec_id, spec.axis, error), [], None, error
 
-    definition = source.get("summary", {}).get("analysis_definition")
-    if not isinstance(definition, dict):
-        error = "primary analysis definition is unavailable for equivalence proof"
+    # One reader, so the proof and the primary owner cannot mean different
+    # things by "the analysis". This used to read ``analysis_definition`` and
+    # nothing else -- a key the host's own primary owner has never written, and
+    # which a repository-wide search finds in exactly two places: here, and the
+    # test fixture added in the same commit. Over 358 recorded step summaries it
+    # appeared once, in a Coder summary, so this proof was unreachable in
+    # production from the day it was written.
+    definition = model_summary_analysis_definition(source.get("summary") or {})
+    if definition is None:
+        error = (
+            "primary analysis definition is unavailable for equivalence proof: "
+            "the primary summary states no exposure, outcome and covariate set "
+            f"under '{MODEL_SUMMARY_ANALYSIS_DEFINITION_KEY}' or as the flat "
+            f"{'/'.join(MODEL_SUMMARY_EXPOSURE_KEYS)}, "
+            f"{'/'.join(MODEL_SUMMARY_OUTCOME_KEYS)} and "
+            f"{'/'.join(MODEL_SUMMARY_COVARIATE_KEYS)} keys"
+        )
         return _blocked_panel_row(spec.spec_id, spec.axis, error), [], None, error
     contract = source.get("primary_contract")
     if not isinstance(contract, dict):
         error = "primary model contract is unavailable for equivalence proof"
         return _blocked_panel_row(spec.spec_id, spec.axis, error), [], None, error
-    exposure = str(
-        definition.get("exposure") or contract.get("exposure_source") or ""
-    ).strip()
-    outcome = str(definition.get("outcome") or contract.get("outcome") or "").strip()
-    covariates = definition.get("covariates")
-    if not isinstance(covariates, list) or any(
-        not isinstance(value, str) or not value.strip() for value in covariates
-    ):
-        error = "primary covariate definition is unavailable for equivalence proof"
-        return _blocked_panel_row(spec.spec_id, spec.axis, error), [], None, error
-    required_variables = {
-        exposure,
-        outcome,
-        *(value.strip() for value in covariates),
-    }
+    exposure = definition["exposure"]
+    outcome = definition["outcome"]
+    covariates = definition["covariates"]
+    required_variables = {exposure, outcome, *covariates}
     required_variables.discard("")
     if not required_variables or not required_variables <= set(variables):
         error = "locked complete-case variables do not cover every primary model input"

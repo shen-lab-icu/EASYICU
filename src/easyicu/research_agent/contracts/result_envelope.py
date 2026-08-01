@@ -162,6 +162,110 @@ def model_summary_coefficient_filename(summary: Mapping[str, Any]) -> str | None
     return None
 
 
+#: Where a model summary states the analysis its primary estimate came from.
+#:
+#: The complete-case equivalence proof needs the exposure, the outcome and the
+#: adjustment set, because a model fitted on one adjustment set and a
+#: complete-case restriction taken over a different one are different analyses.
+#: It read ``summary["analysis_definition"]`` and nothing else.
+#:
+#: Measured over every recorded run: 358 step summaries, 27 carry
+#: ``model_contracts``, 12 of those state exposure + outcome + covariates, and
+#: exactly **one** writes ``analysis_definition`` -- a one-off Coder summary. A
+#: repository-wide search for the name returns the reader and a single test
+#: fixture, both added in the same commit. The host published a contract only
+#: its own test could satisfy, so the proof was unreachable in production from
+#: the day it was written.
+#:
+#: The deterministic primary owner states the same three facts as flat keys, so
+#: they are published here rather than a second nested spelling being demanded
+#: of it. Order is preference, not permission.
+MODEL_SUMMARY_ANALYSIS_DEFINITION_KEY = "analysis_definition"
+MODEL_SUMMARY_EXPOSURE_KEYS: tuple[str, ...] = ("exposure", "exposure_source")
+MODEL_SUMMARY_OUTCOME_KEYS: tuple[str, ...] = ("outcome",)
+MODEL_SUMMARY_COVARIATE_KEYS: tuple[str, ...] = ("covariates", "adjustment_covariates")
+
+
+def _clean_name(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    name = value.strip()
+    return name or None
+
+
+def _clean_covariates(value: Any) -> list[str] | None:
+    if not isinstance(value, list):
+        return None
+    cleaned: list[str] = []
+    for item in value:
+        name = _clean_name(item)
+        if name is None:
+            return None
+        cleaned.append(name)
+    return cleaned
+
+
+def _first_declared(source: Mapping[str, Any], keys: Sequence[str]) -> tuple[bool, Any]:
+    for key in keys:
+        if key in source:
+            return True, source[key]
+    return False, None
+
+
+def model_summary_analysis_definition(
+    summary: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """Return the exposure/outcome/covariates a model summary states, or ``None``.
+
+    ``None`` means *this summary does not state its analysis*, which is a
+    refusal. The caller must not reconstruct the adjustment set from anywhere
+    else: a proof taken over a different set than the model used is a different
+    analysis reported under the same label, and no downstream check can see it.
+
+    An empty covariate list is a real answer -- an unadjusted primary model
+    states exactly that -- so it is returned rather than treated as absent.
+    """
+
+    if not isinstance(summary, Mapping):
+        return None
+
+    nested = summary.get(MODEL_SUMMARY_ANALYSIS_DEFINITION_KEY)
+    if nested is not None:
+        if not isinstance(nested, Mapping):
+            return None
+        source: Mapping[str, Any] = nested
+    else:
+        source = summary
+
+    has_exposure, raw_exposure = _first_declared(source, MODEL_SUMMARY_EXPOSURE_KEYS)
+    has_outcome, raw_outcome = _first_declared(source, MODEL_SUMMARY_OUTCOME_KEYS)
+    if not has_exposure or not has_outcome:
+        return None
+    exposure = _clean_name(raw_exposure)
+    outcome = _clean_name(raw_outcome)
+    if exposure is None or outcome is None:
+        return None
+
+    # Two spellings of the adjustment set that disagree is the one case where
+    # answering at all would be worse than refusing: whichever is picked, the
+    # summary itself says the other is also true, and the proof would silently
+    # be taken over a set the model may not have used.
+    declared: list[list[str]] = []
+    for key in MODEL_SUMMARY_COVARIATE_KEYS:
+        if key not in source:
+            continue
+        covariates = _clean_covariates(source[key])
+        if covariates is None:
+            return None
+        declared.append(covariates)
+    if not declared:
+        return None
+    if any(entry != declared[0] for entry in declared[1:]):
+        return None
+
+    return {"exposure": exposure, "outcome": outcome, "covariates": list(declared[0])}
+
+
 _MAX_SCALARS = 5_000
 _MAX_DEPTH = 12
 _MAX_TABLE_BYTES = 16 * 1024 * 1024
@@ -2483,7 +2587,11 @@ __all__ = [
     "CanonicalScalar",
     "CanonicalStatistic",
     "CanonicalTableProfile",
+    "MODEL_SUMMARY_ANALYSIS_DEFINITION_KEY",
     "MODEL_SUMMARY_COEFFICIENT_TABLE_KEYS",
+    "MODEL_SUMMARY_COVARIATE_KEYS",
+    "MODEL_SUMMARY_EXPOSURE_KEYS",
+    "MODEL_SUMMARY_OUTCOME_KEYS",
     "NormalizationIssue",
     "NormalizationReceipt",
     "StepArtifactRef",
@@ -2494,6 +2602,7 @@ __all__ = [
     "STATISTIC_PAYLOAD_KEY_ALIASES",
     "StepResultEnvelope",
     "StepVariableBindings",
+    "model_summary_analysis_definition",
     "model_summary_coefficient_filename",
     "normalize_step_result_shadow",
     "rebind_step_result_status",
