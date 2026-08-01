@@ -963,6 +963,41 @@ def _branch_all_paths_exit(statements: list[ast.stmt]) -> bool:
     return _block_flow_outcomes(statements) == {_FLOW_FUNCTION_EXIT}
 
 
+def _branch_never_falls_through(statements: list[ast.stmt]) -> bool:
+    """True when control never reaches the statement after this block.
+
+    ``_branch_all_paths_exit`` answers a narrower question -- does every path
+    leave the FUNCTION -- and its callers in the provenance rules need exactly
+    that, because a ``continue`` is not a raise and must not be read as one.
+
+    The unbound-local rules need this wider question instead.  They ask whether
+    a handler can fall into the statements after the ``try`` and read a name the
+    ``try`` body never assigned.  A handler ending in ``continue`` or ``break``
+    cannot: ``continue`` jumps to the next iteration and ``break`` leaves the
+    loop, and either way the siblings after the ``try`` are skipped.  (Both are
+    syntax errors outside a loop, so there is no case where the following
+    siblings are reachable anyway.)
+
+    Measured consequence of conflating the two: a real 2026-08-01 robustness
+    step wrote the textbook form --
+
+        try:
+            numeric_effect = float(candidate)
+        except (TypeError, ValueError):
+            continue
+        if numeric_effect == numeric_effect:
+            ...
+
+    -- which cannot raise UnboundLocalError, because the read is unreachable
+    when the handler runs.  ``_block_flow_outcomes`` already classified that
+    handler as ``{loop_escape}``; the equality test above then discarded the
+    distinction, the gate refused correct code, and the step died having spent
+    two provider calls on a defect that was not there.
+    """
+
+    return _FLOW_FALLTHROUGH not in _block_flow_outcomes(statements)
+
+
 def _has_unrelated_control_ancestor(
     node: ast.AST, parents: dict[ast.AST, ast.AST]
 ) -> bool:
@@ -5136,7 +5171,7 @@ def _branch_local_unbound_findings(tree: ast.Module) -> list[ValidationFinding]:
                 continuing_handlers = [
                     handler
                     for handler in statement.handlers
-                    if not _branch_all_paths_exit(handler.body)
+                    if not _branch_never_falls_through(handler.body)
                 ]
                 handler_guaranteed = [
                     _top_level_stores(handler.body) for handler in continuing_handlers
@@ -5406,6 +5441,23 @@ def _branch_local_unbound_findings(tree: ast.Module) -> list[ValidationFinding]:
                     first_load = min(load_lines)
                     if later_store_lines and min(later_store_lines) < first_load:
                         continue
+                    # Deliberately the NARROW predicate, not
+                    # ``_branch_never_falls_through``. Python deletes the
+                    # exception alias when the handler is left by ANY route,
+                    # ``continue`` and ``break`` included, and the delete
+                    # removes the name outright -- it does not restore whatever
+                    # ``alias`` held before the ``try``. So
+                    #
+                    #     exc = "before"
+                    #     for item in items:
+                    #         try: f(item)
+                    #         except ValueError as exc: continue
+                    #         print(exc)          # NameError on a later pass
+                    #
+                    # really does fail, and reading ``continue`` as "cannot
+                    # reach the read" here would hide it. Only ``raise`` and
+                    # ``return`` leave the function, which is what makes the
+                    # later read unreachable.
                     if alias in assigned_before and _branch_all_paths_exit(
                         handler.body
                     ):
