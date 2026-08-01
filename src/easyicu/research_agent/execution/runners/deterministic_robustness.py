@@ -290,7 +290,18 @@ def robustness_replay_declaration_verdict(step: AnalysisStep) -> OwnershipVerdic
             )
         return OwnershipVerdict.incomplete_declaration(
             ROBUSTNESS_REPLAY_ANALYSIS_KIND,
-            missing=("robustness_replay_spec.products",),
+            # One entry per unbacked product, not the field path. The path was
+            # already in the plan -- with entries in it -- so the plan-time
+            # directive ("add the exact field(s) it left undeclared to the step
+            # that already exists") resolved to "add ``products``", which was
+            # present, and the forced replan changed nothing. The bracket
+            # spelling matters: ``_declared_choice`` cuts the path at ``[``, so
+            # a product the Planner named after a scientific choice stays in
+            # the index position and cannot delete that choice from the
+            # "do not change the science to satisfy this" prohibition.
+            missing=tuple(
+                f"robustness_replay_spec.products[{name!r}]" for name in unbacked
+            ),
             reason=(
                 "the step declares a robustness replay spec that names no entry "
                 "for "

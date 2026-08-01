@@ -154,7 +154,12 @@ def test_a_spec_that_names_no_entry_for_a_promised_product_is_a_gap():
     )
     verdict = robustness_replay_declaration_verdict(step)
 
-    assert verdict.missing_declarations == ("robustness_replay_spec.products",)
+    # One entry per unbacked product since 2026-08-01: the bare field path was
+    # already present in the plan, so demanding it gave the replan nothing to
+    # do. Stricter than the old assertion, not looser -- it pins WHICH product.
+    assert verdict.missing_declarations == (
+        "robustness_replay_spec.products['complete_case_n']",
+    )
     assert "'complete_case_n'" in verdict.reason
 
 
