@@ -43,7 +43,7 @@ from .planning.cohort_contract import (
 from .planning.robustness_contract import (
     RobustnessPlanError,
     RobustnessSpec,
-    validate_planner_robustness_specs,
+    validate_robustness_specs,
 )
 
 PlannedAnalysisRole = Literal[
@@ -2434,7 +2434,17 @@ class AnalysisPlan(BaseModel):
                 )
         if self.robustness_specs:
             try:
-                validate_planner_robustness_specs(self.robustness_specs)
+                # Structural validity only.  Constructing an ``AnalysisPlan`` is
+                # not the same act as accepting one from the Planner: this path
+                # also loads a recorded plan from disk, re-reads a lock on
+                # resume, and builds the framework's own case-neutral
+                # placeholders.  A requirement about what the *Planner must
+                # declare* judged all of those too -- 190 of 409 recorded plan
+                # documents stopped parsing, and a resume of any of them would
+                # have failed at load.  The Planner-output rule is applied where
+                # the Planner's output is accepted, in ``agents.core``, so it
+                # still reaches the model that can act on it.
+                validate_robustness_specs(self.robustness_specs)
             except RobustnessPlanError as exc:
                 raise ValueError(str(exc)) from exc
         return self
