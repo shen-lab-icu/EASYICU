@@ -1544,6 +1544,16 @@ def run_write_phase(
             bound_text = bound_path.read_text(encoding="utf-8")
         except Exception:
             bound_text = ""
+        # The checklist is a coverage report over what this run PRODUCED, not
+        # an analysis-facing writer consumer, so it takes its own view here
+        # rather than reading the one frozen near the top of this function.
+        # Everything the checklist asks about -- the bound scaffold, the causal
+        # audit -- is registered by this phase AFTER that freeze, so the frozen
+        # view made it report artefacts as "awaiting" that the same run had
+        # already bound, and cost a fully executed run its reporting-coverage
+        # score. Same digest-verified call, so an old or superseded record still
+        # cannot leak in; only the moment it is taken differs.
+        checklist_evidence_records = evidence.current_verified_records(per_step_records)
         if pipeline._reporting_checklist_names is not None:
             wanted = tuple(n.lower() for n in pipeline._reporting_checklist_names)
         else:
@@ -1559,7 +1569,7 @@ def run_write_phase(
                 (
                     "strobe",
                     build_strobe_checklist(
-                        evidence_records=current_verified_evidence_records,
+                        evidence_records=checklist_evidence_records,
                         bound_manuscript=bound_text,
                         task_kind=getattr(pipeline, "_benchmark_task_kind", None),
                     ),
@@ -1570,7 +1580,7 @@ def run_write_phase(
                 (
                     "tripod_ai",
                     build_tripod_ai_checklist(
-                        evidence_records=current_verified_evidence_records,
+                        evidence_records=checklist_evidence_records,
                         bound_manuscript=bound_text,
                     ),
                 )
@@ -1580,7 +1590,7 @@ def run_write_phase(
                 (
                     "internal_phenotype",
                     build_internal_phenotype_checklist(
-                        evidence_records=current_verified_evidence_records,
+                        evidence_records=checklist_evidence_records,
                         bound_manuscript=bound_text,
                         task_kind=getattr(pipeline, "_benchmark_task_kind", None),
                     ),
