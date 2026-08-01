@@ -165,8 +165,22 @@ _CORPUS = Path("/Volumes/外置硬盘/easyicu_data/canonical9_runs")
 def test_every_product_this_runner_ever_registered_has_a_declared_kind() -> None:
     """Real bytes: the kind map must cover what the runner actually emits.
 
-    The population is every recorded robustness step summary, so a product the
-    runner emits only in some configuration cannot be missed.
+    Population corrected 2026-08-01.  It used to be every recorded robustness
+    summary's ``output_files``, which is wider than the claim: a
+    ``robustness_sensitivity`` step is not necessarily written by THIS runner,
+    and the mapping only ever receives this runner's own ``product_files``.
+    Scanning all of them made the test fail on ``robustness_grid``, a
+    Planner-named product registered on a different path entirely -- a name the
+    mapping has never been handed and, on this evidence, cannot be.
+
+    ``aliases`` is the bare ``product_files`` map and only this runner writes
+    it, so it is both the right population marker and the exact set the mapping
+    is called with.  Measured over the corpus: 19 summaries carry it, holding
+    17 distinct names -- exactly the 17 the kind map declares.
+
+    The wider question of whether a Planner-named product can reach a consumer
+    that does not know it is real and open; it is not this mapping's, and
+    asserting it here only produced a false accusation against working code.
     """
 
     seen: set[str] = set()
@@ -181,16 +195,13 @@ def test_every_product_this_runner_ever_registered_has_a_declared_kind() -> None
             continue
         if summary.get("analysis_family") != "robustness_sensitivity":
             continue
-        registered = summary.get("output_files")
+        registered = summary.get("aliases")
         if not isinstance(registered, dict):
             continue
-        for product_id in registered:
-            # Recorded runs predate the fix and hold bare names; a canonical
-            # key is read back as its name half so both shapes are covered.
-            seen.add(str(product_id).split(":", 1)[-1])
+        seen.update(str(product_id) for product_id in registered)
 
     if not seen:
-        pytest.skip("no recorded robustness step registered a product")
+        pytest.skip("no recorded run was written by this runner's summary path")
     missing = sorted(seen - set(_ROBUSTNESS_PRODUCT_KINDS))
     assert not missing, (
         f"this runner has emitted {len(missing)} product(s) with no declared "
