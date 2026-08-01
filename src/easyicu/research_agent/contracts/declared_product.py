@@ -851,10 +851,29 @@ def _declares_reserved_primary_cohort_product(step: AnalysisStep) -> bool:
     )
 
 
-def _primary_analysis_cohort_product_matches_plan(
-    raw: object, *, plan: Any
+def locked_primary_cohort_product(
+    raw: object, *, locked_cohort_name: object
 ) -> tuple[str, str] | None:
-    """Bind a named ``cohort:`` product to the Planner-locked cohort only."""
+    """Return the identity of the run's single locked primary-cohort population.
+
+    :func:`reserved_primary_cohort_product` answers for the two globally
+    reserved spellings only.  A plan whose Planner declared the population
+    under the plan's own locked cohort name means the *same* population, and
+    the host publishes that spelling itself -- ``closed_cohort_product_
+    vocabulary`` offers ``cohort:<exact cohort.name>`` to the Planner.
+
+    Surfaces that decide *which population a step sees* must ask here, because
+    the reserved reader alone cannot see that third spelling.  Measured over
+    819 recorded real plans: of 3,995 typed primary-cohort inputs, 36 were
+    written under the plan's own cohort name, and every one of them made the
+    typed-input plane bind the full cohort while the run-level plane mounted
+    and reported the development sample.  In canary20 that split was what fed
+    the primary model 94,425 rows against a contract expecting 1,000, whose
+    ``model_denominator_or_event_mismatch`` then spent the step's repairs.
+
+    ``locked_cohort_name`` is the plan's cohort name; an absent or blank name
+    narrows this back to the reserved spellings rather than matching anything.
+    """
 
     product = _primary_analysis_cohort_product(raw)
     if product is None:
@@ -863,10 +882,21 @@ def _primary_analysis_cohort_product_matches_plan(
         return product
     raw_kind, _, _ = str(raw or "").strip().partition(":")
     _, name = product
-    cohort_name = _normalise(getattr(getattr(plan, "cohort", None), "name", None))
+    cohort_name = _normalise(locked_cohort_name)
     if _normalise(raw_kind) == "cohort" and cohort_name and name == cohort_name:
         return product
     return None
+
+
+def _primary_analysis_cohort_product_matches_plan(
+    raw: object, *, plan: Any
+) -> tuple[str, str] | None:
+    """Bind a named ``cohort:`` product to the Planner-locked cohort only."""
+
+    return locked_primary_cohort_product(
+        raw,
+        locked_cohort_name=getattr(getattr(plan, "cohort", None), "name", None),
+    )
 
 
 def _declares_explicit_cohort_namespace(raw: object) -> bool:
@@ -3589,6 +3619,7 @@ __all__ = [
     "effect_estimand_tier",
     "effect_measure_family",
     "effect_role_family",
+    "locked_primary_cohort_product",
     "reserved_primary_cohort_product",
     "typed_product",
     "typed_product_binding_contract",
