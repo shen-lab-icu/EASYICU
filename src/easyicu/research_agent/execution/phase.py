@@ -4795,6 +4795,16 @@ def run_execute_phase(
     trajectory_plan_blocked = False
     typed_plan_dag_blocked = False
     probe_step_id = "00_probe"
+    # The plan-time gates below validate the PLAN, not the probe, so they
+    # must not live inside the probe branch. canary36 is why: its probe was
+    # satisfied by pre-execution, the whole branch was skipped, and with it
+    # went the typed-DAG, primary-cohort, trajectory, declared-input,
+    # product-promise and owner-declaration gates AND the replan that
+    # answers them. A robustness step whose declaration the gate names
+    # exactly then reached execution unrepaired and died -- in a run where
+    # six other steps were claimed by their deterministic owners.
+    probe_summary: Optional[Dict[str, Any]] = None
+    probe_record: Optional[Dict[str, Any]] = None
     if pipeline._enable_probe_step and probe_step_id not in resumed_step_ids:
         probe_summary, probe_files = services.build_probe_summary(
             context=context,
@@ -4849,141 +4859,143 @@ def run_execute_phase(
         per_step_records.append(probe_record)
         preexecuted_step_ids.add(probe_step_id)
         _flush_partial_manifest()
-        typed_plan_preflight = _typed_plan_dag_findings(plan)
-        primary_cohort_preflight = primary_analysis_cohort_plan_findings(plan=plan)
-        trajectory_preflight = trajectory_plan_dag_findings(
-            plan=plan,
-            context=context,
-            long_trajectory_bound=long_trajectory_bound,
-        )
-        declared_input_preflight = declared_raw_input_plan_findings(
-            plan=plan,
-            context=context,
-        )
-        owner_declaration_preflight = owner_declaration_plan_findings(plan=plan)
-        product_promise_preflight = product_promise_plan_findings(plan=plan)
-        trajectory_directive = None
-        typed_plan_directive = None
-        declared_input_directive = None
-        if typed_plan_preflight:
-            typed_plan_directive = (
-                "Repair the plan's declared typed product DAG without changing "
-                "its scientific choices. Every typed kind:product input must "
-                "have exactly one declared producer, every required producer "
-                "must remain in the plan, and producers must precede consumers. "
-                "Do not invent an exposure, outcome, cohort, estimator, or "
-                "analysis method. Contract findings: "
-                + json.dumps(
-                    [
-                        {
-                            "message": finding.message,
-                            "detail": finding.detail,
-                        }
-                        for finding in typed_plan_preflight
-                    ],
-                    ensure_ascii=False,
-                    default=str,
-                )
+    typed_plan_preflight = _typed_plan_dag_findings(plan)
+    primary_cohort_preflight = primary_analysis_cohort_plan_findings(plan=plan)
+    trajectory_preflight = trajectory_plan_dag_findings(
+        plan=plan,
+        context=context,
+        long_trajectory_bound=long_trajectory_bound,
+    )
+    declared_input_preflight = declared_raw_input_plan_findings(
+        plan=plan,
+        context=context,
+    )
+    owner_declaration_preflight = owner_declaration_plan_findings(plan=plan)
+    product_promise_preflight = product_promise_plan_findings(plan=plan)
+    trajectory_directive = None
+    typed_plan_directive = None
+    declared_input_directive = None
+    if typed_plan_preflight:
+        typed_plan_directive = (
+            "Repair the plan's declared typed product DAG without changing "
+            "its scientific choices. Every typed kind:product input must "
+            "have exactly one declared producer, every required producer "
+            "must remain in the plan, and producers must precede consumers. "
+            "Do not invent an exposure, outcome, cohort, estimator, or "
+            "analysis method. Contract findings: "
+            + json.dumps(
+                [
+                    {
+                        "message": finding.message,
+                        "detail": finding.detail,
+                    }
+                    for finding in typed_plan_preflight
+                ],
+                ensure_ascii=False,
+                default=str,
             )
-        primary_cohort_directive = None
-        if primary_cohort_preflight:
-            primary_cohort_directive = (
-                "Repair the plan's primary-cohort typed-product ownership "
-                "without changing any scientific choice. A cohort construction + "
-                "attrition step must uniquely own exactly one materialised product: "
-                "`artifact|dataset|table:analysis_cohort`, `cohort:analysis_set`, "
-                "or `cohort:<exact cohort.name>`. Definition/protocol/status artifacts "
-                "are not cohort datasets. Contract findings: "
-                + json.dumps(
-                    [
-                        {
-                            "message": finding.message,
-                            "detail": finding.detail,
-                        }
-                        for finding in primary_cohort_preflight
-                    ],
-                    ensure_ascii=False,
-                    default=str,
-                )
-            )
-        if trajectory_preflight:
-            trajectory_directive = (
-                "Repair the agent-declared fixed-window trajectory plan DAG "
-                "without changing its scientific choices. Preserve legitimate "
-                "representation, candidate-selection, stability/freeze, and "
-                "characterization step boundaries; repair only missing/ambiguous "
-                "typed artifact edges, role declarations, and silent internal "
-                "window-grid omissions. Do not choose a clustering method, k, "
-                "eligibility threshold, or deterministic runner. Contract findings: "
-                + json.dumps(
-                    [
-                        {
-                            "message": finding.message,
-                            "detail": finding.detail,
-                        }
-                        for finding in trajectory_preflight
-                    ],
-                    ensure_ascii=False,
-                    default=str,
-                )
-            )
-        if declared_input_preflight:
-            declared_input_directive = (
-                "Repair the plan's declared raw column inputs without changing "
-                "any scientific choice. Every declared raw input must be a "
-                "column the sealed research context carries; a value a previous "
-                "step derives must be declared as that step's typed product "
-                "instead. Do not invent an exposure, outcome, cohort, covariate, "
-                "or method to satisfy this. Contract findings: "
-                + json.dumps(
-                    [
-                        {
-                            "message": finding.message,
-                            "detail": finding.detail,
-                        }
-                        for finding in declared_input_preflight
-                    ],
-                    ensure_ascii=False,
-                    default=str,
-                )
-            )
-        owner_declaration_directive = owner_declaration_replan_directive(
-            owner_declaration_preflight
         )
-        # Ordered before the ownership directive on purpose: an owner cannot
-        # claim a step whose promise no declaration can name, so telling the
-        # Planner to complete a declaration first would be asking for work that
-        # still leaves the step unowned.
-        product_promise_directive = product_promise_replan_directive(
-            product_promise_preflight
-        )
-        plan = _maybe_replan(
-            current_plan=plan,
-            reason="probe_summary",
-            probe_summary_payload=probe_summary,
-            completed_records=[probe_record],
-            directive="\n\n".join(
-                directive
-                for directive in (
-                    typed_plan_directive,
-                    primary_cohort_directive,
-                    trajectory_directive,
-                    declared_input_directive,
-                    product_promise_directive,
-                    owner_declaration_directive,
-                )
-                if directive
+    primary_cohort_directive = None
+    if primary_cohort_preflight:
+        primary_cohort_directive = (
+            "Repair the plan's primary-cohort typed-product ownership "
+            "without changing any scientific choice. A cohort construction + "
+            "attrition step must uniquely own exactly one materialised product: "
+            "`artifact|dataset|table:analysis_cohort`, `cohort:analysis_set`, "
+            "or `cohort:<exact cohort.name>`. Definition/protocol/status artifacts "
+            "are not cohort datasets. Contract findings: "
+            + json.dumps(
+                [
+                    {
+                        "message": finding.message,
+                        "detail": finding.detail,
+                    }
+                    for finding in primary_cohort_preflight
+                ],
+                ensure_ascii=False,
+                default=str,
             )
-            or None,
-            force=bool(
-                typed_plan_preflight
-                or primary_cohort_preflight
-                or trajectory_preflight
-                or declared_input_preflight
-                or product_promise_preflight
-                or owner_declaration_preflight
-            ),
         )
+    if trajectory_preflight:
+        trajectory_directive = (
+            "Repair the agent-declared fixed-window trajectory plan DAG "
+            "without changing its scientific choices. Preserve legitimate "
+            "representation, candidate-selection, stability/freeze, and "
+            "characterization step boundaries; repair only missing/ambiguous "
+            "typed artifact edges, role declarations, and silent internal "
+            "window-grid omissions. Do not choose a clustering method, k, "
+            "eligibility threshold, or deterministic runner. Contract findings: "
+            + json.dumps(
+                [
+                    {
+                        "message": finding.message,
+                        "detail": finding.detail,
+                    }
+                    for finding in trajectory_preflight
+                ],
+                ensure_ascii=False,
+                default=str,
+            )
+        )
+    if declared_input_preflight:
+        declared_input_directive = (
+            "Repair the plan's declared raw column inputs without changing "
+            "any scientific choice. Every declared raw input must be a "
+            "column the sealed research context carries; a value a previous "
+            "step derives must be declared as that step's typed product "
+            "instead. Do not invent an exposure, outcome, cohort, covariate, "
+            "or method to satisfy this. Contract findings: "
+            + json.dumps(
+                [
+                    {
+                        "message": finding.message,
+                        "detail": finding.detail,
+                    }
+                    for finding in declared_input_preflight
+                ],
+                ensure_ascii=False,
+                default=str,
+            )
+        )
+    owner_declaration_directive = owner_declaration_replan_directive(
+        owner_declaration_preflight
+    )
+    # Ordered before the ownership directive on purpose: an owner cannot
+    # claim a step whose promise no declaration can name, so telling the
+    # Planner to complete a declaration first would be asking for work that
+    # still leaves the step unowned.
+    product_promise_directive = product_promise_replan_directive(
+        product_promise_preflight
+    )
+    plan = _maybe_replan(
+        current_plan=plan,
+        reason=(
+            "probe_summary" if probe_record is not None else "plan_contract_preflight"
+        ),
+        probe_summary_payload=probe_summary,
+        completed_records=[probe_record] if probe_record is not None else None,
+        directive="\n\n".join(
+            directive
+            for directive in (
+                typed_plan_directive,
+                primary_cohort_directive,
+                trajectory_directive,
+                declared_input_directive,
+                product_promise_directive,
+                owner_declaration_directive,
+            )
+            if directive
+        )
+        or None,
+        force=bool(
+            typed_plan_preflight
+            or primary_cohort_preflight
+            or trajectory_preflight
+            or declared_input_preflight
+            or product_promise_preflight
+            or owner_declaration_preflight
+        ),
+    )
 
     final_typed_plan_findings = [
         *_typed_plan_dag_findings(plan),
