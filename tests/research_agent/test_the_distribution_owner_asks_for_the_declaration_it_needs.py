@@ -16,14 +16,27 @@ a DIFFERENT table every run.  Of the 26 recorded ``absolute_risk_context.csv``
 files, 25 have distinct headers.  Every downstream figure over them is dead:
 14 such steps recorded, 0 ok.
 
-That is the defect this closes: an 82%-passing step emits an artifact with no
-contract, and the whole cost lands on its consumer.  Success at a producer is
-not the same as a contract.
+That is the defect: an 82%-passing step emits an artifact with no contract, and
+the whole cost lands on its consumer.  Success at a producer is not the same as
+a contract.
 
-So the owner now REPORTS the gap instead of silently declining, at the
-granularity the Planner acts on -- the same change that, made for the robustness
-replay in cf81fa9, turned a step which had died in four consecutive runs into
-one claimed and passed by its owner in canary31.
+**The first version of this gate asked those steps to rename their product, and
+a real run overturned it.**  Measured over every recorded run it asked 48
+distinct step shapes and only 1 promised this product: 27 promised
+``table:cohort_summary``, 18 ``table:absolute_risk_context``, one each
+``table:stage_stratified_outcome`` and ``table:ordinal_trend_audit``.  Which
+table a step promises is a scientific choice, and canary33 showed the price of
+taking it at execution: ``04_absolute_risk_context`` executed fine one run
+earlier and was refused, taking its figure with it, and after three plan
+revisions the Planner never filled the spec.  Across two real runs the wide
+version helped 0 steps and cost 4.
+
+So the gate is narrowed to the step that ALREADY promises this product and only
+omits the spec -- 4 such records exist, 3 ``ok`` (an uncontracted table the
+Coder wrote) and 1 ``coder_failed``.  Getting the same science planned under
+this product's name is a real problem, but it belongs to the Planner directive,
+where the Planner can act on it before the plan is sealed, not to a refusal
+raised at the step.
 
 Two things this deliberately does NOT do, each because the evidence says it
 would regress:
@@ -73,7 +86,7 @@ _SPEC = {
 }
 
 
-def _step(*, outputs, spec=None, **kwargs) -> AnalysisStep:
+def _step(*, outputs, spec=None, method="descriptive", **kwargs) -> AnalysisStep:
     return AnalysisStep(
         step_id="04_absolute_risk_context",
         planned_analysis_role="auxiliary",
@@ -82,7 +95,7 @@ def _step(*, outputs, spec=None, **kwargs) -> AnalysisStep:
         # step inputs, so the fixture carries them whether or not it declares a spec.
         inputs=["artifact:analysis_cohort", "exposure_variable", "outcome_variable"],
         expected_outputs=list(outputs),
-        method="descriptive",
+        method=method,
         exposure_outcome_distribution_spec=spec,
         **kwargs,
     )
@@ -97,26 +110,120 @@ def _missing(step: AnalysisStep) -> tuple[str, ...]:
 # --- the gap it must report ---------------------------------------------------
 
 
-def test_a_step_promising_this_science_without_the_spec_is_a_reported_gap() -> None:
-    """The property that was false: 28 recorded steps, 0 asked."""
+def test_a_step_promising_this_product_without_the_spec_is_a_reported_gap() -> None:
+    """4 recorded records promise it and declare no spec; 3 shipped a table
+    the Coder invented and 1 died outright, and none was ever asked."""
 
-    missing = _missing(_step(outputs=["table:absolute_risk_context"]))
-    assert missing, "the owner still declines silently"
-    assert any(
-        "exposure_outcome_distribution_spec" in name for name in missing
-    ), missing
+    missing = _missing(_step(outputs=[EXPOSURE_OUTCOME_DISTRIBUTION_OUTPUT]))
+    assert missing == ("exposure_outcome_distribution_spec",), missing
 
 
-def test_it_also_names_the_product_the_host_actually_emits() -> None:
-    """The spec alone is not enough and saying so would waste the replan.
+def test_a_step_with_no_typed_cohort_input_is_not_asked() -> None:
+    """A precondition of the owner running, not a guess about intent.
 
-    The executor writes its own filename and registers its own key, so a step
-    promising another name cannot be claimed even with a perfect spec. Both
-    gaps are declarations; neither is a scientific choice.
+    This executor reads exactly one typed cohort. Asking a step without one to
+    declare the spec would demand work that leaves it exactly as unowned --
+    the same rule that keeps the robustness gap off steps whose products this
+    replay does not emit.
     """
 
-    missing = _missing(_step(outputs=["table:absolute_risk_context"]))
-    assert any("expected_outputs" in name for name in missing), missing
+    step = AnalysisStep(
+        step_id="04_prevalence_by_exposure",
+        planned_analysis_role="auxiliary",
+        intent="Report prevalence and outcome by exposure level.",
+        inputs=["exposure_variable", "outcome_variable"],
+        expected_outputs=[EXPOSURE_OUTCOME_DISTRIBUTION_OUTPUT],
+        method="descriptive",
+    )
+
+    assert _missing(step) == ()
+
+
+def test_the_method_label_does_not_decide_this_gap() -> None:
+    """Measured: the two-string allowlist turned away exactly the step the gap
+    is for -- ``descriptive_prevalence_and_mortality``, promising this product
+    with no spec. The promised product is the claim; a label allowlist beside
+    it is the disease, not the cure."""
+
+    labels = (
+        "descriptive",
+        "descriptive_prevalence_and_mortality",
+        "prevalence_and_absolute_risk_descriptive",
+        "something_nobody_registered",
+    )
+    verdicts = {
+        _missing(_step(outputs=[EXPOSURE_OUTCOME_DISTRIBUTION_OUTPUT], method=label))
+        for label in labels
+    }
+
+    assert verdicts == {("exposure_outcome_distribution_spec",)}
+
+
+def test_a_step_carrying_another_owners_spec_is_not_asked_for_this_one() -> None:
+    """Both of these are constructible alongside this product, so both are live.
+
+    A step already declaring another owner's typed contract is that owner's
+    step; asking it for this spec would spend a replan on a declaration that
+    could not make this executor run.
+
+    Only two. ``table_one_spec`` requires ``table:table_one`` as an expected
+    output and ``robustness_replay_spec`` requires its products to be declared
+    outputs, so a step promising exactly this product can carry neither -- the
+    guards for those were deleted rather than left as clauses no input can
+    reach.
+    """
+
+    for field, spec in (
+        (
+            "measurement_audit_spec",
+            {
+                "schema_version": "easyicu.measurement_audit/1",
+                "products": [
+                    {
+                        "product_id": "exposure_outcome_distribution",
+                        "audit": "measurement_missingness",
+                    }
+                ],
+            },
+        ),
+        ("trajectory_stability_spec", {"n_resamples": 50, "sample_fraction": 0.8}),
+    ):
+        step = AnalysisStep(
+            step_id="04_x",
+            planned_analysis_role="auxiliary",
+            intent="Report prevalence and outcome by exposure level.",
+            inputs=[
+                "artifact:analysis_cohort",
+                "exposure_variable",
+                "outcome_variable",
+                "age",
+            ],
+            expected_outputs=[EXPOSURE_OUTCOME_DISTRIBUTION_OUTPUT],
+            method="descriptive",
+            **{field: spec},
+        )
+
+        assert _missing(step) == (), field
+
+
+def test_a_step_promising_a_DIFFERENT_table_is_not_asked_to_rename_it() -> None:
+    """canary33's regression, pinned so it cannot come back.
+
+    ``04_absolute_risk_context`` executed in canary32 and was refused in
+    canary33 by the wide version of this gate, which demanded it promise a
+    different product. Which table a step promises is the Planner's scientific
+    choice; the widest measured cost of taking it here was 27 cohort-summary
+    steps, 18 absolute-risk steps and 2 others -- 47 of the 48 shapes asked.
+    """
+
+    for other in (
+        "table:absolute_risk_context",
+        "table:cohort_summary",
+        "table:stage_stratified_outcome",
+        "table:ordinal_trend_audit",
+    ):
+        assert _missing(_step(outputs=[other])) == (), other
+
     reason = exposure_outcome_distribution_declaration_verdict(
         _step(outputs=["table:absolute_risk_context"])
     ).reason
@@ -349,25 +456,30 @@ def _gaps_as_production_sees_them(raw: dict) -> tuple[str, ...]:
     not _CORPUS.exists(), reason="recorded runs are not on this machine"
 )
 def test_it_fires_on_the_steps_it_was_written_for() -> None:
-    """Reachability, on real plans: a check that never fires is worse than none."""
+    """Reachability, on real plans: a check that never fires is worse than none.
+
+    Thin on purpose. 34 distinct recorded shapes promise this product and 30
+    already declare the spec; the gap is the remaining 4, of which 1 clears
+    every other clause of the contract. Firing once on 596 recorded shapes is
+    the honest size of this defect -- the wide version fired on 48 and was
+    wrong 47 times.
+    """
 
     fired = 0
+    asked_a_rename = 0
     for _record, raw in _recorded_steps():
-        if "table:absolute_risk_context" not in [
-            str(o) for o in (raw.get("expected_outputs") or [])
-        ]:
+        gaps = _gaps_as_production_sees_them(raw)
+        if not gaps:
             continue
-        if _gaps_as_production_sees_them(raw):
-            fired += 1
-    # 17, not 28. The other 11 spell their method
-    # ``descriptive_stage_stratified_outcomes``,
-    # ``prevalence_and_absolute_risk_descriptive`` and so on, which THIS OWNER
-    # cannot accept however the step is declared -- asking them would demand
-    # work that leaves them exactly as unowned. Whether the owner should accept
-    # more method spellings is a separate question with its own evidence.
-    assert fired >= 17, (
-        f"only {fired} recorded absolute-risk steps would be asked; measured 17 "
-        "of the 28 are within this owner's method contract"
+        fired += 1
+        outputs = [str(o) for o in (raw.get("expected_outputs") or [])]
+        if outputs != [EXPOSURE_OUTCOME_DISTRIBUTION_OUTPUT]:
+            asked_a_rename += 1
+
+    assert fired >= 1, "the narrowed check fires on no recorded plan at all"
+    assert asked_a_rename == 0, (
+        f"{asked_a_rename} recorded steps are asked to promise a different "
+        "product; that is the Planner's scientific choice, not this owner's"
     )
 
 
