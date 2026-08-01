@@ -259,6 +259,7 @@ from ..authority.typed_binding import (
     _typed_parent_schema_context_block,
     _write_host_input_binding_receipts,
     _write_resolved_inputs_manifest,
+    host_owns_input_binding_receipts,
 )
 from ..gates.contract import (  # execute-layer collaborators use the canonical gate API
     _AGENT_OWNED_ROBUSTNESS_RESULT_METHODS,
@@ -9226,9 +9227,22 @@ def run_execute_phase(
                     visual_step_summary,
                     run_result.out_dir,
                 )
-                if worker_progress.deterministic_standard_executor_used or (
-                    worker_progress.runner_repair_name
-                    and is_sealed_renderer_repair(worker_progress.runner_repair_name)
+                # Same rule as the post-execution site below, from the single
+                # owner -- this one runs BEFORE the contract gate, so a producer
+                # missing here is refused for a receipt the host never wrote.
+                if host_owns_input_binding_receipts(
+                    deterministic_standard_executor_used=(
+                        worker_progress.deterministic_standard_executor_used
+                    ),
+                    deterministic_fallback_used=(
+                        worker_progress.deterministic_fallback_used
+                    ),
+                    sealed_renderer_repair=bool(
+                        worker_progress.runner_repair_name
+                        and is_sealed_renderer_repair(
+                            worker_progress.runner_repair_name
+                        )
+                    ),
                 ):
                     visual_step_summary = _write_host_input_binding_receipts(
                         out_dir=run_result.out_dir,
@@ -10800,23 +10814,17 @@ def run_execute_phase(
         # would leave evidence digests and claims bound to a retired draft.
         step_summary = _load_step_summary_from_outputs(run_result.out_dir)
         # Any host-authored deterministic code, not only a registered standard
-        # executor.  ``_write_host_input_binding_receipts`` exists precisely
-        # because the host knows which typed inputs it resolved and a renderer
-        # asked to manufacture that receipt would be attesting to its own
-        # input; gating it on the narrower flag meant the deterministic
-        # robustness and sensitivity paths -- which set
-        # ``deterministic_fallback_used`` instead -- could never satisfy the
-        # host's own ``step_summary_integrity`` rule.  Measured across every
-        # recorded run, the host's own deterministic robustness code had never
-        # once passed that gate; the single step that did was a Coder rewrite
-        # that hand-built the receipt block.
-        if (
-            worker_progress.deterministic_standard_executor_used
-            or worker_progress.deterministic_fallback_used
-            or (
+        # executor.  The rule itself lives with the writer it governs; widening
+        # it here alone was what left the pre-gate site narrower.
+        if host_owns_input_binding_receipts(
+            deterministic_standard_executor_used=(
+                worker_progress.deterministic_standard_executor_used
+            ),
+            deterministic_fallback_used=worker_progress.deterministic_fallback_used,
+            sealed_renderer_repair=bool(
                 worker_progress.runner_repair_name
                 and is_sealed_renderer_repair(worker_progress.runner_repair_name)
-            )
+            ),
         ):
             step_summary = _write_host_input_binding_receipts(
                 out_dir=run_result.out_dir,

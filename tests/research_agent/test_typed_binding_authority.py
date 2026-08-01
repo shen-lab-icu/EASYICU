@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import inspect
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -58,7 +59,9 @@ def _top_level_function_calls(tree: ast.Module) -> dict[str, set[str]]:
 
 
 def test_execution_phase_uses_typed_binding_objects_with_identity() -> None:
-    assert len(typed_binding.__all__) == 23
+    # 23 private helpers plus ``host_owns_input_binding_receipts``, the public
+    # rule for which producers the host writes receipts for.
+    assert len(typed_binding.__all__) == 24
     for name in _PHASE_TYPED_BINDING_NAMES:
         assert getattr(execution_phase, name) is getattr(typed_binding, name)
     assert _PHASE_TYPED_BINDING_NAMES < set(typed_binding.__all__)
@@ -68,12 +71,25 @@ def test_standard_executors_receive_host_owned_input_receipts() -> None:
     source = inspect.getsource(execution_phase.run_execute_phase)
     receipt_call = "visual_step_summary = _write_host_input_binding_receipts("
     receipt_index = source.index(receipt_call)
+    # The guard is the shared owner rather than a hand-written condition; the
+    # two spellings of that condition disagreed, and this pre-gate site was the
+    # narrower one.  ``test_host_writes_the_receipt_before_the_gate_demands_it``
+    # owns the rule itself; what this test still owns is its PLACEMENT.
     guard_index = source.rindex(
-        "if worker_progress.deterministic_standard_executor_used or (",
+        "if host_owns_input_binding_receipts(",
         0,
         receipt_index,
     )
-    assert receipt_index - guard_index < 300
+    # "Immediately governs" stated structurally rather than as a character
+    # budget: no other branch may open between the guard and the write.  A
+    # character distance moved when the guard became a multi-line call and
+    # said nothing about what it was meant to protect.
+    between = source[
+        guard_index + len("if host_owns_input_binding_receipts(") : receipt_index
+    ]
+    assert not re.search(
+        r"\n\s*(if|elif|else|for|while|try)\b", between
+    ), "another branch opens between the receipt guard and the receipt write"
     assert receipt_index < source.index("visual_gate = collect_visual_gate_result(")
 
 
