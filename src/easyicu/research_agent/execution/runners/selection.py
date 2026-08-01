@@ -45,7 +45,7 @@ from .missingness_measurement_figure_executor import (
     missingness_measurement_figure_executor_owns_step,
 )
 from .robustness_figure_executor import (
-    ROBUSTNESS_FIGURE_INPUT,
+    robustness_figure_consumed_input_keys,
     robustness_figure_executor_code,
     robustness_figure_executor_owns_step,
 )
@@ -306,7 +306,15 @@ def select_standard_executor(
                 selection_reason="robustness_figure_contract_preflight",
                 progress_message=("Using planner-scoped robustness figure executor"),
                 code=robustness_figure_executor_code(step),
-                consumed_input_keys=(ROBUSTNESS_FIGURE_INPUT,),
+                # Every optional parent this renderer READS, not only the
+                # matrix it plots.  The host stamps an input-binding receipt
+                # per consumed key, so declaring one while reading four left
+                # three inputs unstamped and ``step_summary_integrity``
+                # refused the step for incomplete coverage -- naming exactly
+                # the three the renderer had just drawn from.
+                consumed_input_keys=robustness_figure_consumed_input_keys(
+                    resolved_bindings
+                ),
             )
         )
     _missed("robustness_figure")

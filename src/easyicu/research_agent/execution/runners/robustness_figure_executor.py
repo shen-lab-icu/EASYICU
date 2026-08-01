@@ -61,6 +61,7 @@ from .figure_input_capability import TypedInputCapability
 
 __all__ = [
     "ROBUSTNESS_FIGURE_INPUT",
+    "robustness_figure_consumed_input_keys",
     "robustness_figure_executor_code",
     "robustness_figure_executor_owns_step",
     "run_robustness_figure",
@@ -317,6 +318,30 @@ def _load_matrix(
 
 
 ROBUSTNESS_SUMMARY_TABLE_INPUT = "table:robustness_summary"
+
+
+def robustness_figure_consumed_input_keys(
+    resolved_bindings: Mapping[str, Any] | None,
+) -> tuple[str, ...]:
+    """Every typed parent this renderer will read, in a stable order.
+
+    The host stamps one input-binding receipt per consumed key.  Declaring only
+    the matrix while reading the optional parents left three of four resolved
+    inputs unstamped, and ``step_summary_integrity`` refused the step for
+    incomplete coverage -- naming exactly the parents the renderer had drawn
+    from.
+
+    An optional key that is NOT bound is not returned: the host can only stamp
+    a receipt for something it resolved, and claiming to consume an absent
+    input would fail the same check from the other side.
+    """
+
+    bound = resolved_bindings if isinstance(resolved_bindings, Mapping) else {}
+    keys = [ROBUSTNESS_FIGURE_INPUT]
+    keys.extend(
+        key for key in sorted(ROBUSTNESS_FIGURE_CAPABILITY.optional) if key in bound
+    )
+    return tuple(dict.fromkeys(keys))
 
 
 def _write_bound_parent_source_data(
@@ -667,8 +692,17 @@ def run_robustness_figure(
         "specifications_drawn": int(len(drawn)),
         "specifications_not_estimable": int(len(rows) - len(drawn)),
         "any_specification_not_estimable": bool(has_gap),
-        "primary_estimate_bound": bool(anchor_bound),
-        "primary_estimate_drawn": anchor_value is not None,
+        # Named for what they describe -- whether the anchor input was bound
+        # and whether its line reached the plot -- not for the estimate itself.
+        # As ``primary_estimate_*`` they read to ``declared_product_contract``
+        # as effect-bearing products registered by a rendering-only step, and
+        # it refused the step for "unauthorized_effect_product".  That gate is
+        # deliberately fail-closed on positive flags (its own docstring says
+        # ``effect_estimates_created=True`` must stay refused), so the honest
+        # repair is here: a boolean about the drawing is not an estimate, and
+        # should not be spelled as one.
+        "anchor_input_bound": bool(anchor_bound),
+        "anchor_line_drawn": anchor_value is not None,
         "complete_case_n_bound": bool(complete_case_bound),
         "complete_case_n": complete_case_n,
         "source_data_files": list(source_data_names),
