@@ -112,6 +112,68 @@ ROBUSTNESS_REPLAY_OUTPUT_FILES: Mapping[str, str] = MappingProxyType(
 )
 
 
+#: The ``kind`` half of every product identity this runner registers.
+#:
+#: ``result_envelope`` requires each ``output_files`` key to be a ``kind:name``
+#: identity and drops anything else as ``invalid_product_identity``.  A dropped
+#: product is then missing from the canonical envelope while still present in
+#: the summary, so the bounded-metric shadow reports it as a declared product
+#: that is absent and fails the step closed -- after the science has already
+#: been computed and written.
+#:
+#: Measured over every recorded run: 490 product registrations across all other
+#: producers use a valid identity and 191 do not, and every one of the 191 came
+#: from this runner.  A single E1 step registered 17 products and lost all 17.
+#:
+#: Kinds follow how real plans declare the same product where they declare it
+#: at all (``robustness_matrix`` table 259x, ``primary_or`` statistic 241x,
+#: ``complete_case_n`` statistic 247x, ``missingness_strategy_notes`` log 244x,
+#: ``outcome_label_executability`` table 9x) and the artifact's own form
+#: otherwise: a row-bearing csv is a table, a scalar json is a statistic, and a
+#: written record is a log.
+_ROBUSTNESS_PRODUCT_KINDS: Dict[str, str] = {
+    "coefficients": "table",
+    "cohort_definition_overlap_attrition": "table",
+    "cohort_overlap_and_attrition": "table",
+    "complete_case_n": "statistic",
+    "membership_change_summary": "table",
+    "missingness_strategy_notes": "log",
+    "missingness_strategy_notes_json": "log",
+    "model_replay_index": "log",
+    "model_summaries": "table",
+    "outcome_label_executability": "table",
+    "primary_or": "statistic",
+    "robustness_matrix": "table",
+    "robustness_summary": "table",
+    "robustness_variant_coefficients": "table",
+    "sensitivity_comparison": "table",
+    "sensitivity_specification_grid": "table",
+    "sensitivity_specification_matrix": "table",
+}
+
+
+def canonical_robustness_output_files(
+    product_files: Mapping[str, str]
+) -> Dict[str, str]:
+    """Map this runner's product names onto canonical ``kind:name`` identities.
+
+    Fails closed on a product with no declared kind: a new artifact must say
+    what it is before it can be registered, because the alternative is exactly
+    the silent drop this exists to stop.
+    """
+
+    canonical: Dict[str, str] = {}
+    for name, filename in product_files.items():
+        kind = _ROBUSTNESS_PRODUCT_KINDS.get(str(name))
+        if kind is None:
+            raise ValueError(
+                "robustness product has no declared kind and cannot be "
+                f"registered: {name!r}"
+            )
+        canonical[f"{kind}:{name}"] = filename
+    return canonical
+
+
 def robustness_replay_spec_is_emittable(step: AnalysisStep) -> bool:
     """Whether the step's typed replay declaration is one this runner can emit.
 
@@ -898,7 +960,7 @@ def _run_robustness_preflight(
         }
         for row in matrix_rows
     ]
-    output_files = {
+    product_files = {
         "robustness_matrix": "robustness_matrix.csv",
         "sensitivity_comparison": "sensitivity_comparison.csv",
         "membership_change_summary": "membership_change_summary.csv",
@@ -920,13 +982,17 @@ def _run_robustness_preflight(
             source=structured_source,
             out_dir=out_dir,
         )
-        output_files.update(inherited_files)
+        product_files.update(inherited_files)
     if structured_replay.get("replay_index_file"):
-        output_files["model_replay_index"] = structured_replay["replay_index_file"]
+        product_files["model_replay_index"] = structured_replay["replay_index_file"]
     if structured_replay.get("variant_coefficients_file"):
-        output_files["robustness_variant_coefficients"] = structured_replay[
+        product_files["robustness_variant_coefficients"] = structured_replay[
             "variant_coefficients_file"
         ]
+    # ``output_files`` is the registration the canonical envelope reads and so
+    # must carry identities; ``aliases`` keeps the bare product names it has
+    # always carried, which downstream readers match on by substring.
+    output_files = canonical_robustness_output_files(product_files)
     summary = {
         "step_id": out_dir.parent.name,
         "analysis_family": "robustness_sensitivity",
@@ -952,9 +1018,9 @@ def _run_robustness_preflight(
         "locked_at": locked_at,
         "robustness_rows": robustness_rows,
         "robustness_panel": {"rows": robustness_rows},
-        "outputs": list(dict.fromkeys(output_files.values())),
+        "outputs": list(dict.fromkeys(product_files.values())),
         "output_files": output_files,
-        "aliases": output_files,
+        "aliases": product_files,
         "warnings": warnings,
         "limitations": [
             "Same stay-level scalar outcome labels are not treated as independent variants.",
