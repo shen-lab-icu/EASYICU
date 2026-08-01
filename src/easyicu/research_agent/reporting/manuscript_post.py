@@ -1062,15 +1062,42 @@ def _claim_identity(claim: NumericClaim) -> str:
 
 _CITED_EVIDENCE_RE = re.compile(r"\{evidence:(?P<id>[^}]+)\}")
 
+#: The citation form the writer actually emits, once placeholders have been
+#: rendered: ``[label](evidence/<evidence_id>__<filename>)``. The ``__`` join
+#: is the EvidenceStore's own convention -- see
+#: ``EvidenceStore._target_path``: ``base / f"{safe_id}__{safe_filename}"``.
+#: The tail after the filename is ``[^)\n]*`` and not ``[^)\s]*`` because the
+#: writer appends a title -- ``... "sha256=c962ff2e")`` -- so a space-stopping
+#: tail matches nothing at all on a real manuscript.
+_RENDERED_EVIDENCE_LINK_RE = re.compile(r"\]\(evidence/(?P<id>[^)\s/]+?)__[^)\n]*\)")
+
 
 def _cited_evidence_ids(context: str) -> frozenset[str]:
-    """Return the evidence ids this sentence explicitly cites."""
+    """Return the evidence ids this sentence explicitly cites.
 
-    return frozenset(
+    Both forms are read, because the placeholder form is not what survives to
+    this point. Measured 2026-08-01 over all 115 recorded bound manuscripts:
+    ``{evidence:<id>}`` appears **0** times and the rendered link form appears
+    **541** times. So the caller's "the sentence names its source, restrict the
+    candidates to it" rule -- and with it the only thing that could tell one
+    step's estimate from another's when both registered the same number -- has
+    never once fired on a real manuscript.
+
+    canary37 is what that costs. Its Results sentence cited the primary model's
+    own step summary, one line's worth of characters away from the value, and
+    the primary estimate still went out as ambiguous across eleven candidate
+    fields -- blocking a manuscript in which every other number had bound.
+    """
+
+    cited = {
         match.group("id").strip()
         for match in _CITED_EVIDENCE_RE.finditer(context or "")
-        if match.group("id").strip()
+    }
+    cited.update(
+        match.group("id").strip()
+        for match in _RENDERED_EVIDENCE_LINK_RE.finditer(context or "")
     )
+    return frozenset(value for value in cited if value)
 
 
 def _evidence_lineage(evidence: EvidenceStore) -> Dict[str, frozenset[str]]:
@@ -1268,17 +1295,60 @@ def _numeric_sentence_context(text: str, *, start: int, end: int) -> str:
     That makes a repeated denominator appear to belong to the wrong step.
     Sentence boundaries keep the exact local citation and exclude neighbouring
     claims. The cap only limits pathological generated run-on prose.
+
+    The window then reaches PAST the terminal period through the evidence
+    links that immediately follow it, because that is where the writer puts
+    them. canary37 is the recorded cost: its Results sentence ended
+    ``... from 1.02 to 2.39.`` and the citation naming the owning step sat
+    just after the period, so the sentence window saw no citation at all, the
+    cited-evidence restriction never ran, and the primary estimate stayed
+    ambiguous across eleven candidate fields -- blocking a manuscript in which
+    every other number had bound. Only links are absorbed, and only while they
+    are unbroken by prose, so the next sentence's words can never enter.
     """
 
     context_start = 0
     for match in _NUMERIC_SENTENCE_BOUNDARY_RE.finditer(text, 0, start):
         context_start = match.end()
+    # Symmetric to the tail: the citations sitting just past the PREVIOUS
+    # sentence's period belong to that sentence, and a window starting at the
+    # period would otherwise read them as this sentence's sources. That is the
+    # exact mis-attribution this function was written to prevent.
+    context_start = min(_extend_through_trailing_citations(text, context_start), start)
     next_boundary = _NUMERIC_SENTENCE_BOUNDARY_RE.search(text, end)
     context_end = next_boundary.end() if next_boundary is not None else len(text)
+    context_end = _extend_through_trailing_citations(text, context_end)
     max_chars = 1600
     context_start = max(context_start, start - max_chars)
     context_end = min(context_end, end + max_chars)
     return text[context_start:context_end]
+
+
+#: A markdown link whose target is an evidence artefact, as the writer emits
+#: it: ``[label](evidence/<file> "sha256=...")``. Anchored so only an unbroken
+#: run of such links is absorbed.
+_TRAILING_CITATION_RE = re.compile(r"\s*\[[^\]\n]*\]\(evidence/[^)\n]*\)")
+
+
+def _extend_through_trailing_citations(text: str, context_end: int) -> int:
+    """Extend a sentence window over the citations written after its period.
+
+    Nothing but evidence links is absorbed: the first thing that is not one
+    stops the walk, so a following sentence's prose -- and therefore its
+    claims -- can never be pulled into this sentence's context.
+    """
+
+    cursor = context_end
+    while True:
+        match = _TRAILING_CITATION_RE.match(text, cursor)
+        if match is None or match.end() <= cursor:
+            # A pattern that can match the empty string would spin here
+            # forever. The one above cannot -- it requires a bracketed label --
+            # but a walk that trusts a regex to advance is one edit away from
+            # hanging the writer phase, and a mutation of exactly that shape
+            # did hang this test suite.
+            return cursor
+        cursor = match.end()
 
 
 def bind_numeric_values(
