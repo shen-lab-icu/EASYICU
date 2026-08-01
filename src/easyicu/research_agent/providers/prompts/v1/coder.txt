@@ -308,13 +308,23 @@ Code contract:
   hoc `fig.savefig` calls:
   `from easyicu.research_agent.figures.publication import
   make_figure_contract, apply_publication_style, add_panel_label,
-  save_publication_figure, audit_publication_exports`. Define a
+  save_publication_figure, audit_publication_exports_json`. Import the
+  `_json` form, not `audit_publication_exports`: the typed form returns
+  host model objects that `json.dump` cannot serialize, and step_summary.json
+  must hold JSON primitives. Define a
   claim-first `FigureContract`, map each panel to source evidence,
   and save the publication bundle from the same matplotlib figure.
   Treat this helper surface as EasyICU's default embedded
-  `nature-figure` workflow. Call its stable host-owned keyword API directly:
-  `save_publication_figure(fig=fig, out_dir=out_dir, stem=stem,
-  contract=contract)` (substitute your local variable names). Add only
+  `nature-figure` workflow. Call its stable host-owned keyword API directly
+  and KEEP ITS RETURN VALUE -- it is a `{format: path}` mapping and the only
+  place the host publishes where it put each file:
+  `saved = save_publication_figure(fig=fig, out_dir=out_dir, stem=stem,
+  contract=contract)` (substitute your local variable names). `saved["png"]`,
+  `saved["svg"]` and so on are the exported images, and `saved["contract"]`
+  is the `.figure_contract.json` this same call wrote. Read those paths from
+  `saved`; do not reconstruct them by string-building a stem, and do not
+  reference a contract variable you never bound in the scope that reads it.
+  Add only
   documented overrides such as `formats=` or `dpi=` when needed. Do not use
   `inspect.signature`, `__signature__`, parameter-name loops, or dynamic
   signature dispatch to adapt EasyICU helpers; EasyICU owns helper-version
