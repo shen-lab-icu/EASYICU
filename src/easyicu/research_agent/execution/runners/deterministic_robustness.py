@@ -131,6 +131,12 @@ ROBUSTNESS_REPLAY_OUTPUT_FILES: Mapping[str, str] = MappingProxyType(
 #: ``outcome_label_executability`` table 9x) and the artifact's own form
 #: otherwise: a row-bearing csv is a table, a scalar json is a statistic, and a
 #: written record is a log.
+#: The name this step gives the primary coefficients it copies into its own
+#: outputs.  One spelling, used by the copy and by the matrix row that points
+#: at it, because those two disagreeing is what made the row unreadable.
+_PRIMARY_COEFFICIENT_COPY_NAME = "coefficients.csv"
+
+
 _ROBUSTNESS_PRODUCT_KINDS: Dict[str, str] = {
     "coefficients": "table",
     "cohort_definition_overlap_attrition": "table",
@@ -1948,12 +1954,21 @@ def _matrix_model_trace(
     primary_source = str(primary_contract.get("exposure_source") or "").strip()
 
     contract: Optional[Dict[str, Any]] = None
+    # Still resolved, because the rows are READ from the upstream file.
     coefficient_path = structured_source.get("coefficient_path")
-    coefficient_source = (
-        coefficient_path.name
-        if isinstance(coefficient_path, Path)
-        else "coefficients.csv"
-    )
+    # Name the copy THIS step owns, not the upstream file it was copied from.
+    #
+    # ``_copy_structured_primary_contract_artifacts`` copies the primary
+    # coefficients into this step's outputs under
+    # ``_PRIMARY_COEFFICIENT_COPY_NAME``.  Naming the source path instead left
+    # the row pointing at a file that exists only in the parent step, and the
+    # figure lineage check resolves ``coefficient_source_table`` against the
+    # outputs of the step that owns the row -- so it read nothing and reported
+    # ``coefficient_source_unreadable``.  Measured over every recorded run: 11
+    # matrix rows name a file their own step does not own (all of them the
+    # primary row, all naming the parent's filename) against 4 that name one it
+    # does.
+    coefficient_source = _PRIMARY_COEFFICIENT_COPY_NAME
     contract_source = "step_summary.json:model_contracts"
     replay_mode = "completed_primary_step_output"
     coefficient_rows: List[Dict[str, Any]] = []
@@ -2140,8 +2155,8 @@ def _copy_structured_primary_contract_artifacts(
     copied: Dict[str, str] = {}
     coefficient_path = source.get("coefficient_path")
     if isinstance(coefficient_path, Path) and coefficient_path.is_file():
-        shutil.copy2(coefficient_path, out_dir / "coefficients.csv")
-        copied["coefficients"] = "coefficients.csv"
+        shutil.copy2(coefficient_path, out_dir / _PRIMARY_COEFFICIENT_COPY_NAME)
+        copied["coefficients"] = _PRIMARY_COEFFICIENT_COPY_NAME
 
     # Never copy an unregistered sibling model_summaries.csv.  Re-materialize
     # it from the digest-verified step_summary evidence that authorized the

@@ -261,3 +261,87 @@ def test_the_parents_the_real_run_reported_missing_are_now_covered() -> None:
         "recorded runs report bound sources this renderer still does not "
         f"evidence: {uncovered}"
     )
+
+
+# --- the receipt the host stamps ---------------------------------------------
+
+
+def test_the_owner_declares_every_parent_it_will_read() -> None:
+    """The host stamps one receipt per consumed key.
+
+    Declaring only the matrix while reading four resolved inputs left three
+    unstamped, and ``step_summary_integrity`` refused the step naming exactly
+    ``statistic:complete_case_n``, ``statistic:primary_or`` and
+    ``table:robustness_summary`` -- the parents the renderer had just drawn
+    from.
+    """
+
+    from easyicu.research_agent.execution.runners.robustness_figure_executor import (
+        ROBUSTNESS_FIGURE_INPUT,
+        robustness_figure_consumed_input_keys,
+    )
+
+    resolved = {
+        ROBUSTNESS_FIGURE_INPUT: {},
+        "table:robustness_summary": {},
+        ROBUSTNESS_PRIMARY_ESTIMATE_INPUT: {},
+        ROBUSTNESS_COMPLETE_CASE_INPUT: {},
+    }
+    assert set(robustness_figure_consumed_input_keys(resolved)) == set(resolved)
+
+
+def test_an_unbound_optional_input_is_not_claimed_as_consumed() -> None:
+    """The host can only stamp what it resolved.
+
+    Claiming an absent input would fail the same coverage check from the other
+    side, so absence must not be padded out.
+    """
+
+    from easyicu.research_agent.execution.runners.robustness_figure_executor import (
+        ROBUSTNESS_FIGURE_INPUT,
+        robustness_figure_consumed_input_keys,
+    )
+
+    assert robustness_figure_consumed_input_keys({ROBUSTNESS_FIGURE_INPUT: {}}) == (
+        ROBUSTNESS_FIGURE_INPUT,
+    )
+    assert robustness_figure_consumed_input_keys(None) == (ROBUSTNESS_FIGURE_INPUT,)
+
+
+def test_selection_asks_the_owner_rather_than_naming_one_key() -> None:
+    """The wiring, so a narrower literal cannot come back."""
+
+    import ast
+    import inspect
+
+    from easyicu.research_agent.execution.runners import selection
+
+    tree = ast.parse(inspect.getsource(selection))
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.keyword) or node.arg != "consumed_input_keys":
+            continue
+        rendered = ast.unparse(node.value)
+        assert rendered != "(ROBUSTNESS_FIGURE_INPUT,)", (
+            "the robustness figure declares one key again instead of asking "
+            "its owner"
+        )
+
+
+def test_the_renderer_does_not_spell_a_flag_as_an_estimate() -> None:
+    """A boolean about the drawing is not an effect product.
+
+    ``declared_product_contract`` is deliberately fail-closed on positive
+    effect-named flags, so the summary must not name one.
+    """
+
+    import inspect
+
+    from easyicu.research_agent.contracts.declared_product import _effect_bearing_name
+    from easyicu.research_agent.execution.runners import robustness_figure_executor
+
+    source = inspect.getsource(robustness_figure_executor.run_robustness_figure)
+    for banned in ("primary_estimate_bound", "primary_estimate_drawn"):
+        assert banned not in source, f"{banned} reads to the gate as an effect product"
+    for kept in ("anchor_input_bound", "anchor_line_drawn"):
+        assert kept in source
+        assert not _effect_bearing_name(kept)
