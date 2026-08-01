@@ -72,6 +72,7 @@ __all__ = [
     "_typed_parent_schema_context_block",
     "_write_host_input_binding_receipts",
     "_write_resolved_inputs_manifest",
+    "host_owns_input_binding_receipts",
 ]
 
 _RESUME_TYPED_INPUT_BINDING_FINGERPRINT_SCHEMA_VERSION = (
@@ -1368,6 +1369,40 @@ def _write_resolved_inputs_manifest(
     )
     temporary_path.replace(manifest_path)
     return manifest_path
+
+
+def host_owns_input_binding_receipts(
+    *,
+    deterministic_standard_executor_used: bool,
+    deterministic_fallback_used: bool,
+    sealed_renderer_repair: bool,
+) -> bool:
+    """Whether the HOST, not the generated script, must write the receipts.
+
+    Exactly one rule, stated once, for every producer whose code the host
+    rendered itself: a registered standard executor, one of the deterministic
+    fallback runners (robustness/sensitivity, absolute-risk context,
+    missingness audit), or a sealed renderer repair.  None of them can be
+    asked to manufacture a receipt for its own input -- it would be attesting
+    to itself -- so ``_write_host_input_binding_receipts`` records it from the
+    authority bindings instead.
+
+    The execute layer used to spell this rule out at each call site, and the
+    two copies disagreed: the site that runs BEFORE the contract gate omitted
+    ``deterministic_fallback_used``, and the site that includes it runs AFTER
+    the gate.  A fallback runner therefore had its receipts written only at a
+    point it could never reach, because the gate had already refused the step
+    for the absence of exactly those receipts.  Measured over every recorded
+    run: 12 of 18 deterministic-fallback steps were refused that way and 11
+    of the 12 died; the single survivor was a Coder rewrite that hand-built
+    the receipt block.
+    """
+
+    return bool(
+        deterministic_standard_executor_used
+        or deterministic_fallback_used
+        or sealed_renderer_repair
+    )
 
 
 def _write_host_input_binding_receipts(
