@@ -20,7 +20,7 @@ from ..contracts.declared_product import (
     RUNTIME_BINDABLE_TYPED_INPUT_KINDS,
     RUNTIME_TYPED_INPUT_EVIDENCE_KINDS,
     merge_host_table_contract,
-    reserved_primary_cohort_product,
+    locked_primary_cohort_product,
     typed_product_binding_contract,
     typed_product_schema_receipt,
     typed_product as _canonical_typed_product,
@@ -892,6 +892,7 @@ def _resolved_typed_input_binding(
     producer_step_records: Sequence[Mapping[str, Any]] = (),
     authoritative_cohort_path: Optional[Path] = None,
     development_sample: Optional[Any] = None,
+    locked_cohort_name: object = None,
 ) -> Optional[Dict[str, Any]]:
     """Build the exact, digest-verified runtime binding for one typed input."""
 
@@ -924,12 +925,17 @@ def _resolved_typed_input_binding(
     verified_path = parent_verified_path
     selected_record = record
     declared_kind, product_name = typed_product
-    # The reserved primary-cohort identity is decided by its owner, not by one
-    # spelling of it: ``cohort:analysis_set`` is the same locked population as
-    # ``analysis_cohort``, and recognising only the latter here let every typed
-    # consumer execute on the full cohort while the run still reported the
-    # development sample.
-    binds_primary_cohort = reserved_primary_cohort_product(input_name) is not None
+    # The primary-cohort identity is decided by its owner, not by one spelling
+    # of it: ``cohort:analysis_set`` and the plan's own ``cohort:<cohort.name>``
+    # are the same locked population as ``analysis_cohort``.  Recognising only
+    # a subset here let typed consumers execute on the full cohort while the
+    # run still reported the development sample -- twice now, most recently on
+    # canary20's primary model (94,425 rows against a contract expecting the
+    # 1,000-row sample), so the reader must be the one that knows all three.
+    binds_primary_cohort = (
+        locked_primary_cohort_product(input_name, locked_cohort_name=locked_cohort_name)
+        is not None
+    )
     parent_already_development_scoped = (
         development_sample is not None
         and binds_primary_cohort
@@ -954,6 +960,7 @@ def _resolved_typed_input_binding(
             run_dir=run_dir,
             authoritative_cohort_path=authoritative_cohort_path,
             development_sample=development_sample,
+            locked_cohort_name=locked_cohort_name,
         )
         if projection is None:
             return None
@@ -1461,6 +1468,7 @@ def _resume_typed_input_bindings(
             producer_step_records=trusted_step_records,
             authoritative_cohort_path=cohort_path,
             development_sample=development_sample,
+            locked_cohort_name=getattr(getattr(plan, "cohort", None), "name", None),
         )
         if binding is None:
             raise ValueError(f"typed input {input_name} has no verified host binding")
@@ -1584,6 +1592,9 @@ class TypedBindingResolver:
                         producer_step_records=records_snapshot,
                         authoritative_cohort_path=self.authoritative_cohort_path,
                         development_sample=self.development_sample,
+                        locked_cohort_name=getattr(
+                            getattr(plan, "cohort", None), "name", None
+                        ),
                     )
                     if binding is None:
                         failures.append(
