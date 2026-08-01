@@ -133,3 +133,39 @@ def test_the_guidance_carries_no_case_specific_token():
         "e3",
     ):
         assert not re.search(rf"\b{re.escape(token)}\b", window.casefold()), token
+
+
+def test_it_says_a_host_drawn_figure_takes_exactly_its_own_product():
+    """canary35's last failing step, in one sentence.
+
+    E1 took the guidance above and promised
+    ``table:exposure_outcome_distribution`` -- that step went ok. Its figure
+    then declared three CONTEXT tables alongside it (adjusted estimates, the
+    robustness matrix, a measurement audit), and
+    ``EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_CAPABILITY`` is
+    ``required={table:exposure_outcome_distribution}, optional=frozenset()``.
+    One extra typed input and no host renderer claims the step; it fell to the
+    code generator, which coerced the exposure LEVEL LABEL column to float and
+    died on its own non-finite guard.
+
+    The capability's exactness is deliberate -- a renderer must not silently
+    ignore an input the Planner declared -- so the guidance goes to the
+    Planner, not into the capability.
+    """
+
+    text = _directive()
+
+    assert "consumes EXACTLY the typed product it renders" in text
+    assert "no host renderer can draw it" in text
+    assert "put it in its own figure step" in text
+
+
+def test_the_figure_rule_is_stated_before_the_obligation_too():
+    """Same placement discipline as the choice guidance above."""
+
+    text = _directive()
+
+    assert text.index("consumes EXACTLY the typed product it renders") < text.index(
+        f"A step that declares the exact output "
+        f"`{EXPOSURE_OUTCOME_DISTRIBUTION_OUTPUT}` MUST also declare"
+    )
