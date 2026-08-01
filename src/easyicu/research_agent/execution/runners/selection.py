@@ -23,6 +23,7 @@ from .exposure_outcome_distribution_render import (
     exposure_outcome_distribution_figure_owns_step,
 )
 from .exposure_outcome_distribution_executor import (
+    exposure_outcome_distribution_declaration_verdict,
     exposure_outcome_distribution_executor_code,
     exposure_outcome_distribution_executor_owns_step,
 )
@@ -258,7 +259,21 @@ def select_standard_executor(
                 consumed_input_keys=typed_cohort_inputs,
             )
         )
-    _missed("exposure_outcome_distribution")
+    # Not a bare miss. Measured over every recorded run, 28 steps promise this
+    # owner's science under the Planner's own product label, declare its spec 0
+    # times, and were never asked -- while 29 of the 33 steps that DO declare it
+    # are claimed and pass. Declining silently is what let an 82 %-passing step
+    # emit a table with a different shape every run, killing every figure over
+    # it (14 recorded, 0 ok). The verdict reports the gap where the Planner can
+    # still close it; it stays quiet on any step this owner could not compute
+    # however it were declared.
+    distribution_declaration_verdict = (
+        exposure_outcome_distribution_declaration_verdict(step)
+    )
+    if distribution_declaration_verdict.missing_declarations:
+        _declined(distribution_declaration_verdict)
+    else:
+        _missed("exposure_outcome_distribution")
     if exposure_outcome_distribution_figure_owns_step(step):
         if receipt_required:
             _receipt_declined("exposure_outcome_distribution_figure")

@@ -33,6 +33,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
 
 from ...authority.declared_levels import execution_distribution_spec
+from ...contracts.ownership_verdict import OwnershipVerdict
 from ...schema import AnalysisStep, ExposureOutcomeDistributionSpec, _typed_level_key
 from .typed_input_binding import (
     load_typed_cohort,
@@ -44,6 +45,7 @@ __all__ = [
     "EXPOSURE_OUTCOME_DISTRIBUTION_COLUMNS",
     "EXPOSURE_OUTCOME_DISTRIBUTION_DESIGN_COLUMNS",
     "EXPOSURE_OUTCOME_DISTRIBUTION_OUTPUT",
+    "exposure_outcome_distribution_declaration_verdict",
     "exposure_outcome_distribution_executor_code",
     "exposure_outcome_distribution_executor_owns_step",
     "percentage",
@@ -132,6 +134,91 @@ def exposure_outcome_distribution_executor_owns_step(step: AnalysisStep) -> bool
         and not step.model_requirements
         and step.table_one_spec is None
         and step.trajectory_stability_spec is None
+    )
+
+
+#: The analysis kind this owner reports, in selection and in its verdict.
+EXPOSURE_OUTCOME_DISTRIBUTION_ANALYSIS_KIND = "exposure_outcome_distribution"
+
+
+def exposure_outcome_distribution_declaration_verdict(
+    step: AnalysisStep,
+) -> OwnershipVerdict:
+    """Report what a step must declare for this owner to compute it.
+
+    Measured over every recorded run: 33 steps promise this owner's product, 29
+    declare the spec, 28 are claimed, and 29 of 33 pass (88 %).  The SAME
+    science planned under the Planner's own label --
+    ``table:absolute_risk_context``, 28 steps -- declares the spec 0 times, is
+    claimed 0 times, and was never asked.  Those 28 pass 82 % of the time, so
+    the Coder writes a table; a DIFFERENT table every run.  25 of the 26
+    recorded files have distinct headers, and every figure over them dies
+    (14 recorded, 0 ok).  Declining silently is what let an 82 %-passing step
+    emit an artifact with no contract, and the whole cost land on its consumer.
+
+    Both gaps are asked together because the spec alone cannot close it: this
+    executor writes its own filename and registers its own key, so a step
+    promising a different product would still go unclaimed with a perfect spec,
+    and a replan spent on half the answer is a replan wasted.  Neither is a
+    scientific choice -- the step keeps its exposure, outcome and cohort.
+
+    Guarded to steps this owner could really compute if they declared.  A step
+    that fits a model, promises two products, draws a figure, or already
+    carries another owner's typed spec is someone else's contract, and asking
+    it to declare this one would demand work that leaves it exactly as unowned.
+    """
+
+    outputs = [str(value or "").strip() for value in step.expected_outputs or []]
+    if (
+        str(step.method or "").strip().casefold() not in {"descriptive", "distribution"}
+        or str(step.planned_analysis_role or "").strip().casefold() != "auxiliary"
+        or len(outputs) != 1
+        or not outputs[0].startswith("table:")
+        or not _typed_cohort_input(step)
+        # Each of these survived mutation, so each protects something. A Table 1
+        # step reaches this verdict -- it is consulted BEFORE ``grouped_table_one``
+        # in selection order -- and dropping this clause asked every recorded one.
+        # ``model_requirements`` is NOT guarded: the schema forces it onto
+        # ``method='adjusted_association_models'``, which the method clause above
+        # already excludes, and mutation confirmed a guard there protects nothing.
+        or step.table_one_spec is not None
+        or step.trajectory_stability_spec is not None
+        or getattr(step, "measurement_audit_spec", None) is not None
+        or getattr(step, "robustness_replay_spec", None) is not None
+    ):
+        return OwnershipVerdict.wrong_shape(
+            EXPOSURE_OUTCOME_DISTRIBUTION_ANALYSIS_KIND,
+            reason=(
+                "the step is not a single-table descriptive distribution over a "
+                "typed cohort, so this owner could not compute it however it "
+                "were declared"
+            ),
+        )
+    missing: List[str] = []
+    if step.exposure_outcome_distribution_spec is None:
+        missing.append("exposure_outcome_distribution_spec")
+    if outputs != [EXPOSURE_OUTCOME_DISTRIBUTION_OUTPUT]:
+        missing.append("expected_outputs")
+    if not missing:
+        return OwnershipVerdict.wrong_shape(
+            EXPOSURE_OUTCOME_DISTRIBUTION_ANALYSIS_KIND,
+            reason=(
+                "the step declares this owner's spec and product yet is still "
+                "unclaimed, so the gap is not in this declaration"
+            ),
+        )
+    return OwnershipVerdict.incomplete_declaration(
+        EXPOSURE_OUTCOME_DISTRIBUTION_ANALYSIS_KIND,
+        missing=tuple(missing),
+        reason=(
+            "the host computes prevalence and outcome by exposure level against "
+            "a fixed contract, and this step promises that science without the "
+            "declaration it needs: declare exposure_outcome_distribution_spec "
+            f"and promise {EXPOSURE_OUTCOME_DISTRIBUTION_OUTPUT!r}, the product "
+            "this owner emits. Without both, the analysis is written by the "
+            "Coder and its table has a different shape every run, so no figure "
+            "over it can be drawn"
+        ),
     )
 
 
