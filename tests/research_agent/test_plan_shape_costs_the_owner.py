@@ -371,7 +371,14 @@ def test_a_partial_declaration_does_not_cost_the_step_its_owner() -> None:
     # it. Not punishing the step is not the same as pretending it is complete.
     verdict = robustness_replay_declaration_verdict(partial)
     assert verdict.claimed is False
-    assert verdict.missing_declarations == ("robustness_replay_spec.products",)
+    # One entry per unbacked product since 2026-08-01. The field path alone was
+    # what the plan already had, so the replan had nothing to act on.
+    assert verdict.missing_declarations
+    assert all(
+        name.startswith("robustness_replay_spec.products[")
+        for name in verdict.missing_declarations
+    ), verdict.missing_declarations
+    assert any("primary_or" in name for name in verdict.missing_declarations)
     assert "primary_or" in verdict.reason
 
 
