@@ -256,16 +256,23 @@ def test_every_declarable_output_has_an_implementation() -> None:
 def test_every_capability_file_is_one_the_runner_collects() -> None:
     """The capability map and the runner's own output_files cannot drift.
 
-    Read from the runner module's source rather than a fixture: `output_files`
+    Read from the runner module's source rather than a fixture: `product_files`
     is a literal built during a real replay, so this is the same text the run
-    would use.
+    would use.  It is the bare-name dict; ``output_files`` is now the canonical
+    ``kind:name`` registration compiled from it, and the filenames -- which is
+    what this test compares -- are the same in both.
     """
 
     source = (
         Path(__file__).resolve().parents[2]
         / "src/easyicu/research_agent/execution/runners/deterministic_robustness.py"
     ).read_text(encoding="utf-8")
-    block = source.split("output_files = {", 1)[1].split("\n    }", 1)[0]
+    anchor = "product_files = {"
+    assert anchor in source, (
+        "the runner no longer builds its products under a literal named "
+        f"{anchor!r}; repoint this test at whatever replaced it"
+    )
+    block = source.split(anchor, 1)[1].split("\n    }", 1)[0]
     missing = sorted(
         filename
         for filename in ROBUSTNESS_REPLAY_OUTPUT_FILES.values()
