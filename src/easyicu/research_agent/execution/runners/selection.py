@@ -70,6 +70,36 @@ from .trajectory_stability_executor import (
     trajectory_stability_executor_code,
     trajectory_stability_executor_owns_step,
 )
+from .typed_input_binding import sole_typed_cohort_input
+
+
+def _consumed_typed_cohort_inputs(step: AnalysisStep) -> tuple[str, ...]:
+    """The typed cohort input this step's owner will actually read.
+
+    Read from the published vocabulary rather than matched by prefix here.
+    ``sole_typed_cohort_input`` is where "which keys name the closed cohort
+    product" is decided, and every owner's ``owns_step`` already routes through
+    it -- so a branch that spells the rule out again is asserting the owner
+    reads something the owner does not.
+
+    That is not hypothetical.  Four branches below each carried the same
+    hand-written match on ``cohort:`` or exactly ``artifact:analysis_cohort``,
+    blind to ``table:analysis_cohort`` and ``dataset:analysis_cohort``.  The key
+    it missed became no entry in ``consumed_input_keys``, so the host stamped no
+    input-binding receipt, so ``step_summary_integrity`` reported the step had
+    not accounted for an input the host itself had resolved -- and the host then
+    dispatched a contract repair against its OWN rendered code.  On 2026-08-01
+    that repair inserted a field the host's own spec model forbids, and the E1
+    distribution step died on a defect no model authored.
+
+    Measured over 3,170 recorded plan steps: the hand-written match disagreed
+    with the published reader on 145, missing ``dataset:analysis_cohort`` 60
+    times and ``table:analysis_cohort`` 18 times.
+    """
+
+    typed_cohort_input = sole_typed_cohort_input(step)
+    return (typed_cohort_input,) if typed_cohort_input else ()
+
 
 __all__ = [
     "StandardExecutorCandidate",
@@ -196,12 +226,7 @@ def select_standard_executor(
         # This executor emits the flag-only receipt itself, so a receipt
         # obligation no longer sends a step the host can compute exactly to
         # the stochastic Coder.
-        typed_cohort_inputs = tuple(
-            str(value or "").strip()
-            for value in step.inputs
-            if str(value or "").strip().startswith("cohort:")
-            or str(value or "").strip() == "artifact:analysis_cohort"
-        )
+        typed_cohort_inputs = _consumed_typed_cohort_inputs(step)
         return _selected(
             StandardExecutorSelection(
                 analysis_kind="descriptive_cohort_summary",
@@ -221,12 +246,7 @@ def select_standard_executor(
             # claiming a step whose obligation it cannot discharge.
             _receipt_declined("exposure_outcome_distribution")
             return None
-        typed_cohort_inputs = tuple(
-            str(value or "").strip()
-            for value in step.inputs
-            if str(value or "").strip().startswith("cohort:")
-            or str(value or "").strip() == "artifact:analysis_cohort"
-        )
+        typed_cohort_inputs = _consumed_typed_cohort_inputs(step)
         return _selected(
             StandardExecutorSelection(
                 analysis_kind="exposure_outcome_distribution",
@@ -346,12 +366,7 @@ def select_standard_executor(
         )
     _missed("missingness_measurement_figure")
     if table_one_executor_owns_step(step):
-        typed_cohort_inputs = tuple(
-            str(value or "").strip()
-            for value in step.inputs
-            if str(value or "").strip().startswith("cohort:")
-            or str(value or "").strip() == "artifact:analysis_cohort"
-        )
+        typed_cohort_inputs = _consumed_typed_cohort_inputs(step)
         return _selected(
             StandardExecutorSelection(
                 analysis_kind="grouped_table_one",
@@ -435,12 +450,7 @@ def select_standard_executor(
         # This owner renders the flag-only receipt itself, like the cohort
         # summary and Table 1 owners, so a receipt obligation does not send the
         # study's primary estimate to the stochastic coder.
-        typed_cohort_inputs = tuple(
-            str(value or "").strip()
-            for value in step.inputs
-            if str(value or "").strip().startswith("cohort:")
-            or str(value or "").strip() == "artifact:analysis_cohort"
-        )
+        typed_cohort_inputs = _consumed_typed_cohort_inputs(step)
         return _selected(
             StandardExecutorSelection(
                 analysis_kind=ADJUSTED_ASSOCIATION_ANALYSIS_KIND,
