@@ -1065,6 +1065,17 @@ def _run_robustness_preflight(
                 "primary_exposure": source_summary.get("primary_exposure")
                 or structured_source["primary_contract"].get("exposure_source"),
                 "analysis_cohort_n": structured_source["primary_contract"].get("n"),
+                # The same number, under the name every reader of a locked
+                # cohort already uses.  ``CrossStepCohortLockValidator`` asks a
+                # fixed-cohort step to restate the N its parent locked and
+                # reads it by trying a closed list of spellings;
+                # ``analysis_cohort_n`` -- which the manuscript and figure
+                # layers read -- is not on that list, so the gate saw a step
+                # reporting no cohort count at all and failed it closed while
+                # the correct value sat in the summary.  Both sibling
+                # deterministic producers already say ``n_total``; this one was
+                # the odd one out.
+                "n_total": structured_source["primary_contract"].get("n"),
                 "model_contracts": source_summary.get("model_contracts") or [],
                 "robustness_model_contracts": structured_replay.get(
                     "variant_contracts", []
