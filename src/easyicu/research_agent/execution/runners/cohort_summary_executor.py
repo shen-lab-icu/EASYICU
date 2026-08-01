@@ -19,6 +19,12 @@ from typing import Any, Dict, Optional, Sequence
 import pandas as pd
 
 from ...authority.plausibility import FlagOnlyPlausibilityScope
+from ...gates.plausibility_receipt import (
+    RECEIPT_ABOVE_FIELD,
+    RECEIPT_BELOW_FIELD,
+    RECEIPT_COMPARED_FIELD,
+    RECEIPT_TOTAL_FIELD,
+)
 from ...schema import AnalysisStep
 from .plausibility_receipt import render_standard_plausibility_receipt_code
 from .typed_input_binding import (
@@ -177,6 +183,23 @@ def _verified_plausibility_audit(
     The caller is host-rendered source, but the check stays here so the
     invariant travels with the summary this function writes rather than
     depending on every future caller having rendered the block correctly.
+
+    The required fields are the ones ``gates.plausibility_receipt`` PUBLISHES,
+    read from its constants rather than respelled here.  That module exists so
+    the instruction the Coder is given and the gate that judges the answer
+    cannot disagree about a field name; this function is a third reader of the
+    same receipt and had simply never joined it.  It demanded a fourth field,
+    ``compared_n``, that no instruction has ever asked for -- so a script that
+    followed the published contract exactly was refused, which is what killed
+    the 2026-08-01 E1 cohort-summary step.  Measured over the recorded corpus:
+    319 receipts, 241 carrying ``compared_n`` (all from the host's own rendered
+    fragment) and 78 without it (all hand-written to the published shape).
+
+    ``compared_n`` stays checked when it is there -- that is the only test that
+    can catch a receipt flagging more values than it looked at, and dropping it
+    for the 241 would lose real coverage.  It is not promoted to a requirement,
+    because requiring a field the contract does not publish is exactly the
+    defect being removed.
     """
 
     expected = tuple(str(value) for value in expected_columns)
@@ -189,30 +212,40 @@ def _verified_plausibility_audit(
         return None
     if not isinstance(audit, dict) or set(audit) != set(expected):
         raise RuntimeError("Plausibility receipt does not cover the exact sealed scope")
+
+    def _count(value: Any) -> Optional[int]:
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            return None
+        return value
+
     for column, record in audit.items():
         if not isinstance(record, dict):
             raise RuntimeError(f"Plausibility receipt for {column} is untyped")
-        below = record.get("below_minimum_n")
-        above = record.get("above_maximum_n")
-        total = record.get("out_of_range_n")
-        compared = record.get("compared_n")
-        counts = (below, above, total, compared)
-        if any(
-            not isinstance(value, int) or isinstance(value, bool) or value < 0
-            for value in counts
-        ):
+        below = _count(record.get(RECEIPT_BELOW_FIELD))
+        above = _count(record.get(RECEIPT_ABOVE_FIELD))
+        total = _count(record.get(RECEIPT_TOTAL_FIELD))
+        if below is None or above is None or total is None:
             raise RuntimeError(
-                f"Plausibility receipt for {column} lacks non-negative counts"
+                f"Plausibility receipt for {column} lacks non-negative "
+                f"{RECEIPT_BELOW_FIELD}, {RECEIPT_ABOVE_FIELD} and "
+                f"{RECEIPT_TOTAL_FIELD} counts"
             )
         if total != below + above:
             raise RuntimeError(
                 f"Plausibility receipt for {column} does not partition its total"
             )
-        if total > compared:
-            raise RuntimeError(
-                f"Plausibility receipt for {column} flags more values than it "
-                "compared"
-            )
+        if RECEIPT_COMPARED_FIELD in record:
+            compared = _count(record.get(RECEIPT_COMPARED_FIELD))
+            if compared is None:
+                raise RuntimeError(
+                    f"Plausibility receipt for {column} states a "
+                    f"{RECEIPT_COMPARED_FIELD} that is not a non-negative count"
+                )
+            if total > compared:
+                raise RuntimeError(
+                    f"Plausibility receipt for {column} flags more values than "
+                    "it compared"
+                )
     return dict(audit)
 
 

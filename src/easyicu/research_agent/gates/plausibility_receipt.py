@@ -94,6 +94,17 @@ RECEIPT_BELOW_FIELD = "below_minimum_n"
 RECEIPT_ABOVE_FIELD = "above_maximum_n"
 RECEIPT_TOTAL_FIELD = "out_of_range_n"
 
+#: How many observations were actually compared against the bounds.  The
+#: host's own rendered receipt block writes it; the published contract above
+#: does NOT ask for it, so a hand-written receipt legitimately omits it.
+#:
+#: Named here rather than respelled by each reader because it was previously a
+#: literal inside ``cohort_summary_executor``, which REQUIRED it -- a fourth
+#: field no instruction has ever published.  Any reader that wants it must
+#: treat it as present-or-absent and check it only when present; requiring it
+#: refuses scripts that followed the contract exactly.
+RECEIPT_COMPARED_FIELD = "compared_n"
+
 _VALIDATOR = "mechanical_code_preflight"
 
 #: The compact form carried in the Coder's binding instructions.  It and the
@@ -348,11 +359,11 @@ def plausibility_audit_receipt_findings(
                 "ResearchContext."
             ),
             quote_contract=False,
-            observed_variables=[
-                str(variable or "").strip() or None for variable, _ in records
-            ]
-            if records is not None
-            else None,
+            observed_variables=(
+                [str(variable or "").strip() or None for variable, _ in records]
+                if records is not None
+                else None
+            ),
             observed_type=type(payload).__name__,
         )
     if payload is None:
@@ -518,6 +529,7 @@ __all__ = [
     "POLICY_CONTRACT_KEY",
     "RECEIPT_ABOVE_FIELD",
     "RECEIPT_BELOW_FIELD",
+    "RECEIPT_COMPARED_FIELD",
     "RECEIPT_CONTRACT_CLAUSE",
     "RECEIPT_CONTRACT_SENTENCE",
     "RECEIPT_POLICY_FIELD",
