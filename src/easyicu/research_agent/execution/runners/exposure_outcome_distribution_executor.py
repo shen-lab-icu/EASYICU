@@ -166,39 +166,62 @@ def exposure_outcome_distribution_declaration_verdict(
     that fits a model, promises two products, draws a figure, or already
     carries another owner's typed spec is someone else's contract, and asking
     it to declare this one would demand work that leaves it exactly as unowned.
+
+    NARROWED 2026-08-01 to steps that already promise this owner's product.
+    The first version asked every single-table descriptive auxiliary step, on
+    the reasoning that a spec alone could not close the gap for a step
+    promising a different name.  That reasoning was right about the mechanism
+    and wrong about the boundary: measured over every recorded run, it asked 48
+    distinct step shapes and only 1 promised this product -- 27 promised
+    ``table:cohort_summary``, 18 ``table:absolute_risk_context``, and one each
+    ``table:stage_stratified_outcome`` and ``table:ordinal_trend_audit``.
+    Demanding those rename their output is demanding they promise a different
+    table, which is a scientific choice this owner does not get to make.
+    canary33 proved the cost in a real run: ``04_absolute_risk_context``
+    executed fine one run earlier and was refused here, taking a figure with
+    it.  Whether the same science should be planned under this product's name
+    is a real question, but it belongs to the Planner directive, not to a
+    refusal raised at the step.
     """
 
     outputs = [str(value or "").strip() for value in step.expected_outputs or []]
     if (
-        str(step.method or "").strip().casefold() not in {"descriptive", "distribution"}
-        or str(step.planned_analysis_role or "").strip().casefold() != "auxiliary"
-        or len(outputs) != 1
-        or not outputs[0].startswith("table:")
+        outputs != [EXPOSURE_OUTCOME_DISTRIBUTION_OUTPUT]
+        # A precondition of this owner running at all: it reads one typed
+        # cohort. Asking a step without one to declare the spec would demand
+        # work that leaves it exactly as unowned.
         or not _typed_cohort_input(step)
-        # Each of these survived mutation, so each protects something. A Table 1
-        # step reaches this verdict -- it is consulted BEFORE ``grouped_table_one``
-        # in selection order -- and dropping this clause asked every recorded one.
-        # ``model_requirements`` is NOT guarded: the schema forces it onto
-        # ``method='adjusted_association_models'``, which the method clause above
-        # already excludes, and mutation confirmed a guard there protects nothing.
-        or step.table_one_spec is not None
-        or step.trajectory_stability_spec is not None
+        # A step already carrying another owner's typed spec is that owner's
+        # contract. Only the two that can actually coexist with this product
+        # are listed: ``table_one_spec`` requires ``table:table_one`` as an
+        # expected output and ``robustness_replay_spec`` requires its products
+        # to be declared outputs, so the schema already makes both impossible
+        # here and guarding them was dead code. ``model_requirements`` is
+        # likewise unguarded -- the schema forces it onto
+        # ``method='adjusted_association_models'``.
         or getattr(step, "measurement_audit_spec", None) is not None
-        or getattr(step, "robustness_replay_spec", None) is not None
+        or step.trajectory_stability_spec is not None
     ):
+        # No ``method`` or ``planned_analysis_role`` clause. Both survived
+        # mutation once the promised product was pinned, and the corpus says
+        # why: of the 32 recorded shapes promising exactly this product, 32 are
+        # ``auxiliary``, so the role clause never discriminated, and the method
+        # allowlist turned away exactly one -- a step whose method string spelt
+        # the same descriptive intent in more words, promising this product
+        # with no spec, which is precisely the step this gap exists for. The
+        # promised product IS the claim; a two-string method allowlist beside
+        # it is the allowlist disease this owner already pays for elsewhere.
         return OwnershipVerdict.wrong_shape(
             EXPOSURE_OUTCOME_DISTRIBUTION_ANALYSIS_KIND,
             reason=(
-                "the step is not a single-table descriptive distribution over a "
-                "typed cohort, so this owner could not compute it however it "
-                "were declared"
+                f"the step does not promise {EXPOSURE_OUTCOME_DISTRIBUTION_OUTPUT!r} "
+                "over a typed cohort free of another owner's spec, so this owner "
+                "could not compute it however it were declared"
             ),
         )
     missing: List[str] = []
     if step.exposure_outcome_distribution_spec is None:
         missing.append("exposure_outcome_distribution_spec")
-    if outputs != [EXPOSURE_OUTCOME_DISTRIBUTION_OUTPUT]:
-        missing.append("expected_outputs")
     if not missing:
         return OwnershipVerdict.wrong_shape(
             EXPOSURE_OUTCOME_DISTRIBUTION_ANALYSIS_KIND,
