@@ -1622,12 +1622,28 @@ def trajectory_planner_contract_guide(
     *,
     context: ResearchContext,
     analysis_type: object,
+    long_trajectory_bound: bool = False,
 ) -> str:
-    """Return the case-neutral planning schema for trajectory DAGs."""
+    """Return the case-neutral planning schema for trajectory DAGs.
 
-    if _normalise_token(analysis_type) != "trajectory_clustering" or not any(
-        variable.fixed_window_trajectory is not None
-        for variable in (context.variables or [])
+    ``long_trajectory_bound`` mirrors the parameter
+    :func:`trajectory_plan_contract_applies` already takes, and for the same
+    reason: a trajectory reaches this host in two representations, and only
+    the wide one leaves ``fixed_window_trajectory`` on a variable to find.
+    The gate learned that; this guide did not, so a run holding a bound long
+    trajectory was judged against a contract it was never shown -- the
+    Planner wrote one combined clustering-and-stability step, the gate
+    demanded two typed owners, and the whole plan was refused before any
+    step ran. The default keeps the wide-column behaviour byte-identical
+    for callers that cannot see the bound tier.
+    """
+
+    if _normalise_token(analysis_type) != "trajectory_clustering" or not (
+        long_trajectory_bound
+        or any(
+            variable.fixed_window_trajectory is not None
+            for variable in (context.variables or [])
+        )
     ):
         return ""
     return (
