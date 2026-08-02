@@ -1862,6 +1862,110 @@ class MeasurementAuditProduct(BaseModel):
         return self
 
 
+#: The two products a typed cohort-definition step promises. One spelling
+#: each, because the recorded plans used four for the cohort artifact
+#: (`artifact:analysis_cohort` 111, `cohort:analysis_set` 37,
+#: `dataset:analysis_cohort` 4, `cohort:<bench name>` 4) and four for the flow
+#: table (`table:cohort_flow` 131, `cohort_attrition` 11, `attrition_flow` 5,
+#: `attrition` 2) -- and a host owner that had to recognise all of them would
+#: be the string-set matching this codebase keeps having to delete.
+COHORT_DEFINITION_COHORT_OUTPUT = "artifact:analysis_cohort"
+COHORT_DEFINITION_FLOW_OUTPUT = "table:cohort_flow"
+
+
+class CohortEligibilityCriterion(BaseModel):
+    """One documented eligibility criterion of the materialised cohort."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    criterion_id: str = Field(
+        min_length=1,
+        description=(
+            "The identifier this criterion carries in the attrition flow "
+            "table, so a reader can match the narrative to the row."
+        ),
+    )
+    description: str = Field(
+        min_length=1,
+        description=(
+            "What the criterion required, in the manuscript's own words. It "
+            "is documentation of an eligibility rule the bound cohort already "
+            "satisfies, not a filter this step will evaluate."
+        ),
+    )
+
+
+class CohortDefinitionSpec(BaseModel):
+    """Planner-owned statement that the analysis set IS the bound universe.
+
+    The first analysis step of every recorded plan defines the analytic cohort
+    and reports its attrition, and it is the single most expensive step in the
+    system: measured 2026-08-02 over the recorded runs, 127 of 127 were written
+    by the Coder, 21 of them failed, and each failure killed a mean of 5.1
+    downstream steps -- 108 dead steps, 59% of every cascade in the corpus. The
+    failure reasons do not repeat (ten distinct ones, none more than twice,
+    eight with no recorded finding at all): there is no single defect to fix,
+    because the step is improvised afresh every run.
+
+    It is also, in practice, arithmetic the host can do. The cohort is already
+    materialised and digest-bound before the run; the step reads it, declares
+    it the analysis set, accounts for the drop from the universe and emits an
+    identity receipt. Over 196 recorded attrition tables, 191 excluded ZERO
+    rows -- the multi-row flows document criteria that removed nobody.
+
+    ``analysis_set`` is a closed single-member literal on purpose. This spec
+    claims host ownership, so it must be impossible to declare for a step that
+    really does filter rows: a study that needs an executable exclusion simply
+    omits the spec and keeps the generated-code path. Widening this literal
+    later is a capability decision, not a typo fix.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["easyicu.cohort_definition/1"] = (
+        "easyicu.cohort_definition/1"
+    )
+    analysis_set: Literal["bound_universe"] = Field(
+        default="bound_universe",
+        description=(
+            "The only analysis set this typed step can produce: every row of "
+            "the bound, digest-verified cohort. It carries its one legal value "
+            "as a default because a constant the Planner must retype is a "
+            "constant it can misspell -- three canonical tasks once produced "
+            "no plan at all that way. The ownership claim is presenting this "
+            "spec, not typing this word; the Literal still rejects every "
+            "other spelling."
+        ),
+    )
+    identity_column: str = Field(
+        min_length=1,
+        description=(
+            "The stable row key the identity receipt hashes. Declared because "
+            "an executor that picked it from column order would bind the "
+            "receipt to whichever column happened to come first."
+        ),
+    )
+    eligibility_criteria: List[CohortEligibilityCriterion] = Field(
+        default_factory=list,
+        description=(
+            "The eligibility already applied upstream, one entry per row the "
+            "attrition table should carry. Each excludes no rows here -- they "
+            "document how the bound cohort came to be, which is what the "
+            "manuscript's flow diagram reports."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _criterion_ids_are_unique(self) -> "CohortDefinitionSpec":
+        ids = [criterion.criterion_id for criterion in self.eligibility_criteria]
+        if len(ids) != len(set(ids)):
+            raise ValueError(
+                "cohort_definition_spec eligibility_criteria criterion_id "
+                "values must be unique; the attrition table is keyed by them"
+            )
+        return self
+
+
 class MeasurementAuditSpec(BaseModel):
     """Planner-owned statement of which audit each declared product is.
 
@@ -2054,6 +2158,16 @@ class AnalysisStep(BaseModel):
             ),
         )
     )
+    cohort_definition_spec: Optional[CohortDefinitionSpec] = Field(
+        default=None,
+        description=(
+            "Planner-owned statement that this step's analysis set is exactly "
+            "the bound universe, plus the identity column and the eligibility "
+            "the attrition table should report. Present it only when no "
+            "exclusion remains for the step to apply; a step that really "
+            "filters rows omits it and keeps the generated-code path."
+        ),
+    )
     measurement_audit_spec: Optional[MeasurementAuditSpec] = Field(
         default=None,
         description=(
@@ -2152,6 +2266,22 @@ class AnalysisStep(BaseModel):
                 raise ValueError(
                     "exposure_outcome_distribution_spec exposure and outcome must "
                     f"be explicit step inputs; missing {missing_spec_inputs!r}"
+                )
+        if self.cohort_definition_spec is not None:
+            # The step must promise BOTH halves the spec describes: the cohort
+            # it declares and the attrition table that accounts for it. A spec
+            # attached to a step promising only one of them would claim host
+            # ownership of work the step never said it would deliver.
+            declared = list(self.expected_outputs)
+            if COHORT_DEFINITION_COHORT_OUTPUT not in declared:
+                raise ValueError(
+                    "cohort_definition_spec requires expected output "
+                    f"{COHORT_DEFINITION_COHORT_OUTPUT!r}"
+                )
+            if COHORT_DEFINITION_FLOW_OUTPUT not in declared:
+                raise ValueError(
+                    "cohort_definition_spec requires expected output "
+                    f"{COHORT_DEFINITION_FLOW_OUTPUT!r}"
                 )
         if self.measurement_audit_spec is not None:
             _spec_names_only_products_the_step_declares(
