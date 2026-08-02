@@ -924,7 +924,18 @@ def run_adjusted_association_from_env(
         # the step unless this family is one of them, so the echo is checked.
         "method_family": method_family,
         "exposure_source": exposure,
-        "exposure_expression": exposure_terms[0]["term"],
+        # The term the manuscript quotes, not whichever contrast was fitted
+        # first. With one exposure term the two coincide; with a declared
+        # gradient they do not, and every downstream reader of this contract
+        # is asking "which single coefficient IS the primary result". The
+        # estimates table already marks that row `is_primary_contrast`, and
+        # the loop that built it refuses unless exactly one carries the mark,
+        # so `contrasts.primary` is present and unambiguous here.
+        "exposure_expression": (
+            exposure_terms[0]["term"]
+            if contrasts is None
+            else _contrast_column(exposure, contrasts.primary)
+        ),
         "exposure_role": "primary" if analysis_role == "primary" else "secondary",
         "analysis_role": analysis_role,
         "analysis_set": analysis_set,
