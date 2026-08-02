@@ -23,6 +23,51 @@ def _duckdb_path(p) -> str:
     return str(p).replace('\\', '/')
 
 
+def _aumc_admissions_relation_sql(data_source: Any) -> str:
+    """Return a DuckDB relation for AUMC's ICU admission clock origin.
+
+    AUMC event timestamps are measured on a database-wide millisecond clock.
+    Hourly aggregation therefore needs ``admittedat`` before it can choose a
+    bucket.  Prefer the configured/resolved table when available, while also
+    supporting the CSV-only layout distributed by AmsterdamUMCdb.
+    """
+    base_path = Path(data_source.base_path)
+    candidates: List[Path] = []
+
+    try:
+        resolved = data_source._resolve_loader_from_disk("admissions")
+    except (AttributeError, KeyError, TypeError, ValueError):
+        resolved = None
+    if isinstance(resolved, (str, Path)):
+        candidates.append(Path(resolved))
+
+    candidates.extend(
+        [
+            base_path / "admissions.parquet",
+            base_path / "admissions.csv",
+            base_path / "admissions.csv.gz",
+        ]
+    )
+
+    seen: set[Path] = set()
+    for candidate in candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        if not candidate.is_file():
+            continue
+        sql_path = _duckdb_path(candidate).replace("'", "''")
+        if candidate.suffix.lower() in {".parquet", ".pq"}:
+            return f"read_parquet('{sql_path}')"
+        if candidate.name.lower().endswith((".csv", ".csv.gz")):
+            return f"read_csv_auto('{sql_path}', header=true)"
+
+    raise FileNotFoundError(
+        "AUMC relative-time aggregation requires admissions.parquet, "
+        "admissions.csv, or admissions.csv.gz under the data source path"
+    )
+
+
 def _is_valid_parquet_name(name: str) -> bool:
     """Whether a filename should be treated as a real parquet file.
 
@@ -3224,25 +3269,44 @@ def load_bucketed_table_aggregated(
     _order_itemid = ""
     
     if db_name == "aumc":
-        # AUMC measuredat是Unix毫秒时间戳，转换为分钟后再取整
-        # NOTE: 这里输出的是分钟(measuredat_minutes)。分钟→小时的归一由 concept.py
-        # 经 time_units.minutes_to_hours_series 单点完成（批量路径或 _align_time_to_admission，
-        # 两者互斥，每列只转一次）。本层只产出分钟，不做单位换算。
-        time_round_expr = (
-            f"FLOOR(({time_col} / 60000.0) / {interval_minutes}) * {interval_minutes}"
+        # AUMC measuredat/admittedat share a database-wide millisecond clock.
+        # The bucket boundary must be chosen *after* subtracting admittedat.
+        # Flooring the absolute clock first shifts every non-hour admission and
+        # can mix observations from adjacent ICU-relative hours.
+        admissions_relation = _aumc_admissions_relation_sql(data_source)
+        relative_bucket_minutes = (
+            f"FLOOR(((o.{time_col} - a.admittedat) / 60000.0) / "
+            f"{interval_minutes}) * {interval_minutes}"
         )
-        # 输出时间列为分钟偏移量（相对于admittedat）
+        # Keep the existing downstream contract: measuredat_minutes remains on
+        # AUMC's absolute minute clock so _align_time_to_admission subtracts the
+        # origin exactly once. Adding a floored relative bucket to admittedat
+        # also preserves FLOOR semantics for negative pre-admission times.
+        time_round_expr = (
+            f"(a.admittedat / 60000.0 + {relative_bucket_minutes})"
+        )
         output_time_expr = f"{time_round_expr} as measuredat_minutes"
-        # 标准查询
+        aumc_where_conditions = [
+            f"o.{itemid_col} IN ({ids_str})",
+            f"o.{value_column} IS NOT NULL",
+            "a.admittedat IS NOT NULL",
+        ]
+        if patient_filter_values:
+            patient_str = ", ".join(str(x) for x in patient_filter_values)
+            aumc_where_conditions.append(
+                f"o.{patient_filter_col} IN ({patient_str})"
+            )
+        aumc_where_clause = "WHERE " + " AND ".join(aumc_where_conditions)
         query = f"""
         SELECT 
-            {id_col},
+            o.{id_col} AS {id_col},
             {output_time_expr}{_select_itemid},
             {_agg_value_expr}{unit_select}
-        FROM read_parquet({glob_pattern}, union_by_name=true)
-        {where_clause}
-        GROUP BY {id_col}, {time_round_expr}{_group_itemid}
-        ORDER BY {id_col}, 2{_order_itemid}
+        FROM read_parquet({glob_pattern}, union_by_name=true) o
+        JOIN {admissions_relation} a ON o.{id_col} = a.admissionid
+        {aumc_where_clause}
+        GROUP BY o.{id_col}, {time_round_expr}{_group_itemid}
+        ORDER BY o.{id_col}, 2{_order_itemid}
         """
     elif db_name == "hirid":
         # 🚀 HiRID 优化: 在 DuckDB 中直接完成时间转换（datetime → 相对入院小时数）
@@ -3687,7 +3751,7 @@ def load_bucketed_table_aggregated(
             # new pre-aggregation diagnostic counts.
             df = df.loc[df[value_column].notna()].reset_index(drop=True)
         # Downcast float64 value columns to float32 (skip ID/time columns)
-        _skip_cols = {id_col, "charttime", "unit"}
+        _skip_cols = {id_col, "charttime", "measuredat_minutes", "unit"}
         for c in df.columns:
             if c not in _skip_cols and df[c].dtype == np.float64:
                 df[c] = df[c].astype(np.float32)
@@ -4011,12 +4075,24 @@ def load_bucketed_table_multi_aggregated(
 
     elif _base_db == 'aumc':
         p_clause = _patient_clause(id_col, patient_ids)
-        time_round_expr = f"FLOOR((o.{time_col} / 60000.0) / {interval_minutes}) * {interval_minutes}"
+        admissions_relation = _aumc_admissions_relation_sql(data_source)
+        relative_bucket_minutes = (
+            f"FLOOR(((o.{time_col} - a.admittedat) / 60000.0) / "
+            f"{interval_minutes}) * {interval_minutes}"
+        )
+        # Preserve the measuredat_minutes contract consumed by
+        # ConceptResolver._align_time_to_admission while anchoring the bucket
+        # itself to ICU admission rather than the database-wide clock.
+        time_round_expr = (
+            f"(a.admittedat / 60000.0 + {relative_bucket_minutes})"
+        )
         query = f"""
         SELECT o.{id_col} AS {id_col}, {time_round_expr} AS measuredat_minutes,
             {select_sql}
         FROM read_parquet({glob_pattern}, union_by_name=true) o
+        JOIN {admissions_relation} a ON o.{id_col} = a.admissionid
         WHERE o.{itemid_col} IN ({all_ids_sql}){p_clause}{non_null_clause}
+            AND a.admittedat IS NOT NULL
         GROUP BY o.{id_col}, {time_round_expr}
         ORDER BY o.{id_col}, 2
         """
