@@ -910,11 +910,51 @@ def _legacy_raw_input_contract(variable: ConceptDescriptor) -> Dict[str, Any]:
             "range_policy": "flag_only",
             "out_of_range_action": "retain_and_flag",
         }
+    _apply_domain(fact, variable)
+    return fact
+
+
+def _apply_domain(fact: Dict[str, Any], variable: ConceptDescriptor) -> None:
+    """Publish a DECLARED domain when one exists, an observed one otherwise.
+
+    ``ordinal_levels`` is a declaration: ``icu_rules`` fixes SOFA components at
+    0-4 and KDIGO stage at 0-3 by construction, and 687 of 4,318 recorded
+    context variables already carry it.  This layer ignored it and re-derived a
+    level set from whatever the cohort happened to contain -- so the host held
+    the codebook and published a guess.
+
+    The difference is not cosmetic.  An observed set cannot contain a level with
+    zero cases, which is exactly what a stage-stratified table has to show; the
+    2026-07-30 note that introduced the observed fallback names "not displaying
+    the zero-count one" as part of the defect it was fixing, and deriving the
+    levels from data structurally cannot deliver it.  Measured on the recorded
+    runs: 327 contracts published an ordinal-score domain taken from
+    observation, and every one of those concepts has a declaration available.
+
+    The observed fallback stays for concepts with no declaration (702 binary
+    flags, 393 text), and keeps saying so in ``allowed_values_basis``.  It is
+    still a guess -- ``adm`` published ``['EYE','med','other','surg']`` in 10
+    real contracts while the concept dictionary declares three levels, so an
+    unmapped raw code arrived labelled as a legal value.  Closing that needs the
+    dictionary's own ``levels`` wired in as a third source; this change does not
+    claim to have done it.
+    """
+
+    declared = getattr(variable, "ordinal_levels", None)
+    if declared:
+        fact["allowed_values"] = list(declared)
+        fact["allowed_values_basis"] = "declared_ordinal_levels"
+        observed = _closed_observed_levels(variable.observed_domain)
+        if observed is not None:
+            # Keep the observation visible rather than replacing it: a declared
+            # level this cohort never saw is a real, reportable fact, and a
+            # consumer can only see it by comparing the two.
+            fact["observed_values"] = observed
+        return
     levels = _closed_observed_levels(variable.observed_domain)
     if levels is not None:
         fact["allowed_values"] = levels
         fact["allowed_values_basis"] = "sealed_research_context_observed_domain"
-    return fact
 
 
 def resolved_raw_input_contracts(
@@ -996,7 +1036,19 @@ def resolved_raw_input_contracts(
             else None
         )
         observed_levels = _closed_observed_levels(domain)
-        if "allowed_values" not in fact and observed_levels is not None:
+        # Same order of authority as ``_apply_domain``: a declaration outranks
+        # an observation, and outranks it here too -- this is the manifest the
+        # sandbox actually executes against, so a guess winning on this path
+        # would undo the fix on the other one.
+        declared_levels = (
+            getattr(variable, "ordinal_levels", None) if variable else None
+        )
+        if "allowed_values" not in fact and declared_levels:
+            fact["allowed_values"] = list(declared_levels)
+            fact["allowed_values_basis"] = "declared_ordinal_levels"
+            if observed_levels is not None:
+                fact["observed_values"] = observed_levels
+        elif "allowed_values" not in fact and observed_levels is not None:
             fact["allowed_values"] = observed_levels
             fact["allowed_values_basis"] = "sealed_research_context_observed_domain"
         if binding.analysis_plausibility_range is not None:
