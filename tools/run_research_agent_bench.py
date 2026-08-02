@@ -5288,17 +5288,20 @@ def _run_ehrflowbench_jsonl(
                     request_timeout=request_timeout,
                 )
             scores.append(score)
-            execution_failures = _score_execution_failures(score)
+            # An execution failure is NOT recorded in ``pending``.  ``pending``
+            # means one thing -- the item never entered the pipeline -- and the
+            # exit code says so out loud (5 vs 4), the printed line says so, and
+            # the offered waiver (``--allow-pending-import``) is an *import*
+            # waiver.  This item reached ``_run_one_item_from_cohort`` and came
+            # back with a score, so filing it here made the run report "never
+            # entered the pipeline" for something that ran, return 5 where 4 is
+            # true, count it as both runnable and pending, and tell the operator
+            # to accept an execution failure with an import flag.  The failure
+            # is already reported from ``scores`` through the same predicate
+            # (``incomplete``), which is where it belongs; this append was the
+            # earlier way of exiting non-zero and outlived the split.
             if task_hard_stop is not None:
                 _finish_task_on_execution_outcome(task_hard_stop, score)
-            if execution_failures:
-                pending.append(
-                    {
-                        "key": key,
-                        "status": "execution_incomplete",
-                        "error": "; ".join(execution_failures)[:300],
-                    }
-                )
             if formal_canary_task_id is not None and key == formal_canary_task_id:
                 canary_passed = _figure2_canary_passed(score)
                 _write_figure2_canary_gate(
