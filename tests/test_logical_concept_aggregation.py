@@ -355,3 +355,98 @@ def test_mimic_fio2_carevue_torr_unit_is_not_reported_as_mismatch() -> None:
     ]
     frame = result["fio2"].data
     assert frame["fio2"].tolist() == [50.0]
+
+
+def test_partial_wide_merge_preserves_exact_fractional_charttime_keys() -> None:
+    resolver = ConceptResolver(ConceptDictionary({}))
+    wide = pd.DataFrame(
+        {
+            "admissionid": [16075, 16075],
+            "charttime": [-0.383333333333, 0.616666666667],
+            "hr": [89.0, 95.0],
+        }
+    )
+    pulse = ICUTable(
+        data=pd.DataFrame(
+            {
+                "admissionid": [16075, 16075],
+                "charttime": [0.0, 0.616666666667],
+                "pulse_pressure": [48.5, 97.0],
+            }
+        ),
+        id_columns=["admissionid"],
+        index_column="charttime",
+        value_column="pulse_pressure",
+    )
+
+    observed = resolver._merge_partial_wide_result(
+        wide,
+        {"pulse_pressure": pulse},
+        ["hr", "pulse_pressure"],
+        {"hr"},
+    ).sort_values("charttime", kind="mergesort")
+
+    assert observed["charttime"].tolist() == [
+        -0.383333333333,
+        0.0,
+        0.616666666667,
+    ]
+    by_time = observed.set_index("charttime")
+    assert by_time.loc[-0.383333333333, "hr"] == 89.0
+    assert pd.isna(by_time.loc[-0.383333333333, "pulse_pressure"])
+    assert pd.isna(by_time.loc[0.0, "hr"])
+    assert by_time.loc[0.0, "pulse_pressure"] == 48.5
+    assert by_time.loc[0.616666666667, "hr"] == 95.0
+    assert by_time.loc[0.616666666667, "pulse_pressure"] == 97.0
+
+
+def test_partial_wide_merge_falls_back_on_duplicate_exact_keys() -> None:
+    resolver = ConceptResolver(ConceptDictionary({}))
+    wide = pd.DataFrame(
+        {"admissionid": [1], "charttime": [0.25], "hr": [80.0]}
+    )
+    duplicate = ICUTable(
+        data=pd.DataFrame(
+            {
+                "admissionid": [1, 1],
+                "charttime": [0.25, 0.25],
+                "map": [70.0, 72.0],
+            }
+        ),
+        id_columns=["admissionid"],
+        index_column="charttime",
+        value_column="map",
+    )
+
+    observed = resolver._merge_partial_wide_result(
+        wide,
+        {"map": duplicate},
+        ["hr", "map"],
+        {"hr"},
+    )
+
+    assert observed is None
+
+
+def test_partial_wide_merge_falls_back_instead_of_coercing_text_to_null() -> None:
+    resolver = ConceptResolver(ConceptDictionary({}))
+    wide = pd.DataFrame(
+        {"stay_id": [1], "charttime": [0.0], "hr": [80.0]}
+    )
+    mode = ICUTable(
+        data=pd.DataFrame(
+            {"stay_id": [1], "charttime": [0.0], "vent_mode": ["PCV"]}
+        ),
+        id_columns=["stay_id"],
+        index_column="charttime",
+        value_column="vent_mode",
+    )
+
+    observed = resolver._merge_partial_wide_result(
+        wide,
+        {"vent_mode": mode},
+        ["hr", "vent_mode"],
+        {"hr"},
+    )
+
+    assert observed is None
