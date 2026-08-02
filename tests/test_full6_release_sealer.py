@@ -153,6 +153,14 @@ def test_sealer_validates_6_by_19_and_atomically_writes_metadata(
         "partial_wide_exact_floating_charttime_key_alignment"
         in metadata["corrections"]
     )
+    assert (
+        "aumc_relative_time_bucketed_before_admission_alignment"
+        in metadata["corrections"]
+    )
+    assert (
+        "eicu_susp_inf_uses_antibiotic_event_time"
+        in metadata["corrections"]
+    )
     assert metadata["extraction_execution"]["profile"] == "server-adaptive"
     assert not metadata["extraction_execution"]["portable_16gb_validated"]
     assert set(metadata["extraction_execution"]["timing"]["databases"]) == set(

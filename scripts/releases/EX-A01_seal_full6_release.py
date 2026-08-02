@@ -52,8 +52,10 @@ CORRECTIONS = (
     "demographics_one_row_per_stay_with_nearest_static_values_and_recomputed_bmi",
     "longitudinal_null_equal_primary_key_consolidation",
     "partial_wide_exact_floating_charttime_key_alignment",
+    "aumc_relative_time_bucketed_before_admission_alignment",
     "streamed_non_demographics_charttime_schema_stabilization",
     "eicu_samp_represents_sampling_event_not_culture_positivity",
+    "eicu_susp_inf_uses_antibiotic_event_time",
     "per_parquet_sha256_and_byte_size_receipts",
 )
 
