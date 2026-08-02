@@ -754,6 +754,102 @@ def test_table_one_sdk_accepts_exact_planner_spec(ra):
     assert audit_mechanical_code_contracts(script, step) == []
 
 
+def _spec_not_passed_findings(script: str, step):
+    return [
+        finding
+        for finding in audit_mechanical_code_contracts(script, step)
+        if (finding.detail or {}).get("reason") == "table_one_spec_not_passed"
+    ]
+
+
+def test_table_one_sdk_call_that_passes_no_spec_is_refused_before_launch(ra):
+    """The gate constrained WHICH spec is passed and never that one is.
+
+    m1's ``02_baseline_table_one`` died in the sandbox with
+    ``build_grouped_table_one() missing 1 required positional argument:
+    'spec'`` -- while the correct spec sat four lines above, host-rendered,
+    and was used later in the same script for the receipt.  The gate that
+    exists to constrain this exact call could not see it: its entry condition
+    required two arguments before it would look at anything, so the one shape
+    that supplies no spec skipped the check entirely.
+
+    Measured across the recorded corpus: 121 calls pass the spec positionally
+    and 3 pass nothing, in three different runs under three different step
+    names.  This is not a one-off typo.
+    """
+
+    step = _table_step(ra)
+    spec = step.table_one_spec.model_dump(mode="python")
+    script = (
+        "import pandas as pd\n"
+        "from easyicu.research_agent.methods.table_one import "
+        "build_grouped_table_one\n"
+        'frame = pd.DataFrame({"age": [61.0], "death": [0]})\n'
+        f"table_one_spec = {spec!r}\n"
+        "result = build_grouped_table_one(frame)\n"
+    )
+
+    findings = _spec_not_passed_findings(script, step)
+
+    assert len(findings) == 1
+    assert findings[0].severity == "error"
+    assert findings[0].detail["line"] == 5
+
+
+def test_table_one_sdk_accepts_the_spec_by_keyword(ra):
+    """The signature names the parameter, so naming it is a legal call."""
+
+    step = _table_step(ra)
+    spec = step.table_one_spec.model_dump(mode="python")
+    script = (
+        "import pandas as pd\n"
+        "from easyicu.research_agent.methods.table_one import "
+        "build_grouped_table_one\n"
+        'frame = pd.DataFrame({"age": [61.0], "death": [0]})\n'
+        f"table_one_spec = {spec!r}\n"
+        "result = build_grouped_table_one(frame, spec=table_one_spec)\n"
+    )
+
+    assert _spec_not_passed_findings(script, step) == []
+
+
+def test_a_spec_forwarded_through_a_mapping_splat_is_not_refused(ra):
+    """Refusing what cannot be resolved here would block legal code.
+
+    The gate reads one call site; a ``**mapping`` may carry the spec and
+    nothing at this layer can prove otherwise.  Staying silent keeps the
+    refusal aimed at the shape that is unambiguously wrong.
+    """
+
+    step = _table_step(ra)
+    spec = step.table_one_spec.model_dump(mode="python")
+    script = (
+        "import pandas as pd\n"
+        "from easyicu.research_agent.methods.table_one import "
+        "build_grouped_table_one\n"
+        'frame = pd.DataFrame({"age": [61.0], "death": [0]})\n'
+        f"table_one_spec = {spec!r}\n"
+        'kwargs = {"spec": table_one_spec}\n'
+        "result = build_grouped_table_one(frame, **kwargs)\n"
+    )
+
+    assert _spec_not_passed_findings(script, step) == []
+
+
+def test_a_step_with_no_table_one_spec_is_not_policed_here(ra):
+    """No Planner declaration, nothing for this gate to enforce."""
+
+    script = (
+        "import pandas as pd\n"
+        "from easyicu.research_agent.methods.table_one import "
+        "build_grouped_table_one\n"
+        'frame = pd.DataFrame({"age": [61.0]})\n'
+        "result = build_grouped_table_one(frame)\n"
+    )
+
+    assert _spec_not_passed_findings(script, _step(ra)) == []
+
+
 def test_closed_counts_missing_levels_is_repaired_without_inventing_categories(ra):
     script = """
 from easyicu.research_agent.methods.descriptive_inputs import closed_categorical_counts
