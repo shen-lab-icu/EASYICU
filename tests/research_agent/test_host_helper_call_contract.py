@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from easyicu.research_agent.gates.preflight import audit_mechanical_code_contracts
-from easyicu.research_agent.repairs.reasons import repair_reason_for_finding
+from easyicu.research_agent.repairs.reasons import (
+    RepairReason,
+    repair_reason_for_finding,
+)
 from easyicu.research_agent.repairs.source import deterministic_concept_audit_repair
 
 
@@ -794,6 +797,14 @@ def test_table_one_sdk_call_that_passes_no_spec_is_refused_before_launch(ra):
     assert len(findings) == 1
     assert findings[0].severity == "error"
     assert findings[0].detail["line"] == 5
+    # Omitting the argument is the same class of defect as passing the wrong
+    # one, and its sibling reason ``table_one_spec_not_planner_owned`` is
+    # already classified that way. Left unmapped this fell into the generic
+    # output-contract bucket, which blames the wrong layer in the ledger.
+    assert (
+        repair_reason_for_finding(findings[0])
+        is RepairReason.INVALID_HELPER_SIGNATURE
+    )
 
 
 def test_table_one_sdk_accepts_the_spec_by_keyword(ra):
