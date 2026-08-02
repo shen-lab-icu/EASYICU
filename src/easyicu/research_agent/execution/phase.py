@@ -476,6 +476,7 @@ from ..authority.step_runtime import (
     select_explicit_step_capsule_for_targeted_resume,
 )
 from ..authority.step_attempt import (
+    RESUMABLE_ATTEMPT_COORDINATE_FIELDS,
     CheckpointAuthority,
     StepAttemptState,
     StepAuthorityOperations,
@@ -12107,6 +12108,31 @@ def run_execute_phase(
                 return
 
             detail = f"{type(error).__name__}: {error}".strip()
+            # This record becomes the step's CURRENT record, and a resume reads
+            # only the current one.  Measured before this carry existed: a step
+            # that crashed mid repair-transport left its
+            # `repair_transport_pending` checkpoint intact, but the resume saw
+            # the crash record instead -- no `step_authority_capsule_ref`, no
+            # `capsule_pending_repair_*` -- so it skipped recovery entirely and
+            # bought a second generation (WRITE THE PYTHON CODE 1 -> 2) for a
+            # repair that had already been paid for.  The keys are not guessed
+            # here; the checkpoint owner publishes exactly which ones make a
+            # half-finished attempt recoverable.
+            superseded = next(
+                (
+                    record
+                    for record in reversed(per_step_records)
+                    if isinstance(record, Mapping)
+                    and str(record.get("step_id") or "") == step.step_id
+                ),
+                None,
+            )
+            carried_coordinates: Dict[str, Any] = {}
+            if superseded is not None:
+                for field_name in RESUMABLE_ATTEMPT_COORDINATE_FIELDS:
+                    value = superseded.get(field_name)
+                    if value is not None:
+                        carried_coordinates[field_name] = value
             crash_record: Dict[str, Any] = {
                 "step_id": step.step_id,
                 "status": "execution_raised",
@@ -12115,6 +12141,7 @@ def run_execute_phase(
                 "traceback": "".join(
                     traceback.format_exception(type(error), error, error.__traceback__)
                 ),
+                **carried_coordinates,
             }
             with shared_lock:
                 findings.append(

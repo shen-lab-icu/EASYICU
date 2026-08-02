@@ -29,6 +29,33 @@ from .step_runtime import (
 )
 
 
+#: The coordinates a resume needs to pick a half-finished attempt back up.
+#:
+#: Published rather than kept private because a second owner has to write them:
+#: when a step raises, the crash seal appends a record that becomes the step's
+#: CURRENT record (``current_step_records`` returns the last record per step),
+#: and both recovery readers consult only that one --
+#: ``load_checkpoint_selected_step_capsule`` needs
+#: ``step_authority_capsule_ref``, and the pending-repair recovery gate needs
+#: the ``capsule_pending_*`` coordinates.  A crash record without them does not
+#: lose the earlier checkpoint, it HIDES it, and the resume then buys a fresh
+#: generation for work that was already paid for.
+PENDING_REPAIR_FIELDS: tuple[str, ...] = (
+    "capsule_pending_repair_attempt_id",
+    "capsule_pending_repair_binding_sha256",
+    "capsule_pending_repair_failure_status",
+)
+PENDING_INITIAL_FIELDS: tuple[str, ...] = (
+    "capsule_pending_initial_transport_id",
+    "capsule_pending_initial_binding_sha256",
+)
+RESUMABLE_ATTEMPT_COORDINATE_FIELDS: tuple[str, ...] = (
+    "step_authority_capsule_ref",
+    *PENDING_REPAIR_FIELDS,
+    *PENDING_INITIAL_FIELDS,
+)
+
+
 @dataclass(slots=True)
 class StepAttemptState:
     """One step attempt's mutable authority coordinates and replay state."""
@@ -61,15 +88,11 @@ class StepAuthorityOperations:
 class CheckpointAuthority:
     """Persist and restore one attempt's capsule selector atomically."""
 
-    _PENDING_REPAIR_FIELDS = (
-        "capsule_pending_repair_attempt_id",
-        "capsule_pending_repair_binding_sha256",
-        "capsule_pending_repair_failure_status",
-    )
-    _PENDING_INITIAL_FIELDS = (
-        "capsule_pending_initial_transport_id",
-        "capsule_pending_initial_binding_sha256",
-    )
+    # One definition, two writers: this class clears these keys when an
+    # attempt resolves, and the crash seal carries them forward when it does
+    # not.  Keeping a private copy here would let the two drift.
+    _PENDING_REPAIR_FIELDS = PENDING_REPAIR_FIELDS
+    _PENDING_INITIAL_FIELDS = PENDING_INITIAL_FIELDS
 
     def __init__(
         self,
