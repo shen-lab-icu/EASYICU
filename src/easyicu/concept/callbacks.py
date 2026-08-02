@@ -6147,8 +6147,12 @@ def _callback_susp_inf(
         infection_tbl = tables["infection_icd"]
         abx_tbl = tables["abx"]
         
-        # 转换ID列
-        id_columns, index_column, converted_tables = _assert_shared_schema(
+        # 转换 ID 列。infection_icd 只负责“定人”，疑似感染的
+        # 时间轴必须明确来自 ABX。不能使用 _assert_shared_schema 返回的
+        # “第一个组件 index”：当 infection_icd 先于 abx 传入时，
+        # ABX 小时值会被错标为 diagnosisoffset，并在后续多概念合并
+        # 中被当作 stay-level 字段，最终丢失时间。
+        id_columns, _, converted_tables = _assert_shared_schema(
             {"infection_icd": infection_tbl, "abx": abx_tbl},
             ctx=ctx,
             convert_ids=True
@@ -6157,24 +6161,21 @@ def _callback_susp_inf(
         infection_data = converted_tables["infection_icd"].data.copy()
         abx_data = converted_tables["abx"].data.copy()
         
-        if index_column is None:
-            raise ValueError("susp_inf requires time-indexed component tables")
-        
-        # 统一时间列名
+        # ABX “定时”：以抗生素概念自己的 index metadata 为
+        # 唯一时间权威。eICU 在入院对齐后这一列是 canonical
+        # charttime；保留 metadata 也使显式 icd_abx 调用不依赖字典顺序。
         abx_idx = converted_tables["abx"].index_column
-        if abx_idx and abx_idx != index_column and abx_idx in abx_data.columns:
-            abx_data = abx_data.rename(columns={abx_idx: index_column})
-        
-        infection_idx = converted_tables["infection_icd"].index_column
-        if infection_idx and infection_idx != index_column and infection_idx in infection_data.columns:
-            infection_data = infection_data.rename(columns={infection_idx: index_column})
+        if not abx_idx or abx_idx not in abx_data.columns:
+            raise ValueError(
+                "susp_inf icd_abx requires a time-indexed antibiotic component"
+            )
         
         # ICD感染诊断"定人" - 获取有感染诊断的患者列表
         id_col_list = list(id_columns)
         infection_patients = infection_data[id_col_list].drop_duplicates()
         
         # 抗生素"定时" - 获取使用抗生素的时间点
-        abx_events = abx_data[id_col_list + [index_column]].drop_duplicates()
+        abx_events = abx_data[id_col_list + [abx_idx]].drop_duplicates()
         
         # 合并: 有感染诊断的患者 + 使用抗生素的时间点
         # 这意味着: 患者必须有感染诊断，抗生素使用时间即为疑似感染时间
@@ -6186,7 +6187,12 @@ def _callback_susp_inf(
             f"{len(result)} suspected infection events"
         )
         
-        return _as_icutbl(result, id_columns=id_columns, index_column=index_column, value_column="susp_inf")
+        return _as_icutbl(
+            result,
+            id_columns=id_columns,
+            index_column=abx_idx,
+            value_column="susp_inf",
+        )
     
     # ===== 原有策略: and/or/abx/samp =====
     # 需要 abx 和 samp 两个概念
