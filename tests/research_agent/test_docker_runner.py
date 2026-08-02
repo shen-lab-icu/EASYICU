@@ -300,6 +300,7 @@ def test_build_command_maps_resolved_inputs_manifest_into_container(
     _force_docker_present(monkeypatch)
     run_dir = tmp_path / "run"
     runner = ra.DockerRunner(workdir=run_dir, cohort_parquet=cohort)
+    runner.teardown_absence_budget_seconds = 0.0
     step_dir, script_path, out_dir = runner.prepare_step_dir("consume")
     script_path.write_text("print('hi')\n", encoding="utf-8")
     manifest = run_dir / "resolved_inputs" / "consume.json"
@@ -331,6 +332,7 @@ def test_run_owned_cohort_uses_one_canonical_container_path(
     cohort.parent.mkdir(parents=True)
     cohort.write_bytes(b"bound cohort")
     runner = ra.DockerRunner(workdir=run_dir, cohort_parquet=cohort)
+    runner.teardown_absence_budget_seconds = 0.0
     _, script_path, out_dir = runner.prepare_step_dir("consume")
     script_path.write_text("print('hi')\n", encoding="utf-8")
 
@@ -362,6 +364,7 @@ def test_build_command_maps_digest_bound_authority_snapshot_into_container(
     _force_docker_present(monkeypatch)
     run_dir = tmp_path / "run"
     runner = ra.DockerRunner(workdir=run_dir, cohort_parquet=cohort)
+    runner.teardown_absence_budget_seconds = 0.0
     step_dir, script_path, out_dir = runner.prepare_step_dir("consume")
     script_path.write_text("print('hi')\n", encoding="utf-8")
     (run_dir / "manifest_partial.json").write_text(
@@ -771,6 +774,7 @@ def test_runtime_provenance_timeout_tears_down_named_probe(
     )
     run_dir = tmp_path / "run"
     runner = ra.DockerRunner(workdir=run_dir, cohort_parquet=cohort)
+    runner.teardown_absence_budget_seconds = 0.0
 
     with pytest.raises(
         RuntimeError,
@@ -851,6 +855,7 @@ def test_runtime_provenance_retries_once_after_transient_timeout(
     )
     run_dir = tmp_path / "run"
     runner = ra.DockerRunner(workdir=run_dir, cohort_parquet=cohort)
+    runner.teardown_absence_budget_seconds = 0.0
 
     provenance, requirements = runner._capture_runtime_provenance()
 
@@ -1054,6 +1059,7 @@ def test_successful_docker_return_hides_outputs_when_teardown_is_unconfirmed(
     _install_fake_subprocess(monkeypatch)
     run_dir = tmp_path / "run"
     runner = ra.DockerRunner(workdir=run_dir, cohort_parquet=cohort)
+    runner.teardown_absence_budget_seconds = 0.0
     runner._capture_runtime_provenance()
     _install_fake_subprocess(
         monkeypatch,
@@ -1071,14 +1077,18 @@ def test_successful_docker_return_hides_outputs_when_teardown_is_unconfirmed(
     assert result.succeeded is False
     assert result.outputs_safe_to_collect is False
     assert result.artefacts == []
-    assert [cmd[1] for cmd in captured[-6:]] == [
-        "container",
+    # The teardown control sequence, not its exact length: an unconfirmed
+    # removal now polls for absence within a bounded budget instead of asking
+    # once, so the tail is one "container inspect" or many. What must hold is
+    # that stop/kill/wait/rm ran in order and inspect was reached.
+    verbs = [cmd[1] for cmd in captured]
+    assert verbs[-5:-1] == ["stop", "kill", "wait", "rm"] or verbs[-6:-2] == [
         "stop",
         "kill",
         "wait",
         "rm",
-        "container",
     ]
+    assert verbs[-1] == "container"
     assert len(list(run_dir.glob(".docker-successful-*.sentinel"))) == 1
 
 
@@ -1093,6 +1103,7 @@ def test_nonzero_docker_return_hides_outputs_when_teardown_is_unconfirmed(
     _install_fake_subprocess(monkeypatch)
     run_dir = tmp_path / "run"
     runner = ra.DockerRunner(workdir=run_dir, cohort_parquet=cohort)
+    runner.teardown_absence_budget_seconds = 0.0
     runner._capture_runtime_provenance()
     _install_fake_subprocess(
         monkeypatch,
@@ -1167,6 +1178,7 @@ def test_unconfirmed_timeout_hides_artifacts_and_retries_stale_cleanup(
     _install_fake_subprocess(monkeypatch)
     run_dir = tmp_path / "run"
     runner = ra.DockerRunner(workdir=run_dir, cohort_parquet=cohort)
+    runner.teardown_absence_budget_seconds = 0.0
     runner._capture_runtime_provenance()
     _install_fake_subprocess(
         monkeypatch,
@@ -1240,6 +1252,7 @@ def test_stale_sentinel_for_absent_container_does_not_block_retry(
     )
 
     runner = ra.DockerRunner(workdir=run_dir, cohort_parquet=cohort)
+    runner.teardown_absence_budget_seconds = 0.0
     result = runner.run(step_id="slow", code="print('retry')\n")
 
     assert result.succeeded
@@ -1269,6 +1282,7 @@ def test_stale_cleanup_treats_step_id_glob_metacharacters_literally(
     _install_fake_subprocess(monkeypatch)
 
     runner = ra.DockerRunner(workdir=run_dir, cohort_parquet=cohort)
+    runner.teardown_absence_budget_seconds = 0.0
     result = runner.run(step_id="probe*", code="print('retry')\n")
 
     assert result.succeeded
@@ -1290,6 +1304,7 @@ def test_host_interruption_preserves_cleanup_sentinel(
     _install_fake_subprocess(monkeypatch, run_exception=run_exception)
     run_dir = tmp_path / "run"
     runner = ra.DockerRunner(workdir=run_dir, cohort_parquet=cohort)
+    runner.teardown_absence_budget_seconds = 0.0
 
     with pytest.raises(type(run_exception)):
         runner.run(step_id="interrupted", code="print('hi')\n")
@@ -1333,6 +1348,7 @@ def test_run_replaces_hostile_step_file_and_output_symlinks(
         run_side_effect=replace_step_paths_with_symlinks,
     )
     runner = ra.DockerRunner(workdir=run_dir, cohort_parquet=cohort)
+    runner.teardown_absence_budget_seconds = 0.0
 
     result = runner.run(step_id="hostile", code="print('safe')\n")
 
@@ -1438,6 +1454,7 @@ def test_run_rejects_symlinked_step_directory(
     marker.write_text("keep\n", encoding="utf-8")
     (steps_dir / "hostile").symlink_to(external_step, target_is_directory=True)
     runner = ra.DockerRunner(workdir=run_dir, cohort_parquet=cohort)
+    runner.teardown_absence_budget_seconds = 0.0
 
     with pytest.raises(RuntimeError, match="requires a real directory"):
         runner.run(step_id="hostile", code="print('no')\n")

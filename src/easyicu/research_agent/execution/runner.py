@@ -79,6 +79,12 @@ _RUN_ARTIFACT_AUTHORITY_SNAPSHOT_SHA_ENV = (
 _RUN_ARTIFACT_AUTHORITY_ERROR_ENV = "EASYICU_RUN_ARTIFACT_AUTHORITY_ERROR"
 _ROBUSTNESS_AUTHORITY_ENTRYPOINT = "_run_robustness_preflight_from_env"
 
+#: How long to keep asking whether a container has gone away after its own
+#: ``rm --force`` timed out, and how long to wait between asks.  This is
+#: patience, not permission: collection still requires proof of absence.
+_TEARDOWN_ABSENCE_BUDGET_SECONDS = 60.0
+_TEARDOWN_ABSENCE_POLL_SECONDS = 2.0
+
 
 def _python_source_tree_sha256(root: Path) -> str:
     """Digest Python sources by relative path and bytes."""
@@ -1515,6 +1521,11 @@ class DockerRunner:
         self.docker_executable = (
             docker_executable or os.environ.get("EASYICU_DOCKER_EXECUTABLE") or "docker"
         )
+        # Instance-level so a caller that knows removal is already hopeless --
+        # or a test -- can set the patience to zero without reaching into the
+        # module. The defaults are the module constants.
+        self.teardown_absence_budget_seconds = _TEARDOWN_ABSENCE_BUDGET_SECONDS
+        self.teardown_absence_poll_seconds = _TEARDOWN_ABSENCE_POLL_SECONDS
         self.network = network
         self.extra_mounts = self._validated_extra_mounts(extra_mounts or ())
         self.extra_env = dict(extra_env or {})
@@ -2442,16 +2453,59 @@ class DockerRunner:
             cleanup_notes.append("rm failed")
 
         if not teardown_confirmed:
-            inspect_proc = _control(
-                ("container", "inspect", container_ref),
-                timeout=10.0,
-            )
-            if inspect_proc is not None:
-                inspect_error = inspect_proc.stderr.lower()
-                teardown_confirmed = inspect_proc.returncode != 0 and (
-                    "no such object" in inspect_error
-                    or "no such container" in inspect_error
+            # ``rm --force`` can outlast its own timeout while the removal it
+            # started proceeds -- a container whose bind mounts sit on a slow
+            # volume takes longer to unmount than to stop.  Asking once, right
+            # after that timeout, reads a container that is already going away
+            # and reports it as still present.
+            #
+            # Poll for absence within a bounded budget instead.  The invariant
+            # is unchanged: collection still requires PROOF the container is
+            # gone, and a container that is genuinely stuck still refuses after
+            # the budget.  Only the patience changed.
+            #
+            # Measured: 2 recorded steps hit this, both the robustness replay
+            # (17 output files, the largest set any step writes) on the
+            # external-drive run root, and each cost 3 steps -- itself plus the
+            # figure and panel that depend on it.  One of them was the
+            # full-cohort E1 run whose science had completed: primary OR
+            # 1.6077 (1.5393-1.6791) over 94,425 stays, sitting in the staging
+            # directory, refused collection.
+            # Bounded by BOTH a deadline and a poll count. The wall clock alone
+            # is not a bound here: the only thing that advances it inside this
+            # loop is the loop's own sleep, so a sleep that returns instantly
+            # spins. A test with `time.sleep` stubbed out ran this several
+            # million times before the count was added.
+            budget = float(
+                getattr(
+                    self,
+                    "teardown_absence_budget_seconds",
+                    _TEARDOWN_ABSENCE_BUDGET_SECONDS,
                 )
+            )
+            interval = float(
+                getattr(
+                    self,
+                    "teardown_absence_poll_seconds",
+                    _TEARDOWN_ABSENCE_POLL_SECONDS,
+                )
+            )
+            max_polls = max(1, int(budget / interval)) if interval > 0 else 1
+            deadline = time.monotonic() + budget
+            for _attempt in range(max_polls):
+                inspect_proc = _control(
+                    ("container", "inspect", container_ref),
+                    timeout=10.0,
+                )
+                if inspect_proc is not None:
+                    inspect_error = inspect_proc.stderr.lower()
+                    teardown_confirmed = inspect_proc.returncode != 0 and (
+                        "no such object" in inspect_error
+                        or "no such container" in inspect_error
+                    )
+                if teardown_confirmed or time.monotonic() >= deadline:
+                    break
+                time.sleep(interval)
             if not teardown_confirmed:
                 cleanup_notes.append("container presence could not be excluded")
 
