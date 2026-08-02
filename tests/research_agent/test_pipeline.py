@@ -732,7 +732,11 @@ print(json.dumps(summary))
                     "step_id": "01_cohort_lock",
                     "planned_analysis_role": "auxiliary",
                     "intent": "Record the completed analytic cohort.",
-                    "inputs": ["age"],
+                    # No ranged raw input: the script below only counts rows, so
+                    # declaring one would owe a plausibility receipt it never
+                    # computes -- and the step would be blocked before it ever
+                    # reached the fixed-cohort repair this test is about.
+                    "inputs": ["death"],
                     "expected_outputs": [],
                     "method": "descriptive",
                     "icu_rule_refs": [],
@@ -741,7 +745,7 @@ print(json.dumps(summary))
                     "step_id": "02_reconcile",
                     "planned_analysis_role": "auxiliary",
                     "intent": "Keep the completed cohort fixed while reconciling outputs.",
-                    "inputs": ["age"],
+                    "inputs": ["death"],
                     "expected_outputs": [],
                     "method": "data_quality_audit",
                     "icu_rule_refs": [],
@@ -831,7 +835,10 @@ def test_runtime_crash_after_contract_repair_gets_its_own_repair_budget(
                     "step_id": "05_primary_association",
                     "planned_analysis_role": "primary",
                     "intent": "Estimate the adjusted odds ratio for the exposure.",
-                    "inputs": ["age", "death"],
+                    # See 01_cohort_lock above: the scripts here fabricate the
+                    # estimate table outright, so a ranged input would block the
+                    # step before the crash-after-contract-repair path is reached.
+                    "inputs": ["death"],
                     "expected_outputs": ["statistic:primary_association"],
                     "method": "logistic_regression",
                     "icu_rule_refs": ["aggregation_rule_for"],
@@ -958,9 +965,17 @@ def test_method_substitution_contract_repair_is_blocked_when_budget_is_zero(
                     "intent": (
                         "Estimate the adjusted odds ratio for Sepsis-3 and mortality."
                     ),
-                    "inputs": ["sepsis3", "death", "age", "map_min"],
+                    # The overadjustment rule reads the *covariates the summary
+                    # reports*, not the declared inputs; the script fabricates its
+                    # table and reads no column, so declaring the ranged raw
+                    # inputs would only block it before the rule can fire.
+                    "inputs": ["sepsis3", "death"],
                     "expected_outputs": ["statistic:primary_association"],
-                    "method": "logistic",
+                    # `logistic` alone is not one of the effect-method heads that
+                    # grant effect authority, and without that authority the
+                    # overadjustment auditor never runs -- so the step would fail
+                    # the product contract instead of the rule under test.
+                    "method": "logistic_regression",
                     "icu_rule_refs": ["no_overadjustment_for_exposure_constituents"],
                 }
             ],
@@ -1087,7 +1102,7 @@ def test_generic_association_figure_coder_failure_fails_closed(
                     "step_id": "03_primary_association",
                     "planned_analysis_role": "primary",
                     "intent": "Estimate the adjusted odds ratio.",
-                    "inputs": ["sepsis3", "death", "age"],
+                    "inputs": ["sepsis3", "death"],
                     "expected_outputs": ["statistic:primary_or"],
                     "method": "logistic_regression",
                     "icu_rule_refs": [],
@@ -1512,6 +1527,14 @@ def test_pipeline_does_not_block_or_repair_advisory_ordinal_mean(
     otherwise-correct ordinal analysis down to ``diagnostic_only``.
     """
 
+    # `sofa2` carries a plausibility range, and unlike the fallback fixtures
+    # below both scripts here really do read it -- so the step genuinely owes a
+    # flag-only receipt.  Both drafts are wrapped in the host's own receipt
+    # block (the same one the offline mock provider appends) rather than a
+    # hand-copied literal, so the fixture cannot drift away from the contract it
+    # is meant to satisfy.
+    from easyicu.research_agent.providers.mocks import _with_mock_plausibility_receipt
+
     _disable_article_contract(monkeypatch)
     plan = json.dumps(
         {
@@ -1533,10 +1556,13 @@ def test_pipeline_does_not_block_or_repair_advisory_ordinal_mean(
     repaired_code = """
 import json
 import os
+from pathlib import Path
+
 import pandas as pd
 
 df = pd.read_parquet(os.environ["COHORT_PARQUET"])
 out = os.environ["STEP_OUT_DIR"]
+out_dir = Path(out)
 pd.DataFrame({
     "variable": ["sofa2"],
     "median": [float(df["sofa2"].median())],
@@ -1554,9 +1580,12 @@ print(json.dumps(summary))
     initial_code = """
 import json
 import os
+from pathlib import Path
+
 import pandas as pd
 df = pd.read_parquet(os.environ["COHORT_PARQUET"])
 out = os.environ["STEP_OUT_DIR"]
+out_dir = Path(out)
 
 levels = df["sofa2"].value_counts().sort_index()
 pd.DataFrame({
@@ -1574,6 +1603,8 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
     json.dump(summary, f)
 print(json.dumps(summary))
 """
+    initial_code = _with_mock_plausibility_receipt(initial_code)
+    repaired_code = _with_mock_plausibility_receipt(repaired_code)
     llm = PatternScriptedMockLLMClient(
         [
             *_stable_plan_rules(plan),
@@ -1651,7 +1682,11 @@ def test_pipeline_falls_back_to_deterministic_code_after_repair_failure(
                     "step_id": "01_table_one",
                     "planned_analysis_role": "auxiliary",
                     "intent": "Produce a Table 1 cohort summary.",
-                    "inputs": ["sofa2", "death"],
+                    # The draft below raises immediately and reads nothing, so a
+                    # ranged raw input here would be refused by the plausibility
+                    # preflight and the step would never reach the *runtime*
+                    # failure whose repair this test is about.
+                    "inputs": ["death"],
                     "expected_outputs": ["table:table_one"],
                     "method": "descriptive",
                     "icu_rule_refs": ["aggregation_rule_for"],
@@ -1723,7 +1758,7 @@ def test_pipeline_falls_back_when_repair_model_call_fails(
                     "step_id": "01_table_one",
                     "planned_analysis_role": "auxiliary",
                     "intent": "Produce a Table 1 cohort summary.",
-                    "inputs": ["sofa2", "death"],
+                    "inputs": ["death"],
                     "expected_outputs": ["table:table_one"],
                     "method": "descriptive",
                     "icu_rule_refs": ["aggregation_rule_for"],
@@ -1797,7 +1832,7 @@ def test_pipeline_falls_back_when_successful_script_writes_no_artefacts(
                     "step_id": "01_table_one",
                     "planned_analysis_role": "auxiliary",
                     "intent": "Produce a Table 1 cohort summary.",
-                    "inputs": ["sofa2", "death"],
+                    "inputs": ["death"],
                     "expected_outputs": ["table:table_one"],
                     "method": "descriptive",
                     "icu_rule_refs": ["aggregation_rule_for"],
