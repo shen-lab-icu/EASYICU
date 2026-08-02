@@ -12989,7 +12989,7 @@
     {
      "table": "microlab",
      "val_var": "organism",
-     "callback": "transform_fun(comp_na(`!=`, 'no growth'))",
+     "callback": "transform_fun(set_val(TRUE))",
      "class_name": "col_itm"
     }
    ],
@@ -12997,7 +12997,7 @@
     {
      "table": "microlab",
      "val_var": "organism",
-     "callback": "transform_fun(comp_na(`!=`, 'no growth'))",
+     "callback": "transform_fun(set_val(TRUE))",
      "class_name": "col_itm"
     }
    ],

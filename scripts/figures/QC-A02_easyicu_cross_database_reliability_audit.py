@@ -805,6 +805,128 @@ def _structural_placeholder_checks(
     return checks
 
 
+def _row_grain_contract_checks(
+    *,
+    module: str,
+    entry: dict[str, Any],
+    parquet_path: Path,
+    actual_row_count: int | None,
+) -> dict[str, Any]:
+    """Verify the content-bound native-v2 primary-key receipt.
+
+    Native publication performs the physical consolidation.  QC independently
+    binds that audit to the exact parquet bytes and rejects a missing, stale or
+    internally inconsistent receipt rather than treating column presence as a
+    primary-key check.
+    """
+
+    expected_primary_key = (
+        ["stay_id"] if module == "demographics" else ["stay_id", "charttime"]
+    )
+    expected_row_grain = (
+        "one_row_per_icu_stay"
+        if module == "demographics"
+        else "one_row_per_icu_stay_relative_hour"
+    )
+    audit = entry.get("row_grain_audit")
+    audit = audit if isinstance(audit, dict) else {}
+    source_rows = audit.get("source_rows")
+    published_rows = audit.get("published_rows")
+    duplicate_excess_before = audit.get("duplicate_excess_rows_before")
+    rows_consolidated = audit.get("rows_consolidated")
+    recorded_sha256 = entry.get("parquet_sha256")
+    actual_sha256 = _sha256(parquet_path) if parquet_path.is_file() else None
+    recorded_bytes = entry.get("parquet_bytes")
+    actual_bytes = parquet_path.stat().st_size if parquet_path.is_file() else None
+    checks: dict[str, Any] = {
+        "manifest_primary_key_matches_contract": (
+            _string_list(entry.get("primary_key")) == expected_primary_key
+        ),
+        "manifest_row_grain_matches_contract": (
+            entry.get("row_grain") == expected_row_grain
+        ),
+        "manifest_parquet_sha256": recorded_sha256,
+        "actual_parquet_sha256": actual_sha256,
+        "parquet_sha256_matches": bool(
+            isinstance(recorded_sha256, str)
+            and len(recorded_sha256) == 64
+            and recorded_sha256 == actual_sha256
+        ),
+        "manifest_parquet_bytes": recorded_bytes,
+        "actual_parquet_bytes": actual_bytes,
+        "parquet_bytes_matches": bool(
+            isinstance(recorded_bytes, int)
+            and recorded_bytes > 0
+            and recorded_bytes == actual_bytes
+        ),
+        "row_grain_audit_present": bool(audit),
+        "row_grain_audit_primary_key_matches": (
+            _string_list(audit.get("primary_key")) == expected_primary_key
+        ),
+        "row_grain_audit_row_grain_matches": (
+            audit.get("row_grain") == expected_row_grain
+        ),
+        "row_grain_audit_rows_match_parquet": (
+            audit.get("published_rows") == actual_row_count
+            and entry.get("rows") == actual_row_count
+        ),
+        "row_grain_audit_unique_after": (
+            audit.get("duplicate_excess_rows_after") == 0
+        ),
+        "row_grain_audit_consolidation_accounting_valid": (
+            all(
+                isinstance(value, int)
+                for value in (
+                    source_rows,
+                    published_rows,
+                    duplicate_excess_before,
+                    rows_consolidated,
+                )
+            )
+            and source_rows >= published_rows >= 0
+            and duplicate_excess_before == rows_consolidated
+            and source_rows - published_rows == rows_consolidated
+        ),
+        "row_grain_audit_duplicate_excess_rows_before": audit.get(
+            "duplicate_excess_rows_before"
+        ),
+        "row_grain_audit_rows_consolidated": audit.get("rows_consolidated"),
+        "row_grain_audit_null_charttime_rows_after": audit.get(
+            "null_charttime_rows_after"
+        ),
+    }
+    if module == "demographics":
+        checks["row_grain_audit_null_time_contract"] = (
+            audit.get("null_key_equality") == "not_applicable"
+        )
+    else:
+        null_after = audit.get("null_charttime_rows_after")
+        checks["row_grain_audit_null_time_contract"] = (
+            audit.get("null_key_equality") == "nulls_equal"
+            and isinstance(null_after, int)
+            and null_after >= 0
+            and actual_row_count is not None
+            and null_after <= actual_row_count
+        )
+    required_check_names = [
+        "manifest_primary_key_matches_contract",
+        "manifest_row_grain_matches_contract",
+        "parquet_sha256_matches",
+        "parquet_bytes_matches",
+        "row_grain_audit_present",
+        "row_grain_audit_primary_key_matches",
+        "row_grain_audit_row_grain_matches",
+        "row_grain_audit_rows_match_parquet",
+        "row_grain_audit_unique_after",
+        "row_grain_audit_consolidation_accounting_valid",
+        "row_grain_audit_null_time_contract",
+    ]
+    checks["row_grain_contract_valid"] = all(
+        bool(checks[name]) for name in required_check_names
+    )
+    return checks
+
+
 def _metadata_gap_mask(manifests: pd.DataFrame) -> pd.Series:
     complete_metadata = (
         manifests["concept_metadata_complete"].fillna(False).astype(bool)
@@ -869,6 +991,34 @@ def _raise_for_metadata_gaps(manifests: pd.DataFrame) -> None:
     raise ValueError(
         "Manifest metadata contract gaps detected; audit failed closed: "
         + json.dumps(records, ensure_ascii=False, sort_keys=True)
+    )
+
+
+def _raise_for_row_grain_gaps(manifests: pd.DataFrame) -> None:
+    gaps = manifests.loc[
+        ~manifests["row_grain_contract_valid"].fillna(False).astype(bool),
+        [
+            "database",
+            "module",
+            "manifest_primary_key_matches_contract",
+            "manifest_row_grain_matches_contract",
+            "parquet_sha256_matches",
+            "parquet_bytes_matches",
+            "row_grain_audit_present",
+            "row_grain_audit_unique_after",
+            "row_grain_audit_consolidation_accounting_valid",
+            "row_grain_audit_null_time_contract",
+        ],
+    ]
+    if gaps.empty:
+        return
+    raise ValueError(
+        "Manifest row-grain contract gaps detected; audit failed closed: "
+        + json.dumps(
+            gaps.to_dict(orient="records"),
+            ensure_ascii=False,
+            sort_keys=True,
+        )
     )
 
 
@@ -1516,6 +1666,12 @@ def main() -> None:
                 actual_row_count=actual_row_count,
                 manifest_schema_matches_parquet=manifest_schema_matches_parquet,
             )
+            row_grain_checks = _row_grain_contract_checks(
+                module=module,
+                entry=entry,
+                parquet_path=parquet,
+                actual_row_count=actual_row_count,
+            )
             saved_path = str(parquet)
             manifest_rows.append(
                 {
@@ -1539,6 +1695,7 @@ def main() -> None:
                     ),
                     "concept_metadata_complete": concept_metadata_complete,
                     **structural_checks,
+                    **row_grain_checks,
                     "merge_key_count": int("stay_id" in names)
                     + int("charttime" in names),
                     "manifest_schema_matches_parquet": manifest_schema_matches_parquet,
@@ -1725,6 +1882,26 @@ def main() -> None:
         "manifest_schema_matches_parquet_rows": int(
             manifests["manifest_schema_matches_parquet"].sum()
         ),
+        "manifest_row_grain_contract_verified_rows": int(
+            manifests["row_grain_contract_valid"].sum()
+        ),
+        "manifest_row_grain_contract_gap_rows": int(
+            (~manifests["row_grain_contract_valid"]).sum()
+        ),
+        "parquet_sha256_verified_rows": int(
+            manifests["parquet_sha256_matches"].sum()
+        ),
+        "parquet_bytes_verified_rows": int(
+            manifests["parquet_bytes_matches"].sum()
+        ),
+        "manifest_null_charttime_rows_after": int(
+            pd.to_numeric(
+                manifests.get("row_grain_audit_null_charttime_rows_after"),
+                errors="coerce",
+            ).fillna(0).sum()
+            if "row_grain_audit_null_charttime_rows_after" in manifests
+            else 0
+        ),
         "sidecar_sha256_verified_rows": int(manifests["sidecar_sha256_matches"].sum()),
         "runtime_commits": sorted(
             {str(value) for value in manifests["runtime_commit"].dropna() if str(value)}
@@ -1763,6 +1940,7 @@ def main() -> None:
         ),
     )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
+    _raise_for_row_grain_gaps(manifests)
     _raise_for_metadata_gaps(manifests)
 
 
