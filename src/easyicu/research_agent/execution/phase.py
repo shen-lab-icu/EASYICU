@@ -12066,7 +12066,45 @@ def run_execute_phase(
             raise sites behind this call, so the frames are the only thing that
             says which one fired -- dropping them would trade one lost
             diagnosis for another.
+
+            An operator interrupt is handled differently, and the docstring
+            above says why: this seal exists because "an unexpected exception
+            means an unknown invariant broke".  Ctrl-C is neither unexpected
+            nor an invariant break -- it is a person stopping the machine.
+            Sealing it here would be actively destructive, because
+            ``_append_terminal_step_record`` DELETES the attempt's transient
+            capsule checkpoint before appending the terminal one.  That
+            checkpoint (``capsule_revalidation_pending``,
+            ``executed_pending_review``, ...) is exactly the state a resume
+            needs to pick the attempt back up; replacing it with a terminal
+            verdict turns "the operator stopped a long run" into "this step
+            failed", permanently, in that run's own record.  The interrupt
+            still flushes the partial manifest, still records that the run did
+            not finish, and the coordinator still re-raises.
             """
+
+            if isinstance(error, (KeyboardInterrupt, SystemExit)):
+                with shared_lock:
+                    findings.append(
+                        ValidationFinding(
+                            validator="run_interrupted",
+                            severity="error",
+                            message=(
+                                f"The run was interrupted by "
+                                f"{type(error).__name__} while step "
+                                f"{step.step_id} was in flight; the step's own "
+                                "in-flight record is kept so a resume can pick "
+                                "it up, and no later step ran."
+                            ),
+                            detail={
+                                "reason": "operator_interrupt",
+                                "step_id": step.step_id,
+                                "error_type": type(error).__name__,
+                            },
+                        )
+                    )
+                    _flush_partial_manifest({"run_interrupted": step.step_id})
+                return
 
             detail = f"{type(error).__name__}: {error}".strip()
             crash_record: Dict[str, Any] = {
