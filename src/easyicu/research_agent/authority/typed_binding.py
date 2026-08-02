@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
@@ -40,7 +41,12 @@ from ..authority.runtime_artifacts import (
     current_step_records,
     verified_run_evidence_path,
 )
-from ..schema import AnalysisPlan, AnalysisStep, EvidenceRef
+from ..schema import (
+    AnalysisPlan,
+    AnalysisStep,
+    ArtifactConsumptionContract,
+    EvidenceRef,
+)
 from .plan_scope import (
     _serializable_plan_scientific_scope_signature,
     _step_scientific_signature,
@@ -81,6 +87,43 @@ _RESUME_TYPED_INPUT_BINDING_FINGERPRINT_SCHEMA_VERSION = (
 )
 
 
+_TYPED_INPUT_KEY_PATTERN = re.compile(r"[a-z][a-z0-9_]*:[a-z][a-z0-9_]*")
+
+
+def _neutral_consumption_contract(
+    *,
+    input_name: str,
+    binding: Mapping[str, Any],
+) -> Optional[ArtifactConsumptionContract]:
+    """Return the no-claim ``all_rows`` contract when one can be verified.
+
+    ``all_rows`` is the absence of a selection, not a selection: this module's
+    own rule is that a consumer with no explicit role selection must preserve
+    every row.  ``single_row`` and ``one_per_role`` are the modes that assert
+    something, and the host never compiles those -- a consumer that needs one
+    still fails closed against this receipt, because the mode will not match.
+
+    Returns ``None`` when the binding does not already carry what the receipt
+    is made of.  That is the pre-existing state, so nothing that works today
+    can start failing here.
+    """
+
+    if not _TYPED_INPUT_KEY_PATTERN.fullmatch(input_name or ""):
+        return None
+    product_contract = binding.get("product_contract")
+    if not isinstance(product_contract, Mapping):
+        return None
+    row_count = product_contract.get("row_count")
+    if isinstance(row_count, bool) or not isinstance(row_count, int) or row_count < 0:
+        return None
+    artifact_sha256 = str(binding.get("sha256") or "")
+    if len(artifact_sha256) != 64:
+        return None
+    if not Path(str(binding.get("absolute_path") or "")).is_file():
+        return None
+    return ArtifactConsumptionContract(input_key=input_name, mode="all_rows")
+
+
 def _attach_verified_consumption_contract(
     *,
     step: AnalysisStep,
@@ -92,13 +135,26 @@ def _attach_verified_consumption_contract(
         for contract in step.input_consumption_contracts
         if contract.input_key == input_name
     ]
-    if not contracts:
-        return binding
-    if len(contracts) != 1:  # schema validation already prevents this
+    if len(contracts) > 1:  # schema validation already prevents this
         raise ArtifactConsumptionError("ambiguous input consumption contract")
+    if contracts:
+        contract = contracts[0]
+    else:
+        # The Planner was being asked to transcribe a constant: every one of
+        # the 235 contracts declared across the recorded corpus is
+        # ``all_rows`` with no role column and no roles. When it omitted the
+        # line instead, the consumer died inside the container for want of a
+        # receipt the host could have compiled from bytes it had already
+        # verified. The declaration still wins wherever it is made.
+        contract = _neutral_consumption_contract(
+            input_name=input_name,
+            binding=binding,
+        )
+        if contract is None:
+            return binding
     updated = dict(binding)
     updated["consumption_contract"] = verify_artifact_consumption(
-        contract=contracts[0],
+        contract=contract,
         binding=binding,
     )
     return updated
