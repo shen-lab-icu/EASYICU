@@ -713,22 +713,22 @@ def test_exact_capsule_resume_skips_generation_audit_and_execution_but_reruns_ga
     )
     llm = PatternScriptedMockLLMClient(
         [
-            ("ICU-AWARE RESEARCH PLAN", [_plan()] * 8),
+            ("ICU-AWARE RESEARCH PLAN", [_plan()] * 16),
             (
                 "WRITE THE PYTHON CODE",
-                [_summary_script(phase="CAPSULE_RESUME")] * 8,
+                [_summary_script(phase="CAPSULE_RESUME")] * 16,
             ),
             (
                 "CONSERVATIVE ICU CONCEPT-USE AUDITOR",
-                [json.dumps({"findings": []})] * 8,
+                [json.dumps({"findings": []})] * 16,
             ),
-            ("INTERPRET THE RESULTS", ["The cohort summary is available."] * 8),
+            ("INTERPRET THE RESULTS", ["The cohort summary is available."] * 16),
         ]
     )
 
     def capsule_auditor(endpoint: str) -> ScriptedMockLLMClient:
         client = ScriptedMockLLMClient(
-            [json.dumps({"findings": []})] * 8,
+            [json.dumps({"findings": []})] * 16,
             repeat_last=True,
         )
         client.name = "capsule-auditor"
