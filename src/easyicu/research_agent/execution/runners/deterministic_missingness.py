@@ -1542,7 +1542,16 @@ def missingness_measurement_audit_code(
             ]
         ).to_csv(out_dir / "cohort_flow.csv", index=False)
 
-        worst = audit.head(5)[["concept", "value_missing_pct"]].to_dict("records")
+        # The count travels with the percentage. A manuscript states the
+        # numerator ("missing for 696 of 94,458 stays") and cites this step,
+        # but publishing only the rate leaves this step owning no claim for
+        # the number in that sentence -- the binder then finds the same value
+        # registered by other steps, none of them the cited one, and has to
+        # refuse. ``value_missing_n`` is the numerator of the percentage
+        # already published here and sits in this step's own CSV rows.
+        worst = audit.head(5)[
+            ["concept", "value_missing_n", "value_missing_pct"]
+        ].to_dict("records")
         n_structural = int((audit["missingness_kind"] == "structural_no_source").sum())
         n_binary_event_status = int(
             (audit["indicator_semantics"] == "binary_event_presence").sum()
