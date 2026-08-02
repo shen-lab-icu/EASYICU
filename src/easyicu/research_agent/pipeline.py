@@ -219,6 +219,7 @@ from .robustness.panel import (
 )
 from .trajectory.plan_contract import (
     augment_trajectory_plan_products,
+    non_trajectory_clustering_stability_guide,
     trajectory_plan_dag_findings,
     trajectory_planner_contract_guide,
     trajectory_step_roles,
@@ -2712,24 +2713,35 @@ class ResearchAgentPipeline:
         # the pipeline holds the flag, so it supplies the guide the prompt
         # could not build, and only when the prompt's own attempt came back
         # empty, so a wide-column run is never told twice.
+        analysis_type_key = infer_analysis_type(agent_context).key
+        trajectory_planning_guides = []
         if long_trajectory_bound and not trajectory_planner_contract_guide(
             context=agent_context,
-            analysis_type=infer_analysis_type(agent_context).key,
+            analysis_type=analysis_type_key,
         ):
-            long_tier_trajectory_guide = trajectory_planner_contract_guide(
-                context=agent_context,
-                analysis_type=infer_analysis_type(agent_context).key,
-                long_trajectory_bound=True,
-            )
-            if long_tier_trajectory_guide:
-                planning_contract_context = "\n\n".join(
-                    value
-                    for value in (
-                        planning_contract_context,
-                        long_tier_trajectory_guide,
-                    )
-                    if value
+            trajectory_planning_guides.append(
+                trajectory_planner_contract_guide(
+                    context=agent_context,
+                    analysis_type=analysis_type_key,
+                    long_trajectory_bound=True,
                 )
+            )
+        # The converse case: a group-discovery study with no trajectory in
+        # either representation is still asked for a stability audit, and the
+        # only typed stability field it can see belongs to the trajectory
+        # calculator. Declaring that field is what refused m3's whole plan.
+        trajectory_planning_guides.append(
+            non_trajectory_clustering_stability_guide(
+                context=agent_context,
+                analysis_type=analysis_type_key,
+                long_trajectory_bound=long_trajectory_bound,
+            )
+        )
+        planning_contract_context = "\n\n".join(
+            value
+            for value in (planning_contract_context, *trajectory_planning_guides)
+            if value
+        )
 
         for client in self._iter_mock_clients(llm):
             client.context = agent_context
