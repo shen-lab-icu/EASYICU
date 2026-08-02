@@ -4,6 +4,7 @@ from pathlib import Path
 
 import duckdb
 import pandas as pd
+import pytest
 
 from easyicu.config import DataSourceConfig
 from easyicu.datasource import (
@@ -15,6 +16,59 @@ from easyicu.datasource import (
 
 def _make_data_source(tmp_path: Path) -> ICUDataSource:
     return ICUDataSource(DataSourceConfig(name="miiv"), base_path=tmp_path)
+
+
+def _write_aumc_time_fixture(
+    tmp_path: Path,
+    *,
+    admissions_format: str = "parquet",
+) -> tuple[ICUDataSource, float]:
+    """Create a tiny AUMC source with stay 16075's 23-minute clock phase."""
+    admittedat = 13_141_380_000.0
+    admissions = pd.DataFrame(
+        {
+            "admissionid": [16075, 99999],
+            "admittedat": [admittedat, admittedat + 60_000.0],
+        }
+    )
+    if admissions_format == "parquet":
+        admissions.to_parquet(tmp_path / "admissions.parquet", index=False)
+    else:
+        admissions.to_csv(tmp_path / "admissions.csv", index=False)
+
+    numericitems = tmp_path / "numericitems"
+    numericitems.mkdir()
+    pd.DataFrame(
+        {
+            "admissionid": [
+                16075,
+                16075,
+                16075,
+                16075,
+                16075,
+                16075,
+                16075,
+                16075,
+                99999,
+            ],
+            "measuredat": [
+                admittedat - 1.0,
+                admittedat + 2 * 60_000.0,
+                admittedat + 14 * 60_000.0,
+                admittedat + 74 * 60_000.0,
+                admittedat + 4 * 60_000.0,
+                admittedat + 4 * 60_000.0,
+                admittedat + 4 * 60_000.0,
+                admittedat + 74 * 60_000.0,
+                admittedat + 2 * 60_000.0,
+            ],
+            "itemid": [1, 1, 1, 1, 2, 3, 4, 5, 1],
+            "value": [70.0, 90.0, 88.0, 95.0, 93.5, 122.5, 74.0, 97.0, 999.0],
+        }
+    ).to_parquet(numericitems / "part.parquet", index=False)
+
+    source = ICUDataSource(DataSourceConfig(name="aumc"), base_path=tmp_path)
+    return source, admittedat
 
 
 def test_bucket_file_resolution_uses_duckdb_hash_and_skips_unrelated_buckets(tmp_path: Path) -> None:
@@ -120,6 +174,81 @@ def test_single_aggregated_skips_null_value_rows_before_grouping(tmp_path: Path)
     assert result[["stay_id", "charttime", "valuenum"]].to_dict("records") == [
         {"stay_id": 1, "charttime": 0.0, "valuenum": 80.0}
     ]
+
+
+@pytest.mark.parametrize("admissions_format", ["parquet", "csv"])
+def test_aumc_single_aggregation_floors_icu_relative_time_and_filters_patients(
+    tmp_path: Path,
+    admissions_format: str,
+) -> None:
+    source, admittedat = _write_aumc_time_fixture(
+        tmp_path,
+        admissions_format=admissions_format,
+    )
+
+    result = load_bucketed_table_aggregated(
+        source,
+        "numericitems",
+        "value",
+        [1],
+        interval_minutes=60.0,
+        patient_ids=[16075],
+    )
+    result = result.assign(
+        relative_hour=(result["measuredat_minutes"] - admittedat / 60_000.0) / 60.0
+    )
+
+    assert result[["admissionid", "relative_hour", "value"]].to_dict(
+        "records"
+    ) == [
+        {"admissionid": 16075, "relative_hour": -1.0, "value": 70.0},
+        {"admissionid": 16075, "relative_hour": 0.0, "value": 89.0},
+        {"admissionid": 16075, "relative_hour": 1.0, "value": 95.0},
+    ]
+
+
+def test_aumc_stay_16075_single_and_multi_aggregation_have_identical_time_keys(
+    tmp_path: Path,
+) -> None:
+    source, admittedat = _write_aumc_time_fixture(tmp_path)
+
+    single = load_bucketed_table_aggregated(
+        source,
+        "numericitems",
+        "value",
+        [1],
+        interval_minutes=60.0,
+        patient_ids=[16075],
+    )
+    multi = load_bucketed_table_multi_aggregated(
+        source,
+        "numericitems",
+        {
+            "hr": [1],
+            "map": [2],
+            "sbp": [3],
+            "dbp": [4],
+            "pulse": [5],
+        },
+        value_column="value",
+        interval_minutes=60.0,
+        patient_ids=[16075],
+    )
+
+    assert multi["measuredat_minutes"].tolist() == single[
+        "measuredat_minutes"
+    ].tolist()
+    assert multi["hr"].tolist() == pytest.approx(single["value"].tolist())
+
+    relative_hour = (
+        multi["measuredat_minutes"] - admittedat / 60_000.0
+    ) / 60.0
+    multi = multi.assign(relative_hour=relative_hour).set_index("relative_hour")
+    assert multi.loc[0.0, ["hr", "map", "sbp", "dbp"]].tolist() == pytest.approx(
+        [89.0, 93.5, 122.5, 74.0]
+    )
+    assert multi.loc[0.0, "sbp"] - multi.loc[0.0, "dbp"] == pytest.approx(48.5)
+    assert multi.loc[1.0, ["hr", "pulse"]].tolist() == pytest.approx([95.0, 97.0])
 
 
 def test_bucket_layout_cache_invalidates_when_complete_marker_changes(tmp_path: Path) -> None:
