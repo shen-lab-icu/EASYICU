@@ -1915,7 +1915,17 @@ def _structured_model_row(
     contract: Optional[Dict[str, Any]],
     evidence_id: str,
     note_prefix: str,
-    coefficient_path: Optional[Path] = None,
+    # Required, and deliberately without a default. ``coefficient.py``'s
+    # resolver returns None to mean *this summary declares no coefficient
+    # companion*, and its docstring calls that a refusal the caller must not
+    # paper over -- a guessed name that happens to exist would bind the replay
+    # to a table nobody declared. This signature used to default to
+    # ``outputs_dir / "coefficients.csv"``, a filename measured to exist zero
+    # times across every recorded run, so the guess could only ever produce a
+    # missing-file error that blamed the file instead of the declaration. All
+    # six call sites already resolve the path and refuse None before arriving
+    # here; removing the default keeps the next one from re-opening the hole.
+    coefficient_path: Path,
 ) -> tuple[
     RobustnessPanelRow,
     List[Dict[str, Any]],
@@ -1927,7 +1937,6 @@ def _structured_model_row(
     if not isinstance(contract, dict):
         error = "no compatible primary-exposure model contract is available"
         return _blocked_panel_row(spec_id, axis, error), [], None, error
-    coefficient_path = coefficient_path or outputs_dir / "coefficients.csv"
     try:
         coefficients = pd.read_csv(coefficient_path)
     except Exception as exc:
@@ -2223,7 +2232,12 @@ def _variant_model_evidence(
     replay_mode: str,
     analysis_set: Optional[str] = None,
     cohort_override: Optional[Dict[str, Any]] = None,
-    coefficient_path: Optional[Path] = None,
+    # Required for the same reason as ``_structured_model_row``: the guessed
+    # ``coefficients.csv`` never existed, and here the read is wrapped in a bare
+    # ``except`` that returns empty coefficients -- so a guess would not even
+    # surface as an error, it would silently publish contracts with no
+    # term-level evidence attached.
+    coefficient_path: Path,
 ) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """Collect the full spec-by-model contract and term-level evidence."""
 
@@ -2249,7 +2263,6 @@ def _variant_model_evidence(
             contract["cohort_override"] = cohort_override
         evidence_contracts.append(contract)
 
-    coefficient_path = coefficient_path or outputs_dir / "coefficients.csv"
     try:
         coefficients = pd.read_csv(coefficient_path)
     except Exception:
