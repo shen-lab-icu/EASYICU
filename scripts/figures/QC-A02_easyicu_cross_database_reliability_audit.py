@@ -36,14 +36,14 @@ ID_COLUMNS = {
 }
 INDEX_COLUMNS = ID_COLUMNS | {"charttime"}
 NATIVE_SCHEMA_VERSION = "easyicu_native_export_v2"
-CURRENT_QC_SOURCE_RUN_ID = "current_full6_native_v2_hirid_urine24_20260730"
+CURRENT_QC_SOURCE_RUN_ID = "full6_native_v2_rowgrain_a9f8464e_20260803"
 CURRENT_QC_SOURCE_RUN_METADATA_SHA256 = (
-    "62adfb6f29a05305d687802f0eaa1c98f0ba2c4b888bb122c7e29233b4663d04"
+    "72a0469451f22bc7c7954fbc1f46ec2b3b6925cc04efe7e91ddf1c5bd5a3c4c2"
 )
 
 
 # Direct source traces for the review-only shifts retained by the sealed
-# 2026-07-30 six-database package.  These records deliberately do not suppress
+# 2026-08-03 six-database package.  These records deliberately do not suppress
 # the anomaly flags: they distinguish a verified source/recording difference
 # from an untraced conversion defect while preserving the signal for
 # database-stratified downstream sensitivity analyses.
