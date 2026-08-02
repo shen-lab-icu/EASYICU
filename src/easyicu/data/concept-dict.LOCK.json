@@ -1,7 +1,7 @@
 {
   "finalized": false,
-  "finalized_note": "2026-08-03 待重跑 — eICU samp 已从培养阳性语义修复为实际送检事件；native-v2 新增严格行粒度、跨批 charttime、Parquet SHA-256 和重复收敛合同。2026-07-30 六库导出仍是不可变历史证据，不代表本 SHA 的当前发布。",
-  "locked_for_extraction_run": "pending_native_v2_row_grain_rerun_20260803",
+  "finalized_note": "2026-08-03 待 AUMC 纠正重跑 — full6_native_v2_rowgrain_a9f8464e_20260803 的逐值审计发现部分宽表合并把浮点 charttime 截断为整数后匹配，使 AUMC 不同原始时点的概念错误对齐。根因已在 7e35f2c1 修复为精确 (stay_id, charttime) 键；旧 a9f8464e 发布仅保留历史证据，不得进入论文派生链。",
+  "locked_for_extraction_run": "pending_aumc_exact_time_rerun_7e35f2c1_20260803",
   "concept_dict_sha256": "f1a3cfa5c5e3c09f4f167a9cb95450844e47641ba662c53a13e1e1d31f22509c",
   "sofa2_dict_sha256": "ab39bdcf03ad481dd65bbd5f6e63bdc71612a2267539aa76cc9fb415e19a0fca",
   "total_concepts": 251,
