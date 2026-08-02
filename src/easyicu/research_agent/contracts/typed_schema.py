@@ -20,6 +20,13 @@ _MAX_TYPED_TABLE_HEADER_CHARS = 256
 _MAX_TYPED_TABLE_RECEIPT_BYTES = 64 * 1024
 _MAX_TYPED_TABLE_DTYPE_PROFILE_BYTES = 16 * 1024 * 1024
 
+#: A non-numeric column is reported as a closed value set only when it looks
+#: like a category vocabulary rather than free text or an identifier. Above
+#: either bound the column is simply omitted -- omission is the pre-existing
+#: state and says nothing, which is the fail-closed answer.
+_MAX_TYPED_TABLE_CATEGORY_CARDINALITY = 24
+_MAX_TYPED_TABLE_CATEGORY_VALUE_CHARS = 64
+
 
 def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
@@ -127,10 +134,38 @@ def _tabular_artifact_pandas_dtypes(
         for column, dtype in zip(frame.columns, frame.dtypes, strict=True)
         if pd.api.types.is_numeric_dtype(dtype)
     ]
-    return {
+    # Naming a column without naming what may appear in it publishes half a
+    # contract: a consumer that has to select rows on that column is left to
+    # invent the value. This reports the observed vocabulary for the columns
+    # where a vocabulary is what the column is -- the same representation
+    # fact as a dtype, bounded the same way.
+    numeric_set = set(numeric_columns)
+    categorical_values: dict[str, list[str]] = {}
+    for column in frame.columns:
+        name = str(column)
+        if name in numeric_set:
+            continue
+        try:
+            observed = frame[column].dropna().unique().tolist()
+        except Exception:
+            continue
+        if not observed or len(observed) > _MAX_TYPED_TABLE_CATEGORY_CARDINALITY:
+            continue
+        rendered = [str(value) for value in observed]
+        if any(
+            len(value) > _MAX_TYPED_TABLE_CATEGORY_VALUE_CHARS
+            or any(ord(character) < 32 for character in value)
+            for value in rendered
+        ):
+            continue
+        categorical_values[name] = sorted(set(rendered))
+    profile: dict[str, Any] = {
         "column_dtypes": column_dtypes,
         "numeric_columns": numeric_columns,
     }
+    if categorical_values:
+        profile["categorical_values"] = categorical_values
+    return profile
 
 
 def _tabular_artifact_row_count(
@@ -215,6 +250,15 @@ def typed_product_schema_receipt(
         profiled_receipt = {**receipt, **dtype_profile}
         if _serialized_json_size(profiled_receipt) <= _MAX_TYPED_TABLE_RECEIPT_BYTES:
             return profiled_receipt
+        # Value sets are the optional part. Dropping them must not also cost
+        # the dtype facts a consumer already relied on.
+        without_values = {
+            key: value
+            for key, value in profiled_receipt.items()
+            if key != "categorical_values"
+        }
+        if _serialized_json_size(without_values) <= _MAX_TYPED_TABLE_RECEIPT_BYTES:
+            return without_values
     return (
         receipt
         if _serialized_json_size(receipt) <= _MAX_TYPED_TABLE_RECEIPT_BYTES
@@ -234,6 +278,7 @@ def merge_host_table_contract(
         "semantic_roles_scope",
         "column_dtypes",
         "numeric_columns",
+        "categorical_values",
         "row_count",
     ):
         contract.pop(reserved, None)
@@ -269,12 +314,24 @@ def typed_product_prompt_facts(
         return {}
     selected = [value for value in prompt_columns if value in column_dtypes]
     selected_set = set(selected)
-    return {
+    facts: dict[str, Any] = {
         "column_dtypes": {value: column_dtypes[value] for value in selected},
         "numeric_columns": [
             value for value in numeric_columns if value in selected_set
         ],
     }
+    categorical_values = contract.get("categorical_values")
+    if isinstance(categorical_values, Mapping):
+        projected = {
+            column: list(values)
+            for column, values in categorical_values.items()
+            if column in selected_set
+            and isinstance(values, list)
+            and all(isinstance(value, str) for value in values)
+        }
+        if projected:
+            facts["categorical_values"] = projected
+    return facts
 
 
 __all__ = [
