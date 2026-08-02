@@ -826,38 +826,34 @@ def _build_planner_user_prompt(
         "which spells it any other way is executed by nobody.\n\n"
         # The wide vocabulary above is legal but only one pair is EXECUTABLE by
         # the host, and a Planner given five equally-endorsed spellings picked
-        # a non-executable one in 64 of 282 recorded plans. Say which pair buys
-        # the deterministic executor, and why the others cost it.
-        "Of those spellings, exactly one declaration lets the HOST perform "
-        "this step instead of asking the code generator to write it: the "
-        "step's `expected_outputs` are exactly the two products "
+        # a non-executable one in 64 of 282 recorded plans.
+        #
+        # This paragraph was ~2.8 KB when first written, carrying its measured
+        # motivation ("127 of 127", "59% of every cascade") at full length. On
+        # a synthetic minimal context that left 29 KB of headroom and looked
+        # free; on the real typed contexts it is not. h1 died at 80,071 bytes
+        # against an 80,000 limit -- 71 over, from an addition of 2,819. The
+        # Planner needs the INSTRUCTION; the evidence for it belongs in the
+        # commit message and the tests, which is where it now lives. Measure
+        # any further addition against a REAL large context, never a minimal
+        # one.
+        "Of those spellings, exactly one lets the HOST perform this step "
+        "rather than the code generator: `expected_outputs` is exactly "
         + _host_executed_cohort_step_sentence()
-        + ", with no third output of any kind. The host has already "
-        "materialised and digest-bound the cohort before the run starts, so "
-        "under that exact declaration it reads the bound rows, declares them "
-        "the analysis set, writes the attrition table and emits the identity "
-        "receipt itself -- no code, no repair, nothing to get wrong. Any other "
-        "legal spelling of the same two products, or a third output added "
-        "alongside them, is written by the code generator instead. That is the "
-        "single most expensive place in the system to lose the host: over the "
-        "recorded runs this step was generated in 127 of 127 plans, failed in "
-        "21 of them for ten unrelated reasons, and each failure killed a mean "
-        "of 5.1 downstream steps -- 59% of every cascade in the corpus. Prefer "
-        "the executable declaration unless the study genuinely needs a "
-        "differently-named product.\n\n"
-        "When that step also has no exclusion left to apply -- the bound "
-        "cohort IS the analysis set, and the criteria you would list were "
-        "already satisfied upstream -- also declare `cohort_definition_spec`. "
-        "Give `identity_column`, the stable row key the receipt hashes (the "
-        "host will not pick it from column order), and one "
-        "`eligibility_criteria` entry per row you want the attrition table to "
-        "carry, each with a `criterion_id` and a `description` in your "
-        "manuscript's own words. Those entries DOCUMENT eligibility the bound "
-        "cohort already satisfies; they are not filters this step evaluates, "
-        "so a criterion that still has rows to remove does not belong there -- "
-        "a step that must genuinely exclude rows omits the spec, which is the "
-        "honest outcome. Over 196 recorded attrition tables 191 excluded zero "
-        "rows, so this is the ordinary case, not the exception.\n\n"
+        + " and nothing else. The cohort is already materialised and "
+        "digest-bound, so under that declaration the host reads the bound "
+        "rows, writes the attrition table and emits the identity receipt "
+        "itself. Any other spelling of the same two products, or a third "
+        "output beside them, goes to the code generator -- the most expensive "
+        "place in the system to lose the host.\n\n"
+        "When that step has no exclusion left to apply -- the bound cohort IS "
+        "the analysis set -- also declare `cohort_definition_spec`: "
+        "`identity_column` (the row key the receipt hashes; the host will not "
+        "guess it) and one `eligibility_criteria` entry per attrition row, "
+        "each a `criterion_id` plus a `description`. Those entries DOCUMENT "
+        "eligibility the bound cohort already satisfies, so a criterion that "
+        "still has rows to remove does not belong there; a step that must "
+        "genuinely exclude rows omits the spec.\n\n"
         "When robustness is required, pre-specify one or more executable, "
         "task-supported `robustness_specs`; never invent an unsupported axis, "
         "endpoint, or variable. "
@@ -945,6 +941,10 @@ def _build_planner_user_prompt(
         # nested criterion objects -- the same lesson the distribution spec
         # below already paid for. The two product names are literal, not
         # placeholders: this exact pair is what the host executes.
+        # Only the fields this step's shape actually turns on: the two literal
+        # product names and the nested criterion object. The other keys are
+        # already demonstrated by the two steps below, and every byte here is
+        # a byte taken from the typed context.
         "    {\n"
         '      "step_id": "01_define_analysis_cohort",\n'
         '      "planned_analysis_role": "auxiliary",\n'
@@ -953,19 +953,11 @@ def _build_planner_user_prompt(
         '      "expected_outputs": ["' + COHORT_DEFINITION_COHORT_OUTPUT + '", '
         '"' + COHORT_DEFINITION_FLOW_OUTPUT + '"],\n'
         '      "method": "cohort_definition_and_attrition",\n'
-        '      "icu_rule_refs": [],\n'
-        '      "model_requirements": [],\n'
-        '      "input_consumption_contracts": [],\n'
-        '      "table_one_spec": null,\n'
-        '      "trajectory_stability_spec": null,\n'
-        '      "exposure_outcome_distribution_spec": null,\n'
         '      "cohort_definition_spec": {\n'
         '        "identity_column": "<exact id column from the cohort roster>",\n'
         '        "eligibility_criteria": [\n'
-        "          {\n"
-        '            "criterion_id": "<short id used as the flow-table row key>",\n'
-        '            "description": "<what the criterion required, in prose>"\n'
-        "          }\n"
+        '          {"criterion_id": "<flow-table row key>", '
+        '"description": "<what it required>"}\n'
         "        ]\n"
         "      }\n"
         "    },\n"
