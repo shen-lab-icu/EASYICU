@@ -1,7 +1,7 @@
 {
   "finalized": false,
-  "finalized_note": "2026-08-03 待 AUMC 纠正重跑 — full6_native_v2_rowgrain_a9f8464e_20260803 的逐值审计发现部分宽表合并把浮点 charttime 截断为整数后匹配，使 AUMC 不同原始时点的概念错误对齐。根因已在 7e35f2c1 修复为精确 (stay_id, charttime) 键；旧 a9f8464e 发布仅保留历史证据，不得进入论文派生链。",
-  "locked_for_extraction_run": "pending_aumc_exact_time_rerun_7e35f2c1_20260803",
+  "finalized_note": "2026-08-03 待 AUMC/eICU 全量纠正重跑 — 逐值审计发现 AUMC 曾在按 ICU 入科时间归零前对绝对时间取整，且部分宽表合并曾把浮点 charttime 截断为整数；eICU suspected infection 则曾误用 diagnosisoffset 而非抗菌药事件时间。根因分别已在 7e35f2c1、7a75f1cf 和 497cc5fc 修复。旧 a9f8464e 发布仅保留历史证据，不得进入论文派生链；只有基于 f5da6d92 或其后继提交重跑、质控并封存的新六库发布才可提升为 current。",
+  "locked_for_extraction_run": "pending_aumc_eicu_time_semantics_rerun_f5da6d92_20260803",
   "concept_dict_sha256": "f1a3cfa5c5e3c09f4f167a9cb95450844e47641ba662c53a13e1e1d31f22509c",
   "sofa2_dict_sha256": "ab39bdcf03ad481dd65bbd5f6e63bdc71612a2267539aa76cc9fb415e19a0fca",
   "total_concepts": 251,
@@ -14,7 +14,7 @@
   "extraction_contract": {
     "output_layout": "one wide parquet per module ({db}/{module}.parquet): id + time + one column per concept — NOT per-concept files. Matches the web export path (webserver/dataio.py).",
     "load_call": "load_concepts(module_concepts, merge=True) once per module inside keep_cache; do NOT hand-write a per-concept merge (time-column mismatch -> Cartesian blow-up -> OOM).",
-    "batching": "adaptive and result-invariant: one-shot when memory permits; streamed exports continuously size the first batch from currently available memory after reserving 25% (at least 2 GiB), round down to 5,000 stays, and then resize later batches from measured process-tree working set, capped at 67,000. An 8 GiB-available host therefore starts at 40,000 stays. Sepsis derivation reuses the outer batch rather than imposing a hidden 2,000-stay sub-batch. Explicit batch_size remains authoritative. The portable streamed launcher keeps a 1-thread/1GB/256MB safety profile; explicit one-shot runs scale in bounded 24/32/64-GiB tiers up to 8 workers, 8GB DuckDB and 8GB cache on large servers.",
+    "batching": "adaptive and result-invariant: one-shot when memory permits; streamed exports continuously size the first batch from currently available memory after reserving 25% (at least 2 GiB), round down to 5,000 stays, and then resize later batches from measured process-tree working set, capped at 67,000. An 8 GiB-available host therefore starts at 40,000 stays. Sepsis derivation reuses the outer batch rather than imposing a hidden 2,000-stay sub-batch. Explicit batch_size remains authoritative. Both streamed and one-shot launchers use the process-effective memory envelope: Linux honours cgroup-v2 memory.max/current, while macOS and Windows use portable host-memory detection. Below 24 GiB available the profile remains 1 worker/1GB DuckDB/256MB cache; 24/32/64-GiB tiers scale to 2/4/8 workers, 2/4/8GB DuckDB and 2/6/8GB cache.",
     "spill": "DuckDB temp + batch spill default to <output_dir>/.easyicu_spill (the output drive), not system /tmp.",
     "row_grain": "demographics is exactly one row per stay using nearest-to-0h non-null static values and recomputed BMI; every other module is unique on null-equal (stay_id, charttime), with boolean any, numeric median, and conflicting-string fail-closed consolidation. Each file manifest binds the primary key audit and exact Parquet SHA-256."
   },
