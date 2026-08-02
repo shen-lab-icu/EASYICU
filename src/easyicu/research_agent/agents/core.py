@@ -137,6 +137,8 @@ from ..authority.step_capsule import ContentRef
 from ..schema import (
     ADJUSTED_ASSOCIATION_BINARY_METHOD_FAMILIES,
     ADJUSTED_ASSOCIATION_CONTINUOUS_METHOD_FAMILIES,
+    COHORT_DEFINITION_COHORT_OUTPUT,
+    COHORT_DEFINITION_FLOW_OUTPUT,
     AgentRuntimeState,
     AnalysisPlan,
     ArtifactConsumptionContract,
@@ -822,6 +824,40 @@ def _build_planner_user_prompt(
         "downstream step consuming that cohort declares the SAME key in its "
         "`inputs`; a step whose row authority is the closed cohort product but "
         "which spells it any other way is executed by nobody.\n\n"
+        # The wide vocabulary above is legal but only one pair is EXECUTABLE by
+        # the host, and a Planner given five equally-endorsed spellings picked
+        # a non-executable one in 64 of 282 recorded plans. Say which pair buys
+        # the deterministic executor, and why the others cost it.
+        "Of those spellings, exactly one declaration lets the HOST perform "
+        "this step instead of asking the code generator to write it: the "
+        "step's `expected_outputs` are exactly the two products "
+        + _host_executed_cohort_step_sentence()
+        + ", with no third output of any kind. The host has already "
+        "materialised and digest-bound the cohort before the run starts, so "
+        "under that exact declaration it reads the bound rows, declares them "
+        "the analysis set, writes the attrition table and emits the identity "
+        "receipt itself -- no code, no repair, nothing to get wrong. Any other "
+        "legal spelling of the same two products, or a third output added "
+        "alongside them, is written by the code generator instead. That is the "
+        "single most expensive place in the system to lose the host: over the "
+        "recorded runs this step was generated in 127 of 127 plans, failed in "
+        "21 of them for ten unrelated reasons, and each failure killed a mean "
+        "of 5.1 downstream steps -- 59% of every cascade in the corpus. Prefer "
+        "the executable declaration unless the study genuinely needs a "
+        "differently-named product.\n\n"
+        "When that step also has no exclusion left to apply -- the bound "
+        "cohort IS the analysis set, and the criteria you would list were "
+        "already satisfied upstream -- also declare `cohort_definition_spec`. "
+        "Give `identity_column`, the stable row key the receipt hashes (the "
+        "host will not pick it from column order), and one "
+        "`eligibility_criteria` entry per row you want the attrition table to "
+        "carry, each with a `criterion_id` and a `description` in your "
+        "manuscript's own words. Those entries DOCUMENT eligibility the bound "
+        "cohort already satisfies; they are not filters this step evaluates, "
+        "so a criterion that still has rows to remove does not belong there -- "
+        "a step that must genuinely exclude rows omits the spec, which is the "
+        "honest outcome. Over 196 recorded attrition tables 191 excluded zero "
+        "rows, so this is the ordinary case, not the exception.\n\n"
         "When robustness is required, pre-specify one or more executable, "
         "task-supported `robustness_specs`; never invent an unsupported axis, "
         "endpoint, or variable. "
@@ -904,8 +940,37 @@ def _build_planner_user_prompt(
         '    "exclusion": []\n'
         "  },\n"
         '  "steps": [\n'
+        # The cohort-definition step is shown first because it IS first in
+        # every recorded plan, and because prose alone did not convey the
+        # nested criterion objects -- the same lesson the distribution spec
+        # below already paid for. The two product names are literal, not
+        # placeholders: this exact pair is what the host executes.
         "    {\n"
-        '      "step_id": "01_table_one",\n'
+        '      "step_id": "01_define_analysis_cohort",\n'
+        '      "planned_analysis_role": "auxiliary",\n'
+        '      "intent": "<one sentence>",\n'
+        '      "inputs": [],\n'
+        '      "expected_outputs": ["' + COHORT_DEFINITION_COHORT_OUTPUT + '", '
+        '"' + COHORT_DEFINITION_FLOW_OUTPUT + '"],\n'
+        '      "method": "cohort_definition_and_attrition",\n'
+        '      "icu_rule_refs": [],\n'
+        '      "model_requirements": [],\n'
+        '      "input_consumption_contracts": [],\n'
+        '      "table_one_spec": null,\n'
+        '      "trajectory_stability_spec": null,\n'
+        '      "exposure_outcome_distribution_spec": null,\n'
+        '      "cohort_definition_spec": {\n'
+        '        "identity_column": "<exact id column from the cohort roster>",\n'
+        '        "eligibility_criteria": [\n'
+        "          {\n"
+        '            "criterion_id": "<short id used as the flow-table row key>",\n'
+        '            "description": "<what the criterion required, in prose>"\n'
+        "          }\n"
+        "        ]\n"
+        "      }\n"
+        "    },\n"
+        "    {\n"
+        '      "step_id": "02_table_one",\n'
         '      "planned_analysis_role": "auxiliary",\n'
         '      "intent": "<one sentence>",\n'
         '      "inputs": ["<variable names from context>"],\n'
@@ -928,7 +993,8 @@ def _build_planner_user_prompt(
         "        ]\n"
         "      },\n"
         '      "trajectory_stability_spec": null,\n'
-        '      "exposure_outcome_distribution_spec": null\n'
+        '      "exposure_outcome_distribution_spec": null,\n'
+        '      "cohort_definition_spec": null\n'
         "    },\n"
         # A second example step exists for one reason: the distribution spec
         # was described in prose only, and a real Planner then guessed its
@@ -939,7 +1005,7 @@ def _build_planner_user_prompt(
         # name or whether a field nests. Show the shape, as table_one_spec
         # already does.
         "    {\n"
-        '      "step_id": "02_exposure_outcome_distribution",\n'
+        '      "step_id": "03_exposure_outcome_distribution",\n'
         '      "planned_analysis_role": "auxiliary",\n'
         '      "intent": "<one sentence>",\n'
         # Exactly one typed input (the cohort artifact, which carries the
@@ -966,7 +1032,8 @@ def _build_planner_user_prompt(
         '        "denominator_policy": "all_declared_rows",\n'
         '        "missing_outcome_policy": "structural_absence_is_non_event",\n'
         '        "confidence_level": 0.95\n'
-        "      }\n"
+        "      },\n"
+        '      "cohort_definition_spec": null\n'
         "    }\n"
         "  ],\n"
         '  "robustness_specs": [\n'
@@ -1214,6 +1281,9 @@ def _planner_retry_response_projection(raw: str) -> str:
         "table_one_spec",
         "trajectory_stability_spec",
         "exposure_outcome_distribution_spec",
+        # Omitted here, a spec the previous attempt got right is dropped from
+        # the projection and has to be rediscovered on the retry.
+        "cohort_definition_spec",
     )
     raw_steps = payload.get("steps")
     steps = raw_steps if isinstance(raw_steps, list) else []
@@ -1444,8 +1514,9 @@ class PlannerAgent:
                 "each with step_id, planned_analysis_role, intent, inputs, expected_outputs, "
                 "method, icu_rule_refs, optional model_requirements, optional "
                 "input_consumption_contracts, optional table_one_spec, optional "
-                "trajectory_stability_spec, and optional "
-                "exposure_outcome_distribution_spec), "
+                "trajectory_stability_spec, optional "
+                "exposure_outcome_distribution_spec, and optional "
+                "cohort_definition_spec), "
                 "rationale (string). "
                 "All string values must be plain ASCII or UTF-8 quoted strings; "
                 "do not use special Unicode whitespace inside values."
@@ -4552,6 +4623,27 @@ def _closed_cohort_product_sentence() -> str:
 
     spellings = [f"`{value}`" for value in closed_cohort_product_vocabulary()]
     return ", ".join(spellings[:-1]) + f", or {spellings[-1]}"
+
+
+def _host_executed_cohort_step_sentence() -> str:
+    """Name the one output pair the host can execute this step under.
+
+    Same failure as the sentence above, one layer along: the vocabulary of
+    legal closed-cohort spellings is deliberately wide, but the predicate that
+    decides whether the HOST performs the cohort-definition step accepts one
+    exact pair and nothing else. Measured over 282 recorded plans, 142 first
+    steps declared that pair and 64 more declared an equally legal spelling
+    that silently sent the step to the code generator. Rendering the sentence
+    from the constants the schema and the predicate share means the offer and
+    the enforcement cannot drift.
+    """
+
+    from ..schema import (
+        COHORT_DEFINITION_COHORT_OUTPUT,
+        COHORT_DEFINITION_FLOW_OUTPUT,
+    )
+
+    return f"`{COHORT_DEFINITION_COHORT_OUTPUT}` and `{COHORT_DEFINITION_FLOW_OUTPUT}`"
 
 
 def _declared_field_names(model: type) -> set:
