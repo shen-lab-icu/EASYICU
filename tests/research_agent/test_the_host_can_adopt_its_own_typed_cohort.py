@@ -42,6 +42,8 @@ from types import SimpleNamespace
 import pandas as pd
 import pytest
 
+from easyicu.research_agent.authority.evidence_store import EvidenceStore
+from easyicu.research_agent.authority.run_input import _planned_host_cohort_checkpoint
 from easyicu.research_agent.cohort import materializer as cohort_materializer
 from easyicu.research_agent.cohort.schema import (
     CohortDefinition,
@@ -49,11 +51,18 @@ from easyicu.research_agent.cohort.schema import (
     TimeWindow,
     load_materialized_analysis_cohort_result,
     materialize_locked_analysis_cohort,
+    write_locked_cohort_definition,
 )
 from easyicu.research_agent.intake.materialized_metadata import (
     implementation_bundle_sha256,
     load_verified_materialized_cohort_authority,
     stage_materialized_cohort_authority,
+)
+from easyicu.research_agent.schema import (
+    COHORT_DEFINITION_COHORT_OUTPUT,
+    COHORT_DEFINITION_FLOW_OUTPUT,
+    AnalysisPlan,
+    AnalysisStep,
 )
 
 from .test_materialized_column_metadata import _typed_export
@@ -245,6 +254,172 @@ def test_a_wrong_definition_still_refuses_on_the_typed_branch(typed_run):
     )
 
     assert load_materialized_analysis_cohort_result(run_dir=run_dir, plan=other) is None
+
+
+# ---------------------------------------------------------------------------
+# Adopting is not enough: the checkpoint has to seal
+# ---------------------------------------------------------------------------
+
+
+def _sealable_plan():
+    return AnalysisPlan(
+        research_question="Which older adults enter the analysis cohort?",
+        cohort=_definition(),
+        steps=[
+            AnalysisStep(
+                step_id="01_define_analysis_cohort",
+                intent="Define the analytic cohort and report its attrition.",
+                inputs=[],
+                expected_outputs=[
+                    COHORT_DEFINITION_COHORT_OUTPUT,
+                    COHORT_DEFINITION_FLOW_OUTPUT,
+                ],
+                method="cohort_definition_and_attrition",
+            )
+        ],
+    )
+
+
+def _seal(run_dir: Path, plan: AnalysisPlan):
+    evidence = EvidenceStore(run_dir)
+    write_locked_cohort_definition(
+        run_dir=run_dir,
+        plan=plan,
+        evidence=evidence,
+        prompt_pack_version="test",
+        llm_signature="test",
+    )
+    result = load_materialized_analysis_cohort_result(run_dir=run_dir, plan=plan)
+    assert result is not None, "adoption refused, so the seal cannot be tested"
+    return evidence, _planned_host_cohort_checkpoint(
+        plan=plan,
+        result=result,
+        cohort_path=run_dir / "cohort_analysis.parquet",
+        evidence=evidence,
+        prompt_pack_version="test",
+        llm_signature="test",
+        run_dir=run_dir,
+        reason="locked_plan_cohort_materialization",
+        gate_stamp={},
+    )
+
+
+def test_the_adopted_cohort_seals_a_host_owned_checkpoint(typed_run):
+    """The second half of the defect.
+
+    Adoption produced a result the checkpoint could not seal: the receipt named
+    the typed authority, the evidence record did not, and the verifier compares
+    the two. Observed on the real full-cohort run of 2026-08-02 -- the only
+    occurrence of this reason in the whole recorded corpus, because until the
+    loader was fixed nothing ever reached the check.
+    """
+
+    run_dir, _plan = typed_run
+    plan = _sealable_plan()
+
+    _evidence, (step_id, checkpoint, error) = _seal(run_dir, plan)
+
+    assert error is None
+    assert checkpoint is not None
+    assert step_id == "01_define_analysis_cohort"
+    assert checkpoint["generation_mode"] == "deterministic_cohort_materializer"
+    assert checkpoint["status"] == "ok"
+    assert set(checkpoint["step_summary"]["output_files"]) == {
+        COHORT_DEFINITION_COHORT_OUTPUT,
+        COHORT_DEFINITION_FLOW_OUTPUT,
+    }
+
+
+def test_the_evidence_carries_the_same_authority_the_receipt_names(typed_run):
+    """One value, compiled once, handed to both places that assert it."""
+
+    run_dir, _plan = typed_run
+    plan = _sealable_plan()
+
+    evidence, (_step_id, checkpoint, error) = _seal(run_dir, plan)
+    assert error is None and checkpoint is not None
+
+    record = evidence.get("analysis_cohort_execute_repair")
+    metadata = dict(record.metadata or {})
+    receipt = checkpoint["step_summary"]
+
+    assert (
+        metadata["materialized_cohort_authority_ref"]
+        == receipt["materialized_cohort_authority_ref"]
+    )
+    assert metadata["cohort_definition_sha256"] == receipt["cohort_definition_sha256"]
+    assert metadata["reason"] == "locked_plan_cohort_materialization"
+
+
+def test_evidence_bound_to_a_different_authority_is_still_refused(typed_run):
+    """The comparison is not vacuous just because one producer fills both.
+
+    An evidence record already registered under this id -- by an earlier
+    materialization, with a different authority -- is reused rather than
+    overwritten, and that is exactly what this check exists to catch.
+    """
+
+    run_dir, _plan = typed_run
+    plan = _sealable_plan()
+    evidence = EvidenceStore(run_dir)
+    write_locked_cohort_definition(
+        run_dir=run_dir,
+        plan=plan,
+        evidence=evidence,
+        prompt_pack_version="test",
+        llm_signature="test",
+    )
+    evidence.register_file(
+        kind="table",
+        description="A cohort registered under this id by an earlier attempt.",
+        source_path=run_dir / "cohort_analysis.parquet",
+        evidence_id="analysis_cohort_execute_repair",
+        produced_by_step="01_define_analysis_cohort",
+        producer="cohort_repair",
+        generation_mode="llm",
+        prompt_pack_version="test",
+        metadata={"reason": "stale", "llm_signature": "test"},
+    )
+
+    result = load_materialized_analysis_cohort_result(run_dir=run_dir, plan=plan)
+    assert result is not None
+    _step_id, checkpoint, error = _planned_host_cohort_checkpoint(
+        plan=plan,
+        result=result,
+        cohort_path=run_dir / "cohort_analysis.parquet",
+        evidence=evidence,
+        prompt_pack_version="test",
+        llm_signature="test",
+        run_dir=run_dir,
+        reason="locked_plan_cohort_materialization",
+        gate_stamp={},
+    )
+
+    assert checkpoint is None
+    assert error is not None
+    assert "does not bind the typed authority reference" in error
+
+
+def test_an_untyped_materialization_seals_without_typed_keys(tmp_path: Path):
+    """The same verifier refuses a legacy receipt carrying PARTIAL typed
+    authority, so the two keys must be absent when there is no authority to
+    name -- adding them unconditionally would break the untyped path instead."""
+
+    universe_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"age": [10, 18, 40, 70]}).to_parquet(universe_path, index=False)
+    plan = _sealable_plan()
+    materialize_locked_analysis_cohort(
+        run_dir=tmp_path, plan=plan, universe_path=universe_path
+    )
+    assert _ledger(tmp_path)["schema_version"] == "easyicu.analysis_cohort/1"
+
+    evidence, (_step_id, checkpoint, error) = _seal(tmp_path, plan)
+
+    assert error is None
+    assert checkpoint is not None
+    metadata = dict(evidence.get("analysis_cohort_execute_repair").metadata or {})
+    assert "materialized_cohort_authority_ref" not in metadata
+    assert "cohort_definition_sha256" not in metadata
 
 
 def test_the_untyped_ledger_still_requires_its_own_digest(tmp_path: Path):
