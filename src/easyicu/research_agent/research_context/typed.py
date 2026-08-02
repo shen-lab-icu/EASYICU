@@ -931,30 +931,80 @@ def _apply_domain(fact: Dict[str, Any], variable: ConceptDescriptor) -> None:
     runs: 327 contracts published an ordinal-score domain taken from
     observation, and every one of those concepts has a declaration available.
 
-    The observed fallback stays for concepts with no declaration (702 binary
-    flags, 393 text), and keeps saying so in ``allowed_values_basis``.  It is
-    still a guess -- ``adm`` published ``['EYE','med','other','surg']`` in 10
-    real contracts while the concept dictionary declares three levels, so an
-    unmapped raw code arrived labelled as a legal value.  Closing that needs the
-    dictionary's own ``levels`` wired in as a third source; this change does not
-    claim to have done it.
+    The concept dictionary is the second declaration.  A ``fct_cncpt`` states
+    its own closed factor -- ``adm`` is ``['med','surg','other']`` -- and that
+    is a codebook, not a sample.  Reading it also makes a mapping defect
+    visible instead of blessing it: MIMIC-IV's service table contains ``EYE``,
+    the dictionary's own ``apply_map`` for ``adm`` has no entry for it, and the
+    raw code passed straight through.  All 201 recorded contexts observed
+    ``['EYE','med','other','surg']`` on a concept that declares three levels,
+    and publishing the observation labelled the leak legal.  Whether ``EYE``
+    belongs in ``surg`` or ``other`` is a clinical mapping decision and is NOT
+    made here; this only stops the host asserting it is already legal.
+
+    The observed fallback stays for concepts with neither declaration -- 702
+    binary 0/1 flags on the recorded runs -- and keeps saying so in
+    ``allowed_values_basis``.
     """
 
-    declared = getattr(variable, "ordinal_levels", None)
-    if declared:
+    observed = _closed_observed_levels(variable.observed_domain)
+    declared, basis = _declared_domain(variable)
+    if declared is not None:
         fact["allowed_values"] = list(declared)
-        fact["allowed_values_basis"] = "declared_ordinal_levels"
-        observed = _closed_observed_levels(variable.observed_domain)
+        fact["allowed_values_basis"] = basis
         if observed is not None:
             # Keep the observation visible rather than replacing it: a declared
-            # level this cohort never saw is a real, reportable fact, and a
-            # consumer can only see it by comparing the two.
+            # level this cohort never saw, and an observed value the codebook
+            # does not declare, are both real reportable facts, and a consumer
+            # can only see either by comparing the two.
             fact["observed_values"] = observed
         return
-    levels = _closed_observed_levels(variable.observed_domain)
-    if levels is not None:
-        fact["allowed_values"] = levels
+    if observed is not None:
+        fact["allowed_values"] = observed
         fact["allowed_values_basis"] = "sealed_research_context_observed_domain"
+
+
+_CONCEPT_LEVELS_CACHE: Dict[str, Optional[List[Any]]] = {}
+
+
+def _dictionary_declared_levels(source_concept: Optional[str]) -> Optional[List[Any]]:
+    """Return the concept dictionary's own closed factor levels, if it has one."""
+
+    if not source_concept:
+        return None
+    if source_concept in _CONCEPT_LEVELS_CACHE:
+        return _CONCEPT_LEVELS_CACHE[source_concept]
+    levels: Optional[List[Any]] = None
+    try:  # local import to avoid import-time cost / cycles, as icu_rules does
+        from ...concept.loader import load_dictionary
+
+        definition = load_dictionary().get(source_concept)
+        raw = getattr(definition, "levels", None)
+        if isinstance(raw, (list, tuple)) and raw:
+            levels = list(raw)
+    except Exception:
+        levels = None
+    _CONCEPT_LEVELS_CACHE[source_concept] = levels
+    return levels
+
+
+def _declared_domain(
+    variable: ConceptDescriptor,
+) -> tuple[Optional[List[Any]], Optional[str]]:
+    """Return the highest-authority declared domain for one descriptor.
+
+    Order is authority, not convenience: the host's own ICU rules fix a score's
+    range by construction, so they outrank the dictionary; the dictionary
+    outranks anything derived from this cohort's rows.
+    """
+
+    ordinal = getattr(variable, "ordinal_levels", None)
+    if ordinal:
+        return list(ordinal), "declared_ordinal_levels"
+    levels = _dictionary_declared_levels(getattr(variable, "source_concept", None))
+    if levels:
+        return levels, "declared_concept_dictionary_levels"
+    return None, None
 
 
 def resolved_raw_input_contracts(
@@ -1040,12 +1090,12 @@ def resolved_raw_input_contracts(
         # an observation, and outranks it here too -- this is the manifest the
         # sandbox actually executes against, so a guess winning on this path
         # would undo the fix on the other one.
-        declared_levels = (
-            getattr(variable, "ordinal_levels", None) if variable else None
+        declared_levels, declared_basis = (
+            _declared_domain(variable) if variable is not None else (None, None)
         )
         if "allowed_values" not in fact and declared_levels:
             fact["allowed_values"] = list(declared_levels)
-            fact["allowed_values_basis"] = "declared_ordinal_levels"
+            fact["allowed_values_basis"] = declared_basis
             if observed_levels is not None:
                 fact["observed_values"] = observed_levels
         elif "allowed_values" not in fact and observed_levels is not None:
