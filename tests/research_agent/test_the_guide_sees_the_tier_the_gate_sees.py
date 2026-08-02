@@ -34,6 +34,8 @@ from easyicu.research_agent.schema import (
     ResearchContext,
 )
 from easyicu.research_agent.trajectory.plan_contract import (
+    _GENERAL_CLUSTER_STABILITY_METHOD,
+    non_trajectory_clustering_stability_guide,
     trajectory_planner_contract_guide,
 )
 
@@ -131,4 +133,87 @@ def test_an_unbound_trajectory_still_says_nothing():
             long_trajectory_bound=False,
         )
         == ""
+    )
+
+
+def test_a_group_discovery_study_without_a_trajectory_is_told_how_to_declare_stability():
+    """m3's exact shape: clusters one row per stay, still owes a stability audit.
+
+    Its task requires a cluster-stability audit, and ``trajectory_stability_spec``
+    was the only typed stability field it could see.  Declaring that without a
+    validated fixed-window trajectory contract is refused, and the refusal
+    emptied the whole plan -- 11 planned steps, none executed.
+    """
+
+    guide = non_trajectory_clustering_stability_guide(
+        context=_context(wide_window=False),
+        analysis_type=TRAJECTORY,
+        long_trajectory_bound=False,
+    )
+
+    assert guide, "the study was asked for stability with no legal way to declare it"
+    assert "trajectory_stability_spec` null" in guide
+    assert _GENERAL_CLUSTER_STABILITY_METHOD in guide
+
+
+def test_exactly_one_of_the_two_guides_ever_speaks():
+    """They are the two halves of one predicate, so they must not overlap.
+
+    Verified on the recorded contexts as well: h3 gets 3,821 bytes of trajectory
+    contract and 0 of this; m3 gets 0 and 627; the association task gets 0 and 0.
+    """
+
+    for wide, bound in ((False, False), (False, True), (True, False), (True, True)):
+        context = _context(wide_window=wide)
+        spoke = [
+            bool(
+                trajectory_planner_contract_guide(
+                    context=context,
+                    analysis_type=TRAJECTORY,
+                    long_trajectory_bound=bound,
+                )
+            ),
+            bool(
+                non_trajectory_clustering_stability_guide(
+                    context=context,
+                    analysis_type=TRAJECTORY,
+                    long_trajectory_bound=bound,
+                )
+            ),
+        ]
+        assert sum(spoke) == 1, f"wide={wide} bound={bound} -> {spoke}"
+
+
+def test_the_stability_guide_stays_out_of_other_families():
+    assert (
+        non_trajectory_clustering_stability_guide(
+            context=_context(wide_window=False),
+            analysis_type="association_study",
+        )
+        == ""
+    )
+
+
+def test_the_named_method_is_the_registry_key_not_a_literal_that_can_drift():
+    """The guide may only name a method the Planner is actually allowed to use.
+
+    It is also the registry's own statement that this path is agent-coded:
+    ``runner`` is None, so no deterministic owner is being promised.
+    """
+
+    from easyicu.research_agent.planning.analysis_method_suite import (
+        METHOD_SUITE_REGISTRY,
+    )
+
+    methods = {
+        method.key: method
+        for suite in METHOD_SUITE_REGISTRY
+        for method in suite.methods
+    }
+    assert (
+        _GENERAL_CLUSTER_STABILITY_METHOD in methods
+    ), "the guide names a method the registry does not define"
+    assert methods[_GENERAL_CLUSTER_STABILITY_METHOD].runner is None, (
+        "this guide promises agent-coded stability; a runner here would make "
+        "that promise false"
     )

@@ -69,6 +69,13 @@ STABILITY_EXECUTOR_INPUTS = frozenset(
 # claiming the calculator merely by declaring stability-shaped filenames.
 TRAJECTORY_STABILITY_METHOD_HEAD = "trajectory_cluster_stability"
 
+#: The method key a group-discovery study declares when it has no fixed-window
+#: trajectory. It is ``llm_coded`` with no runner in the method suite, which is
+#: the registry's own way of saying general cluster stability stays agent-coded.
+#: A contract test binds this to that registry entry so a rename cannot leave
+#: this guide naming a method the Planner is not allowed to use.
+_GENERAL_CLUSTER_STABILITY_METHOD = "cluster_stability"
+
 TRAJECTORY_REPRESENTATION_SCHEMA_VERSION = "easyicu.trajectory_representation_schema/1"
 TRAJECTORY_CANDIDATE_SOLUTION_SCHEMA_VERSION = (
     "easyicu.candidate_cluster_solution_schema/2"
@@ -1715,6 +1722,53 @@ def trajectory_planner_contract_guide(
     )
 
 
+def non_trajectory_clustering_stability_guide(
+    *,
+    context: ResearchContext,
+    analysis_type: object,
+    long_trajectory_bound: bool = False,
+) -> str:
+    """Tell a group-discovery study without a trajectory how to declare stability.
+
+    The converse of :func:`trajectory_planner_contract_guide`, and gated on the
+    same predicate so exactly one of the two ever speaks.
+
+    ``m3_sepsis_subphenotype`` asks to cluster first-24h summaries -- one row
+    per stay, no trajectory in either representation -- and its task requires a
+    cluster-stability audit.  ``trajectory_stability_spec`` is the only typed
+    stability field a Planner can see, so it declared that, and the plan was
+    refused for attaching a stability spec with no validated fixed-window
+    trajectory contract behind it.  The study was asked for something it had no
+    legal way to declare.
+
+    The method registry already separates the two: ``cluster_stability`` is
+    ``llm_coded`` with no runner, and the trajectory entry's own notes say
+    "general cluster stability remains agent-coded".  That answer simply never
+    reached the Planner.
+    """
+
+    if _normalise_token(analysis_type) != "trajectory_clustering":
+        return ""
+    if long_trajectory_bound or any(
+        variable.fixed_window_trajectory is not None
+        for variable in (context.variables or [])
+    ):
+        # The fixed-window contract applies; the other guide speaks instead.
+        return ""
+    return (
+        "CLUSTER STABILITY WITHOUT A FIXED-WINDOW TRAJECTORY:\n"
+        "This run has no fixed-window trajectory in either representation, so "
+        "the typed trajectory stability calculator does not apply to it. Leave "
+        "`trajectory_stability_spec` null on every step: attaching it without a "
+        "validated fixed-window trajectory contract is refused, and that "
+        "refusal stops the whole plan. Declare the stability work as an "
+        f"ordinary analysis step with method `{_GENERAL_CLUSTER_STABILITY_METHOD}` "
+        "(bootstrap / consensus / adjusted Rand). It is agent-coded, so state "
+        "the resampling scheme, the agreement metric and the decision rule in "
+        "the step intent rather than in a typed spec."
+    )
+
+
 def trajectory_role_code_contract(
     *,
     context: ResearchContext,
@@ -1935,6 +1989,7 @@ __all__ = [
     "STABILITY_EXECUTOR_INPUTS",
     "STABILITY_EXECUTOR_OUTPUTS",
     "TRAJECTORY_STABILITY_METHOD_HEAD",
+    "non_trajectory_clustering_stability_guide",
     "TrajectoryPlanDagEvaluation",
     "augment_trajectory_plan_products",
     "evaluate_trajectory_plan_dag",
