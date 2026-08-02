@@ -2180,6 +2180,17 @@ def _matrix_model_trace(
         and str(item.get("term_role") or "").lower() == "exposure"
         and str(item.get("source_variable") or "") == primary_source
     ]
+    # Same shape as the headline selection in ``_structured_model_row``: with a
+    # declared gradient several exposure terms are fitted, and "exactly one or
+    # give up" leaves this trace field empty. The trace check then refuses a row
+    # whose coefficient IS identified -- the contract names it right here.
+    exposure_expression = str(contract.get("exposure_expression") or "").strip()
+    if len(exposure_terms) > 1 and exposure_expression:
+        exposure_terms = [
+            item
+            for item in exposure_terms
+            if str(item.get("term") or "") == exposure_expression
+        ]
     coefficient_term = (
         exposure_terms[0].get("term") if len(exposure_terms) == 1 else None
     )
