@@ -1208,16 +1208,38 @@ def load_materialized_analysis_cohort_result(
         recorded_parquet_sha = str(
             provenance.get("cohort_parquet_sha256") or ""
         ).strip()
-        # This is an authority recovery path, not a best-effort cache.  A
-        # pre-digest ledger cannot prove which parquet bytes originally closed
-        # the plan-phase materialization, so it must not be promoted into a new
-        # successful checkpoint.  Fresh runs deterministically rematerialize
-        # the cohort and write the digest; legacy runs fail closed instead of
-        # silently blessing same-row-count content drift.
-        if not recorded_parquet_sha:
-            return None
-        if _file_sha256(cohort_path) != recorded_parquet_sha:
-            return None
+        # This is an authority recovery path, not a best-effort cache: the
+        # bytes on disk must be proved to be the ones the materialization
+        # closed, or adoption is refused.  There are two proofs because there
+        # are two ledgers.  ``cohort_parquet_sha256`` anchors the untyped
+        # ``analysis_cohort/1`` ledger, which has nothing else.  The typed
+        # ``/2`` branch never writes that key -- it publishes a content-
+        # addressed authority sidecar instead -- so requiring the key alone
+        # refused every typed materialization the host had just performed.
+        # Measured over the recorded corpus: 164 of 164 ledgers are ``/2`` and
+        # none carries the key, so this recovery had never once succeeded, and
+        # the cohort-definition step it exists to adopt was written by the
+        # Coder in 127 of 127 runs.
+        verified_authority = None
+        if recorded_parquet_sha:
+            if _file_sha256(cohort_path) != recorded_parquet_sha:
+                return None
+        else:
+            from ..intake.materialized_metadata import (
+                load_verified_materialized_cohort_authority,
+            )
+
+            # Strictly stronger than the digest it stands in for: this pins the
+            # parquet bytes, size, row count, column list, schema digest and a
+            # per-row identity digest, and requires the sidecar's semantic
+            # provenance to equal this ledger.  A missing or broken authority
+            # yields None (or raises into the handler below), so a ledger with
+            # neither proof still fails closed.
+            verified_authority = load_verified_materialized_cohort_authority(
+                cohort_path
+            )
+            if verified_authority is None:
+                return None
         flow = pd.read_csv(flow_path)
         if flow.empty:
             return None
@@ -1242,8 +1264,18 @@ def load_materialized_analysis_cohort_result(
         "status": "applied",
         "path": cohort_path,
         "flow_path": flow_path,
-        "authority_path": None,
-        "authority_ref": provenance.get("materialized_cohort_authority_ref"),
+        # Report the authority this adoption actually verified, so a recovered
+        # result carries the same reference a fresh materialization would.
+        "authority_path": (
+            cohort_path.parent / verified_authority.reference.file
+            if verified_authority is not None
+            else None
+        ),
+        "authority_ref": (
+            verified_authority.reference.to_dict()
+            if verified_authority is not None
+            else provenance.get("materialized_cohort_authority_ref")
+        ),
         "cohort_definition_sha256": expected_definition_sha,
         "n_universe": n_universe,
         "n_cohort": n_cohort,
