@@ -1164,16 +1164,16 @@ def missingness_measurement_audit_code(
                     "value_column": value_col or "",
                     "n_total": n_total,
                     "measured_one_n": measured_one_n,
-                    "measured_one_pct": round(100.0 * measured_one_n / n_total, 6),
+                    "measured_one_pct": 100.0 * measured_one_n / n_total,
                     "value_missing_n": value_missing_n,
-                    "value_missing_pct": round(100.0 * value_missing_n / n_total, 6),
+                    "value_missing_pct": 100.0 * value_missing_n / n_total,
                     # aliases so every downstream resolver (figure renderer /
                     # validator) finds a column it recognises.
                     "measured_n": measured_one_n,
                     "n_nonmissing": measured_one_n,
                     "missing_n": value_missing_n,
-                    "missing_pct": round(100.0 * value_missing_n / n_total, 6),
-                    "measured_pct": round(100.0 * measured_one_n / n_total, 6),
+                    "missing_pct": 100.0 * value_missing_n / n_total,
+                    "measured_pct": 100.0 * measured_one_n / n_total,
                     "eligible_n": eligible_n,
                     "not_applicable_n": not_applicable_n,
                     "event_present_n": event_present_n,
@@ -1414,13 +1414,13 @@ def missingness_measurement_audit_code(
                         "n_stratum": stratum_n,
                         "measured_n": measured_n,
                         "measured_pct": (
-                            round(100.0 * measured_n / stratum_n, 6)
+                            100.0 * measured_n / stratum_n
                             if stratum_n
                             else float("nan")
                         ),
                         "value_missing_n": stratum_n - measured_n,
                         "value_missing_pct": (
-                            round(100.0 * (stratum_n - measured_n) / stratum_n, 6)
+                            100.0 * (stratum_n - measured_n) / stratum_n
                             if stratum_n
                             else float("nan")
                         ),
@@ -1433,7 +1433,7 @@ def missingness_measurement_audit_code(
                             else float("nan")
                         ),
                         "raw_indicator_one_pct": (
-                            round(100.0 * raw_indicator_n / stratum_n, 6)
+                            100.0 * raw_indicator_n / stratum_n
                             if resolved_raw_flag is not None and stratum_n
                             else float("nan")
                         ),
@@ -1482,7 +1482,7 @@ def missingness_measurement_audit_code(
                     "n_total": n_total,
                     "n_complete": observed_n,
                     "n_excluded_missing": int(n_total - observed_n),
-                    "complete_pct": round(100.0 * observed_n / n_total, 6),
+                    "complete_pct": 100.0 * observed_n / n_total,
                 }
             )
         expects_analytic_denominator = any(
@@ -1521,7 +1521,7 @@ def missingness_measurement_audit_code(
                     int(n_total - complete_n) if complete_n is not None else None
                 ),
                 "complete_pct": (
-                    round(100.0 * complete_n / n_total, 6)
+                    100.0 * complete_n / n_total
                     if complete_n is not None
                     else None
                 ),
