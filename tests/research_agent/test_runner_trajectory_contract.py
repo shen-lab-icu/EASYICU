@@ -21,6 +21,21 @@ from easyicu.research_agent.authority.step_capsule import (
 from easyicu.research_agent.providers.mocks import PatternScriptedMockLLMClient
 from tests.research_agent.test_materialized_trajectory_authority import _bundle
 
+# The smallest score payload the bench reads as "this arm executed its plan".
+# It mirrors ``_arm_execution_succeeded`` exactly: a run is complete only when
+# it says so and names no failed or missing step.  Stubs in this module use it
+# because they assert what the bench HANDS the pipeline, and an undeclared
+# execution outcome would make the run's exit code -- not the handoff -- the
+# thing that fails.
+_COMPLETED_AWARE_ARM = {
+    "aware": {
+        "execution_complete": True,
+        "step_scientific_requirements_complete": True,
+        "failed_step_ids": [],
+        "missing_step_ids": [],
+    }
+}
+
 
 def _trajectory_authority_plan_llm() -> PatternScriptedMockLLMClient:
     plan = json.dumps(
@@ -340,7 +355,12 @@ def test_ehrflowbench_preserves_trajectory_as_typed_pipeline_input(
 
     def fake_run_one(**kwargs):
         seen.update(kwargs)
-        return {"item_key": "trajectory-probe"}
+        # This test is about what the bench HANDS the pipeline, so the stub has
+        # to return a score that says the arm executed.  A bare ``{"item_key":
+        # ...}`` declares no arm at all, which the execution-completion gate
+        # correctly reads as "did not finish" -- the exit code then reports that
+        # instead of the contract under test.
+        return {"item_key": "trajectory-probe", **_COMPLETED_AWARE_ARM}
 
     monkeypatch.setattr(bench, "_run_one_item_from_cohort", fake_run_one)
     monkeypatch.setattr(bench, "_aggregate", lambda _scores: {"aware": {}})
@@ -400,7 +420,9 @@ def test_ehrflowbench_preserves_typed_cohort_and_trajectory_authority(
 
     def fake_run_one(**kwargs):
         seen.update(kwargs)
-        return {"item_key": "typed-trajectory-probe"}
+        # See the note on the sibling stub: a score with no arm reads as an
+        # unfinished execution, which is not what this test is asserting.
+        return {"item_key": "typed-trajectory-probe", **_COMPLETED_AWARE_ARM}
 
     monkeypatch.setattr(bench, "_run_one_item_from_cohort", fake_run_one)
     monkeypatch.setattr(bench, "_aggregate", lambda _scores: {"aware": {}})
@@ -663,9 +685,40 @@ def test_preexecution_trajectory_mutation_blocks_before_runner_call(
         runner_factory=runner_factory,
     )
 
-    with pytest.raises(MaterializedTrajectoryError, match="authoritative trajectory"):
-        pipeline.run(**run_kwargs)
+    # The tamper is refused, but it no longer escapes ``run``: a step that
+    # raises is now caught, written into the manifest as a terminal record, and
+    # the run stops there instead of losing every other artifact with the
+    # traceback.  Asserting the exception propagates would only prove that
+    # *something* raised.  Assert the four facts that actually make this safe.
+    result = pipeline.run(**run_kwargs)
     assert runner_calls == []
+    manifest = json.loads(Path(result.manifest_path).read_text(encoding="utf-8"))
+
+    # 1. The refusal is recorded, and it names the authoritative trajectory.
+    refusals = [
+        finding
+        for finding in manifest["findings"]
+        if finding.get("severity") == "error"
+        and "authoritative trajectory" in str(finding.get("message"))
+    ]
+    assert len(refusals) == 1, manifest["findings"]
+    assert MaterializedTrajectoryError.__name__ in str(refusals[0]["message"])
+
+    # 2. The step is terminal, not merely unlucky.
+    statuses = {
+        str(record.get("step_id")): str(record.get("status"))
+        for record in manifest["per_step_records"]
+        if record.get("status") == "execution_raised"
+    }
+    assert statuses == {"01_summary": "execution_raised"}
+
+    # 3. No step counts as completed, so nothing from the attempt survives.
+    readiness = manifest["readiness"]
+    assert readiness["execution_complete"] is False
+    assert readiness["completed_step_count"] == 0
+
+    # 4. And the run can never be presented as a paper.
+    assert manifest["execution_identity"]["paper_eligible"] is False
 
 
 def test_runner_trajectory_mutation_rejects_outputs_before_capsule_seal(
