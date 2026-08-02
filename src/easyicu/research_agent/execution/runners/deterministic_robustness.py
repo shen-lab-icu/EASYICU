@@ -1942,11 +1942,35 @@ def _structured_model_row(
     exposure_rows = model_rows[
         model_rows["term_role"].astype(str).str.lower().eq("exposure")
     ].copy()
+    # A declared gradient fits one term per non-reference level, so counting
+    # exposure terms answers "how many contrasts" -- never "which one is the
+    # primary result". The producer already answers that: its contract names
+    # the primary contrast in ``exposure_expression`` and its estimates table
+    # marks the same row ``is_primary_contrast``. Reading that instead of the
+    # row count is what lets an ordinal exposure reach the robustness panel;
+    # counting alone refused every one of them.
+    fitted_exposure_n = len(exposure_rows)
+    exposure_expression = str(contract.get("exposure_expression") or "").strip()
+    if fitted_exposure_n > 1 and exposure_expression:
+        exposure_rows = exposure_rows[
+            exposure_rows["term"].astype(str).eq(exposure_expression)
+        ].copy()
     if len(exposure_rows) != 1:
+        # Still fail closed: no declared primary term, or one that names no
+        # fitted coefficient, leaves the headline genuinely unidentified.
+        # Report what was fitted AND what was asked for -- "emitted 0" after a
+        # failed lookup would send the reader hunting a model that fitted fine.
         error = (
             "robustness matrix requires one scalar primary exposure coefficient; "
-            f"model {model_id!r} emitted {len(exposure_rows)}"
+            f"model {model_id!r} emitted {fitted_exposure_n}"
         )
+        if fitted_exposure_n > 1:
+            error += (
+                "; the contract names "
+                f"{exposure_expression!r} as the primary contrast"
+                if exposure_expression
+                else "; the contract names no primary contrast"
+            )
         return _blocked_panel_row(spec_id, axis, error), [], dict(contract), error
     effect_col = next(
         (
