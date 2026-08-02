@@ -1310,11 +1310,14 @@ def _numeric_sentence_context(text: str, *, start: int, end: int) -> str:
     context_start = 0
     for match in _NUMERIC_SENTENCE_BOUNDARY_RE.finditer(text, 0, start):
         context_start = match.end()
-    # Symmetric to the tail: the citations sitting just past the PREVIOUS
-    # sentence's period belong to that sentence, and a window starting at the
-    # period would otherwise read them as this sentence's sources. That is the
-    # exact mis-attribution this function was written to prevent.
-    context_start = min(_extend_through_trailing_citations(text, context_start), start)
+    # The leading run of citations is KEPT, not skipped. Skipping it was a
+    # symmetry argument, and canary39 refuted it on a real manuscript: the
+    # writer puts a citation before a sentence as readily as after, and there
+    # the value's true owner sat BEFORE while the citation after it belonged to
+    # the next sentence. Position does not identify ownership, so both
+    # neighbouring runs stay in scope. That is safe because the restriction
+    # below only ever NARROWS the candidate set: an extra citation costs recall,
+    # it cannot by itself produce a wrong bind.
     next_boundary = _NUMERIC_SENTENCE_BOUNDARY_RE.search(text, end)
     context_end = next_boundary.end() if next_boundary is not None else len(text)
     context_end = _extend_through_trailing_citations(text, context_end)
