@@ -158,6 +158,22 @@ def test_the_summary_registers_the_canonical_map_and_not_the_bare_one() -> None:
 
 _CORPUS = Path("/Volumes/外置硬盘/easyicu_data/canonical9_runs")
 
+#: Names that reached ``aliases`` from a writer that no longer exists.
+#:
+#: Between 55b901b (2026-08-01) and its removal, the promised-product patch
+#: also wrote the *Planner's* product id, bare, into ``aliases`` -- a key whose
+#: whole job is to be this runner's own internal-stem map.  One recorded run
+#: caught that window:
+#: ``batch_20260802_luna_miiv_FULL_d5baff6_nine1/m1_hepatobiliary_missingness``
+#: registered ``robustness_grid -> sensitivity_specification_grid.csv``.
+#:
+#: Recorded bytes do not change when the code is fixed, so without this the
+#: assertion below could never be green again -- a permanently red guard tells
+#: you nothing.  Naming the one known artifact keeps it a guard: any OTHER
+#: undeclared name still fails, including a recurrence of this one under a
+#: different spelling.  Delete this set when the corpus is regenerated.
+_PRE_FIX_ALIAS_POLLUTION = frozenset({"robustness_grid"})
+
 
 @pytest.mark.skipif(
     not _CORPUS.exists(), reason="recorded runs are not on this machine"
@@ -202,7 +218,7 @@ def test_every_product_this_runner_ever_registered_has_a_declared_kind() -> None
 
     if not seen:
         pytest.skip("no recorded run was written by this runner's summary path")
-    missing = sorted(seen - set(_ROBUSTNESS_PRODUCT_KINDS))
+    missing = sorted(seen - set(_ROBUSTNESS_PRODUCT_KINDS) - _PRE_FIX_ALIAS_POLLUTION)
     assert not missing, (
         f"this runner has emitted {len(missing)} product(s) with no declared "
         f"kind, so they would be refused: {missing}"
