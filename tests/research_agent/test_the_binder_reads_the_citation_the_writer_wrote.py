@@ -170,10 +170,42 @@ def test_the_sentence_window_reaches_its_own_trailing_citation():
     assert _OWN_EVIDENCE in _cited_evidence_ids(_context_for_the_estimate())
 
 
-def test_the_window_leaves_the_previous_sentences_citation_behind():
-    """Symmetric, and the mis-attribution this function exists to prevent."""
+def test_the_window_keeps_the_citation_written_BEFORE_the_sentence_too():
+    """canary39 refuted the symmetry argument on a real manuscript.
 
-    assert _PREVIOUS_EVIDENCE not in _cited_evidence_ids(_context_for_the_estimate())
+    The first version skipped the leading run of citations, reasoning that they
+    belong to the previous sentence. canary39's Results paragraph reads
+
+        [01_cohort_definition_flow](...) The source cohort comprised 94,458 ICU
+        stays identified by `stay_id`. [02_table_one](...)
+
+    -- the value's true owner is cited BEFORE it and the citation after belongs
+    to the NEXT sentence. Skipping the leading run put the wrong step in scope
+    and the number stayed ambiguous, blocking the manuscript again.
+
+    Position does not identify ownership, so both neighbouring runs stay in
+    scope. That is safe rather than sloppy: ``_restrict_to_cited_evidence`` only
+    NARROWS the candidate set, so an extra citation costs recall and cannot by
+    itself produce a wrong bind -- which the two negative tests below still
+    prove.
+    """
+
+    leading = (
+        "[flow](evidence/statistic_step_summary_5586117158e82833"
+        '__step_summary.json "sha256=1b3e7ef1")'
+        " The source cohort comprised 94,458 ICU stays. "
+        "[t1](evidence/statistic_step_summary_39586ec6da69c0c2"
+        '__step_summary.json "sha256=e656301c")'
+    )
+    start = leading.index("comprised 94,458") + len("comprised ")
+    cited = _cited_evidence_ids(
+        _numeric_sentence_context(leading, start=start, end=start + 6)
+    )
+
+    assert "statistic_step_summary_5586117158e82833" in cited
+
+    # and the after-the-period case from canary37 still works
+    assert _OWN_EVIDENCE in _cited_evidence_ids(_context_for_the_estimate())
 
 
 def test_the_window_never_swallows_the_next_sentences_prose():
