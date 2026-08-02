@@ -1265,6 +1265,49 @@ def _extract_module_worker(
     )
 
 
+def _require_timed_positive_suspicion(
+    frame,
+    *,
+    id_col: str,
+    time_col: str,
+    database: str,
+) -> None:
+    """Fail closed when a positive suspected-infection event has no time.
+
+    Sepsis-3 applies a SOFA-delta window around the suspected-infection event,
+    so a positive ``susp_inf`` value is not meaningful without an event time.
+    Native-v2 always materialises a ``charttime`` field, including as an
+    all-null structural column; checking column presence alone is therefore
+    insufficient.  This validation is deliberately scoped to ``susp_inf`` and
+    does not reject stay-level support fields such as ``infection_icd``.
+    """
+    if "susp_inf" not in frame.columns:
+        raise ValueError("Sepsis dependency lacks susp_inf")
+
+    positive = frame["susp_inf"].eq(True).fillna(False)
+    if not bool(positive.any()):
+        return
+    if time_col not in frame.columns:
+        raise ValueError(
+            f"{database} Sepsis dependency has positive susp_inf rows but lacks "
+            f"the required time column '{time_col}'"
+        )
+
+    missing_time = positive & frame[time_col].isna()
+    if not bool(missing_time.any()):
+        return
+    sample_ids = (
+        frame.loc[missing_time, id_col].drop_duplicates().head(5).tolist()
+        if id_col in frame.columns
+        else []
+    )
+    raise ValueError(
+        f"{database} Sepsis dependency has {int(missing_time.sum())} positive "
+        f"susp_inf rows with null {time_col}; sample {id_col}={sample_ids}. "
+        "A timed Sepsis-3 window cannot be derived from stay-level positives."
+    )
+
+
 def _stream_special_extraction_batches(
     special_modules: List[str],
     database: str,
@@ -1371,26 +1414,17 @@ def _stream_special_extraction_batches(
         writers[concept].write_table(table)
         rows[concept] += len(frame)
 
-    def _suspicion_timeline(susp, score, time_col: str):
-        """Return suspected-infection flags on the score time axis.
-
-        Some databases expose ``susp_inf`` as a timed event, while eICU's
-        public ``sepsis_shared`` module is deliberately stay-level.  The
-        ordinary (non-streamed) multi-concept merge broadcasts that stay-level
-        flag onto the SOFA time grid.  Recreate the same representation here
-        so streamed and one-shot exports remain result-invariant.
-        """
-        if time_col in susp.columns:
-            return susp[[id_col, time_col, "susp_inf"]]
-        stay_flags = susp[[id_col, "susp_inf"]].drop_duplicates(
-            subset=[id_col], keep="last"
+    def _suspicion_timeline(susp, time_col: str):
+        """Return validated, event-timed suspected-infection flags."""
+        _require_timed_positive_suspicion(
+            susp,
+            id_col=id_col,
+            time_col=time_col,
+            database=database,
         )
-        return score[[id_col, time_col]].merge(
-            stay_flags,
-            on=id_col,
-            how="left",
-            validate="many_to_one",
-        )
+        if time_col not in susp.columns:
+            return pd.DataFrame(columns=[id_col, time_col, "susp_inf"])
+        return susp[[id_col, time_col, "susp_inf"]]
 
     try:
         for start in range(0, len(all_ids), safe_batch_size):
@@ -1435,7 +1469,7 @@ def _stream_special_extraction_batches(
                 if time_col is None:
                     errors.append("streamed SOFA-1 dependency lacks a time index")
                 else:
-                    susp1 = _suspicion_timeline(susp, sofa1, time_col)
+                    susp1 = _suspicion_timeline(susp, time_col)
                     frame = _sep3(
                         sofa1[[id_col, time_col, "sofa"]],
                         susp1,
@@ -1454,7 +1488,7 @@ def _stream_special_extraction_batches(
                 if time_col is None:
                     errors.append("streamed SOFA-2 dependency lacks a time index")
                 else:
-                    susp2 = _suspicion_timeline(susp, sofa2, time_col)
+                    susp2 = _suspicion_timeline(susp, time_col)
                     frame = _sep3_sofa2(
                         sofa2[[id_col, time_col, "sofa2"]],
                         susp2,
@@ -1629,6 +1663,12 @@ def _run_special_extraction(
         )
 
         if id_col and time_col and "susp_inf" in merged.columns:
+            _require_timed_positive_suspicion(
+                merged,
+                id_col=id_col,
+                time_col=time_col,
+                database=database,
+            )
             # Sepsis-3 = a >=2-point SOFA increase WITHIN the suspected-infection
             # window (delta rule, R ricu sep3), NOT an absolute SOFA>=2. Use the
             # shared sep3()/sep3_sofa2() so both labels match load_sepsis3 and the
