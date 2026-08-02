@@ -9,6 +9,7 @@ failed validation cannot replace a pre-existing ``run_metadata.json``.
 from __future__ import annotations
 
 import argparse
+import csv
 import hashlib
 import json
 import os
@@ -47,6 +48,13 @@ NATIVE_SCHEMA_VERSION = "easyicu_native_export_v2"
 CONTRACT_REVISION = "native_v2_row_grain_sha256_size_20260803"
 RELEASE_SCHEMA_VERSION = "easyicu_full6_release_v1"
 EXPECTED_PARQUET_COUNT = len(DATABASES) * len(MODULES)
+CORRECTIONS = (
+    "demographics_one_row_per_stay_with_nearest_static_values_and_recomputed_bmi",
+    "longitudinal_null_equal_primary_key_consolidation",
+    "streamed_non_demographics_charttime_schema_stabilization",
+    "eicu_samp_represents_sampling_event_not_culture_positivity",
+    "per_parquet_sha256_and_byte_size_receipts",
+)
 
 
 class ReleaseValidationError(ValueError):
@@ -321,6 +329,7 @@ def validate_release(run_root: Path) -> dict[str, Any]:
     module_receipts: dict[str, list[dict[str, Any]]] = {
         module: [] for module in MODULES
     }
+    database_totals: dict[str, dict[str, int]] = {}
     total_rows = 0
     total_bytes = 0
 
@@ -407,6 +416,8 @@ def validate_release(run_root: Path) -> dict[str, Any]:
                     )
                 _validate_sidecar(database_root, manifest)
                 by_module = {entry["module"]: entry for entry in entries}
+                database_rows = 0
+                database_bytes = 0
                 for module in MODULES:
                     receipt = _validate_file_entry(
                         connection=connection,
@@ -415,8 +426,14 @@ def validate_release(run_root: Path) -> dict[str, Any]:
                         entry=by_module[module],
                     )
                     module_receipts[module].append(receipt)
+                    database_rows += receipt["rows"]
+                    database_bytes += receipt["bytes"]
                     total_rows += receipt["rows"]
                     total_bytes += receipt["bytes"]
+                database_totals[database] = {
+                    "rows": database_rows,
+                    "parquet_bytes": database_bytes,
+                }
                 source_manifest_sha256[database] = hashlib.sha256(
                     raw_manifest
                 ).hexdigest()
@@ -443,13 +460,84 @@ def validate_release(run_root: Path) -> dict[str, Any]:
         "runtime_provenance": runtime_provenance,
         "source_manifest_sha256": source_manifest_sha256,
         "module_concepts": module_concepts,
+        "database_totals": database_totals,
         "total_rows": total_rows,
         "total_parquet_bytes": total_bytes,
     }
 
 
+def validate_extraction_timing(
+    *, run_root: Path, validation: dict[str, Any]
+) -> dict[str, Any]:
+    """Bind the six extraction durations and process-tree peaks to the release."""
+
+    path = run_root / "database_extraction_timing.csv"
+    if not path.is_file() or path.is_symlink():
+        raise ReleaseValidationError(
+            f"Missing regular extraction timing evidence: {path}"
+        )
+    try:
+        with path.open(newline="", encoding="utf-8") as handle:
+            rows = list(csv.DictReader(handle))
+    except (OSError, csv.Error) as exc:
+        raise ReleaseValidationError(f"Cannot parse extraction timing CSV: {exc}") from exc
+    by_database = {row.get("database"): row for row in rows}
+    if len(rows) != len(DATABASES) or set(by_database) != set(DATABASES):
+        raise ReleaseValidationError(
+            "Extraction timing CSV must contain exactly one row for each database"
+        )
+
+    records: dict[str, dict[str, Any]] = {}
+    for database in DATABASES:
+        row = by_database[database]
+        label = f"timing[{database}]"
+        try:
+            module_count = int(row.get("module_count") or "")
+            valid_parquet_count = int(row.get("valid_parquet_count") or "")
+            process_exit_code = int(row.get("process_exit_code") or "")
+            total_rows = int(row.get("total_rows") or "")
+            total_bytes = int(row.get("total_parquet_bytes") or "")
+            elapsed_seconds = float(row.get("elapsed_seconds") or "")
+            peak_rss_mb = float(row.get("peak_process_tree_rss_mb") or "")
+            peak_pss_mb = float(row.get("peak_process_tree_pss_mb") or "")
+        except (TypeError, ValueError) as exc:
+            raise ReleaseValidationError(f"{label} has invalid numeric fields") from exc
+        expected = validation["database_totals"][database]
+        if (
+            row.get("status") != "complete"
+            or row.get("error") not in {None, ""}
+            or process_exit_code != 0
+            or module_count != len(MODULES)
+            or valid_parquet_count != len(MODULES)
+            or total_rows != expected["rows"]
+            or total_bytes != expected["parquet_bytes"]
+            or elapsed_seconds <= 0
+            or peak_rss_mb <= 0
+            or peak_pss_mb <= 0
+        ):
+            raise ReleaseValidationError(
+                f"{label} is incomplete or disagrees with the sealed Parquet package"
+            )
+        records[database] = {
+            "elapsed_seconds": elapsed_seconds,
+            "elapsed_minutes": round(elapsed_seconds / 60.0, 3),
+            "batch_strategy": row.get("batch_strategy"),
+            "peak_process_tree_rss_mb": peak_rss_mb,
+            "peak_process_tree_pss_mb": peak_pss_mb,
+        }
+    return {
+        "file": path.name,
+        "sha256": _sha256_file(path),
+        "databases": records,
+    }
+
+
 def build_run_metadata(
-    *, run_id: str, validation: dict[str, Any]
+    *,
+    run_id: str,
+    validation: dict[str, Any],
+    extraction_timing: dict[str, Any],
+    execution_profile: str,
 ) -> dict[str, Any]:
     if not run_id.strip():
         raise ReleaseValidationError("run_id must be non-empty")
@@ -459,6 +547,7 @@ def build_run_metadata(
         "run_id": run_id,
         "status": "verified",
         "package_kind": "easyicu_six_database_native_v2_release",
+        "contract_revision": CONTRACT_REVISION,
         "sealed_at": datetime.now(timezone.utc).isoformat(),
         "database_order": list(DATABASES),
         "database_commits": validation["database_commits"],
@@ -469,6 +558,12 @@ def build_run_metadata(
         "module_count": len(MODULES),
         "database_count": len(DATABASES),
         "expected_parquet_count": EXPECTED_PARQUET_COUNT,
+        "corrections": list(CORRECTIONS),
+        "extraction_execution": {
+            "profile": execution_profile,
+            "portable_16gb_validated": execution_profile == "16gb",
+            "timing": extraction_timing,
+        },
         "validation": {
             "audited_parquet_count": EXPECTED_PARQUET_COUNT,
             "valid_footer_count": EXPECTED_PARQUET_COUNT,
@@ -486,6 +581,7 @@ def build_run_metadata(
         "provenance": {
             "database_native_manifests": "exports/{database}/_manifest.json",
             "sealer": "scripts/releases/EX-A01_seal_full6_release.py",
+            "sealer_sha256": _sha256_file(Path(__file__)),
         },
     }
     if len(commits) == 1:
@@ -525,12 +621,22 @@ def _atomic_write_json(path: Path, value: dict[str, Any]) -> None:
             temporary_path.unlink(missing_ok=True)
 
 
-def seal_release(*, run_root: Path, run_id: str | None = None) -> Path:
+def seal_release(
+    *,
+    run_root: Path,
+    run_id: str | None = None,
+    execution_profile: str,
+) -> Path:
     resolved_run_root = run_root.resolve()
     validation = validate_release(resolved_run_root)
+    extraction_timing = validate_extraction_timing(
+        run_root=resolved_run_root, validation=validation
+    )
     metadata = build_run_metadata(
         run_id=run_id if run_id is not None else resolved_run_root.name,
         validation=validation,
+        extraction_timing=extraction_timing,
+        execution_profile=execution_profile,
     )
     destination = resolved_run_root / "run_metadata.json"
     _atomic_write_json(destination, metadata)
@@ -549,12 +655,22 @@ def parse_args() -> argparse.Namespace:
         "--run-id",
         help="Immutable release ID; defaults to the run directory name.",
     )
+    parser.add_argument(
+        "--execution-profile",
+        required=True,
+        choices=("server-adaptive", "16gb", "portable-low-memory"),
+        help="Resource profile actually enforced for this extraction run.",
+    )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
-    destination = seal_release(run_root=args.run_root, run_id=args.run_id)
+    destination = seal_release(
+        run_root=args.run_root,
+        run_id=args.run_id,
+        execution_profile=args.execution_profile,
+    )
     print(f"Sealed verified release metadata: {destination}")
     return 0
 

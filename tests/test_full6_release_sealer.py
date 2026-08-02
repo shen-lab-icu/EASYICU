@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import hashlib
 import importlib.util
 import json
@@ -31,6 +32,7 @@ def _sha256(path: Path) -> str:
 
 def _build_synthetic_release(run_root: Path) -> None:
     export_root = run_root / "exports"
+    timing_rows = []
     for database in sealer.DATABASES:
         database_root = export_root / database
         database_root.mkdir(parents=True)
@@ -105,6 +107,29 @@ def _build_synthetic_release(run_root: Path) -> None:
         (database_root / "_manifest.json").write_text(
             json.dumps(manifest) + "\n", encoding="utf-8"
         )
+        timing_rows.append(
+            {
+                "database": database,
+                "status": "complete",
+                "elapsed_seconds": "60.0",
+                "module_count": str(len(sealer.MODULES)),
+                "valid_parquet_count": str(len(sealer.MODULES)),
+                "total_rows": str(sum(entry["rows"] for entry in entries)),
+                "total_parquet_bytes": str(
+                    sum(entry["parquet_bytes"] for entry in entries)
+                ),
+                "batch_strategy": "one_shot",
+                "error": "",
+                "process_exit_code": "0",
+                "peak_process_tree_rss_mb": "1000.0",
+                "peak_process_tree_pss_mb": "900.0",
+            }
+        )
+    timing_path = run_root / "database_extraction_timing.csv"
+    with timing_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(timing_rows[0]))
+        writer.writeheader()
+        writer.writerows(timing_rows)
 
 
 def test_sealer_validates_6_by_19_and_atomically_writes_metadata(
@@ -113,7 +138,9 @@ def test_sealer_validates_6_by_19_and_atomically_writes_metadata(
     run_root = tmp_path / "full6_test"
     _build_synthetic_release(run_root)
 
-    destination = sealer.seal_release(run_root=run_root)
+    destination = sealer.seal_release(
+        run_root=run_root, execution_profile="server-adaptive"
+    )
 
     metadata = json.loads(destination.read_text(encoding="utf-8"))
     assert metadata["run_id"] == "full6_test"
@@ -121,6 +148,12 @@ def test_sealer_validates_6_by_19_and_atomically_writes_metadata(
     assert metadata["database_count"] == 6
     assert metadata["module_count"] == 19
     assert metadata["expected_parquet_count"] == 114
+    assert metadata["contract_revision"] == sealer.CONTRACT_REVISION
+    assert metadata["extraction_execution"]["profile"] == "server-adaptive"
+    assert not metadata["extraction_execution"]["portable_16gb_validated"]
+    assert set(metadata["extraction_execution"]["timing"]["databases"]) == set(
+        sealer.DATABASES
+    )
     assert metadata["easyicu_commit"] == "a" * 40
     assert set(metadata["source_manifest_sha256"]) == set(sealer.DATABASES)
     assert metadata["validation"] == {
@@ -154,7 +187,9 @@ def test_failed_validation_preserves_existing_run_metadata(tmp_path: Path) -> No
     manifest_path.write_text(json.dumps(manifest) + "\n", encoding="utf-8")
 
     with pytest.raises(sealer.ReleaseValidationError, match="size mismatch"):
-        sealer.seal_release(run_root=run_root)
+        sealer.seal_release(
+            run_root=run_root, execution_profile="server-adaptive"
+        )
 
     assert destination.read_bytes() == original
     assert not list(run_root.glob(".run_metadata.json.*.tmp"))
