@@ -418,6 +418,18 @@ Code contract:
   Never clip a genuinely invalid estimate to make it pass a range check.
   This rule does not apply to effect scales such as
   risk ratios, odds ratios, hazard ratios, or risk differences.
+- If a table you write contains a TOTAL / OVERALL row alongside its
+  per-group rows, the table itself must say so. Add a `row_role` column
+  and mark that row `overall` and every partition row `exposure_level`
+  (that is the spelling the host's own distribution output uses; the
+  column may also be named `role`, `row_type`, `record_role`,
+  `group_type`, `partition_status`, `estimate_type`, `result_role`,
+  `record_type`, `summary_type`, `status` or `variable_class`).
+  Without it a consumer reading only these bytes cannot tell the total
+  apart from another group and will double every denominator it sums, so
+  the host refuses the table and the step spends a repair on relabelling
+  instead of on the analysis. The simpler alternative is to not write a
+  total row at all: the reader can sum the groups.
 - When reporting a source-status count map, always include the complete four
   category schema: valid observed; no source; measured/source present but
   summary missing; and contradictory/invalid. Preserve zero-frequency
