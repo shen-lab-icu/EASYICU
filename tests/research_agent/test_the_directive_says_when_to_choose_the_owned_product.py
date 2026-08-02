@@ -169,3 +169,67 @@ def test_the_figure_rule_is_stated_before_the_obligation_too():
         f"A step that declares the exact output "
         f"`{EXPOSURE_OUTCOME_DISTRIBUTION_OUTPUT}` MUST also declare"
     )
+
+
+# ---------------------------------------------------------------------------
+# Why the guidance above still was not taken
+# ---------------------------------------------------------------------------
+
+
+def test_it_says_a_continuous_summary_belongs_in_its_own_step():
+    """The measured reason the product keeps being abandoned.
+
+    ``ExposureOutcomeDistributionSpec`` is a closed-level outcome contract:
+    ``outcome_levels`` plus ``outcome_positive_value``.  It has no field for a
+    median, a mean or a quantile, so a step that wants an event rate AND a
+    continuous summary by the same levels genuinely cannot be expressed by it.
+
+    Measured 2026-08-02 over the recorded plans, restricted to descriptive or
+    visualization steps reporting an absolute risk / prevalence / outcome by
+    exposure level: 16 declared the typed product and 15 of those asked for no
+    continuous summary; 13 used a name of their own and 10 of those did.  The
+    Planner was not ignoring the guidance -- it was hitting a contract wall and
+    silently dropping the whole product to get past it, which also drops the
+    host renderer, which is what leaves the figure to the code generator.
+    """
+
+    text = _directive()
+
+    assert "A summary of a CONTINUOUS variable by the same" in text
+    assert "cannot be added to it" in text
+    assert "put the continuous summary in a separate step" in text.replace("\n", " ")
+
+
+def test_it_says_the_wall_is_not_a_reason_to_abandon_the_product():
+    """Naming the limit without naming the remedy invites the same escape."""
+
+    text = _directive()
+
+    assert "not a reason to give up the product" in text
+
+
+def test_the_continuous_summary_rule_precedes_the_obligation():
+    """Same placement discipline as every other clause in this block."""
+
+    text = _directive()
+
+    assert text.index("A summary of a CONTINUOUS variable") < text.index(
+        f"A step that declares the exact output "
+        f"`{EXPOSURE_OUTCOME_DISTRIBUTION_OUTPUT}` MUST also declare"
+    )
+
+
+def test_the_contract_really_cannot_hold_a_continuous_summary():
+    """Anchored on the schema, so widening it makes this file fail loudly.
+
+    If the spec ever gains a continuous-summary field, the guidance above
+    becomes false and must be rewritten rather than left standing.
+    """
+
+    from easyicu.research_agent.schema import ExposureOutcomeDistributionSpec
+
+    fields = set(ExposureOutcomeDistributionSpec.model_fields)
+
+    assert {"outcome_levels", "outcome_positive_value"} <= fields
+    for continuous in ("median", "mean", "quantiles", "quartiles", "summary_statistic"):
+        assert continuous not in fields, continuous
