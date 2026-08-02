@@ -151,16 +151,40 @@ def test_the_gate_passes_a_replay_that_reports_the_locked_count() -> None:
     assert findings == []
 
 
-def test_the_defect_itself_is_pinned() -> None:
-    """Without a readable spelling the gate reports "no count at all"."""
+def test_the_host_key_alone_is_now_enough() -> None:
+    """The defect is closed at the reader, so the alias is no longer load-bearing.
+
+    This used to assert the opposite -- that a summary carrying only
+    ``analysis_cohort_n`` left the gate reporting "no count at all" -- because
+    the fix of the day was to have the replay ALSO publish ``n_total``, a
+    spelling the reader already accepted. Adding a second spelling for a value
+    that already had one is how a key ends up meaning two things, and it did:
+    one recorded summary used ``n_total`` for the number of variants compared,
+    so the gate read an analysis cohort of 2 against a locked 1,000.
+
+    Teaching the reader the host's own key instead fixes that and reaches 15
+    further recorded summaries where the gate had no count at all and the value
+    was sitting in the file the whole time.
+    """
 
     findings = CrossStepCohortLockValidator().audit(
         step=_Step(_FIXED_COHORT_INTENT),
         step_summary=_summary(cohort_n=1000, readable=False),
         completed_step_records=_locked_parent(1000),
     )
+    assert findings == []
+
+
+def test_the_gate_keeps_its_teeth_without_the_alias() -> None:
+    """Reading a new key is only right if a WRONG count is still visible there."""
+
+    findings = CrossStepCohortLockValidator().audit(
+        step=_Step(_FIXED_COHORT_INTENT),
+        step_summary=_summary(cohort_n=812, readable=False),
+        completed_step_records=_locked_parent(1000),
+    )
     assert len(findings) == 1
-    assert findings[0].detail["reported_summary_path"] is None
+    assert "812" in findings[0].message and "1000" in findings[0].message
 
 
 def test_a_replay_that_really_changed_the_cohort_is_still_caught() -> None:

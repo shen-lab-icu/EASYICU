@@ -2814,6 +2814,22 @@ class CrossStepCohortLockValidator:
         "runner_repaired",
     }
     _COUNT_PATHS: tuple[tuple[str, ...], ...] = (
+        # First, because it is the only entry the HOST writes. Everything below
+        # is a spelling this validator hopes a producer happened to choose, and
+        # a hoped-for name can mean something else in another producer's
+        # vocabulary. ``n_total`` is exactly that: 8 recorded robustness
+        # summaries use it for the analysis cohort, and one uses it for the
+        # number of variants compared -- so the cohort-lock guard read an
+        # analysis cohort of 2 against a locked 1,000, with the correct value
+        # sitting in the same file under this key.
+        #
+        # Measured over 819 recorded summaries: 53 carry ``analysis_cohort_n``.
+        # Of those the search below lands on ``n_total`` 35 times, ``cohort_n``
+        # 3 times, and on NOTHING 15 times -- so in 15 the guard was blind while
+        # the value it needed was present. Putting this first corrects the one
+        # disagreement, gives the 15 a reading, and leaves the 37 that already
+        # agree untouched.
+        ("analysis_cohort_n",),
         ("n_final_cohort",),
         ("final_analytic_cohort_n",),
         ("final_cohort_n",),
@@ -8570,9 +8586,7 @@ class FigureSourceDataValidator:
             if exposure_rows.empty:
                 return product
             for _, row in exposure_rows.iterrows():
-                contract = contract_by_model.get(
-                    str(row.get("model_id") or "").strip()
-                )
+                contract = contract_by_model.get(str(row.get("model_id") or "").strip())
                 if (
                     contract is None
                     or str(row.get("source_variable") or "").strip()
@@ -8586,9 +8600,7 @@ class FigureSourceDataValidator:
             # that compact shape only when every row maps exactly to a fitted
             # host model contract and preserves its locked exposure source.
             for _, row in contract_frame.iterrows():
-                contract = contract_by_model.get(
-                    str(row.get("model_id") or "").strip()
-                )
+                contract = contract_by_model.get(str(row.get("model_id") or "").strip())
                 if (
                     contract is None
                     or str(row.get("exposure") or "").strip()

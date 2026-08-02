@@ -177,7 +177,7 @@ def test_the_shared_structural_validator_still_accepts_it():
     validate_robustness_specs([_spec({"strategy": "complete_case"})])
 
 
-# --- and the plan itself refuses it, not just the helper ---------------------
+# --- and the plan constructor does NOT, which is the same boundary again -----
 
 
 def _plan_with(missing_override) -> None:
@@ -205,16 +205,28 @@ def _plan_with(missing_override) -> None:
     )
 
 
-def test_the_plan_itself_refuses_the_undeclared_spec():
-    """Without this the wiring can revert and only a real run would notice."""
+def test_the_plan_constructor_accepts_it_because_it_also_loads_recorded_plans():
+    """The same population argument as the shared validator, one level up.
 
-    from pydantic import ValidationError
+    This assertion used to demand the opposite -- that constructing an
+    ``AnalysisPlan`` raise -- on the reasoning that "without this the wiring can
+    revert and only a real run would notice". The worry is right; the object was
+    wrong. ``AnalysisPlan.model_validate`` is not only how Planner output
+    arrives: it is also how a recorded plan is loaded from disk, how a lock is
+    re-read on resume, and how the framework's own case-neutral placeholders are
+    built. Judging all of those by what the *Planner must declare* stopped 190 of
+    409 recorded plan documents from parsing, and a resume of any of them would
+    have failed at load.
 
-    with pytest.raises(ValidationError, match=COMPLETE_CASE_VARIABLES_KEY):
-        _plan_with({"strategy": "complete_case", "columns": ["age"]})
+    So the rule lives where Planner output is accepted, and the two halves are
+    pinned separately: this one says the constructor stays permissive, and
+    ``test_planning_contract_boundaries`` says the Planner path still applies the
+    rule -- both by identity and at the call site, so an import that is never
+    called cannot pass for wiring.
+    """
 
-    with pytest.raises(ValidationError, match=COMPLETE_CASE_VARIABLES_KEY):
-        _plan_with({"strategy": "complete_case"})
+    _plan_with({"strategy": "complete_case", "columns": ["age"]})
+    _plan_with({"strategy": "complete_case"})
 
 
 def test_the_plan_accepts_a_declared_spec():

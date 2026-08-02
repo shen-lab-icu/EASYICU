@@ -37,15 +37,55 @@ def test_robustness_contract_runtime_exports_are_identical() -> None:
 def test_schema_uses_the_pure_robustness_contract() -> None:
     assert schema.RobustnessPlanError is robustness_contract.RobustnessPlanError
     assert schema.RobustnessSpec is robustness_contract.RobustnessSpec
-    # The validator schema actually calls. It is the planner-scoped one:
-    # the shared structural validator is also asked about locks and about
-    # case-neutral placeholders, so a Planner-output requirement does not
-    # belong on it.
+    # The validator schema actually calls: the STRUCTURAL one, and only it.
+    #
+    # This assertion used to demand the planner-scoped validator here, which is
+    # the arrangement that was tried and measured: constructing an
+    # ``AnalysisPlan`` is not the same act as accepting one from the Planner --
+    # the same constructor loads a recorded plan from disk, re-reads a lock on
+    # resume, and builds the framework's own case-neutral placeholders. Asking
+    # all of those what the *Planner must declare* stopped 190 of 409 recorded
+    # plan documents from parsing, and a resume of any of them would have
+    # failed at load.
     assert (
-        schema.validate_planner_robustness_specs
+        schema.validate_robustness_specs
+        is robustness_contract.validate_robustness_specs
+    )
+    # The negative half is the one that protects those 190: schema must not
+    # even import the planner-scoped rule, or the revert can quietly return.
+    assert not hasattr(schema, "validate_planner_robustness_specs")
+    assert not hasattr(schema, "_validate_robustness_specs_locally")
+
+
+def test_the_planner_rule_still_runs_where_planner_output_is_accepted() -> None:
+    """Moving the rule off the constructor must not lose it.
+
+    The property the old assertion was reaching for -- "the wiring can revert
+    and only a real run would notice" -- is real; it was just pointed at the
+    wrong object. The Planner-output rule belongs at the single point where
+    Planner output is accepted and the Planner can still answer for it.
+    """
+
+    core = importlib.import_module("easyicu.research_agent.agents.core")
+    assert (
+        core.validate_planner_robustness_specs
         is robustness_contract.validate_planner_robustness_specs
     )
-    assert not hasattr(schema, "_validate_robustness_specs_locally")
+    # Imported is not called: pin the call site too.
+    tree = ast.parse(Path(inspect.getsourcefile(core)).read_text(encoding="utf-8"))
+    parse_bodies = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "_parse"
+    ]
+    assert parse_bodies, "PlannerAgent._parse is where Planner output is accepted"
+    assert any(
+        isinstance(call.func, ast.Name)
+        and call.func.id == "validate_planner_robustness_specs"
+        for body in parse_bodies
+        for call in ast.walk(body)
+        if isinstance(call, ast.Call)
+    ), "the Planner-output rule is imported but never applied"
 
 
 def test_robustness_contract_has_no_runtime_or_evidence_dependency() -> None:
