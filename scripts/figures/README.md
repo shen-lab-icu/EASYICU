@@ -48,6 +48,18 @@ suppressed only in reader-facing plot labels.
 native-v2 manifests, metadata sidecars, provenance, availability and
 conservative distribution anomaly signals. A distribution flag is a review
 trigger, not proof of a conversion defect; source-table traceback remains
-required. For a curated package assembled from source-specific corrective
+required. Verified source traces are attached to the flag rather than deleting
+it, so downstream analyses can still apply database-stratified sensitivity.
+Run-specific adjudications require an exact run ID, run-metadata SHA-256 and
+anomaly type; reusing a run ID with different metadata leaves the flag
+unadjudicated. `QC-A02` also verifies the six root-manifest SHA-256 receipts in
+`run_metadata.json` before applying any adjudication.
+The metadata summary reports selected-concept bindings and explicit zero-row
+structural placeholders separately; their union must cover every
+database-by-module manifest row, while an undocumented metadata gap remains a
+non-zero audit failure. Structural closure requires declared and physical zero
+rows, the canonical typed schema, an empty selected-concept binding and a
+complete per-concept structural-placeholder status. For a curated package
+assembled from source-specific corrective
 reruns, `run_metadata.json` may declare a `database_commits` mapping; the audit
 then verifies each database against its own recorded Git commit.
