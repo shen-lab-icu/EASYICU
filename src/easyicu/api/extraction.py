@@ -2357,6 +2357,343 @@ def _native_export_file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+_NATIVE_EXPORT_ARROW_BATCH_ROWS = 262_144
+_NATIVE_EXPORT_DUCKDB_MEMORY_MB = 512
+_NATIVE_EXPORT_PANDAS_FALLBACK_MAX_ROWS = 1_000_000
+_NATIVE_EXPORT_PANDAS_FALLBACK_MAX_BYTES = 512 * 1024 * 1024
+_NATIVE_EXPORT_PANDAS_FALLBACK_MAX_UNCOMPRESSED_BYTES = 1024 * 1024 * 1024
+
+
+def _native_export_empty_schema_frame(
+    *,
+    module: str,
+    requested_concepts: List[str],
+    dictionary,
+):
+    """Return the zero-row pandas representation of the native-v2 schema.
+
+    This frame is intentionally metadata-only.  The Arrow publisher uses it to
+    preserve the same pandas/Parquet logical dtypes as the legacy
+    ``DataFrame.to_parquet`` path without materialising a module payload in
+    pandas.
+    """
+    import pandas as pd
+
+    columns = {"stay_id": pd.Series([], dtype="int64")}
+    if module != "demographics":
+        columns["charttime"] = pd.Series([], dtype="float64")
+    for concept in requested_concepts:
+        kind = _native_export_storage_kind(concept, dictionary)
+        if kind == "boolean":
+            columns[concept] = pd.Series([], dtype="boolean")
+        elif kind == "string":
+            columns[concept] = pd.Series([], dtype="string")
+        else:
+            columns[concept] = pd.Series([], dtype="float64")
+    return pd.DataFrame(columns)
+
+
+def _native_export_arrow_batch_rows() -> int:
+    """Resolve a bounded publisher batch without exposing an unbounded knob."""
+    raw = os.environ.get("EASYICU_NATIVE_PUBLISH_BATCH_ROWS")
+    if raw is None:
+        return _NATIVE_EXPORT_ARROW_BATCH_ROWS
+    try:
+        requested = int(raw)
+    except (TypeError, ValueError):
+        return _NATIVE_EXPORT_ARROW_BATCH_ROWS
+    return min(1_000_000, max(16_384, requested))
+
+
+def _native_export_duckdb_memory_mb() -> int:
+    """Resolve the spillable uniqueness-audit memory ceiling."""
+    raw = os.environ.get("EASYICU_NATIVE_PUBLISH_DUCKDB_MEMORY_MB")
+    if raw is None:
+        return _NATIVE_EXPORT_DUCKDB_MEMORY_MB
+    try:
+        requested = int(raw)
+    except (TypeError, ValueError):
+        return _NATIVE_EXPORT_DUCKDB_MEMORY_MB
+    return min(1_024, max(128, requested))
+
+
+def _native_export_pandas_fallback_size(path: Path) -> Dict[str, int]:
+    """Return physical bounds used before any full-frame fallback."""
+    import pyarrow.parquet as pq
+
+    parquet = pq.ParquetFile(path)
+    metadata = parquet.metadata
+    return {
+        "rows": int(metadata.num_rows),
+        "parquet_bytes": int(path.stat().st_size),
+        "uncompressed_parquet_bytes": int(
+            sum(
+                metadata.row_group(index).total_byte_size
+                for index in range(metadata.num_row_groups)
+            )
+        ),
+    }
+
+
+def _native_export_pandas_fallback_is_bounded(size: Dict[str, int]) -> bool:
+    return (
+        size["rows"] <= _NATIVE_EXPORT_PANDAS_FALLBACK_MAX_ROWS
+        and size["parquet_bytes"] <= _NATIVE_EXPORT_PANDAS_FALLBACK_MAX_BYTES
+        and size["uncompressed_parquet_bytes"]
+        <= _NATIVE_EXPORT_PANDAS_FALLBACK_MAX_UNCOMPRESSED_BYTES
+    )
+
+
+def _native_export_arrow_row_grain_audit(
+    path: Path,
+    *,
+    module: str,
+) -> Dict[str, object]:
+    """Audit a canonical temporary Parquet with bounded, spillable DuckDB.
+
+    Hashing all keys in Python would itself recreate a multi-gigabyte working
+    set.  DuckDB is given an explicit memory ceiling and a temporary directory
+    beside the output, so its global NULL-equal uniqueness proof can spill to
+    the same user-selected volume as the export.
+    """
+    import tempfile
+
+    import duckdb
+
+    if module == "demographics":
+        raise ValueError("Arrow row-grain audit is longitudinal-only")
+    memory_mb = _native_export_duckdb_memory_mb()
+    with tempfile.TemporaryDirectory(
+        prefix=f".{module}.native-v2-grain-",
+        dir=path.parent,
+    ) as spill_dir:
+        connection = duckdb.connect(
+            database=":memory:",
+            config={
+                "memory_limit": f"{memory_mb}MB",
+                "threads": "1",
+                "temp_directory": spill_dir,
+            },
+        )
+        try:
+            row = connection.execute(
+                """
+                WITH key_counts AS (
+                    SELECT stay_id, charttime, count(*)::BIGINT AS n
+                    FROM read_parquet(?)
+                    GROUP BY stay_id, charttime
+                )
+                SELECT
+                    coalesce(sum(n), 0)::BIGINT AS source_rows,
+                    coalesce(sum(n) FILTER (WHERE charttime IS NULL), 0)::BIGINT
+                        AS null_charttime_rows,
+                    coalesce(sum(n) FILTER (WHERE n > 1), 0)::BIGINT
+                        AS duplicate_key_rows,
+                    count(*) FILTER (WHERE n > 1)::BIGINT
+                        AS duplicate_key_groups,
+                    coalesce(sum(n - 1) FILTER (WHERE n > 1), 0)::BIGINT
+                        AS duplicate_excess_rows
+                FROM key_counts
+                """,
+                [str(path)],
+            ).fetchone()
+        finally:
+            connection.close()
+    if row is None:
+        raise RuntimeError("native export DuckDB row-grain audit returned no result")
+    source_rows, null_rows, duplicate_rows, duplicate_groups, duplicate_excess = (
+        int(value) for value in row
+    )
+    return {
+        "row_grain": "one_row_per_icu_stay_relative_hour",
+        "primary_key": ["stay_id", "charttime"],
+        "null_key_equality": "nulls_equal",
+        "source_rows": source_rows,
+        "published_rows": source_rows,
+        "null_charttime_rows_before": null_rows,
+        "null_charttime_rows_after": null_rows,
+        "duplicate_key_rows_before": duplicate_rows,
+        "duplicate_key_groups_before": duplicate_groups,
+        "duplicate_excess_rows_before": duplicate_excess,
+        "rows_consolidated": 0,
+        "duplicate_excess_rows_after": duplicate_excess,
+        "aggregation_policy": {
+            "boolean": "any_non_null_preserving_all_null",
+            "numeric": "median_non_null_preserving_all_null",
+            "string": "single_non_null_value_or_fail_on_conflict",
+        },
+        "publication_backend": "pyarrow_record_batches",
+        "uniqueness_backend": "duckdb_bounded_spillable_hash_aggregate",
+        "uniqueness_memory_limit_mb": memory_mb,
+    }
+
+
+def _try_publish_native_export_arrow_fast_path(
+    *,
+    source_parquet: Path,
+    temporary_parquet: Path,
+    module: str,
+    requested_concepts: List[str],
+    dictionary,
+    stay_time_upper_bounds: Dict[int, float],
+) -> Optional[Dict[str, object]]:
+    """Publish a unique longitudinal module without a full pandas payload.
+
+    The temporary file is canonicalised and bounded batch-by-batch.  A global
+    NULL-equal uniqueness audit is then performed under a fixed DuckDB memory
+    budget.  Small duplicate-bearing modules return ``None`` for the exact
+    pandas consolidation path; a large duplicate-bearing module fails closed
+    rather than silently escaping the documented memory contract.
+    """
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    if module == "demographics":
+        return None
+    source_file = pq.ParquetFile(source_parquet)
+    if source_file.metadata.num_rows == 0:
+        return None
+    source_schema = source_file.schema_arrow
+    if len(set(source_schema.names)) != len(source_schema.names):
+        raise ValueError("native export frame has duplicate physical columns")
+    candidates = [
+        column for column in _NATIVE_EXPORT_ID_COLUMNS if column in source_schema.names
+    ]
+    if not candidates:
+        raise ValueError("native export frame has no ICU-stay identity column")
+    identity = "stay_id" if "stay_id" in candidates else candidates[0]
+    schema_frame = _native_export_empty_schema_frame(
+        module=module,
+        requested_concepts=requested_concepts,
+        dictionary=dictionary,
+    )
+    target_schema = pa.Table.from_pandas(
+        schema_frame,
+        preserve_index=False,
+    ).schema
+    read_columns = list(
+        dict.fromkeys(
+            [
+                identity,
+                *(("charttime",) if "charttime" in source_schema.names else ()),
+                *(
+                    concept
+                    for concept in requested_concepts
+                    if concept in source_schema.names
+                ),
+            ]
+        )
+    )
+    time_axis_audit: Optional[Dict[str, object]] = None
+    bounds_audit: Optional[Dict[str, Dict[str, object]]] = None
+    concept_non_null = {concept: 0 for concept in requested_concepts}
+    writer = None
+    try:
+        writer = pq.ParquetWriter(
+            temporary_parquet,
+            target_schema,
+            compression="snappy",
+        )
+        for batch in source_file.iter_batches(
+            batch_size=_native_export_arrow_batch_rows(),
+            columns=read_columns,
+            use_threads=False,
+        ):
+            # Reuse the established validators on one bounded record batch.
+            # This is deliberately a small pandas bridge, never a full-module
+            # DataFrame; it minimizes semantic drift across pandas/Arrow types.
+            frame = batch.to_pandas()
+            frame = _canonicalise_native_export_frame(
+                frame,
+                module=module,
+                requested_concepts=requested_concepts,
+                dictionary=dictionary,
+            )
+            frame, batch_time_audit = _enforce_native_export_time_axis(
+                frame,
+                module=module,
+                stay_time_upper_bounds=stay_time_upper_bounds,
+            )
+            batch_bounds_audit = _enforce_native_export_concept_bounds(
+                frame,
+                requested_concepts=requested_concepts,
+                dictionary=dictionary,
+            )
+            if time_axis_audit is None:
+                time_axis_audit = dict(batch_time_audit)
+            else:
+                for field in (
+                    "excluded_rows",
+                    "normalized_stay_level_rows",
+                    "rows_with_los_bound",
+                ):
+                    if field in batch_time_audit:
+                        time_axis_audit[field] = int(
+                            time_axis_audit.get(field, 0)
+                        ) + int(batch_time_audit[field])
+            if bounds_audit is None:
+                bounds_audit = {
+                    concept: dict(record)
+                    for concept, record in batch_bounds_audit.items()
+                }
+            else:
+                for concept, record in batch_bounds_audit.items():
+                    bounds_audit[concept]["excluded_out_of_bounds"] = int(
+                        bounds_audit[concept]["excluded_out_of_bounds"]
+                    ) + int(record["excluded_out_of_bounds"])
+            for concept in requested_concepts:
+                concept_non_null[concept] += int(frame[concept].notna().sum())
+            output = pa.Table.from_pandas(
+                frame,
+                schema=target_schema,
+                preserve_index=False,
+                safe=True,
+            )
+            if len(output):
+                writer.write_table(output)
+            del output, frame
+            _release_stream_batch_memory(
+                pa,
+                trim_native_allocator=False,
+            )
+        writer.close()
+        writer = None
+    except Exception:
+        if writer is not None:
+            writer.close()
+        temporary_parquet.unlink(missing_ok=True)
+        raise
+
+    if time_axis_audit is None or bounds_audit is None:
+        temporary_parquet.unlink(missing_ok=True)
+        raise RuntimeError("native export Arrow publisher observed no source batches")
+
+    row_grain_audit = _native_export_arrow_row_grain_audit(
+        temporary_parquet,
+        module=module,
+    )
+    duplicate_excess = int(row_grain_audit["duplicate_excess_rows_before"])
+    if duplicate_excess:
+        fallback_size = _native_export_pandas_fallback_size(source_parquet)
+        temporary_parquet.unlink(missing_ok=True)
+        if _native_export_pandas_fallback_is_bounded(fallback_size):
+            return None
+        raise ValueError(
+            "native export row-grain consolidation exceeds the bounded pandas "
+            f"fallback (module={module!r}, {fallback_size=}, "
+            f"duplicate_excess_rows={duplicate_excess})"
+        )
+
+    return {
+        "schema_frame": schema_frame,
+        "rows": int(row_grain_audit["published_rows"]),
+        "time_axis_audit": time_axis_audit,
+        "bounds_audit": bounds_audit,
+        "row_grain_audit": row_grain_audit,
+        "concept_non_null": concept_non_null,
+    }
+
+
 def _native_export_stay_time_upper_bounds(outcome_frame) -> Dict[int, float]:
     """Return each stay's last plausible ICU-relative event hour.
 
@@ -2682,17 +3019,18 @@ def _publish_native_export_v2(
         relative_path = f"{module}.parquet"
         source_parquet = output_root / relative_path
         physical_output_missing = not source_parquet.is_file()
-        # This is an output validation pass, not a second scan of any raw table.
-        # A structurally unavailable module starts from an empty identity frame;
-        # canonicalisation below adds charttime and every requested typed value
-        # column in catalog order.
+        source_rows = 0
         if physical_output_missing:
-            frame = pd.DataFrame(
-                {"stay_id": pd.Series([], dtype="int64")}
-            )
+            original_columns = {"stay_id"}
         else:
-            frame = pd.read_parquet(source_parquet)
-        original_columns = set(frame.columns)
+            import pyarrow.parquet as _source_pq
+
+            source_file = _source_pq.ParquetFile(source_parquet)
+            source_rows = int(source_file.metadata.num_rows)
+            source_names = list(source_file.schema_arrow.names)
+            if len(set(source_names)) != len(source_names):
+                raise ValueError("native export frame has duplicate physical columns")
+            original_columns = set(source_names)
         produced_concepts: Optional[set[str]] = (
             set() if physical_output_missing else None
         )
@@ -2724,7 +3062,7 @@ def _publish_native_export_v2(
         # produced.  Preserve that status so native-v2 publication is
         # idempotent.
         whole_module_unavailable = physical_output_missing or (
-            frame.empty and produced_concepts == set()
+            source_rows == 0 and produced_concepts == set()
         )
         if whole_module_unavailable:
             unavailable_modules.append(
@@ -2771,79 +3109,131 @@ def _publish_native_export_v2(
             )
 
         temporary_parquet = None
+        frame = None
         try:
-            source_charttime = (
-                frame["charttime"].copy()
-                if module == "demographics" and "charttime" in frame
-                else None
-            )
-            frame = _canonicalise_native_export_frame(
-                frame,
-                module=module,
-                requested_concepts=requested_concept_plan[module],
-                dictionary=dictionary,
-            )
-            frame, time_axis_audit = _enforce_native_export_time_axis(
-                frame,
-                module=module,
-                stay_time_upper_bounds=stay_time_upper_bounds,
-            )
-            if module == "demographics":
-                # Treat target-unit bound violations as missing before choosing
-                # the nearest static value. A corrupt +0.1 h height must not
-                # mask a valid -2 h height and then leave the stay empty.
-                bounds_audit = _enforce_native_export_concept_bounds(
-                    frame,
-                    requested_concepts=requested_concept_plan[module],
-                    dictionary=dictionary,
-                )
-                frame, row_grain_audit = _consolidate_native_export_row_grain(
-                    frame,
-                    module=module,
-                    requested_concepts=requested_concept_plan[module],
-                    dictionary=dictionary,
-                    source_charttime=source_charttime,
-                )
-                post_consolidation_bounds = _enforce_native_export_concept_bounds(
-                    frame,
-                    requested_concepts=requested_concept_plan[module],
-                    dictionary=dictionary,
-                )
-                for concept, post_audit in post_consolidation_bounds.items():
-                    bounds_audit[concept]["excluded_out_of_bounds"] += int(
-                        post_audit["excluded_out_of_bounds"]
-                    )
-            else:
-                # Null physical bound violations before taking a duplicate-key
-                # median; otherwise two invalid source values could average to
-                # a plausible value and survive the publication contract.
-                bounds_audit = _enforce_native_export_concept_bounds(
-                    frame,
-                    requested_concepts=requested_concept_plan[module],
-                    dictionary=dictionary,
-                )
-                frame, row_grain_audit = _consolidate_native_export_row_grain(
-                    frame,
-                    module=module,
-                    requested_concepts=requested_concept_plan[module],
-                    dictionary=dictionary,
-                )
             temporary_parquet = output_root / f".{module}.native-v2.tmp.parquet"
             if temporary_parquet.exists() or temporary_parquet.is_symlink():
                 raise ValueError(
                     f"native_export_v2 refuses stale temporary file: "
                     f"{temporary_parquet}"
                 )
-            frame.to_parquet(
-                temporary_parquet,
-                index=False,
-                engine="pyarrow",
-                compression="snappy",
-            )
+            arrow_result = None
+            if not physical_output_missing:
+                arrow_result = _try_publish_native_export_arrow_fast_path(
+                    source_parquet=source_parquet,
+                    temporary_parquet=temporary_parquet,
+                    module=module,
+                    requested_concepts=requested_concept_plan[module],
+                    dictionary=dictionary,
+                    stay_time_upper_bounds=stay_time_upper_bounds,
+                )
+            if arrow_result is None:
+                # Demographics has a concept-wise nearest-time selection policy;
+                # small duplicate-bearing longitudinal modules also use this
+                # exact fallback. No large table may enter it merely because
+                # the Arrow path found keys that need consolidation.
+                if physical_output_missing:
+                    frame = pd.DataFrame(
+                        {"stay_id": pd.Series([], dtype="int64")}
+                    )
+                else:
+                    if module == "demographics":
+                        fallback_size = _native_export_pandas_fallback_size(
+                            source_parquet
+                        )
+                        if not _native_export_pandas_fallback_is_bounded(
+                            fallback_size
+                        ):
+                            raise ValueError(
+                                "native export demographics consolidation exceeds "
+                                "the bounded pandas fallback "
+                                f"({fallback_size=})"
+                            )
+                    frame = pd.read_parquet(source_parquet)
+                source_charttime = (
+                    frame["charttime"].copy()
+                    if module == "demographics" and "charttime" in frame
+                    else None
+                )
+                frame = _canonicalise_native_export_frame(
+                    frame,
+                    module=module,
+                    requested_concepts=requested_concept_plan[module],
+                    dictionary=dictionary,
+                )
+                frame, time_axis_audit = _enforce_native_export_time_axis(
+                    frame,
+                    module=module,
+                    stay_time_upper_bounds=stay_time_upper_bounds,
+                )
+                if module == "demographics":
+                    # Treat target-unit bound violations as missing before choosing
+                    # the nearest static value. A corrupt +0.1 h height must not
+                    # mask a valid -2 h height and then leave the stay empty.
+                    bounds_audit = _enforce_native_export_concept_bounds(
+                        frame,
+                        requested_concepts=requested_concept_plan[module],
+                        dictionary=dictionary,
+                    )
+                    frame, row_grain_audit = _consolidate_native_export_row_grain(
+                        frame,
+                        module=module,
+                        requested_concepts=requested_concept_plan[module],
+                        dictionary=dictionary,
+                        source_charttime=source_charttime,
+                    )
+                    post_consolidation_bounds = _enforce_native_export_concept_bounds(
+                        frame,
+                        requested_concepts=requested_concept_plan[module],
+                        dictionary=dictionary,
+                    )
+                    for concept, post_audit in post_consolidation_bounds.items():
+                        bounds_audit[concept]["excluded_out_of_bounds"] += int(
+                            post_audit["excluded_out_of_bounds"]
+                        )
+                else:
+                    # Null physical bound violations before taking a duplicate-key
+                    # median; otherwise two invalid source values could average to
+                    # a plausible value and survive the publication contract.
+                    bounds_audit = _enforce_native_export_concept_bounds(
+                        frame,
+                        requested_concepts=requested_concept_plan[module],
+                        dictionary=dictionary,
+                    )
+                    frame, row_grain_audit = _consolidate_native_export_row_grain(
+                        frame,
+                        module=module,
+                        requested_concepts=requested_concept_plan[module],
+                        dictionary=dictionary,
+                    )
+                row_grain_audit["publication_backend"] = (
+                    "pandas_bounded_row_grain_fallback"
+                    if not physical_output_missing
+                    else "pandas_structural_placeholder"
+                )
+                frame.to_parquet(
+                    temporary_parquet,
+                    index=False,
+                    engine="pyarrow",
+                    compression="snappy",
+                )
+                metadata_frame = frame
+                published_rows = int(frame.shape[0])
+                concept_non_null = {
+                    concept: int(frame[concept].notna().sum())
+                    for concept in requested_concept_plan[module]
+                }
+            else:
+                time_axis_audit = arrow_result["time_axis_audit"]
+                bounds_audit = arrow_result["bounds_audit"]
+                row_grain_audit = arrow_result["row_grain_audit"]
+                metadata_frame = arrow_result["schema_frame"]
+                published_rows = int(arrow_result["rows"])
+                concept_non_null = dict(arrow_result["concept_non_null"])
             binding = build_export_file_metadata_binding(
                 relative_path=relative_path,
                 module=module,
-                frame=frame,
+                frame=metadata_frame,
                 concept_ids=concept_plan[module],
                 database=normalized_database,
                 database_class_prefixes=class_prefixes,
@@ -2869,7 +3259,7 @@ def _publish_native_export_v2(
         file_bindings.append(binding)
         concept_status = {}
         for concept in requested_concept_plan[module]:
-            non_null = int(frame[concept].notna().sum())
+            non_null = int(concept_non_null[concept])
             if concept in structurally_unavailable:
                 availability = "structurally_unavailable_placeholder"
             elif non_null == 0:
@@ -2906,7 +3296,7 @@ def _publish_native_export_v2(
                 "concepts": len(concept_plan[module]),
                 "concept_ids": concept_plan[module],
                 "physical_concept_ids": requested_concept_plan[module],
-                "rows": int(frame.shape[0]),
+                "rows": published_rows,
                 "physical_schema": physical_schema,
                 "parquet_sha256": parquet_sha256,
                 "parquet_bytes": parquet_bytes,
@@ -2918,6 +3308,17 @@ def _publish_native_export_v2(
                 "column_metadata_columns": list(binding.columns),
             }
         )
+        # Prevent the previous fallback frame from overlapping the next
+        # ``read_parquet`` RHS. Return unused Arrow pages as well so a 19-file
+        # package does not appear cumulatively resident to the OS.
+        frame = None
+        metadata_frame = None
+        try:
+            import pyarrow as _pa
+
+            _release_stream_batch_memory(_pa)
+        except Exception:
+            pass
 
     missing_primary = missing_primary_metadata_concepts(
         concept_plan=concept_plan,

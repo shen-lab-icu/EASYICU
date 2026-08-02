@@ -570,3 +570,188 @@ def test_grouped_export_reads_special_concept_from_saved_key(
 
     with open_export_package(tmp_path) as package:
         assert set(package.concept_index) == {"sep3_sofa1"}
+
+
+def test_unique_longitudinal_publication_never_materialises_full_pandas_frame(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The normal publisher path must remain Arrow-batched across row groups."""
+    rows = 40_000
+    monkeypatch.setattr(
+        api,
+        "EXTRACT_MODULES",
+        {
+            "neurological": [
+                "gcs",
+                "delirium_positive",
+                "avpu",
+            ]
+        },
+    )
+    monkeypatch.setenv("EASYICU_NATIVE_PUBLISH_BATCH_ROWS", "16384")
+    source = pd.DataFrame(
+        {
+            "patientid": range(rows),
+            "charttime": [0.0] * rows,
+            "gcs": [15.0] * rows,
+            "delirium_positive": [0, 1] * (rows // 2),
+            "avpu": ["A"] * rows,
+        }
+    )
+    source.to_parquet(tmp_path / "neurological.parquet", index=False)
+    real_read_parquet = pd.read_parquet
+
+    def _forbid_pandas_payload_read(*_args, **_kwargs):
+        raise AssertionError("unique longitudinal payload entered pandas")
+
+    monkeypatch.setattr(pd, "read_parquet", _forbid_pandas_payload_read)
+    api._publish_native_export_v2(
+        database="miiv",
+        data_path="/raw/source-must-not-be-read",
+        output_dir=str(tmp_path),
+        modules=["neurological"],
+        max_patients=None,
+        result=_completed_result("neurological"),
+    )
+
+    exported = real_read_parquet(tmp_path / "neurological.parquet")
+    assert len(exported) == rows
+    assert exported["stay_id"].tolist() == list(range(rows))
+    assert str(exported["delirium_positive"].dtype) == "boolean"
+    assert str(exported["avpu"].dtype) == "string"
+    manifest = json.loads((tmp_path / "_manifest.json").read_text())
+    entry = manifest["files"][0]
+    audit = entry["row_grain_audit"]
+    assert audit["publication_backend"] == "pyarrow_record_batches"
+    assert audit["uniqueness_memory_limit_mb"] == 512
+    assert audit["duplicate_excess_rows_after"] == 0
+    assert entry["physical_schema"] == {
+        "stay_id": "int64",
+        "charttime": "double",
+        "gcs": "double",
+        "delirium_positive": "bool",
+        "avpu": "string",
+    }
+    assert entry["parquet_sha256"] == hashlib.sha256(
+        (tmp_path / "neurological.parquet").read_bytes()
+    ).hexdigest()
+    assert entry["parquet_bytes"] == (
+        tmp_path / "neurological.parquet"
+    ).stat().st_size
+
+
+def test_arrow_publication_matches_legacy_canonical_values_order_and_schema(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        api,
+        "EXTRACT_MODULES",
+        {"neurological": ["gcs", "delirium_positive", "avpu"]},
+    )
+    source = pd.DataFrame(
+        {
+            "patientid": [30, 10, 20, 40, 50],
+            "charttime": [-25.0, -24.0, 0.0, 9_000.0, None],
+            "gcs": [15.0, 99.0, 12.0, 8.0, None],
+            "delirium_positive": [0.0, 1.0, None, 1.0, 0.0],
+            # Exercise pandas' exact numeric-to-string representation inside a
+            # bounded Arrow batch (1.0 must remain "1.0", not Arrow's "1").
+            "avpu": [1.0, 2.0, None, 4.0, 5.0],
+        }
+    )
+    source.to_parquet(tmp_path / "neurological.parquet", index=False)
+    dictionary = api.load_dictionary(include_sofa2=True)
+    expected = api._canonicalise_native_export_frame(
+        pd.read_parquet(tmp_path / "neurological.parquet"),
+        module="neurological",
+        requested_concepts=["gcs", "delirium_positive", "avpu"],
+        dictionary=dictionary,
+    )
+    expected, expected_time_audit = api._enforce_native_export_time_axis(
+        expected,
+        module="neurological",
+        stay_time_upper_bounds={},
+    )
+    expected_bounds_audit = api._enforce_native_export_concept_bounds(
+        expected,
+        requested_concepts=["gcs", "delirium_positive", "avpu"],
+        dictionary=dictionary,
+    )
+    expected, expected_grain_audit = api._consolidate_native_export_row_grain(
+        expected,
+        module="neurological",
+        requested_concepts=["gcs", "delirium_positive", "avpu"],
+        dictionary=dictionary,
+    )
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    expected_arrow_schema = pa.Table.from_pandas(
+        expected,
+        preserve_index=False,
+    ).schema
+
+    api._publish_native_export_v2(
+        database="miiv",
+        data_path="/raw/source-must-not-be-read",
+        output_dir=str(tmp_path),
+        modules=["neurological"],
+        max_patients=None,
+        result=_completed_result("neurological"),
+    )
+
+    exported = pd.read_parquet(tmp_path / "neurological.parquet")
+    pd.testing.assert_frame_equal(exported, expected)
+    assert pq.read_schema(tmp_path / "neurological.parquet").equals(
+        expected_arrow_schema,
+        check_metadata=True,
+    )
+    manifest = json.loads((tmp_path / "_manifest.json").read_text())
+    entry = manifest["files"][0]
+    assert entry["time_axis_audit"] == expected_time_audit
+    assert {
+        key: entry["row_grain_audit"][key]
+        for key in expected_grain_audit
+    } == expected_grain_audit
+    assert {
+        concept: {
+            "excluded_out_of_bounds": status["excluded_out_of_bounds"],
+            **(
+                {"declared_bounds": status["declared_bounds"]}
+                if "declared_bounds" in status
+                else {}
+            ),
+        }
+        for concept, status in entry["concept_status"].items()
+    } == expected_bounds_audit
+
+
+def test_large_duplicate_grain_fails_closed_before_unbounded_pandas_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(api, "EXTRACT_MODULES", {"sepsis_shared": ["samp"]})
+    monkeypatch.setattr(api, "_NATIVE_EXPORT_PANDAS_FALLBACK_MAX_ROWS", 1)
+    source = pd.DataFrame(
+        {
+            "stay_id": [1, 1],
+            "charttime": [None, None],
+            "samp": [False, True],
+        }
+    )
+    path = tmp_path / "sepsis_shared.parquet"
+    source.to_parquet(path, index=False)
+    original_digest = hashlib.sha256(path.read_bytes()).hexdigest()
+
+    with pytest.raises(ValueError, match="exceeds the bounded pandas fallback"):
+        api._publish_native_export_v2(
+            database="eicu",
+            data_path="/raw/source-must-not-be-read",
+            output_dir=str(tmp_path),
+            modules=["sepsis_shared"],
+            max_patients=None,
+            result=_completed_result("sepsis_shared"),
+        )
+
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == original_digest
+    assert not (tmp_path / "_manifest.json").exists()
+    assert not (tmp_path / ".sepsis_shared.native-v2.tmp.parquet").exists()
