@@ -54,6 +54,14 @@ def _load_json(filename: str) -> dict | list:
     return json.loads((DATA_DIR / filename).read_text())
 
 
+def test_eicu_sampling_means_specimen_collected_not_positive_culture() -> None:
+    concept = _load_json("concept-dict.json")
+    for database in ("eicu", "eicu_demo"):
+        source = concept["samp"]["sources"][database][0]
+        assert source["table"] == "microlab"
+        assert source["callback"] == "transform_fun(set_val(TRUE))"
+
+
 def _data_source_tables() -> dict[str, dict]:
     data_sources = _load_json("data-sources.json")
     return {source["name"]: source["tables"] for source in data_sources}

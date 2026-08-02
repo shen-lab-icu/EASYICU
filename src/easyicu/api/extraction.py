@@ -592,11 +592,52 @@ def _module_arrow_null_type(concept: str, pyarrow_module):
     return pyarrow_module.float64()
 
 
-def _module_arrow_table(frame, concepts, pyarrow_module, *, schema=None):
+def _module_arrow_table(
+    frame,
+    concepts,
+    pyarrow_module,
+    *,
+    module: str,
+    schema=None,
+):
     """Create a stable module table, adding structural nulls only in Arrow."""
     table = pyarrow_module.Table.from_pandas(frame, preserve_index=False)
     requested = list(dict.fromkeys(concepts))
     requested_set = set(requested)
+
+    # Every non-demographics module is longitudinal in the native-v2 physical
+    # contract, even when a particular patient batch has no timestamped event.
+    # If the first streamed batch omitted ``charttime``, its Arrow schema used
+    # to omit it too; later batches were then projected onto that first schema
+    # and their real timestamps were silently discarded.  Establish the time
+    # field before the first writer schema is frozen and keep it float64 in all
+    # batches, including an all-null first batch.
+    if module != "demographics":
+        if "charttime" not in table.column_names:
+            identity_positions = [
+                table.column_names.index(column)
+                for column in _NATIVE_EXPORT_ID_COLUMNS
+                if column in table.column_names
+            ]
+            insert_at = max(identity_positions, default=-1) + 1
+            table = table.add_column(
+                insert_at,
+                pyarrow_module.field("charttime", pyarrow_module.float64()),
+                pyarrow_module.nulls(len(table), type=pyarrow_module.float64()),
+            )
+        elif table.schema.field("charttime").type != pyarrow_module.float64():
+            charttime_index = table.column_names.index("charttime")
+            try:
+                charttime = table.column("charttime").cast(pyarrow_module.float64())
+            except (TypeError, ValueError, pyarrow_module.ArrowInvalid) as exc:
+                raise ValueError(
+                    "module charttime must be numeric ICU-relative hours"
+                ) from exc
+            table = table.set_column(
+                charttime_index,
+                pyarrow_module.field("charttime", pyarrow_module.float64()),
+                charttime,
+            )
     context_columns = [
         column for column in table.column_names if column not in requested_set
     ]
@@ -912,6 +953,7 @@ def _stream_module_batches_to_parquet(
                         frame,
                         concepts,
                         pa,
+                        module=module_name,
                         schema=schema,
                     )
                     if writer is None:
@@ -1156,6 +1198,7 @@ def _run_module_extraction(
                 result,
                 concepts,
                 pa,
+                module=module_name,
             )
             pq.write_table(table, path, compression="snappy")
             saved[module_name] = {
@@ -2005,6 +2048,315 @@ def _canonicalise_native_export_frame(
     return canonical
 
 
+def _restore_native_export_storage_dtypes(
+    frame,
+    *,
+    requested_concepts: List[str],
+    dictionary,
+):
+    """Restore the exact native-v2 dtypes after row-grain aggregation."""
+    import pandas as pd
+
+    frame["stay_id"] = pd.to_numeric(frame["stay_id"], errors="raise").astype(
+        "int64"
+    )
+    if "charttime" in frame:
+        frame["charttime"] = pd.to_numeric(
+            frame["charttime"], errors="coerce"
+        ).astype("float64")
+    for concept in requested_concepts:
+        kind = _native_export_storage_kind(concept, dictionary)
+        if kind == "boolean":
+            frame[concept] = frame[concept].astype("boolean")
+        elif kind == "string":
+            frame[concept] = frame[concept].astype("string")
+        else:
+            frame[concept] = pd.to_numeric(
+                frame[concept], errors="coerce"
+            ).astype("float64")
+    return frame
+
+
+def _consolidate_native_export_row_grain(
+    frame,
+    *,
+    module: str,
+    requested_concepts: List[str],
+    dictionary,
+    source_charttime=None,
+):
+    """Enforce one deterministic physical row per native-v2 primary key.
+
+    Demographics is a stay-level table.  A source may nevertheless expose a
+    static concept at several event times; each concept is therefore selected
+    independently from its nearest non-null value to ICU admission (0 h), with
+    stable source order as the tie-breaker.  BMI is recomputed from the selected
+    height and weight rather than copied from a potentially different row.
+
+    Every other module has the null-equal key ``(stay_id, charttime)``. Exact
+    key collisions are consolidated by the physical type family: logical any,
+    numeric median, and a single non-null string value. Conflicting strings are
+    publication errors because silently choosing one would invent a category.
+    """
+    import numpy as np
+    import pandas as pd
+
+    if not isinstance(frame, pd.DataFrame):
+        raise TypeError("native export grain consolidation requires a DataFrame")
+    # Canonicalisation already owns a fresh frame.  Avoid another deep copy of
+    # multi-million-row modules merely to inspect their key: this publication
+    # guard must remain usable on the documented 16-GB profile.  Only normalize
+    # a non-default index when an earlier time filter actually left one behind.
+    working = frame
+    if not isinstance(working.index, pd.RangeIndex) or (
+        working.index.start != 0 or working.index.step != 1
+    ):
+        working = working.reset_index(drop=True)
+
+    if module == "demographics":
+        primary_key = ["stay_id"]
+        duplicate_mask = working.duplicated(primary_key, keep=False)
+        duplicate_excess = int(
+            working.duplicated(primary_key, keep="first").sum()
+        )
+        duplicate_groups = int(
+            working.loc[duplicate_mask, "stay_id"].nunique(dropna=False)
+        )
+
+        if source_charttime is None:
+            source_time = pd.Series(np.nan, index=working.index, dtype="float64")
+            source_time_present = False
+            source_null_time_rows = None
+        else:
+            raw_time = pd.Series(source_charttime).reset_index(drop=True)
+            if len(raw_time) != len(working):
+                raise ValueError(
+                    "demographics source charttime is not row-aligned with its frame"
+                )
+            source_time = pd.to_numeric(raw_time, errors="coerce")
+            invalid_time = raw_time.notna() & source_time.isna()
+            if bool(invalid_time.any()):
+                raise ValueError(
+                    "demographics source charttime must be numeric ICU-relative hours"
+                )
+            source_time = source_time.astype("float64")
+            source_time_present = True
+            source_null_time_rows = int(source_time.isna().sum())
+
+        first_stays = working[["stay_id"]].drop_duplicates(
+            "stay_id", keep="first"
+        )
+        consolidated = first_stays.reset_index(drop=True)
+        conflict_groups: Dict[str, int] = {}
+        for concept in requested_concepts:
+            if concept == "bmi":
+                continue
+            candidates = pd.DataFrame(
+                {
+                    "stay_id": working["stay_id"],
+                    concept: working[concept],
+                    "_source_time": source_time,
+                    "_row_order": np.arange(len(working), dtype="int64"),
+                }
+            )
+            non_null = candidates.loc[candidates[concept].notna()].copy()
+            if non_null.empty:
+                selected = pd.Series(dtype=working[concept].dtype)
+                conflicts = 0
+            else:
+                value_counts = non_null.groupby(
+                    "stay_id", sort=False, dropna=False
+                )[concept].nunique(dropna=True)
+                conflicts = int((value_counts > 1).sum())
+                non_null["_time_missing"] = non_null["_source_time"].isna()
+                non_null["_abs_source_time"] = non_null["_source_time"].abs()
+                non_null = non_null.sort_values(
+                    [
+                        "stay_id",
+                        "_time_missing",
+                        "_abs_source_time",
+                        "_row_order",
+                    ],
+                    kind="mergesort",
+                )
+                selected = non_null.drop_duplicates(
+                    "stay_id", keep="first"
+                ).set_index("stay_id")[concept]
+            conflict_groups[concept] = conflicts
+            consolidated[concept] = consolidated["stay_id"].map(selected)
+
+        recomputed_bmi_rows = 0
+        if "bmi" in requested_concepts:
+            bmi = pd.Series(np.nan, index=consolidated.index, dtype="float64")
+            if {"height", "weight"}.issubset(consolidated.columns):
+                height = pd.to_numeric(consolidated["height"], errors="coerce")
+                weight = pd.to_numeric(consolidated["weight"], errors="coerce")
+                bounds = _load_concept_bounds_map()
+                height_min, height_max = bounds.get("height", (None, None))
+                weight_min, weight_max = bounds.get("weight", (None, None))
+                valid = height.notna() & weight.notna() & (height > 0) & (weight > 0)
+                if height_min is not None:
+                    valid &= height >= float(height_min)
+                if height_max is not None:
+                    valid &= height <= float(height_max)
+                if weight_min is not None:
+                    valid &= weight >= float(weight_min)
+                if weight_max is not None:
+                    valid &= weight <= float(weight_max)
+                bmi.loc[valid] = weight.loc[valid] / (
+                    height.loc[valid] / 100.0
+                ) ** 2
+                finite = np.isfinite(bmi.to_numpy(dtype="float64", na_value=np.nan))
+                bmi.loc[~finite] = np.nan
+                recomputed_bmi_rows = int(bmi.notna().sum())
+            consolidated["bmi"] = bmi
+
+        consolidated = consolidated[
+            ["stay_id", *requested_concepts]
+        ].reset_index(drop=True)
+        consolidated = _restore_native_export_storage_dtypes(
+            consolidated,
+            requested_concepts=requested_concepts,
+            dictionary=dictionary,
+        )
+        if bool(consolidated.duplicated(primary_key, keep=False).any()):
+            raise RuntimeError("demographics row-grain consolidation was not unique")
+        audit: Dict[str, object] = {
+            "row_grain": "one_row_per_icu_stay",
+            "primary_key": primary_key,
+            "null_key_equality": "not_applicable",
+            "source_rows": int(len(working)),
+            "published_rows": int(len(consolidated)),
+            "duplicate_key_rows_before": int(duplicate_mask.sum()),
+            "duplicate_key_groups_before": duplicate_groups,
+            "duplicate_excess_rows_before": duplicate_excess,
+            "rows_consolidated": duplicate_excess,
+            "duplicate_excess_rows_after": 0,
+            "source_charttime_present": source_time_present,
+            "source_null_charttime_rows": source_null_time_rows,
+            "static_selection_policy": (
+                "nearest_non_null_value_to_icu_admission_then_source_order"
+            ),
+            "conflicting_non_null_stay_groups_by_concept": conflict_groups,
+            "bmi_policy": "recomputed_from_selected_weight_kg_and_height_cm",
+            "bounded_source_bmi_non_null_rows_discarded": (
+                int(working["bmi"].notna().sum())
+                if "bmi" in requested_concepts
+                else 0
+            ),
+            "recomputed_bmi_rows": recomputed_bmi_rows,
+        }
+        return consolidated, audit
+
+    primary_key = ["stay_id", "charttime"]
+    if "charttime" not in working:
+        raise ValueError(
+            f"native export module '{module}' has no canonical charttime column"
+        )
+    duplicate_mask = working.duplicated(primary_key, keep=False)
+    duplicate_excess = int(
+        working.duplicated(primary_key, keep="first").sum()
+    )
+    duplicate_rows = int(duplicate_mask.sum())
+    records = []
+    if duplicate_rows:
+        duplicate_frame = working.loc[duplicate_mask]
+        for _key, group in duplicate_frame.groupby(
+            primary_key,
+            sort=False,
+            dropna=False,
+        ):
+            record = {
+                "stay_id": group["stay_id"].iloc[0],
+                "charttime": group["charttime"].iloc[0],
+                "_row_order": int(group.index.min()),
+            }
+            for concept in requested_concepts:
+                values = group[concept].dropna()
+                kind = _native_export_storage_kind(concept, dictionary)
+                if values.empty:
+                    record[concept] = (
+                        pd.NA if kind in {"boolean", "string"} else np.nan
+                    )
+                elif kind == "boolean":
+                    record[concept] = bool(values.astype("boolean").any())
+                elif kind == "string":
+                    distinct = values.astype("string").drop_duplicates()
+                    if len(distinct) > 1:
+                        key_value = (
+                            int(group["stay_id"].iloc[0]),
+                            group["charttime"].iloc[0],
+                        )
+                        raise ValueError(
+                            "native export cannot consolidate conflicting string "
+                            f"concept '{concept}' at key {key_value!r}: "
+                            f"{distinct.astype(str).tolist()!r}"
+                        )
+                    record[concept] = distinct.iloc[0]
+                else:
+                    record[concept] = float(
+                        pd.to_numeric(values, errors="raise").median()
+                    )
+            records.append(record)
+
+        unique_rows = working.loc[~duplicate_mask].copy()
+        unique_rows["_row_order"] = unique_rows.index.astype("int64")
+        aggregated = pd.DataFrame.from_records(records)
+        consolidated = pd.concat(
+            [unique_rows, aggregated], ignore_index=True, sort=False
+        ).sort_values("_row_order", kind="mergesort")
+        consolidated = consolidated.drop(columns="_row_order")
+    else:
+        consolidated = working
+
+    consolidated = consolidated[
+        ["stay_id", "charttime", *requested_concepts]
+    ].reset_index(drop=True)
+    consolidated = _restore_native_export_storage_dtypes(
+        consolidated,
+        requested_concepts=requested_concepts,
+        dictionary=dictionary,
+    )
+    duplicate_after = int(
+        consolidated.duplicated(primary_key, keep="first").sum()
+    )
+    if duplicate_after:
+        raise RuntimeError(
+            f"native export module '{module}' row-grain consolidation was not unique"
+        )
+    audit = {
+        "row_grain": "one_row_per_icu_stay_relative_hour",
+        "primary_key": primary_key,
+        "null_key_equality": "nulls_equal",
+        "source_rows": int(len(working)),
+        "published_rows": int(len(consolidated)),
+        "null_charttime_rows_before": int(working["charttime"].isna().sum()),
+        "null_charttime_rows_after": int(consolidated["charttime"].isna().sum()),
+        "duplicate_key_rows_before": duplicate_rows,
+        "duplicate_key_groups_before": int(len(records)),
+        "duplicate_excess_rows_before": duplicate_excess,
+        "rows_consolidated": duplicate_excess,
+        "duplicate_excess_rows_after": duplicate_after,
+        "aggregation_policy": {
+            "boolean": "any_non_null_preserving_all_null",
+            "numeric": "median_non_null_preserving_all_null",
+            "string": "single_non_null_value_or_fail_on_conflict",
+        },
+    }
+    return consolidated, audit
+
+
+def _native_export_file_sha256(path: Path) -> str:
+    """Return the content digest sealed into a native-v2 file receipt."""
+    import hashlib
+
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _native_export_stay_time_upper_bounds(outcome_frame) -> Dict[int, float]:
     """Return each stay's last plausible ICU-relative event hour.
 
@@ -2420,6 +2772,11 @@ def _publish_native_export_v2(
 
         temporary_parquet = None
         try:
+            source_charttime = (
+                frame["charttime"].copy()
+                if module == "demographics" and "charttime" in frame
+                else None
+            )
             frame = _canonicalise_native_export_frame(
                 frame,
                 module=module,
@@ -2431,11 +2788,46 @@ def _publish_native_export_v2(
                 module=module,
                 stay_time_upper_bounds=stay_time_upper_bounds,
             )
-            bounds_audit = _enforce_native_export_concept_bounds(
-                frame,
-                requested_concepts=requested_concept_plan[module],
-                dictionary=dictionary,
-            )
+            if module == "demographics":
+                # Treat target-unit bound violations as missing before choosing
+                # the nearest static value. A corrupt +0.1 h height must not
+                # mask a valid -2 h height and then leave the stay empty.
+                bounds_audit = _enforce_native_export_concept_bounds(
+                    frame,
+                    requested_concepts=requested_concept_plan[module],
+                    dictionary=dictionary,
+                )
+                frame, row_grain_audit = _consolidate_native_export_row_grain(
+                    frame,
+                    module=module,
+                    requested_concepts=requested_concept_plan[module],
+                    dictionary=dictionary,
+                    source_charttime=source_charttime,
+                )
+                post_consolidation_bounds = _enforce_native_export_concept_bounds(
+                    frame,
+                    requested_concepts=requested_concept_plan[module],
+                    dictionary=dictionary,
+                )
+                for concept, post_audit in post_consolidation_bounds.items():
+                    bounds_audit[concept]["excluded_out_of_bounds"] += int(
+                        post_audit["excluded_out_of_bounds"]
+                    )
+            else:
+                # Null physical bound violations before taking a duplicate-key
+                # median; otherwise two invalid source values could average to
+                # a plausible value and survive the publication contract.
+                bounds_audit = _enforce_native_export_concept_bounds(
+                    frame,
+                    requested_concepts=requested_concept_plan[module],
+                    dictionary=dictionary,
+                )
+                frame, row_grain_audit = _consolidate_native_export_row_grain(
+                    frame,
+                    module=module,
+                    requested_concepts=requested_concept_plan[module],
+                    dictionary=dictionary,
+                )
             temporary_parquet = output_root / f".{module}.native-v2.tmp.parquet"
             if temporary_parquet.exists() or temporary_parquet.is_symlink():
                 raise ValueError(
@@ -2500,6 +2892,8 @@ def _publish_native_export_v2(
             field.name: str(field.type)
             for field in _pq.read_schema(temporary_parquet)
         }
+        parquet_sha256 = _native_export_file_sha256(temporary_parquet)
+        parquet_bytes = temporary_parquet.stat().st_size
         files.append(
             {
                 "file": relative_path,
@@ -2514,6 +2908,11 @@ def _publish_native_export_v2(
                 "physical_concept_ids": requested_concept_plan[module],
                 "rows": int(frame.shape[0]),
                 "physical_schema": physical_schema,
+                "parquet_sha256": parquet_sha256,
+                "parquet_bytes": parquet_bytes,
+                "primary_key": row_grain_audit["primary_key"],
+                "row_grain": row_grain_audit["row_grain"],
+                "row_grain_audit": row_grain_audit,
                 "time_axis_audit": time_axis_audit,
                 "concept_status": concept_status,
                 "column_metadata_columns": list(binding.columns),
@@ -2565,6 +2964,7 @@ def _publish_native_export_v2(
     }
     manifest = {
         "schema_version": _NATIVE_EXPORT_SCHEMA_V2,
+        "contract_revision": "native_v2_row_grain_sha256_size_20260803",
         "database": normalized_database,
         "data_path": str(data_path),
         "format": "parquet",
@@ -2583,6 +2983,17 @@ def _publish_native_export_v2(
             "concept_order": "module_catalog",
             "unavailable_representation": "typed_all_null_placeholder",
             "declared_bounds_policy": "out_of_range_to_null",
+            "row_grain_contract": {
+                "demographics": {
+                    "row_grain": "one_row_per_icu_stay",
+                    "primary_key": ["stay_id"],
+                },
+                "all_other_modules": {
+                    "row_grain": "one_row_per_icu_stay_relative_hour",
+                    "primary_key": ["stay_id", "charttime"],
+                    "null_key_equality": "nulls_equal",
+                },
+            },
         },
         "module_timings_seconds": module_timings,
         "module_peak_rss_mb": module_peak_rss_mb,

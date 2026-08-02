@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
 
 import pandas as pd
@@ -77,6 +78,14 @@ def test_grouped_output_is_sealed_without_accessing_the_raw_data_path(
     manifest = json.loads((tmp_path / "_manifest.json").read_text())
     assert manifest["schema_version"] == "easyicu_native_export_v2"
     assert manifest["files"][0]["file"] == "demographics.parquet"
+    assert manifest["files"][0]["primary_key"] == ["stay_id"]
+    assert manifest["files"][0]["row_grain"] == "one_row_per_icu_stay"
+    assert manifest["files"][0]["parquet_sha256"] == hashlib.sha256(
+        (tmp_path / "demographics.parquet").read_bytes()
+    ).hexdigest()
+    assert manifest["files"][0]["parquet_bytes"] == (
+        tmp_path / "demographics.parquet"
+    ).stat().st_size
     assert manifest["canonical_physical_schema"]["identity_column"] == "stay_id"
     assert manifest["runtime_provenance"]["easyicu_import_path"].endswith(
         "/src/easyicu"
@@ -386,11 +395,9 @@ def test_grouped_export_nulls_declared_bound_violations_and_audits_them(
     )
 
     exported = pd.read_parquet(tmp_path / "demographics.parquet")
-    assert exported.loc[1, ["height", "weight", "bmi"]].tolist() == [
-        170.0,
-        75.0,
-        26.0,
-    ]
+    assert exported.loc[1, "height"] == 170.0
+    assert exported.loc[1, "weight"] == 75.0
+    assert exported.loc[1, "bmi"] == pytest.approx(75.0 / 1.7**2)
     assert exported.loc[[0, 2], ["height", "weight", "bmi"]].isna().all().all()
 
     manifest = json.loads((tmp_path / "_manifest.json").read_text())
@@ -407,6 +414,115 @@ def test_grouped_export_nulls_declared_bound_violations_and_audits_them(
     }
     assert status["weight"]["excluded_out_of_bounds"] == 2
     assert status["bmi"]["excluded_out_of_bounds"] == 2
+
+
+def test_demographics_consolidates_nearest_static_values_and_recomputes_bmi(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        api,
+        "EXTRACT_MODULES",
+        {"demographics": ["age", "bmi", "height", "sex", "weight", "adm"]},
+    )
+    pd.DataFrame(
+        {
+            "stay_id": [10, 10, 10, 20],
+            "charttime": [-12.0, 2.0, 1.0, 0.0],
+            "age": [59.0, 60.0, None, 70.0],
+            "bmi": [99.0, 98.0, 97.0, 18.0],
+            "height": [180.0, None, 170.0, 160.0],
+            "sex": ["M", "M", None, "F"],
+            "weight": [80.0, 70.0, None, 50.0],
+            "adm": ["emergency", "elective", "urgent", "emergency"],
+        }
+    ).to_parquet(tmp_path / "demographics.parquet", index=False)
+
+    api._publish_native_export_v2(
+        database="hirid",
+        data_path="/raw/source-must-not-be-read",
+        output_dir=str(tmp_path),
+        modules=["demographics"],
+        max_patients=None,
+        result=_completed_result(),
+    )
+
+    exported = pd.read_parquet(tmp_path / "demographics.parquet")
+    assert exported["stay_id"].tolist() == [10, 20]
+    stay10 = exported.set_index("stay_id").loc[10]
+    # Each static concept is selected independently at its nearest non-null
+    # source time: age/weight from +2 h, height/adm from +1 h.
+    assert stay10["age"] == 60.0
+    assert stay10["height"] == 170.0
+    assert stay10["weight"] == 70.0
+    assert stay10["adm"] == "urgent"
+    assert stay10["bmi"] == pytest.approx(70.0 / 1.7**2)
+
+    manifest = json.loads((tmp_path / "_manifest.json").read_text())
+    audit = manifest["files"][0]["row_grain_audit"]
+    assert audit["primary_key"] == ["stay_id"]
+    assert audit["source_rows"] == 4
+    assert audit["published_rows"] == 2
+    assert audit["duplicate_excess_rows_before"] == 2
+    assert audit["rows_consolidated"] == 2
+    assert audit["recomputed_bmi_rows"] == 2
+
+
+def test_longitudinal_null_time_boolean_conflicts_use_any_and_are_unique(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(api, "EXTRACT_MODULES", {"sepsis_shared": ["samp"]})
+    pd.DataFrame(
+        {
+            "patientunitstayid": [1, 1, 1, 2],
+            "charttime": [None, None, None, None],
+            "samp": [False, True, None, False],
+        }
+    ).to_parquet(tmp_path / "sepsis_shared.parquet", index=False)
+
+    api._publish_native_export_v2(
+        database="eicu",
+        data_path="/raw/source-must-not-be-read",
+        output_dir=str(tmp_path),
+        modules=["sepsis_shared"],
+        max_patients=None,
+        result=_completed_result("sepsis_shared"),
+    )
+
+    exported = pd.read_parquet(tmp_path / "sepsis_shared.parquet")
+    assert len(exported) == 2
+    assert exported.set_index("stay_id")["samp"].to_dict() == {1: True, 2: False}
+    assert not exported.duplicated(["stay_id", "charttime"], keep=False).any()
+    manifest = json.loads((tmp_path / "_manifest.json").read_text())
+    audit = manifest["files"][0]["row_grain_audit"]
+    assert audit["null_key_equality"] == "nulls_equal"
+    assert audit["null_charttime_rows_before"] == 4
+    assert audit["null_charttime_rows_after"] == 2
+    assert audit["duplicate_key_groups_before"] == 1
+    assert audit["rows_consolidated"] == 2
+
+
+def test_longitudinal_conflicting_strings_fail_closed() -> None:
+    dictionary = api.load_dictionary(include_sofa2=True)
+    canonical = api._canonicalise_native_export_frame(
+        pd.DataFrame(
+            {
+                "stay_id": [1, 1],
+                "charttime": [0.0, 0.0],
+                "avpu": ["A", "V"],
+            }
+        ),
+        module="neurological",
+        requested_concepts=["avpu"],
+        dictionary=dictionary,
+    )
+
+    with pytest.raises(ValueError, match="conflicting string concept 'avpu'"):
+        api._consolidate_native_export_row_grain(
+            canonical,
+            module="neurological",
+            requested_concepts=["avpu"],
+            dictionary=dictionary,
+        )
 
 
 def test_native_bounds_survive_sofa2_overlay_redefinition(

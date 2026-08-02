@@ -335,6 +335,50 @@ def test_streamed_module_preserves_first_schema_without_pandas_reindex(
     assert pd.isna(exported["optional_signal"].iloc[2])
 
 
+def test_streamed_module_keeps_later_charttime_when_first_batch_has_none(
+    monkeypatch, tmp_path
+) -> None:
+    def fake_load_concepts(**kwargs):
+        ids = list(kwargs["patient_ids"]["stay_id"])
+        if ids[0] == 1:
+            # This reproduces eICU sepsis_shared when the first stay batch has
+            # no timestamped sampling event at all.
+            return pd.DataFrame(
+                {
+                    "stay_id": ids,
+                    "susp_inf": [False] * len(ids),
+                }
+            )
+        return pd.DataFrame(
+            {
+                "stay_id": ids,
+                "charttime": [5.0] * len(ids),
+                "susp_inf": [True] * len(ids),
+            }
+        )
+
+    monkeypatch.setattr(easyicu, "load_concepts", fake_load_concepts)
+
+    api._run_module_extraction(
+        "sepsis_shared",
+        ["susp_inf"],
+        "eicu",
+        str(tmp_path),
+        {"stay_id": [1, 2, 3]},
+        2,
+        str(tmp_path),
+        stream_output_batches=True,
+    )
+
+    manifest = json.loads((tmp_path / "_manifest.json").read_text())
+    assert manifest["errors"] == []
+    exported = pd.read_parquet(manifest["saved"]["sepsis_shared"]["path"])
+    assert list(exported.columns) == ["stay_id", "charttime", "susp_inf"]
+    assert exported["charttime"].dtype == "float64"
+    assert exported["charttime"].iloc[:2].isna().all()
+    assert exported["charttime"].iloc[2] == 5.0
+
+
 def test_stream_batch_release_flushes_arrow_pool():
     released = []
 

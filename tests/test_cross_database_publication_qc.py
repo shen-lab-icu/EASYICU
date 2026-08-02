@@ -270,6 +270,55 @@ def test_structural_placeholder_requires_zero_rows_typed_schema_and_status() -> 
     ]
 
 
+def test_row_grain_receipt_binds_primary_key_audit_and_parquet_bytes(
+    tmp_path: Path,
+) -> None:
+    module = _load_script(AUDIT_SCRIPT, "easyicu_qc_a02_row_grain")
+    parquet = tmp_path / "vitals.parquet"
+    pd.DataFrame(
+        {"stay_id": [1], "charttime": [0.0], "hr": [70.0]}
+    ).to_parquet(parquet, index=False)
+    entry = {
+        "rows": 1,
+        "primary_key": ["stay_id", "charttime"],
+        "row_grain": "one_row_per_icu_stay_relative_hour",
+        "parquet_sha256": hashlib.sha256(parquet.read_bytes()).hexdigest(),
+        "parquet_bytes": parquet.stat().st_size,
+        "row_grain_audit": {
+            "row_grain": "one_row_per_icu_stay_relative_hour",
+            "primary_key": ["stay_id", "charttime"],
+            "null_key_equality": "nulls_equal",
+            "source_rows": 1,
+            "published_rows": 1,
+            "null_charttime_rows_after": 0,
+            "duplicate_excess_rows_before": 0,
+            "rows_consolidated": 0,
+            "duplicate_excess_rows_after": 0,
+        },
+    }
+
+    checks = module._row_grain_contract_checks(
+        module="vitals",
+        entry=entry,
+        parquet_path=parquet,
+        actual_row_count=1,
+    )
+    assert checks["row_grain_contract_valid"]
+    assert checks["parquet_sha256_matches"]
+    assert checks["parquet_bytes_matches"]
+
+    parquet.write_bytes(parquet.read_bytes() + b"tampered")
+    tampered = module._row_grain_contract_checks(
+        module="vitals",
+        entry=entry,
+        parquet_path=parquet,
+        actual_row_count=1,
+    )
+    assert not tampered["parquet_sha256_matches"]
+    assert not tampered["parquet_bytes_matches"]
+    assert not tampered["row_grain_contract_valid"]
+
+
 def test_qc_a02_fails_closed_on_end_to_end_metadata_gap(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -289,9 +338,10 @@ def test_qc_a02_fails_closed_on_end_to_end_metadata_gap(
         sidecar_sha256 = hashlib.sha256(sidecar.read_bytes()).hexdigest()
         entries = []
         for module_name in modules:
+            parquet_path = database_root / f"{module_name}.parquet"
             pd.DataFrame(
                 {"stay_id": [1], "charttime": [0.0], "value": [1.0]}
-            ).to_parquet(database_root / f"{module_name}.parquet", index=False)
+            ).to_parquet(parquet_path, index=False)
             metadata_columns = ["value"]
             if database == "aumc" and module_name == modules[0]:
                 metadata_columns = []
@@ -307,6 +357,26 @@ def test_qc_a02_fails_closed_on_end_to_end_metadata_gap(
                         "stay_id": "int64",
                         "charttime": "double",
                         "value": "double",
+                    },
+                    "parquet_sha256": hashlib.sha256(
+                        parquet_path.read_bytes()
+                    ).hexdigest(),
+                    "parquet_bytes": parquet_path.stat().st_size,
+                    "primary_key": ["stay_id", "charttime"],
+                    "row_grain": "one_row_per_icu_stay_relative_hour",
+                    "row_grain_audit": {
+                        "row_grain": "one_row_per_icu_stay_relative_hour",
+                        "primary_key": ["stay_id", "charttime"],
+                        "null_key_equality": "nulls_equal",
+                        "source_rows": 1,
+                        "published_rows": 1,
+                        "null_charttime_rows_before": 0,
+                        "null_charttime_rows_after": 0,
+                        "duplicate_key_rows_before": 0,
+                        "duplicate_key_groups_before": 0,
+                        "duplicate_excess_rows_before": 0,
+                        "rows_consolidated": 0,
+                        "duplicate_excess_rows_after": 0,
                     },
                     "concept_status": {
                         "value": {"availability": "available", "non_null": 1}

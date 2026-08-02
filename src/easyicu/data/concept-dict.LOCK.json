@@ -1,8 +1,8 @@
 {
-  "finalized": true,
-  "finalized_note": "定稿 2026-07-30 — HiRID OUTUrine/h 直接速率语义、KDIGO 完整窗口覆盖和 MCHC g/L→g/dL 已在干净 Git commit 47b11aea 上完成全队列 19 模块 native-v2 发布；19/19 Parquet 可读且与另外五库逐模块 Arrow schema 完全一致。",
-  "locked_for_extraction_run": "hirid19_uo_mchc_native_v2_47b11aea_20260730",
-  "concept_dict_sha256": "b8a5f5f5a8eab41426a724f728716663dcf37df6abdaa32d9108206995abbca2",
+  "finalized": false,
+  "finalized_note": "2026-08-03 待重跑 — eICU samp 已从培养阳性语义修复为实际送检事件；native-v2 新增严格行粒度、跨批 charttime、Parquet SHA-256 和重复收敛合同。2026-07-30 六库导出仍是不可变历史证据，不代表本 SHA 的当前发布。",
+  "locked_for_extraction_run": "pending_native_v2_row_grain_rerun_20260803",
+  "concept_dict_sha256": "f1a3cfa5c5e3c09f4f167a9cb95450844e47641ba662c53a13e1e1d31f22509c",
   "sofa2_dict_sha256": "ab39bdcf03ad481dd65bbd5f6e63bdc71612a2267539aa76cc9fb415e19a0fca",
   "total_concepts": 251,
   "own_concepts_not_in_ricu": 130,
@@ -15,7 +15,8 @@
     "output_layout": "one wide parquet per module ({db}/{module}.parquet): id + time + one column per concept — NOT per-concept files. Matches the web export path (webserver/dataio.py).",
     "load_call": "load_concepts(module_concepts, merge=True) once per module inside keep_cache; do NOT hand-write a per-concept merge (time-column mismatch -> Cartesian blow-up -> OOM).",
     "batching": "adaptive and result-invariant: one-shot when memory permits; streamed exports continuously size the first batch from currently available memory after reserving 25% (at least 2 GiB), round down to 5,000 stays, and then resize later batches from measured process-tree working set, capped at 67,000. An 8 GiB-available host therefore starts at 40,000 stays. Sepsis derivation reuses the outer batch rather than imposing a hidden 2,000-stay sub-batch. Explicit batch_size remains authoritative. The portable streamed launcher keeps a 1-thread/1GB/256MB safety profile; explicit one-shot runs scale in bounded 24/32/64-GiB tiers up to 8 workers, 8GB DuckDB and 8GB cache on large servers.",
-    "spill": "DuckDB temp + batch spill default to <output_dir>/.easyicu_spill (the output drive), not system /tmp."
+    "spill": "DuckDB temp + batch spill default to <output_dir>/.easyicu_spill (the output drive), not system /tmp.",
+    "row_grain": "demographics is exactly one row per stay using nearest-to-0h non-null static values and recomputed BMI; every other module is unique on null-equal (stay_id, charttime), with boolean any, numeric median, and conflicting-string fail-closed consolidation. Each file manifest binds the primary key audit and exact Parquet SHA-256."
   },
   "merge_oom_safety": {
     "verified": true,
