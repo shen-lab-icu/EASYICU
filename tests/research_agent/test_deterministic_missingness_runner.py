@@ -607,6 +607,81 @@ def test_missingness_audit_counts_from_measured_indicator(tmp_path: Path):
         assert col in audit.columns
 
 
+#: The tolerance the shipped missingness figure re-derives at, copied from the
+#: recorded ``analysis.py`` that raised on it: ``np.allclose(..., rtol=0.0,
+#: atol=1e-8)``. A published percentage has to survive THIS, not a friendlier
+#: number chosen here.
+_CONSUMER_ATOL = 1e-8
+
+
+def test_published_percentages_survive_the_consumer_rederiving_them(
+    tmp_path: Path,
+):
+    """Rounding a number a downstream contract re-derives is a broken contract.
+
+    e1 in the 2026-08-02 sweep ran 11 steps and lost exactly one:
+    ``11_missingness_figure`` died in 1.2 s with "missing_pct is inconsistent
+    with n_total and n_nonmissing", and that single death is what turned the
+    whole manuscript into a fail-closed placeholder.  Nothing was inconsistent.
+    The figure recomputes ``100 * (n_total - n_nonmissing) / n_total`` and
+    compares at ``atol=1e-8``; this executor published the same quantity
+    through ``round(..., 6)``.  On the real artifact 4 of 6 rows were off by
+    2e-7 to 4e-7 -- entirely the rounding, and far outside the tolerance.
+
+    Six decimals is a display decision.  The consumer of a machine-readable
+    table is doing arithmetic, not reading, so the rounding belongs at the
+    point of display and nowhere upstream of it.
+    """
+
+    cohort = _cohort(n=94458, seed=3)
+    _summary, out_dir = _exec_runner(tmp_path, cohort, {})
+
+    audit = pd.read_csv(out_dir / "missingness_measurement_audit.csv")
+    nonzero = audit["n_total"] != 0
+    assert nonzero.any(), "the probe needs at least one audited concept"
+
+    # Exactly the two checks the shipped renderer performs.
+    expected_missing = (
+        100.0
+        * (audit.loc[nonzero, "n_total"] - audit.loc[nonzero, "n_nonmissing"])
+        / audit.loc[nonzero, "n_total"]
+    )
+    expected_measured = (
+        100.0
+        * audit.loc[nonzero, "n_nonmissing"]
+        / audit.loc[nonzero, "n_total"]
+    )
+    assert np.allclose(
+        audit.loc[nonzero, "missing_pct"].to_numpy(dtype=float),
+        expected_missing.to_numpy(dtype=float),
+        rtol=0.0,
+        atol=_CONSUMER_ATOL,
+    ), "missing_pct cannot be re-derived at the tolerance its consumer uses"
+    assert np.allclose(
+        audit.loc[nonzero, "measured_pct"].to_numpy(dtype=float),
+        expected_measured.to_numpy(dtype=float),
+        rtol=0.0,
+        atol=_CONSUMER_ATOL,
+    ), "measured_pct cannot be re-derived at the tolerance its consumer uses"
+
+    # The same rule for the other rate this step publishes to a machine.
+    denominators = pd.read_csv(out_dir / "analytic_denominators.csv")
+    scoped = denominators[
+        denominators["n_total"].notna()
+        & (denominators["n_total"] != 0)
+        & denominators["n_complete"].notna()
+    ]
+    if len(scoped):
+        assert np.allclose(
+            scoped["complete_pct"].to_numpy(dtype=float),
+            (100.0 * scoped["n_complete"] / scoped["n_total"]).to_numpy(
+                dtype=float
+            ),
+            rtol=0.0,
+            atol=_CONSUMER_ATOL,
+        ), "complete_pct cannot be re-derived at the tolerance a consumer uses"
+
+
 def test_the_worst_concepts_summary_publishes_the_count_not_only_the_rate(
     tmp_path: Path,
 ):
