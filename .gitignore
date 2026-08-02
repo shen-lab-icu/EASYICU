@@ -137,6 +137,8 @@ scripts/*
 !scripts/launch_easyicu.py
 !scripts/figures/
 !scripts/figures/*.py
+!scripts/releases/
+!scripts/releases/*.py
 
 # 环境文件
 .env
