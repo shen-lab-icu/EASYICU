@@ -57,6 +57,7 @@ logger = logging.getLogger(__name__)
 
 from .agents.core import (
     AnalyzerAgent,
+    infer_analysis_type,
     ClinicalSemanticsAgent,
     CoderAgent,
     CriticAgent,
@@ -219,6 +220,7 @@ from .robustness.panel import (
 from .trajectory.plan_contract import (
     augment_trajectory_plan_products,
     trajectory_plan_dag_findings,
+    trajectory_planner_contract_guide,
     trajectory_step_roles,
 )
 from .reporting.readiness import (
@@ -2702,6 +2704,32 @@ class ResearchAgentPipeline:
                 for value in (planning_contract_context, population_contract)
                 if value
             )
+
+        # The Planner prompt renders this guide itself, but from the context
+        # alone -- which carries only the wide representation. A run whose
+        # trajectory is bound as the long typed input therefore saw nothing,
+        # and was then refused by a gate that DOES know about that tier. Only
+        # the pipeline holds the flag, so it supplies the guide the prompt
+        # could not build, and only when the prompt's own attempt came back
+        # empty, so a wide-column run is never told twice.
+        if long_trajectory_bound and not trajectory_planner_contract_guide(
+            context=agent_context,
+            analysis_type=infer_analysis_type(agent_context).key,
+        ):
+            long_tier_trajectory_guide = trajectory_planner_contract_guide(
+                context=agent_context,
+                analysis_type=infer_analysis_type(agent_context).key,
+                long_trajectory_bound=True,
+            )
+            if long_tier_trajectory_guide:
+                planning_contract_context = "\n\n".join(
+                    value
+                    for value in (
+                        planning_contract_context,
+                        long_tier_trajectory_guide,
+                    )
+                    if value
+                )
 
         for client in self._iter_mock_clients(llm):
             client.context = agent_context
