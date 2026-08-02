@@ -1161,12 +1161,33 @@ def test_resume_seals_completed_repair_after_capsule_checkpoint_crash(
         "stop_after_step_id": "01_summary",
         "stop_after_analysis": True,
     }
-    with pytest.raises(StepAuthorityRuntimeError, match="simulated post-receipt"):
-        build_pipeline().run(**run_kwargs)
+    # The crash no longer escapes `run`: a step that raises is caught, sealed
+    # into the manifest as a terminal record, and the run stops there. So the
+    # crash is read out of the ledger rather than out of a raised exception.
+    build_pipeline().run(**run_kwargs)
     run_dir = next(tmp_path.glob("run_*"))
-    first_record = _latest_step_record(run_dir)
-    assert first_record["status"] == "repair_transport_pending"
+    crash_ledger = json.loads(
+        (run_dir / "manifest_partial.json").read_text(encoding="utf-8")
+    )
+    step_records = [
+        record
+        for record in crash_ledger["per_step_records"]
+        if record.get("step_id") == "01_summary"
+    ]
+    assert step_records[-1]["status"] == "execution_raised"
+
+    # The attempt's own checkpoint is still there, and -- this is the part that
+    # decides whether the resume is free -- the crash record that supersedes it
+    # carries the coordinates a resume needs. A resume reads only the CURRENT
+    # record, so coordinates left behind on an older one are invisible.
+    first_record = [
+        record
+        for record in step_records
+        if record["status"] == "repair_transport_pending"
+    ][-1]
     assert first_record["capsule_pending_repair_attempt_id"] == 1
+    assert step_records[-1]["capsule_pending_repair_attempt_id"] == 1
+    assert step_records[-1]["step_authority_capsule_ref"]
     assert _call_count(llm, "WRITE THE PYTHON CODE") == 1
     # This fixture intentionally returns a complete script to the patch route,
     # so one logical repair uses patch + authorized full-rewrite calls.
