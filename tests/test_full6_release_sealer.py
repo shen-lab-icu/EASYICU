@@ -149,6 +149,10 @@ def test_sealer_validates_6_by_19_and_atomically_writes_metadata(
     assert metadata["module_count"] == 19
     assert metadata["expected_parquet_count"] == 114
     assert metadata["contract_revision"] == sealer.CONTRACT_REVISION
+    assert (
+        "partial_wide_exact_floating_charttime_key_alignment"
+        in metadata["corrections"]
+    )
     assert metadata["extraction_execution"]["profile"] == "server-adaptive"
     assert not metadata["extraction_execution"]["portable_16gb_validated"]
     assert set(metadata["extraction_execution"]["timing"]["databases"]) == set(

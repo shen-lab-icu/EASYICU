@@ -51,6 +51,7 @@ EXPECTED_PARQUET_COUNT = len(DATABASES) * len(MODULES)
 CORRECTIONS = (
     "demographics_one_row_per_stay_with_nearest_static_values_and_recomputed_bmi",
     "longitudinal_null_equal_primary_key_consolidation",
+    "partial_wide_exact_floating_charttime_key_alignment",
     "streamed_non_demographics_charttime_schema_stabilization",
     "eicu_samp_represents_sampling_event_not_culture_positivity",
     "per_parquet_sha256_and_byte_size_receipts",
