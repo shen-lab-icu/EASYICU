@@ -4208,13 +4208,30 @@ def run_execute_phase(
             snapshot = dict(record)
             if snapshot not in step_attempt_history:
                 step_attempt_history.append(snapshot)
+        # The partial manifest is a diagnostic snapshot, and one of its callers
+        # is the step-crash handler.  ``plan_manifest_fields`` fails closed when
+        # the executing plan is not bound to an immutable record; letting that
+        # abort the write replaces the diagnosis being recorded (which step
+        # raised what) with an authority message that names none of it -- which
+        # is exactly how the binding defect below stayed invisible.  Record the
+        # binding failure alongside everything else and finish the write.  This
+        # weakens nothing: the run's fate is still decided by the same
+        # fail-closed call in ``finalize``, which still raises.  ``plan_path``
+        # is deliberately omitted rather than guessed, because its consumers
+        # require a run-relative path and already have a defined fallback.
+        try:
+            plan_fields: Dict[str, Any] = dict(
+                plan_manifest_fields(run_dir, evidence, plan, plan_path)
+            )
+        except ValueError as authority_error:
+            plan_fields = {"current_plan_authority_error": str(authority_error)}
         payload: Dict[str, Any] = {
             "schema_version": "easyicu.research_manifest_partial/1",
             "run_id": run_id,
             "research_question": context.research_question,
             "started_at": plan_result.started_at.isoformat(),
             "context_path": str(plan_result.context_path.relative_to(run_dir)),
-            **plan_manifest_fields(run_dir, evidence, plan, plan_path),
+            **plan_fields,
             "evidence": [r.model_dump(mode="json") for r in evidence.records()],
             "findings": [f.model_dump(mode="json") for f in findings],
             "per_step_records": per_step_records,
@@ -4263,6 +4280,7 @@ def run_execute_phase(
         revised_plan: AnalysisPlan,
         *,
         reason: str,
+        producer: str = "replanner",
     ) -> Path:
         from ..authority.declared_levels import bind_step_declared_levels
         from ..authority.table_one_binding import (
@@ -4286,7 +4304,7 @@ def run_execute_phase(
                 description=f"Revised analysis plan (reason={reason}).",
                 source_path=revision_path,
                 evidence_id=base_id,
-                producer="replanner",
+                producer=producer,
                 generation_mode="llm",
                 prompt_pack_version=prompt_version,
                 metadata={"reason": reason, "llm_signature": llm_signature},
@@ -4309,7 +4327,7 @@ def run_execute_phase(
                 ),
                 source_path=revision_path,
                 evidence_id=f"{base_id}_{digest}",
-                producer="replanner",
+                producer=producer,
                 generation_mode="llm",
                 prompt_pack_version=prompt_version,
                 metadata={
@@ -4613,20 +4631,40 @@ def run_execute_phase(
         candidate_plan: AnalysisPlan,
         *,
         reason: str,
-    ) -> None:
+    ) -> bool:
         """For an executing plan that implies a cohort but left it unstructured:
         first try to materialise it from the step prose (real enforcement); if
-        that fails, surface the auditable contract error (visibility)."""
+        that fails, surface the auditable contract error (visibility).
+
+        Returns ``True`` when this call changed the plan's public cohort, so the
+        caller can seal the plan that will actually execute.  The comparison is
+        on the serialized payload rather than on the materializer's own return
+        value, because the caller's obligation is defined by what changed in the
+        plan, not by which branch reported success.
+        """
         if not (
             _plan_expects_analysis_cohort(candidate_plan)
             and _cohort_definition_is_empty(candidate_plan)
         ):
-            return
-        if _try_materialize_cohort_from_prose(candidate_plan, reason=reason):
-            return
-        _enforce_cohort_contract_on_executing_plan(candidate_plan, reason=reason)
+            return False
+        before = candidate_plan.model_dump(mode="json").get("cohort")
+        if not _try_materialize_cohort_from_prose(candidate_plan, reason=reason):
+            _enforce_cohort_contract_on_executing_plan(candidate_plan, reason=reason)
+        return candidate_plan.model_dump(mode="json").get("cohort") != before
 
-    _resolve_cohort_definition(plan, reason="execute_start")
+    if _resolve_cohort_definition(plan, reason="execute_start"):
+        # Same obligation as the replan path below, on the plan that entered
+        # execution: whatever cohort the host just wrote is the one this run
+        # analyses, so an immutable record of it has to exist before any step
+        # runs.  Sealed only when the cohort actually changed -- every run
+        # reaches this line, and registering an identical revision on each of
+        # them would add a record that carries no new authority.
+        plan_path = _register_plan_revision(
+            plan,
+            reason="execute_start_cohort_materialization",
+            producer="cohort_materializer",
+        )
+        plan_result.plan_path = plan_path
 
     def _maybe_replan(
         *,
@@ -4744,11 +4782,24 @@ def run_execute_phase(
             return current_plan
 
         # Substantive revision: reset the no-op streak and register it.
+        #
+        # Resolve the cohort BEFORE sealing.  ``_resolve_cohort_definition``
+        # may translate this plan's own prose 纳排 into typed predicates and
+        # write them onto ``revised.cohort``, and ``cohort`` is a public,
+        # scientifically load-bearing field: it decides which patients the run
+        # analyses.  Two host authorities read the plan back and require an
+        # immutable record of exactly what executes --
+        # ``resolve_registered_plan_authority`` compares the executing plan's
+        # whole public payload against the registered record on every manifest
+        # flush and at finalize, and resume rejects any candidate plan whose
+        # cohort digest is not the locked one.  Sealing first therefore
+        # registered a plan nothing would execute, and left both authorities
+        # with no match at all.
         _replan_state["noop_streak"] = 0
         _replan_state["total"] += 1
+        _resolve_cohort_definition(revised, reason=reason)
         plan_path = _register_plan_revision(revised, reason=reason)
         plan_result.plan_path = plan_path
-        _resolve_cohort_definition(revised, reason=reason)
         findings.append(
             ValidationFinding(
                 validator="replanner",
