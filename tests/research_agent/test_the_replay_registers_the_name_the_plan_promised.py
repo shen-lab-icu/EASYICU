@@ -283,9 +283,18 @@ def test_the_epilogue_registers_the_promised_identity(tmp_path):
     # The runner's own stem keeps its registration: a step that declares no
     # spec still has nothing else to be found by.
     assert "table:sensitivity_specification_grid" in summary["output_files"]
+    # ...and `aliases` keeps holding ONLY those stems. It is the runner's own
+    # internal-stem map -- the exact set `canonical_robustness_output_files` is
+    # handed, and the marker that says "this runner wrote this summary". The
+    # epilogue used to copy the plan's bare name in here too, which gave one key
+    # two meanings: a real run recorded `robustness_grid` there, a name the kind
+    # map does not declare and would raise on. The promised identity belongs in
+    # `output_files`, which is what the envelope reads, and nowhere else.
     assert (
-        summary["aliases"]["specification_grid"] == "sensitivity_specification_grid.csv"
+        summary["aliases"]["sensitivity_specification_grid"]
+        == "sensitivity_specification_grid.csv"
     )
+    assert "specification_grid" not in summary["aliases"]
 
 
 def test_the_epilogue_will_not_register_a_file_that_was_not_written(tmp_path):
