@@ -478,7 +478,7 @@ def test_pipeline_repairs_failed_generated_code(ra, tmp_path: Path, monkeypatch)
                     "step_id": "01_table_one",
                     "planned_analysis_role": "auxiliary",
                     "intent": "Write a compact cohort table.",
-                    "inputs": ["age", "death"],
+                    "inputs": ["death"],
                     "expected_outputs": ["table:table_one"],
                     "method": "descriptive",
                     "icu_rule_refs": ["aggregation_rule_for"],
