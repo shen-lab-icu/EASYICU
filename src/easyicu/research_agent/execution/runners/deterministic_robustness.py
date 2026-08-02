@@ -243,6 +243,17 @@ def declared_robustness_product_registrations(
     their own registrations because a step that declares no spec still has
     nothing else, so this is "the contract name when the plan declared one",
     not a second spelling of one contract.
+
+    The promised identity goes into ``output_files`` and NOWHERE else.  It was
+    also written, bare, into ``aliases`` -- incidentally, not by design; the
+    commit that introduced it argues only about ``output_files``.  But
+    ``aliases`` is the runner's own internal-stem map, the exact set
+    ``canonical_robustness_output_files`` is called with and the one population
+    marker that says "this runner wrote this summary".  Putting a
+    Planner-chosen id in it gave one key two meanings: the 2026-08-02 m1 run
+    recorded ``robustness_grid`` there, a name ``_ROBUSTNESS_PRODUCT_KINDS``
+    does not declare and would raise on.  The envelope reads ``output_files``,
+    so the second write bought nothing.
     """
 
     # No ``step is None`` guard: ``getattr`` already answers ``None`` for it and
@@ -547,7 +558,6 @@ def robustness_sensitivity_preflight_scaffold(
                     f"""
                     declared_product_files = {declared_registrations!r}
                     registered_products = summary.setdefault("output_files", {{}})
-                    product_aliases = summary.setdefault("aliases", {{}})
                     for product_identity, product_filename in (
                         declared_product_files.items()
                     ):
@@ -558,9 +568,6 @@ def robustness_sensitivity_preflight_scaffold(
                             continue
                         registered_products.setdefault(
                             product_identity, product_filename
-                        )
-                        product_aliases.setdefault(
-                            product_identity.split(":", 1)[1], product_filename
                         )
                     """
                 ).strip()
