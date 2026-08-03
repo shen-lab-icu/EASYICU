@@ -470,6 +470,74 @@ def test_null_time_contract_rejects_manifest_count_mismatch(tmp_path: Path) -> N
     assert not checks["null_time_concept_contract_valid"]
 
 
+def test_eicu_tidal_volume_unit_gate_allows_only_paediatric_measured_low_value(
+    tmp_path: Path,
+) -> None:
+    module = _load_script(AUDIT_SCRIPT, "easyicu_qc_a02_tidal_volume_pass")
+    eicu_root = tmp_path / "eicu"
+    eicu_root.mkdir()
+    pd.DataFrame(
+        {
+            "stay_id": [1, 2],
+            "age": [50.0, 4.0],
+        }
+    ).to_parquet(eicu_root / "demographics.parquet", index=False)
+    pd.DataFrame(
+        {
+            "stay_id": [1, 2],
+            "tidal_vol": [400.0, 0.5],
+            "tidal_vol_set": [500.0, 50.0],
+        }
+    ).to_parquet(eicu_root / "ventilator.parquet", index=False)
+
+    gate = module._eicu_tidal_volume_unit_gate(tmp_path)
+
+    assert gate["passed"].all()
+    measured = gate.set_index("concept").loc["tidal_vol"]
+    assert measured["positive_le_2_rows"] == 1
+    assert measured["adult_positive_le_2_rows"] == 0
+    assert gate.set_index("concept").loc["tidal_vol_set", "positive_le_2_rows"] == 0
+
+
+def test_eicu_tidal_volume_unit_gate_fails_on_adult_mixed_scale_and_set_decimal(
+    tmp_path: Path,
+) -> None:
+    module = _load_script(AUDIT_SCRIPT, "easyicu_qc_a02_tidal_volume_fail")
+    eicu_root = tmp_path / "eicu"
+    eicu_root.mkdir()
+    pd.DataFrame({"stay_id": [1], "age": [50.0]}).to_parquet(
+        eicu_root / "demographics.parquet", index=False
+    )
+    pd.DataFrame(
+        {
+            "stay_id": [1, 1, 1],
+            "tidal_vol": [0.3, 300.0, 10.0],
+            "tidal_vol_set": [0.5, 500.0, 500.0],
+        }
+    ).to_parquet(eicu_root / "ventilator.parquet", index=False)
+
+    gate = module._eicu_tidal_volume_unit_gate(tmp_path)
+    measured = gate.set_index("concept").loc["tidal_vol"]
+    setting = gate.set_index("concept").loc["tidal_vol_set"]
+
+    assert not gate["passed"].any()
+    assert measured["adult_mixed_scale_stays"] == 1
+    assert measured["adult_gt_2_lt_50_rows"] == 1
+    assert setting["positive_le_2_rows"] == 1
+    with pytest.raises(ValueError, match="tidal-volume unit gate failed closed"):
+        module._raise_for_eicu_tidal_volume_unit_gate(gate)
+
+
+def test_verified_findings_registers_eicu_tidal_volume_unit_defect() -> None:
+    module = _load_script(AUDIT_SCRIPT, "easyicu_qc_a02_tidal_volume_finding")
+    findings = module._resolved_findings().set_index("issue_id")
+
+    finding = findings.loc["EICU-QC-P0-013"]
+    assert finding["severity"] == "critical"
+    assert "rerun required" in finding["status"]
+    assert "stay 168728" in finding["evidence"]
+
+
 def test_qc_a02_fails_closed_on_end_to_end_metadata_gap(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

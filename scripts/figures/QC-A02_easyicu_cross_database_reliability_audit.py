@@ -245,6 +245,14 @@ RESOLUTION_UPDATES: dict[str, dict[str, str]] = {
             "observation interval and require complete 6/12/24-hour coverage for KDIGO."
         ),
     },
+    "EICU-QC-P0-013": {
+        "status": "fixed in current code; eICU ventilator rerun required",
+        "required_action": (
+            "Rerun the eICU ventilator module and require the tidal-volume unit gate: "
+            "zero unresolved (0, 2] mL set values, zero adult (0, 2] or (2, 50) mL "
+            "values, and zero adult mixed-scale stays."
+        ),
+    },
 }
 
 
@@ -496,6 +504,34 @@ VERIFIED_FINDINGS: tuple[dict[str, Any], ...] = (
         "required_action": (
             "Validate a sampled set of stays against raw hourly urine values and "
             "hand-calculated 6/12/24 h windows before declaring comparability."
+        ),
+    },
+    {
+        "issue_id": "EICU-QC-P0-013",
+        "severity": "critical",
+        "classification": "mixed-unit extraction defect",
+        "database": "eicu",
+        "module": "ventilator",
+        "concept": "tidal_vol, tidal_vol_set",
+        "status": "fixed in current code; eICU ventilator rerun required",
+        "evidence": (
+            "Raw respiratoryCharting contains 12,668 measured tidal-volume rows in "
+            "(0, 2] across 845 stays; the sealed export retains 11,163 such rows across "
+            "789 stays, including stay 168728 where 0.3 coexists with 300-550 mL. "
+            "Set Vt (Drager) contributes 17,039 positive values <=2 (median 0.4734), "
+            "and the sealed tidal_vol_set export retains 18,485/937,002 values <=2."
+        ),
+        "root_cause": (
+            "eICU respiratoryCharting exposes no unit column. L-scale decimals and mL "
+            "values were pooled under measured labels, while the L-scale Drager set-TV "
+            "interface was grouped with predominantly mL set labels without a source callback."
+        ),
+        "required_action": (
+            "Normalize raw rows before hourly aggregation: convert Drager values in "
+            "(0, 2] from L to mL while retaining its >=50 mL tail, use "
+            "same-stay mL evidence or adult age for mixed labels, preserve explicit "
+            "paediatric mL, quarantine ambiguous/implausible values, and enforce the "
+            "publication-export tidal-volume unit gate."
         ),
     },
 )
@@ -1335,6 +1371,143 @@ def _raise_for_null_time_contract_gaps(manifests: pd.DataFrame) -> None:
     )
 
 
+EICU_TIDAL_VOLUME_GATE_COLUMNS = (
+    "database",
+    "module",
+    "concept",
+    "non_null_rows",
+    "positive_le_2_rows",
+    "positive_le_2_stays",
+    "adult_positive_le_2_rows",
+    "adult_positive_le_2_stays",
+    "adult_gt_2_lt_50_rows",
+    "adult_gt_2_lt_50_stays",
+    "adult_mixed_scale_stays",
+    "unknown_age_gt_0_lt_50_rows",
+    "unknown_age_gt_0_lt_50_stays",
+    "passed",
+    "failure_reason",
+)
+
+
+def _eicu_tidal_volume_unit_gate(export_root: Path) -> pd.DataFrame:
+    """Audit canonical eICU tidal-volume values after source normalization."""
+
+    eicu_root = export_root / "eicu"
+    ventilator_path = eicu_root / "ventilator.parquet"
+    demographics_path = eicu_root / "demographics.parquet"
+    for path in (ventilator_path, demographics_path):
+        if not path.is_file():
+            raise FileNotFoundError(f"Missing eICU tidal-volume gate input: {path}")
+
+    ventilator_schema = set(pq.read_schema(ventilator_path).names)
+    demographics_schema = set(pq.read_schema(demographics_path).names)
+    required_ventilator = {"stay_id", "tidal_vol", "tidal_vol_set"}
+    required_demographics = {"stay_id", "age"}
+    if not required_ventilator.issubset(ventilator_schema):
+        missing = sorted(required_ventilator - ventilator_schema)
+        raise ValueError(f"eICU ventilator gate columns missing: {missing}")
+    if not required_demographics.issubset(demographics_schema):
+        missing = sorted(required_demographics - demographics_schema)
+        raise ValueError(f"eICU demographics gate columns missing: {missing}")
+
+    ventilator = pd.read_parquet(
+        ventilator_path,
+        columns=["stay_id", "tidal_vol", "tidal_vol_set"],
+    )
+    demographics = pd.read_parquet(
+        demographics_path,
+        columns=["stay_id", "age"],
+    ).drop_duplicates(subset=["stay_id"], keep="first")
+    age_lookup = pd.Series(
+        pd.to_numeric(demographics["age"], errors="coerce").to_numpy(),
+        index=demographics["stay_id"],
+    )
+    ages = pd.to_numeric(ventilator["stay_id"].map(age_lookup), errors="coerce")
+    adult = ages.ge(18)
+
+    rows: list[dict[str, Any]] = []
+    for concept in ("tidal_vol", "tidal_vol_set"):
+        values = pd.to_numeric(ventilator[concept], errors="coerce")
+        non_null = values.notna()
+        low = values.gt(0) & values.le(2)
+        adult_low = low & adult
+        adult_mid = values.gt(2) & values.lt(50) & adult
+        unknown_age_at_risk = ages.isna() & values.gt(0) & values.lt(50)
+
+        by_stay = pd.DataFrame(
+            {
+                "stay_id": ventilator["stay_id"],
+                "adult": adult,
+                "low": low,
+                "high": values.ge(100),
+            }
+        ).groupby("stay_id", dropna=False).agg(
+            adult=("adult", "max"),
+            low=("low", "max"),
+            high=("high", "max"),
+        )
+        adult_mixed_stays = int(
+            (by_stay["adult"] & by_stay["low"] & by_stay["high"]).sum()
+        )
+
+        failures: list[str] = []
+        if int(unknown_age_at_risk.sum()):
+            failures.append(
+                "unknown_age_gt_0_lt_50_rows="
+                f"{int(unknown_age_at_risk.sum())}"
+            )
+        if int(adult_low.sum()):
+            failures.append(f"adult_positive_le_2_rows={int(adult_low.sum())}")
+        if int(adult_mid.sum()):
+            failures.append(f"adult_gt_2_lt_50_rows={int(adult_mid.sum())}")
+        if adult_mixed_stays:
+            failures.append(f"adult_mixed_scale_stays={adult_mixed_stays}")
+        if concept == "tidal_vol_set" and int(low.sum()):
+            failures.append(f"positive_le_2_rows={int(low.sum())}")
+
+        rows.append(
+            {
+                "database": "eicu",
+                "module": "ventilator",
+                "concept": concept,
+                "non_null_rows": int(non_null.sum()),
+                "positive_le_2_rows": int(low.sum()),
+                "positive_le_2_stays": int(ventilator.loc[low, "stay_id"].nunique()),
+                "adult_positive_le_2_rows": int(adult_low.sum()),
+                "adult_positive_le_2_stays": int(
+                    ventilator.loc[adult_low, "stay_id"].nunique()
+                ),
+                "adult_gt_2_lt_50_rows": int(adult_mid.sum()),
+                "adult_gt_2_lt_50_stays": int(
+                    ventilator.loc[adult_mid, "stay_id"].nunique()
+                ),
+                "adult_mixed_scale_stays": adult_mixed_stays,
+                "unknown_age_gt_0_lt_50_rows": int(unknown_age_at_risk.sum()),
+                "unknown_age_gt_0_lt_50_stays": int(
+                    ventilator.loc[unknown_age_at_risk, "stay_id"].nunique()
+                ),
+                "passed": not failures,
+                "failure_reason": "; ".join(failures),
+            }
+        )
+    return pd.DataFrame(rows, columns=EICU_TIDAL_VOLUME_GATE_COLUMNS)
+
+
+def _raise_for_eicu_tidal_volume_unit_gate(gate: pd.DataFrame) -> None:
+    failures = gate.loc[~gate["passed"].fillna(False).astype(bool)]
+    if failures.empty:
+        return
+    raise ValueError(
+        "eICU tidal-volume unit gate failed closed: "
+        + json.dumps(
+            failures.to_dict(orient="records"),
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    )
+
+
 def _build_report_artifact(
     *,
     output_dir: Path,
@@ -2166,6 +2339,19 @@ def main() -> None:
     )
     availability["available_all_six"] = availability["databases_available"] == 6
 
+    # The gate joins ventilator values to demographics, so a deliberately
+    # partial QC run must contain both modules before this release-level check
+    # is activated. Full-six publication audits always include both.
+    tidal_volume_gate_required = {
+        "ventilator",
+        "demographics",
+    }.issubset(module_concepts)
+    tidal_volume_gate = (
+        _eicu_tidal_volume_unit_gate(args.export_root)
+        if tidal_volume_gate_required
+        else pd.DataFrame(columns=EICU_TIDAL_VOLUME_GATE_COLUMNS)
+    )
+
     fields.to_csv(args.output_dir / "field_contract_audit.csv", index=False)
     modules.to_csv(args.output_dir / "module_schema_summary.csv", index=False)
     manifests.to_csv(args.output_dir / "manifest_audit.csv", index=False)
@@ -2174,6 +2360,10 @@ def main() -> None:
         index=False,
     )
     availability.to_csv(args.output_dir / "concept_availability.csv", index=False)
+    tidal_volume_gate.to_csv(
+        args.output_dir / "eicu_tidal_volume_unit_gate.csv",
+        index=False,
+    )
     findings = _resolved_findings()
     findings.to_csv(args.output_dir / "verified_issue_register.csv", index=False)
     distribution_flags = _adjudicate_distribution_flags(
@@ -2295,6 +2485,15 @@ def main() -> None:
         "distribution_unadjudicated_flag_count": int(
             (distribution_flags["adjudication_status"] == "unadjudicated").sum()
         ),
+        "eicu_tidal_volume_unit_gate_required": tidal_volume_gate_required,
+        "eicu_tidal_volume_unit_gate_passed": (
+            bool(tidal_volume_gate["passed"].all())
+            if tidal_volume_gate_required
+            else None
+        ),
+        "eicu_tidal_volume_unit_gate_failed_concepts": int(
+            (~tidal_volume_gate["passed"].astype(bool)).sum()
+        ),
         "verified_findings_by_severity": (
             findings["severity"].value_counts().to_dict()
         ),
@@ -2314,6 +2513,8 @@ def main() -> None:
     _raise_for_row_grain_gaps(manifests)
     _raise_for_null_time_contract_gaps(manifests)
     _raise_for_metadata_gaps(manifests)
+    if tidal_volume_gate_required:
+        _raise_for_eicu_tidal_volume_unit_gate(tidal_volume_gate)
 
 
 if __name__ == "__main__":

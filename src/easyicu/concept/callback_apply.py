@@ -46,6 +46,7 @@ missing during the move.
 
 from __future__ import annotations
 
+import logging
 import operator
 import re
 from dataclasses import replace
@@ -73,6 +74,7 @@ if TYPE_CHECKING:
     from . import ConceptResolver
 
 DEBUG_MODE = False
+logger = logging.getLogger(__name__)
 
 
 def _duckdb_sql_path_literal(path) -> str:
@@ -280,6 +282,182 @@ def _load_mimic_icu_outtimes(
     ].drop_duplicates()
 
 
+def _parse_eicu_age(values: pd.Series) -> pd.Series:
+    """Parse eICU's numeric strings and ``> 89`` sentinel onto years."""
+
+    text = values.astype("string").str.strip()
+    age = pd.to_numeric(text.str.extract(r"(\d+(?:\.\d+)?)", expand=False), errors="coerce")
+    return age.mask(text.str.startswith(">") & age.eq(89), 90.0)
+
+
+def _load_eicu_tidal_volume_ages(
+    frame: pd.DataFrame,
+    *,
+    id_column: str,
+    data_source: Optional["ICUDataSource"],
+) -> pd.Series:
+    """Return age aligned to a respiratoryCharting source frame.
+
+    The lookup is restricted to the current extraction batch.  Failure is
+    represented by missing age rather than an assumed adult age; the caller
+    then quarantines unit-ambiguous values instead of guessing their scale.
+    """
+
+    if "age" in frame.columns:
+        return _parse_eicu_age(frame["age"])
+    result = pd.Series(np.nan, index=frame.index, dtype="float64")
+    if data_source is None or id_column not in frame.columns:
+        return result
+
+    stay_ids = frame[id_column].dropna().unique().tolist()
+    if not stay_ids:
+        return result
+    try:
+        from ..datasource import FilterOp, FilterSpec
+
+        patient = data_source.load_table(
+            "patient",
+            columns=[id_column, "age"],
+            filters=[FilterSpec(column=id_column, op=FilterOp.IN, value=stay_ids)],
+            verbose=False,
+        )
+        demographics = patient.data if hasattr(patient, "data") else patient
+        if not isinstance(demographics, pd.DataFrame):
+            demographics = pd.DataFrame(demographics)
+        if id_column not in demographics.columns or "age" not in demographics.columns:
+            raise KeyError(f"patient table lacks {id_column!r} or 'age'")
+        demographics = demographics[[id_column, "age"]].drop_duplicates(
+            subset=[id_column], keep="first"
+        )
+        age_lookup = pd.Series(
+            _parse_eicu_age(demographics["age"]).to_numpy(),
+            index=demographics[id_column],
+        )
+        return pd.to_numeric(frame[id_column].map(age_lookup), errors="coerce")
+    except Exception as exc:
+        logger.warning(
+            "eICU tidal-volume age lookup failed; ambiguous values will be "
+            "quarantined (stays=%d, error=%s)",
+            len(stay_ids),
+            exc,
+        )
+        return result
+
+
+def _normalize_eicu_tidal_volume_frame(
+    frame: pd.DataFrame,
+    *,
+    concept_name: str,
+    value_column: Optional[str] = None,
+    id_column: Optional[str] = None,
+    label_column: Optional[str] = None,
+    ages: Optional[pd.Series] = None,
+    force_liters: bool = False,
+) -> pd.DataFrame:
+    """Normalize eICU respiratory tidal volume to mL before aggregation.
+
+    ``respiratoryCharting`` has no unit column.  Most tidal-volume labels are
+    recorded in mL, but some interfaces emit L-scale decimals under the same
+    label; ``Set Vt (Drager)`` is a separately identified L-scale source.  The
+    mixed-label rule therefore uses within-stay evidence first, then adult age,
+    and fails closed for ambiguous paediatric/unknown-age values.  Zero is a
+    valid ventilator setting and is deliberately never rescaled.
+    """
+
+    out = frame.copy()
+    value_column = value_column or (
+        concept_name if concept_name in out.columns else None
+    )
+    if value_column is None or value_column not in out.columns:
+        raise ValueError(
+            f"eICU tidal-volume callback requires value column for {concept_name!r}"
+        )
+    id_column = id_column or next(
+        (
+            candidate
+            for candidate in ("patientunitstayid", "stay_id")
+            if candidate in out.columns
+        ),
+        None,
+    )
+    label_column = label_column or next(
+        (
+            candidate
+            for candidate in ("respchartvaluelabel", "respChartValueLabel")
+            if candidate in out.columns
+        ),
+        None,
+    )
+
+    raw = pd.to_numeric(out[value_column], errors="coerce")
+    normalized = raw.copy()
+    if ages is None:
+        ages = pd.Series(np.nan, index=out.index, dtype="float64")
+    else:
+        ages = pd.to_numeric(ages.reindex(out.index), errors="coerce")
+    adult = ages.ge(18)
+
+    if label_column and label_column in out.columns:
+        labels = out[label_column].astype("string").str.strip()
+    else:
+        labels = pd.Series(pd.NA, index=out.index, dtype="string")
+    explicit_ml = labels.eq("Vt Spontaneous (mL)").fillna(False)
+    drager = labels.eq("Set Vt (Drager)").fillna(False)
+    if force_liters:
+        drager = pd.Series(True, index=out.index)
+
+    positive = raw.gt(0)
+    low = positive & raw.le(2)
+    if id_column and id_column in out.columns:
+        has_ml_reference = raw.ge(100).groupby(out[id_column], dropna=False).transform(
+            "any"
+        )
+    else:
+        has_ml_reference = pd.Series(False, index=out.index)
+
+    # Drager is predominantly L-scale below 2, but a tiny tail is already mL
+    # (250--650 in the real source).  Convert only the evidenced L range.
+    drager_convert = drager & low
+    contextual_convert = low & ~drager & ~explicit_ml & has_ml_reference
+    adult_pure_convert = low & ~drager & ~explicit_ml & ~has_ml_reference & adult
+    convert = drager_convert | contextual_convert | adult_pure_convert
+    normalized.loc[convert] = raw.loc[convert] * 1000.0
+
+    # A low value with neither an explicit unit nor contextual/adult evidence
+    # cannot safely be interpreted as L or mL.  Preserve only explicit mL.
+    ambiguous_low = low & ~drager & ~explicit_ml & ~contextual_convert & ~adult_pure_convert
+    normalized.loc[ambiguous_low] = np.nan
+
+    # Values between 2 and 50 are not credible adult tidal volumes.  For an
+    # unlabelled paediatric/unknown-age record they are equally unit-ambiguous,
+    # while an explicitly mL-labelled paediatric record remains admissible.
+    raw_mid = raw.gt(2) & raw.lt(50)
+    ambiguous_mid = raw_mid & ~explicit_ml
+    normalized.loc[ambiguous_mid] = np.nan
+    adult_small_ml = adult & normalized.gt(0) & normalized.lt(50)
+    normalized.loc[adult_small_ml] = np.nan
+
+    out[value_column] = normalized
+    audit = {
+        "rows": int(len(out)),
+        "zero_rows_preserved": int(raw.eq(0).sum()),
+        "drager_l_to_ml_rows": int(drager_convert.sum()),
+        "same_stay_l_to_ml_rows": int(contextual_convert.sum()),
+        "adult_pure_low_l_to_ml_rows": int(adult_pure_convert.sum()),
+        "ambiguous_low_quarantined_rows": int(ambiguous_low.sum()),
+        "ambiguous_mid_quarantined_rows": int(ambiguous_mid.sum()),
+        "adult_small_ml_quarantined_rows": int(adult_small_ml.sum()),
+        "age_missing_rows": int(ages.isna().sum()),
+    }
+    out.attrs["eicu_tidal_volume_unit_audit"] = audit
+    logger.info(
+        "eICU tidal-volume normalization concept=%s audit=%s",
+        concept_name,
+        audit,
+    )
+    return out
+
+
 def _apply_callback(
     frame: pd.DataFrame,
     source: ConceptSource,
@@ -298,6 +476,51 @@ def _apply_callback(
 
     if expr == "identity_callback":
         return frame
+
+    if expr in {
+        "eicu_tidal_volume_mixed_scale",
+        "eicu_tidal_volume_drager_l_to_ml",
+    }:
+        value_column = (
+            concept_name
+            if concept_name in frame.columns
+            else source.value_var
+            if source.value_var and source.value_var in frame.columns
+            else None
+        )
+        id_column = next(
+            (
+                candidate
+                for candidate in ("patientunitstayid", "stay_id")
+                if candidate in frame.columns
+            ),
+            None,
+        )
+        if id_column is None:
+            ages = pd.Series(np.nan, index=frame.index, dtype="float64")
+        else:
+            ages = _load_eicu_tidal_volume_ages(
+                frame,
+                id_column=id_column,
+                data_source=data_source,
+            )
+        result = _normalize_eicu_tidal_volume_frame(
+            frame,
+            concept_name=concept_name,
+            value_column=value_column,
+            id_column=id_column,
+            label_column=source.sub_var,
+            ages=ages,
+            force_liters=expr == "eicu_tidal_volume_drager_l_to_ml",
+        )
+        # The deprecated ConceptLoader invokes callbacks before its standard
+        # value/time projection.  Preserve that compatibility route without
+        # changing the main resolver, which already presents concept_name.
+        if concept_name not in frame.columns and value_column in result.columns:
+            result = result.rename(columns={value_column: "value"})
+            if "respchartoffset" in result.columns and "time" not in result.columns:
+                result = result.rename(columns={"respchartoffset": "time"})
+        return result
 
     if expr in ("vent_mode_control", "vent_mode_seq"):
         # Harmonise a native ventilator-mode label/code onto one axis (control | seq)
@@ -3033,4 +3256,4 @@ def _apply_callback(
         f"Callback '{callback}' is not yet supported."
     )
 
-__all__ = ["_apply_callback"]
+__all__ = ["_apply_callback", "_normalize_eicu_tidal_volume_frame"]
