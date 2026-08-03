@@ -271,8 +271,12 @@ def _load_mimic_icu_outtimes(
     # never infer discharge from a medication event.
     if unresolved:
         bounds = bounds.loc[~bounds[id_col].isin(unresolved)].copy()
+    keep_columns = [id_col]
+    if "intime" in bounds.columns:
+        keep_columns.append("intime")
+    keep_columns.append("outtime")
     return bounds.loc[
-        bounds["outtime"].notna(), [id_col, "outtime"]
+        bounds["outtime"].notna(), keep_columns
     ].drop_duplicates()
 
 

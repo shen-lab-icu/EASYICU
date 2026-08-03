@@ -15,6 +15,7 @@ from easyicu.concept.schema import (
     ConceptDictionary,
     ConceptSource,
 )
+from easyicu.load_concepts import ConceptLoader
 from easyicu.table import ICUTable
 from easyicu.utils.callback_utils import mimic_dur_incv, mimic_dur_inmv
 
@@ -302,6 +303,82 @@ def test_mimic_mv_keeps_subhour_precision_and_clips_to_icu_outtime() -> None:
     assert result["stay_id"].tolist() == [7, 7]
     assert result["epi_dur"].tolist() == pytest.approx([0.5, 0.25])
     assert (result["epi_dur"] > 0).all()
+
+
+def test_mimic_mv_relative_hours_convert_absolute_icu_outtime() -> None:
+    frame = pd.DataFrame(
+        {
+            "stay_id": [7],
+            "linkorderid": [70],
+            "starttime": [0.25],
+            "endtime": [2.0],
+            "statusdescription": ["ChangeDose/Rate"],
+        }
+    )
+    icu_stays = pd.DataFrame(
+        {
+            "stay_id": [7],
+            "intime": pd.to_datetime(["2025-01-01 00:00:00"]),
+            "outtime": pd.to_datetime(["2025-01-01 01:00:00"]),
+        }
+    )
+
+    result = mimic_dur_inmv(
+        frame,
+        val_col="norepi_dur",
+        grp_var="linkorderid",
+        stop_var="endtime",
+        id_cols=["stay_id"],
+        icu_stays=icu_stays,
+    )
+
+    assert result["starttime"].tolist() == [0.25]
+    assert result["norepi_dur"].tolist() == pytest.approx([0.75])
+
+
+def test_mimic_mv_relative_hours_refuse_absolute_outtime_without_origin() -> None:
+    frame = pd.DataFrame(
+        {
+            "stay_id": [7],
+            "starttime": [0.25],
+            "endtime": [2.0],
+            "statusdescription": ["ChangeDose/Rate"],
+        }
+    )
+    icu_stays = pd.DataFrame(
+        {
+            "stay_id": [7],
+            "outtime": pd.to_datetime(["2025-01-01 01:00:00"]),
+        }
+    )
+
+    with pytest.raises(ValueError, match="require ICU intime"):
+        mimic_dur_inmv(
+            frame,
+            val_col="norepi_dur",
+            stop_var="endtime",
+            id_cols=["stay_id"],
+            icu_stays=icu_stays,
+        )
+
+
+def test_mimic_mv_refuses_mixed_source_clocks() -> None:
+    frame = pd.DataFrame(
+        {
+            "stay_id": [7],
+            "starttime": [0.25],
+            "endtime": pd.to_datetime(["2025-01-01 02:00:00"]),
+            "statusdescription": ["ChangeDose/Rate"],
+        }
+    )
+
+    with pytest.raises(ValueError, match="mixed numeric and datetime"):
+        mimic_dur_inmv(
+            frame,
+            val_col="norepi_dur",
+            stop_var="endtime",
+            id_cols=["stay_id"],
+        )
 
 
 def test_mimic_cv_uses_five_hour_segments_and_singleton_unknown() -> None:
@@ -642,3 +719,45 @@ def test_loader_requests_mimic_mv_semantic_columns_and_clips_outtime() -> None:
     assert any("outtime" in request for request in source.requested["icustays"])
     assert loaded.data["norepi_dur"].tolist() == pytest.approx([0.75])
     assert "rateuom" not in loaded.data.columns
+
+
+def test_legacy_loader_preserves_mimic_duration_semantics(tmp_path: Path) -> None:
+    pd.DataFrame(
+        {
+            "stay_id": [7, 7],
+            "hadm_id": [70, 70],
+            "starttime": pd.to_datetime(
+                ["2025-01-01 00:15:00", "2025-01-01 00:30:00"]
+            ),
+            "endtime": pd.to_datetime(
+                ["2025-01-01 02:00:00", "2026-01-01 00:00:00"]
+            ),
+            "itemid": [221906, 221906],
+            "amount": [1.0, 1.0],
+            "amountuom": ["mg", "mg"],
+            "rate": [0.1, 0.2],
+            "linkorderid": [700, 701],
+            "statusdescription": ["ChangeDose/Rate", "Rewritten"],
+        }
+    ).to_parquet(tmp_path / "inputevents.parquet")
+    pd.DataFrame(
+        {
+            "stay_id": [7],
+            "intime": pd.to_datetime(["2025-01-01 00:00:00"]),
+            "outtime": pd.to_datetime(["2025-01-01 01:00:00"]),
+            "los": [1 / 24],
+        }
+    ).to_parquet(tmp_path / "icustays.parquet")
+
+    loader = ConceptLoader("miiv", data_path=str(tmp_path), low_memory=True)
+    result = loader.load_concepts(
+        ["norepi_dur"],
+        patient_ids=[7],
+        merge_data=False,
+        verbose=False,
+        concept_workers=1,
+    )["norepi_dur"]
+
+    assert result.columns.tolist() == ["stay_id", "charttime", "norepi_dur"]
+    assert result["charttime"].tolist() == pytest.approx([0.25])
+    assert result["norepi_dur"].tolist() == pytest.approx([0.75])
