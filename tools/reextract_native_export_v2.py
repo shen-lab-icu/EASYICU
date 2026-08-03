@@ -313,6 +313,17 @@ def _resolve_data_paths(args: argparse.Namespace) -> dict[str, str]:
                 for database in DATABASE_ORDER
             }
         )
+        # PhysioNet commonly stores MIMIC-III as ``mimiciii/1.4`` while the
+        # other databases live directly below ``data_root``. Prefer the
+        # versioned directory only when it contains the ICU-stay table and the
+        # parent does not; an explicit --data-path below remains authoritative.
+        mimic_parent = paths["mimic"]
+        mimic_markers = ("icustays.parquet", "ICUSTAYS.csv.gz", "ICUSTAYS.csv")
+        parent_is_dataset = any((mimic_parent / name).is_file() for name in mimic_markers)
+        versioned = mimic_parent / "1.4"
+        versioned_is_dataset = any((versioned / name).is_file() for name in mimic_markers)
+        if not parent_is_dataset and versioned_is_dataset:
+            paths["mimic"] = versioned
     overrides = _parse_key_value(
         args.data_path,
         option="--data-path",
