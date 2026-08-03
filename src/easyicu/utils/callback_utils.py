@@ -2970,7 +2970,7 @@ def grp_mount_to_rate(
     extra_dur: pd.Timedelta,
     unit_val: Optional[Union[str, dict]] = None,
     grp_var: Optional[str] = None,
-    filt_fun: Optional[Callable] = None
+    filt_fun: Optional[Callable] = None,
 ) -> Callable:
     """Create callback for converting grouped amounts to rates (R ricu grp_mount_to_rate).
     
@@ -3006,6 +3006,7 @@ def grp_mount_to_rate(
         unit_col: str = 'unit',
         index_var: Optional[str] = None,
         id_cols: Optional[list] = None,
+        sub_var: Optional[str] = None,
         **kwargs
     ) -> pd.DataFrame:
         if data.empty:
@@ -3029,37 +3030,103 @@ def grp_mount_to_rate(
         # Apply filter if provided
         if filt_fun is not None:
             data = data[filt_fun(data)]
+
+        if data.empty:
+            return data
+
+        required_cols = [index_var, val_col]
+        if grp_var_to_use:
+            required_cols.append(grp_var_to_use)
+        if sub_var:
+            required_cols.append(sub_var)
+        missing_cols = [col for col in required_cols if col not in data.columns]
+        if missing_cols:
+            raise ValueError(
+                "grp_mount_to_rate requires columns "
+                f"{missing_cols}; available columns are {list(data.columns)}"
+            )
+
+        # CSV-backed MIMIC-III can expose AMOUNT as object/VARCHAR even though
+        # the source contract is numeric.  Pandas ``groupby.sum`` concatenates
+        # such strings (``'150' + '150' -> '150150'``), which can then escape
+        # the callback as an apparent infusion rate.  Coerce before grouping,
+        # quarantine every unusable value, and leave an exact audit count in
+        # the extraction log.  Infinite values are just as unusable as text.
+        numeric_values = pd.to_numeric(data[val_col], errors="coerce")
+        finite_values = pd.Series(
+            np.isfinite(numeric_values.to_numpy(dtype=float, na_value=np.nan)),
+            index=data.index,
+        )
+        unusable_values = numeric_values.isna() | ~finite_values
+        if unusable_values.any():
+            logger.warning(
+                "grp_mount_to_rate dropped %d/%d rows with missing, "
+                "non-numeric, or non-finite %s values",
+                int(unusable_values.sum()),
+                len(data),
+                val_col,
+            )
+            numeric_values = numeric_values.mask(unusable_values)
+        data[val_col] = numeric_values.astype(float)
         
         # Build grouping columns
         group_cols = list(id_cols)
-        if grp_var_to_use and grp_var_to_use in data.columns:
+        if grp_var_to_use:
             group_cols.append(grp_var_to_use)
+        # Concentration normalization (for example dex_to_10) runs after this
+        # aggregation.  Keep its discriminator in the output and split mixed
+        # item/pharma groups instead of discarding it or choosing one ID.
+        if sub_var:
+            group_cols.append(sub_var)
+        group_cols = list(dict.fromkeys(group_cols))
+        if not group_cols:
+            raise ValueError(
+                "grp_mount_to_rate requires at least one patient or group column"
+            )
         
         # Sort by group and time
         sort_cols = group_cols + [index_var]
         data = data.sort_values(sort_cols)
         
-        # Aggregate by group
-        agg_dict = {
-            index_var: ['min', 'max'],
-            val_col: 'sum'
-        }
-        
-        # Keep first unit if available
-        if unit_col in data.columns:
-            agg_dict[unit_col] = lambda x: x.dropna().iloc[0] if len(x.dropna()) > 0 else np.nan
-        
-        result = data.groupby(group_cols, dropna=False).agg(agg_dict).reset_index()
-        
-        # Flatten column names
-        result.columns = [
-            col[0] if col[1] == '' or col[1] == '<lambda>' else f"{col[0]}_{col[1]}"
-            for col in result.columns
-        ]
-        
-        # Calculate duration
+        # Aggregate by group.  An unusable amount is excluded from the sum but
+        # its timestamp remains part of the documented infusion span.  This
+        # matters for terminal CareVue rows whose amount is missing: deleting
+        # the whole row shortens the denominator and inflates the rate.
         min_time_col = f"{index_var}_min"
         max_time_col = f"{index_var}_max"
+        sum_col = f"{val_col}_sum"
+        agg_dict = {
+            min_time_col: (index_var, "min"),
+            max_time_col: (index_var, "max"),
+            sum_col: (val_col, lambda values: values.sum(min_count=1)),
+        }
+
+        if unit_col in data.columns:
+            agg_dict[unit_col] = (
+                unit_col,
+                lambda values: (
+                    values.dropna().iloc[0]
+                    if not values.dropna().empty
+                    else np.nan
+                ),
+            )
+
+        result = (
+            data.groupby(group_cols, dropna=False)
+            .agg(**agg_dict)
+            .reset_index()
+        )
+        no_usable_amount = result[sum_col].isna()
+        if no_usable_amount.any():
+            logger.warning(
+                "grp_mount_to_rate dropped %d/%d groups with no usable %s",
+                int(no_usable_amount.sum()),
+                len(result),
+                val_col,
+            )
+            result = result.loc[~no_usable_amount].copy()
+        if result.empty:
+            return result
         
         result['dur_var'] = result[max_time_col] - result[min_time_col]
         
@@ -3096,7 +3163,7 @@ def grp_mount_to_rate(
 
             # Calculate rate: amount / duration (convert to hours for rate/hour)
             dur_hours = result['dur_var'].dt.total_seconds() / 3600
-        result[val_col] = result[f"{val_col}_sum"] / dur_hours
+        result[val_col] = result[sum_col] / dur_hours
         
         # Set units
         if closure_unit_val is not None:

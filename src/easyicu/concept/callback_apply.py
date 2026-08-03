@@ -1037,161 +1037,182 @@ def _apply_callback(
     # Format: dex_to_10(ids, factors) or dex_to_10(c(...), c(...)) or dex_to_10(list(...), c(...))
     match = re.fullmatch(r"dex_to_10\((.+)\)", expr, flags=re.DOTALL)
     if match:
+        if frame.empty:
+            return frame
         args = _split_arguments(match.group(1))
-        if len(args) >= 2:
-            # Parse itemids and factors using _parse_r_value which handles nested list/c structures
-            id_arg = args[0].strip()
-            factor_arg = args[1].strip()
-            
-            try:
-                itemids = _parse_r_value(id_arg)    # e.g., list(7255L, 7256L, c(8940L, 9571L)) -> [7255, 7256, [8940, 9571]]
-                factors = _parse_r_value(factor_arg)  # e.g., c(2, 3, 4) -> [2, 3, 4]
-                
-                # 🔧 FIX: Ensure itemids and factors are always lists (handle single-value case)
-                # e.g., dex_to_10(30017L, c(0.5)) → itemids=30017 (int), factors=[0.5]
-                if not isinstance(itemids, (list, tuple)):
-                    itemids = [itemids]
-                if not isinstance(factors, (list, tuple)):
-                    factors = [factors]
-                
-                # Flatten itemids if needed for simple structure, or handle nested mapping
-                # Nested structure means: itemids[i] can be a list, all items in that list get factors[i]
-                
-                # Apply conversion factors
-                sub_var = source.sub_var if hasattr(source, 'sub_var') else 'itemid'
-                # 🔧 FIX: 确定值列
-                # 对于 MIIV: mimv_rate 会将计算结果写入 rate 列
-                # 对于 AUMC drugitems: 默认值列是 dose（不是 rate）
-                # 策略：优先使用 source 配置的 val_var，然后 concept_name，最后回退到 dose/rate
-                val_col = None
-                # 1. 优先使用 source 配置的 value_var
-                if hasattr(source, 'value_var') and source.value_var and source.value_var in frame.columns:
-                    val_col = source.value_var
-                # 2. 使用 concept_name 列（如果已创建）
-                elif concept_name in frame.columns:
-                    val_col = concept_name
-                # 3. AUMC drugitems 默认用 dose 列
-                elif 'dose' in frame.columns and frame['dose'].notna().any():
-                    val_col = 'dose'
-                # 4. 回退到 rate 列（MIIV inputevents）
-                elif 'rate' in frame.columns and frame['rate'].notna().any():
-                    val_col = 'rate'
-                # 5. 其他常见值列
-                elif 'amount' in frame.columns:
-                    val_col = 'amount'
-                elif 'valuenum' in frame.columns:
-                    val_col = 'valuenum'
-                
-                if sub_var in frame.columns and val_col:
-                    frame = frame.copy()
-                    for ids_item, factor in zip(itemids, factors):
-                        # ids_item can be a single value or a list
-                        if isinstance(ids_item, (list, tuple)):
-                            ids_to_check = ids_item
-                        else:
-                            ids_to_check = [ids_item]
-                        
-                        for itemid in ids_to_check:
-                            mask = frame[sub_var] == itemid
-                            if mask.any():
-                                frame.loc[mask, val_col] = frame.loc[mask, val_col] * factor
-            except Exception as e:
-                # Log warning but continue
-                import logging
-                logging.warning(f"dex_to_10 parsing failed: {e}")
-        return frame
+        if len(args) < 2:
+            raise ValueError("dex_to_10 requires item IDs and conversion factors")
+
+        try:
+            itemids = _parse_r_value(args[0].strip())
+            factors = _parse_r_value(args[1].strip())
+            if not isinstance(itemids, (list, tuple)):
+                itemids = [itemids]
+            if not isinstance(factors, (list, tuple)):
+                factors = [factors]
+
+            sub_var = source.sub_var
+            if not sub_var or sub_var not in frame.columns:
+                raise ValueError(
+                    "dex_to_10 requires the configured sub_var to survive "
+                    "upstream aggregation"
+                )
+
+            val_col = None
+            candidates = [
+                source.value_var,
+                concept_name,
+                "dose",
+                "rate",
+                "amount",
+                "givendose",
+                "pharmavalue",
+                "valuenum",
+            ]
+            for candidate in candidates:
+                if (
+                    candidate
+                    and candidate in frame.columns
+                    and frame[candidate].notna().any()
+                ):
+                    val_col = candidate
+                    break
+            if val_col is None:
+                raise ValueError("dex_to_10 could not identify a value column")
+
+            from ..utils.callback_utils import dex_to_10 as dex_to_10_fn
+
+            return dex_to_10_fn(itemids, factors)(
+                frame,
+                sub_var=sub_var,
+                val_col=val_col,
+            )
+        except Exception as exc:
+            raise ValueError(f"dex_to_10 conversion failed: {exc}") from exc
     
     # Handle grp_mount_to_rate callback (convert grouped amounts to rates)
     # Format: grp_mount_to_rate(mins(1L), hours(1L)) or similar
     match = re.fullmatch(r"grp_mount_to_rate\((.+)\)", expr, flags=re.DOTALL)
     if match:
         args = _split_arguments(match.group(1))
-        if len(args) >= 2:
-            try:
-                # Parse min_dur and extra_dur
-                min_dur_expr = args[0].strip()
-                extra_dur_expr = args[1].strip()
-                
-                def _parse_duration_expr(dur_expr: str) -> pd.Timedelta:
-                    """Parse R duration expression like mins(1L), hours(1L)."""
-                    if 'mins(' in dur_expr:
-                        mins_match = re.search(r'mins\((\d+)', dur_expr)
-                        if mins_match:
-                            return pd.Timedelta(minutes=int(mins_match.group(1)))
-                    elif 'hours(' in dur_expr:
-                        hours_match = re.search(r'hours\((\d+)', dur_expr)
-                        if hours_match:
-                            return pd.Timedelta(hours=int(hours_match.group(1)))
-                    elif 'secs(' in dur_expr:
-                        secs_match = re.search(r'secs\((\d+)', dur_expr)
-                        if secs_match:
-                            return pd.Timedelta(seconds=int(secs_match.group(1)))
-                    # Default to 1 minute
-                    return pd.Timedelta(minutes=1)
-                
-                min_dur = _parse_duration_expr(min_dur_expr)
-                extra_dur = _parse_duration_expr(extra_dur_expr)
-                
-                # Get group variable from source
-                # 🔧 FIX: grp_var 可能在 source.grp_var 或 source.params['grp_var'] 中
-                grp_var = None
-                if hasattr(source, 'grp_var') and source.grp_var:
-                    grp_var = source.grp_var
-                elif hasattr(source, 'params') and source.params and 'grp_var' in source.params:
-                    grp_var = source.params['grp_var']
-                
-                # Get value and unit columns
-                val_col = source.value_var if hasattr(source, 'value_var') and source.value_var else None
-                if not val_col:
-                    # Try common value columns
-                    for candidate in ['val', 'value', 'amount', 'dose', 'givendose', 'pharmavalue']:
-                        if candidate in frame.columns:
-                            val_col = candidate
-                            break
-                if not val_col:
-                    val_col = concept_name
-                
-                unit_col = source.unit_var if hasattr(source, 'unit_var') and source.unit_var else None
-                if not unit_col:
-                    for candidate in ['unit', 'unit_var', 'amountuom', 'doserateunit', 'doseunit']:
-                        if candidate in frame.columns:
-                            unit_col = candidate
-                            break
-                
-                # Get index_var (time column)
-                index_var = source.index_var if hasattr(source, 'index_var') and source.index_var else None
-                if not index_var:
-                    for candidate in ['datetime', 'givenat', 'starttime', 'charttime', 'time']:
-                        if candidate in frame.columns:
-                            index_var = candidate
-                            break
-                
-                # Get ID columns - only use standard patient/stay ID columns
-                # 🔧 FIX: Don't use "id" substring matching - it incorrectly includes columns like
-                # 'fluidamount_calc', 'typeid', 'subtypeid' which contain "id" but are not patient IDs
-                standard_id_cols = ['patientid', 'stay_id', 'admissionid', 'patientunitstayid', 'subject_id', 'hadm_id', 'icustay_id']
-                id_cols = [col for col in standard_id_cols if col in frame.columns]
-                
-                from ..utils.callback_utils import grp_mount_to_rate as grp_mount_fn
-                callback_fn = grp_mount_fn(
-                    min_dur=min_dur,
-                    extra_dur=extra_dur,
-                    grp_var=grp_var
+        if len(args) < 2:
+            raise ValueError(
+                "grp_mount_to_rate requires minimum and extra durations"
+            )
+        try:
+            min_dur_expr = args[0].strip()
+            extra_dur_expr = args[1].strip()
+
+            def _parse_duration_expr(dur_expr: str) -> pd.Timedelta:
+                """Parse R duration expressions such as ``mins(1L)``."""
+                duration_match = re.fullmatch(
+                    r"(mins|hours|secs)\(\s*(\d+)L?\s*\)",
+                    dur_expr,
                 )
-                
-                result = callback_fn(
-                    frame,
-                    val_col=val_col if val_col in frame.columns else (concept_name if concept_name in frame.columns else 'value'),
-                    unit_col=unit_col if unit_col and unit_col in frame.columns else 'unit',
-                    index_var=index_var,
-                    id_cols=id_cols
-                )
-                
-                return result
-            except Exception as e:
-                import logging
-                logging.warning(f"grp_mount_to_rate parsing failed: {e}")
-        return frame
+                if duration_match is None:
+                    raise ValueError(
+                        f"unsupported duration expression {dur_expr!r}"
+                    )
+                amount = int(duration_match.group(2))
+                unit = {
+                    "mins": "minutes",
+                    "hours": "hours",
+                    "secs": "seconds",
+                }[duration_match.group(1)]
+                return pd.Timedelta(**{unit: amount})
+
+            min_dur = _parse_duration_expr(min_dur_expr)
+            extra_dur = _parse_duration_expr(extra_dur_expr)
+
+            grp_var = None
+            if getattr(source, "grp_var", None):
+                grp_var = source.grp_var
+            elif source.params and "grp_var" in source.params:
+                grp_var = source.params["grp_var"]
+
+            val_col = source.value_var
+            if not val_col:
+                for candidate in [
+                    "val",
+                    "value",
+                    "amount",
+                    "dose",
+                    "givendose",
+                    "pharmavalue",
+                ]:
+                    if candidate in frame.columns:
+                        val_col = candidate
+                        break
+            if not val_col:
+                val_col = concept_name
+
+            unit_col = source.unit_var
+            if not unit_col:
+                for candidate in [
+                    "unit",
+                    "unit_var",
+                    "amountuom",
+                    "doserateunit",
+                    "doseunit",
+                ]:
+                    if candidate in frame.columns:
+                        unit_col = candidate
+                        break
+
+            index_var = source.index_var
+            if not index_var:
+                for candidate in [
+                    "datetime",
+                    "givenat",
+                    "starttime",
+                    "charttime",
+                    "time",
+                ]:
+                    if candidate in frame.columns:
+                        index_var = candidate
+                        break
+
+            standard_id_cols = [
+                "patientid",
+                "stay_id",
+                "admissionid",
+                "patientunitstayid",
+                "subject_id",
+                "hadm_id",
+                "icustay_id",
+            ]
+            id_cols = [col for col in standard_id_cols if col in frame.columns]
+
+            from ..utils.callback_utils import grp_mount_to_rate as grp_mount_fn
+
+            callback_fn = grp_mount_fn(
+                min_dur=min_dur,
+                extra_dur=extra_dur,
+                grp_var=grp_var,
+            )
+            resolved_val_col = (
+                val_col
+                if val_col in frame.columns
+                else concept_name
+                if concept_name in frame.columns
+                else "value"
+            )
+            return callback_fn(
+                frame,
+                val_col=resolved_val_col,
+                unit_col=(
+                    unit_col
+                    if unit_col and unit_col in frame.columns
+                    else "unit"
+                ),
+                index_var=index_var,
+                id_cols=id_cols,
+                sub_var=source.sub_var,
+            )
+        except Exception as exc:
+            raise ValueError(
+                f"grp_mount_to_rate conversion failed: {exc}"
+            ) from exc
     
     # Handle ts_to_win_tbl callback
     match = re.fullmatch(r"ts_to_win_tbl\((.+)\)", expr, flags=re.DOTALL)
