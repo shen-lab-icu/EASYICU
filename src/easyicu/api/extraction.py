@@ -44,7 +44,7 @@ def _get_all_patient_ids(
 
 
 # ============================================================================
-# 全库提取 API — 按模块子进程隔离，16GB 安全
+# 全库提取 API — 按模块子进程隔离与实测内存自适应
 # ============================================================================
 
 # Module definitions are derived from the shared web/export catalog so the
@@ -83,9 +83,8 @@ EXTRACT_MODULE_ORDER: List[str] = [
     if module not in _PREFERRED_EXTRACT_MODULE_ORDER
 ]
 
-# Production cohort boundary used by the default extraction contract.  The
-# five smaller public databases stay below this size and run each module in one
-# pass.  A full eICU cohort crosses it and may use up to three large batches.
+# Production cohort boundary used only to admit a calibrated one-shot fast
+# path on sufficiently large-memory hosts.  Crossing it always uses streaming.
 ONESHOT_MAX_PATIENTS = 150_000
 
 # Streamed export planning is deliberately expressed as a continuous capacity
@@ -95,13 +94,14 @@ ONESHOT_MAX_PATIENTS = 150_000
 # working set is converted to stays with a conservative cross-module planning
 # coefficient, rounded down, and capped at the production-proven 67k batch.
 #
-# At 8 GiB available this yields 40k stays:
+# At 8 GiB available the generic ceiling is 40k stays:
 #   available 8192 - reserve 2048 = 6144 MiB
 #   floor(6144 / 0.15 / 5000) * 5000 = 40,000
 #
-# This is substantially faster than the former "<12 GiB => 10k" cliff while
-# retaining 2 GiB of immediate headroom.  Explicit ``batch_size`` remains
-# authoritative.
+# A database-specific release calibration below may select a smaller initial
+# pilot when the observed source/score working set is heavier; it is not a
+# fixed RAM tier and later batches still adapt from measurement.  Explicit
+# ``batch_size`` remains authoritative.
 _STREAM_BATCH_RESERVE_FRACTION = 0.25
 _STREAM_BATCH_MIN_RESERVE_MB = 2 * 1024
 _STREAM_BATCH_MB_PER_STAY = 0.15
@@ -110,6 +110,57 @@ _STREAM_BATCH_MIN = 5_000
 _STREAM_BATCH_MAX = 67_000
 _STREAM_BATCH_RETRY_FACTOR = 0.75
 _STREAM_BATCH_MAX_RETRIES = 3
+
+# A full-cohort one-shot is not admitted merely because the generic
+# per-stay formula happens to cover the cohort.  The 2026-08-03 full-six run
+# showed that source-table shape and score-grid construction dominate that
+# simple model for several databases: MIMIC-III 61,532 stays reached about
+# 16.83 GiB process-tree RSS, AUMC 23,106 stays reached about 29.31 GiB, and
+# one 67k eICU batch reached about 15.6 GiB in ``other_scores``.  Use rounded-up
+# release measurements as conservative *initial-pilot* references.  Every
+# module can still grow after its first measured batch, so this does not create
+# a fixed low-memory tier.
+_STREAM_ONESHOT_MIN_AVAILABLE_MB = 24 * 1024
+_STREAM_CALIBRATION_QUANTUM = 1_000
+_STREAM_UNMEASURED_ONESHOT_GUARD_DATABASES = frozenset(
+    {"mimic", "miiv", "aumc"}
+)
+_STREAM_CALIBRATED_REFERENCE = {
+    # database: (observed stays, conservative process-tree peak MiB)
+    "mimic": (61_532, 18 * 1024),
+    "miiv": (94_458, 15 * 1024),
+    "eicu": (67_000, 16 * 1024),
+    "aumc": (23_106, 30 * 1024),
+    "hirid": (33_905, 14 * 1024),
+    "sic": (27_386, 10 * 1024),
+}
+
+
+def _normalise_stream_database(database: str) -> str:
+    """Return the canonical stream-planning database name."""
+
+    normalized = str(database).strip().lower()
+    return {
+        "mimiciii": "mimic",
+        "mimic-iii": "mimic",
+        "mimiciv": "miiv",
+        "mimic-iv": "miiv",
+    }.get(normalized, normalized)
+
+
+def _stream_calibration(database: str) -> Optional[tuple[int, float]]:
+    """Return the conservative release calibration for one database alias."""
+
+    return _STREAM_CALIBRATED_REFERENCE.get(
+        _normalise_stream_database(database)
+    )
+
+
+def _quantize_stream_capacity(capacity: float, quantum: int) -> int:
+    """Round a positive stay capacity down without falling below 5k."""
+
+    quantized = (max(0, int(capacity)) // int(quantum)) * int(quantum)
+    return max(_STREAM_BATCH_MIN, min(_STREAM_BATCH_MAX, quantized))
 
 
 def _process_tree_rss_mb() -> float:
@@ -258,18 +309,21 @@ def _resolve_stream_batch_size(
     machine may have only 8 GB available while an IDE, browser, or another
     analysis is open.  Explicit user choices always win.
 
-    Automatic batches use a continuous capacity estimate: reserve 25% of
-    currently available memory (at least 2 GiB), budget 0.15 MiB per stay from
-    the remainder, round down to 5k stays, and cap at 67k.  Streamed cohorts
-    are interleaved across the source-order range before chunking so a dense
-    late eICU era is not concentrated into the final batch.  Under a 14-GiB
-    cgroup, all three 67k respiratory partitions completed after the datasource
-    parallelism was made cgroup-aware; at 8 GiB available the same continuous
-    policy starts at 40k.  If a worker is nevertheless killed under memory
-    pressure, adaptive exports retry only that module at a smaller batch.
-    Databases whose complete cohort fits the capacity stay one-shot; at >=12
-    GiB available the five sub-150k databases retain their established
-    one-shot fast path.
+    Automatic batches reserve 25% of currently available memory (at least
+    2 GiB), then combine the generic 0.15-MiB-per-stay capacity with a
+    conservative database calibration from the latest full-six run.  The
+    initial pilot is rounded down, bounded to 5k--67k stays, and then resized
+    from each module's first measured working set.  This preserves large
+    batches where measurements support them without a fixed 10k tier.
+
+    Below 24 GiB available memory, MIMIC-III, MIMIC-IV and AUMC cannot use an
+    unmeasured one-shot fast path.  Lower-risk calibrated cohorts such as SIC
+    and HiRID may remain one-shot when their conservative full-cohort peak fits
+    the post-reserve budget.  When the high-risk guard alone requires a split,
+    it starts from an even half rather than manufacturing a tiny residual
+    batch.  Streamed cohorts are interleaved across the source-order range
+    before chunking so a dense late eICU era is not concentrated into the
+    final batch.  Explicit user choices remain authoritative.
     """
 
     total = int(num_patients)
@@ -288,21 +342,44 @@ def _resolve_stream_batch_size(
         available_memory_mb = get_available_memory_mb()
     available = max(0.0, float(available_memory_mb))
 
-    # The complete smaller cohorts have a measured one-shot path when at least
-    # 12 GiB is currently available.  Preserve it instead of manufacturing a
-    # nearly-full extra batch from the generic capacity formula.
-    if total <= ONESHOT_MAX_PATIENTS and available >= 12 * 1024:
-        return total
-
     reserve = max(
         float(_STREAM_BATCH_MIN_RESERVE_MB),
         available * _STREAM_BATCH_RESERVE_FRACTION,
     )
     usable = max(0.0, available - reserve)
-    capacity = int(usable / _STREAM_BATCH_MB_PER_STAY)
-    capacity = (capacity // _STREAM_BATCH_QUANTUM) * _STREAM_BATCH_QUANTUM
-    capacity = max(_STREAM_BATCH_MIN, capacity)
-    capacity = min(_STREAM_BATCH_MAX, capacity)
+    capacity = _quantize_stream_capacity(
+        usable / _STREAM_BATCH_MB_PER_STAY,
+        _STREAM_BATCH_QUANTUM,
+    )
+
+    calibration = _stream_calibration(database)
+    calibrated_full_peak_mb = None
+    if calibration is not None:
+        reference_stays, reference_peak_mb = calibration
+        calibrated_capacity = _quantize_stream_capacity(
+            reference_stays * usable / max(1.0, float(reference_peak_mb)),
+            _STREAM_CALIBRATION_QUANTUM,
+        )
+        capacity = min(capacity, calibrated_capacity)
+        calibrated_full_peak_mb = (
+            float(reference_peak_mb) * total / max(1, reference_stays)
+        )
+
+    guarded_unmeasured_one_shot = (
+        available < _STREAM_ONESHOT_MIN_AVAILABLE_MB
+        and _normalise_stream_database(database)
+        in _STREAM_UNMEASURED_ONESHOT_GUARD_DATABASES
+    )
+    if total <= ONESHOT_MAX_PATIENTS and not guarded_unmeasured_one_shot:
+        if calibrated_full_peak_mb is None:
+            one_shot_fits = capacity >= total
+        else:
+            one_shot_fits = calibrated_full_peak_mb <= usable
+        if one_shot_fits:
+            return total
+
+    if guarded_unmeasured_one_shot and capacity >= total:
+        capacity = (total + 1) // 2
     return min(capacity, total)
 
 
@@ -994,6 +1071,12 @@ def _stream_module_batches_to_parquet(
         while start < len(all_ids):
             table = None
             batch_ids = all_ids[start : start + current_batch_size]
+            # Keep the inner ``load_concepts`` boundary identical to the outer
+            # writer boundary.  After first-batch adaptation, retaining the
+            # original value here made an apparent 40k -> 67k growth execute as
+            # hidden 40k + 27k inner loads and repeated the expensive source
+            # scans that the larger outer batch was meant to avoid.
+            batch_load_kwargs["batch_size"] = len(batch_ids)
             batch_sampler = _RSSPeakSampler().start()
             frame = None
             output_rows = 0
@@ -1041,6 +1124,9 @@ def _stream_module_batches_to_parquet(
                     "batch_index": len(batch_telemetry) + 1,
                     "start_offset": start,
                     "stays": len(batch_ids),
+                    "inner_load_batch_size": int(
+                        batch_load_kwargs["batch_size"]
+                    ),
                     "output_rows": output_rows,
                     **batch_memory,
                 }
@@ -3556,6 +3642,7 @@ def extract_database(
     native_export_v2: Optional[bool] = None,
     stream_output_batches: bool = False,
     verbose: bool = True,
+    adaptive_stream_batches: Optional[bool] = None,
 ) -> Dict:
     """按 19 个模块分组、子进程隔离地提取整个数据库的全部特征。
 
@@ -3570,15 +3657,15 @@ def extract_database(
         每组一个子进程、组内用 keep_cache 复用 raw/table 缓存：
         chartevents/labevents 等重表每组只扫一次，而不是每模块重扫一遍；
         SOFA 闭包只算一次并被 sofa1/sofa2/sep3_* 复用。缓存受
-        EASYICU_CACHE_BUDGET_MB 字节预算约束（默认物理内存的 25%），
-        8-16GB 机器安全。
+        EASYICU_CACHE_BUDGET_MB 字节预算约束（默认物理内存的 25%）；
+        低内存整库安全性由下述 streamed pilot 与重试合同共同保证。
       * 每组在独立子进程中运行，组退出后 OS 完整回收内存（含 pymalloc
         arena 碎片），主进程 RSS 几乎不增长。group_modules=False 或环境变量
         EASYICU_EXTRACT_GROUPING=0 退回每模块一个子进程的旧行为。
-      * 五个不超过 15 万患者的数据库默认一次性 in-process 加载；完整 eICU
-        队列超过该边界，按稳定内存预算使用 1–3 个大 batch（16GB 下最重模块
-        为 3 批）。不会切成大量小批而重复扫描共享源表。一次性路径确实 OOM
-        时，worker 仍会降级为最多 3 批。
+      * 流式导出对低于 24 GiB 的 MIMIC-III、MIMIC-IV 和 AUMC 先运行按实测
+        峰值校准的大 pilot，不再未经验证就 one-shot；SIC/HiRID 若保守峰值可
+        放入预留后预算则保留 one-shot。每个模块再根据首批真实工作集调整后续
+        批次，上限为 67,000 stays。
       * 参考实测：MIMIC-III 全量 61,532 stays 的 SOFA-2 六分量 ~6 分钟。
 
     Args:
@@ -3604,6 +3691,10 @@ def extract_database(
             worker 内合并整模块 DataFrame。用于本地磁盘/内存受限且输出位于
             外置盘的完整导出；会牺牲部分源表复用以换取稳定的峰值内存。
         verbose: 是否打印进度
+        adaptive_stream_batches: ``None`` 保持公共默认：自动选择的流式 batch
+            会自适应，用户显式 ``batch_size`` 固定不变。六库 launcher 会同时
+            显式传入有 provenance 的首批计划和 ``True``，从而保证 plan 与实际
+            首批一致，同时允许后续批次继续按实测增长或收缩。
 
     Note:
         提取 worker 在所有平台均使用 ``spawn`` 以隔离 Arrow/DuckDB 原生状态。
@@ -3684,26 +3775,28 @@ def extract_database(
 
     num_patients = len(all_ids)
 
-    # 默认 batch_size：先以不分批的哨兵值传入 worker；worker 对不超过
-    # ONESHOT_MAX_PATIENTS 的五库保持一次完成，对完整 eICU 队列再按稳定内存
-    # 预算收敛到最多 3 个大 batch。
-    # 每个模块已在独立子进程(_extract_module_worker)中运行，模块退出后 OS 完整
-    # 回收内存，所以模块间不会累积碎片。实测单模块峰值 RSS 恒定 ~2-3GB(与队列
-    # 规模无关，因为 load_concepts 按源表流式处理)，五个较小数据库能一次装下。
-    # 主动分批只会让 load_concepts 每批重读共享源表(chartevents/labevents…)，
-    # 数倍变慢——这是用户“怎么这么慢”的根因。故默认用大于任意队列的哨兵值，
-    # 让较小数据库单次扫表完成；eICU 的 worker 会应用三批上限。仅在特殊
-    # 机器/存储条件下由用户显式传 batch_size 覆盖。
+    # 流式导出先选择一个有证据的首批，而不是按数据库大小猜测 one-shot。
+    # 2026-08-03 实测显示小队列也可能很重（AUMC 23,106 stays 约 29.31 GiB），
+    # 所以低于 24 GiB 时高风险库先按数据库校准 pilot；SIC/HiRID 等较低风险库
+    # 仅在保守峰值能放入预留后预算时保留 one-shot。每个模块再用首批 working-set
+    # 自适应。显式用户 batch 仍保持固定；launcher 可以显式传计划值并单独打开
+    # adaptive_stream_batches，使 provenance 与真实首批完全一致。
+    if adaptive_stream_batches and not stream_output_batches:
+        raise ValueError(
+            "adaptive_stream_batches requires stream_output_batches=True"
+        )
+
     if stream_output_batches:
-        # The bounded writer needs a concrete batch.  Resolve it from current
-        # available memory rather than nominal total RAM: a 16 GB laptop with
-        # only 8 GB free starts from a bounded 40k batch and can grow only
-        # after the first batch supplies a measured working-set baseline.
-        _adaptive_stream_batches = batch_size is None
+        automatic_stream_batch = batch_size is None
         batch_size = _resolve_stream_batch_size(
             database,
             num_patients,
             batch_size,
+        )
+        _adaptive_stream_batches = (
+            automatic_stream_batch
+            if adaptive_stream_batches is None
+            else bool(adaptive_stream_batches)
         )
         _auto_one_shot = False
     elif batch_size is None:

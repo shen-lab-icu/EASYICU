@@ -485,6 +485,26 @@ def _assigned_worker_memory_mb(memory: Mapping[str, Any], workers: int) -> float
     return max(4 * 1024.0, (available - reserve) / max(1, workers))
 
 
+def _stream_planning_memory_mb(
+    memory: Mapping[str, Any],
+    workers: int,
+    assigned_memory_mb: float,
+) -> float:
+    """Return one pre-reserve memory signal for the stream batch planner.
+
+    With one database worker, the core stream planner itself retains the
+    25%/2-GiB reserve.  Passing the already-reserved worker allocation would
+    reserve twice (an 8-GiB launch was planned as 25k even though the core ran
+    40k).  Concurrent waves instead use the per-worker allocation so one
+    worker cannot plan against memory assigned to its peer.
+    """
+
+    available = float(memory.get("effective_available_mb") or 0.0)
+    if int(workers) == 1 and available > 0:
+        return available
+    return max(0.0, float(assigned_memory_mb))
+
+
 def _runtime_limits(available_memory_mb: float, cpu_count: int | None = None) -> dict[str, str]:
     available = max(0.0, float(available_memory_mb))
     cpus = max(1, int(cpu_count or os.cpu_count() or 1))
@@ -872,7 +892,9 @@ def _worker_main(spec_path: Path) -> int:
             raise ExtractionRunError(f"no ICU stays found for {database}")
         num_stays = len(patient_ids)
         requested_batch_size = spec.get("requested_batch_size")
-        planning_memory_mb = float(spec["assigned_memory_mb"])
+        planning_memory_mb = float(
+            spec.get("planning_memory_mb", spec["assigned_memory_mb"])
+        )
         planned_batch_size = _resolve_stream_batch_size(
             database,
             num_stays,
@@ -888,7 +910,8 @@ def _worker_main(spec_path: Path) -> int:
             "planned_initial_batch_size": planned_batch_size,
             "planned_batch_count": math.ceil(num_stays / planned_batch_size),
             "adaptive_core": adaptive_core,
-            "assigned_memory_mb": round(planning_memory_mb, 1),
+            "assigned_memory_mb": round(float(spec["assigned_memory_mb"]), 1),
+            "planning_memory_mb": round(planning_memory_mb, 1),
             "runtime_limits": runtime,
             "easyicu_git_commit": identity["commit"],
         }
@@ -900,10 +923,11 @@ def _worker_main(spec_path: Path) -> int:
             output_dir=output_root,
             modules=list(MODULE_ORDER),
             patient_ids={id_column: patient_ids},
-            batch_size=None if adaptive_core else planned_batch_size,
+            batch_size=planned_batch_size,
             native_export_v2=True,
             stream_output_batches=True,
             verbose=True,
+            adaptive_stream_batches=adaptive_core,
         )
         errors = {
             module: list((extraction["modules"].get(module) or {}).get("errors") or [])
@@ -975,6 +999,7 @@ def _looks_like_memory_failure(exit_code: int, error: str) -> bool:
             "bad_alloc",
             "oom",
             "killed",
+            "streamed module export exhausted memory",
         )
     )
 
@@ -1025,6 +1050,7 @@ def _execute_database(
     psutil_module,
     monitoring: Mapping[str, Any],
     prior_source: Mapping[str, Any] | None,
+    planning_memory_mb: float | None = None,
 ) -> dict[str, Any]:
     final_export = run_root / "exports" / database
     if final_export.exists() or final_export.is_symlink():
@@ -1053,6 +1079,12 @@ def _execute_database(
             "attempt_root": str(attempt_root),
             "easyicu_git_commit": git_commit,
             "assigned_memory_mb": round(assigned_memory_mb, 1),
+            "planning_memory_mb": round(
+                assigned_memory_mb
+                if planning_memory_mb is None
+                else planning_memory_mb,
+                1,
+            ),
             "adaptive_core": adaptive_core and retry_index == 0,
             "requested_batch_size": next_batch_size,
         }
@@ -1076,6 +1108,7 @@ def _execute_database(
             "planned_batch_count": worker_plan.get("planned_batch_count"),
             "adaptive_core": worker_plan.get("adaptive_core"),
             "assigned_memory_mb": round(assigned_memory_mb, 1),
+            "planning_memory_mb": worker_plan.get("planning_memory_mb"),
             "elapsed_seconds": round(monitor_result["elapsed_seconds"], 3),
             "process_exit_code": monitor_result["process_exit_code"],
             "peak_process_tree_rss_mb": monitor_result[
@@ -1419,6 +1452,11 @@ def _run_non_eicu_segment(
         wave = remaining[:worker_count]
         remaining = remaining[worker_count:]
         assigned_memory_mb = _assigned_worker_memory_mb(memory, worker_count)
+        planning_memory_mb = _stream_planning_memory_mb(
+            memory,
+            worker_count,
+            assigned_memory_mb,
+        )
         with ThreadPoolExecutor(max_workers=worker_count) as executor:
             futures = {
                 executor.submit(
@@ -1435,6 +1473,7 @@ def _run_non_eicu_segment(
                     psutil_module=psutil_module,
                     monitoring=manifest["resource_monitoring"],
                     prior_source=manifest["sources"].get(database),
+                    planning_memory_mb=planning_memory_mb,
                 ): database
                 for database in wave
             }
@@ -1490,13 +1529,14 @@ def _run_pending(
             segment = []
         if database == "eicu":
             memory = _detect_effective_memory(psutil_module)
+            assigned_memory_mb = _assigned_worker_memory_mb(memory, 1)
             try:
                 source = _execute_database(
                     database="eicu",
                     run_root=run_root,
                     data_path=data_paths["eicu"],
                     git_commit=manifest["source_checkout"]["easyicu_git_commit"],
-                    assigned_memory_mb=_assigned_worker_memory_mb(memory, 1),
+                    assigned_memory_mb=assigned_memory_mb,
                     adaptive_core=True,
                     requested_batch_size=batch_overrides.get("eicu"),
                     max_memory_retries=args.max_memory_retries,
@@ -1504,6 +1544,11 @@ def _run_pending(
                     psutil_module=psutil_module,
                     monitoring=manifest["resource_monitoring"],
                     prior_source=manifest["sources"].get("eicu"),
+                    planning_memory_mb=_stream_planning_memory_mb(
+                        memory,
+                        1,
+                        assigned_memory_mb,
+                    ),
                 )
             except Exception as exc:
                 source = {
