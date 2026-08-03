@@ -87,11 +87,15 @@
      breadcrumb so a destination has ONE name across the sidebar, header, and
      home entries (no sidebar-vs-title drift). Copilot is a separate, parallel
      system that completes the same flow conversationally. */
+  /* Extraction produces the export the other three read. Listed as four peers,
+     a new user clicks Patient Review first and meets an empty state; the order
+     of operations was only discoverable by tripping over it. `role` renders
+     that dependency in the nav instead. */
   const CLASSIC = [
-    { id: 'extraction', label: ['Data Extraction', '数据抽取'], sub: ['choose cohort + modules', '选择队列 + 模块'], ico: 'extract' },
-    { id: 'patient', label: ['Patient Review', '患者审阅'], sub: ['tables · trends · patients', '表格 · 趋势 · 患者'], ico: 'patient' },
-    { id: 'cohort', label: ['Cohort Statistics', '队列统计'], sub: ['groups + coverage', '分组 + 覆盖率'], ico: 'cohort' },
-    { id: 'crossdb', label: ['Cross-database comparison', '跨库对比'], sub: ['coverage + distributions', '覆盖率 + 分布'], ico: 'benchmark' },
+    { id: 'extraction', label: ['Data Extraction', '数据抽取'], sub: ['choose cohort + modules', '选择队列 + 模块'], ico: 'extract', role: 'produces' },
+    { id: 'patient', label: ['Patient Review', '患者审阅'], sub: ['tables · trends · patients', '表格 · 趋势 · 患者'], ico: 'patient', role: 'reads' },
+    { id: 'cohort', label: ['Cohort Statistics', '队列统计'], sub: ['groups + coverage', '分组 + 覆盖率'], ico: 'cohort', role: 'reads' },
+    { id: 'crossdb', label: ['Cross-database comparison', '跨库对比'], sub: ['coverage + distributions', '覆盖率 + 分布'], ico: 'benchmark', role: 'reads' },
   ];
   let classicOpen = true;
 
@@ -216,8 +220,10 @@
         </button>
         ${wsOpen ? `
         <div class="wsg-children" id="data-workspace-links">
-          ${CLASSIC.map(c => `
-            <button type="button" class="wsitem ${route === c.id ? 'active' : ''}" data-nav="${c.id}">
+          ${CLASSIC.map((c, i) => `
+            ${c.role === 'reads' && CLASSIC[i - 1] && CLASSIC[i - 1].role === 'produces'
+              ? `<div class="wsg-step">${t('then, from that export', '然后，基于该导出')}</div>` : ''}
+            <button type="button" class="wsitem ${route === c.id ? 'active' : ''} ws-${c.role}" data-nav="${c.id}">
               <span class="ico">${icon(c.ico, 15)}</span>
               <span class="wsi-copy"><span class="wsi-t">${L(c.label)}</span><span class="wsi-sub">${L(c.sub)}</span></span>
             </button>`).join('')}
