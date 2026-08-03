@@ -12,7 +12,10 @@ import argparse
 import csv
 import hashlib
 import json
+import math
 import os
+import re
+import subprocess
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -47,6 +50,12 @@ MODULES = (
 NATIVE_SCHEMA_VERSION = "easyicu_native_export_v2"
 CONTRACT_REVISION = "native_v2_row_grain_sha256_size_20260803"
 RELEASE_SCHEMA_VERSION = "easyicu_full6_release_v1"
+RELEASE_GATE_CONTRACT = "easyicu_corrected_time_semantics_release_gate_v1"
+MINIMUM_CORRECTED_TIME_EASYICU_COMMIT = "e27a0e02e7bff25169aa70a487de088b6901ba50"
+REQUIRED_CORRECTED_TIME_CORRECTIONS = (
+    "aumc_relative_time_bucketed_before_admission_alignment",
+    "eicu_susp_inf_uses_antibiotic_event_time",
+)
 EXPECTED_PARQUET_COUNT = len(DATABASES) * len(MODULES)
 CORRECTIONS = (
     "demographics_one_row_per_stay_with_nearest_static_values_and_recomputed_bmi",
@@ -62,6 +71,79 @@ CORRECTIONS = (
 
 class ReleaseValidationError(ValueError):
     """Raised when an export cannot be sealed without weakening its contract."""
+
+
+def _require_git_commit(repository: Path, commit: str, *, label: str) -> None:
+    result = subprocess.run(
+        ["git", "cat-file", "-e", f"{commit}^{{commit}}"],
+        cwd=repository,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip()
+        raise ReleaseValidationError(
+            f"{label} commit {commit} is not available in the EasyICU Git "
+            "repository. Fetch full history before sealing (the repository may "
+            f"be shallow). Git detail: {detail or 'unknown commit'}"
+        )
+
+
+def _validate_corrected_time_commit_ancestry(
+    database_commits: dict[str, str],
+    *,
+    repository: Path | None = None,
+) -> None:
+    """Prove affected runtime commits include the corrected-time implementation."""
+    if not isinstance(database_commits, dict):
+        raise ReleaseValidationError(
+            "database_commits must be a database-to-full-SHA object"
+        )
+    repo = (
+        Path(__file__).resolve().parents[2]
+        if repository is None
+        else Path(repository).resolve()
+    )
+    for database in ("aumc", "eicu"):
+        commit = database_commits.get(database)
+        if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit):
+            raise ReleaseValidationError(
+                f"{database}: corrected-time ancestry requires a full lowercase "
+                f"Git commit SHA, got {commit!r}"
+            )
+    _require_git_commit(
+        repo,
+        MINIMUM_CORRECTED_TIME_EASYICU_COMMIT,
+        label="minimum corrected-time",
+    )
+    for database in ("aumc", "eicu"):
+        commit = database_commits[database]
+        _require_git_commit(repo, commit, label=f"{database} runtime")
+        result = subprocess.run(
+            [
+                "git",
+                "merge-base",
+                "--is-ancestor",
+                MINIMUM_CORRECTED_TIME_EASYICU_COMMIT,
+                commit,
+            ],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode == 1:
+            raise ReleaseValidationError(
+                f"{database}: runtime commit {commit} predates required corrected-time "
+                f"commit {MINIMUM_CORRECTED_TIME_EASYICU_COMMIT}"
+            )
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout).strip()
+            raise ReleaseValidationError(
+                f"{database}: cannot verify corrected-time Git ancestry. Fetch full "
+                f"history before sealing. Git detail: {detail or result.returncode}"
+            )
 
 
 def _sha256_file(path: Path) -> str:
@@ -112,9 +194,7 @@ def _actual_key_audit(
     primary_key: list[str],
 ) -> dict[str, int]:
     key_sql = ", ".join(_quote_identifier(column) for column in primary_key)
-    select_parts = [
-        "count(*) FILTER (WHERE stay_id IS NULL) AS null_stay_id_rows"
-    ]
+    select_parts = ["count(*) FILTER (WHERE stay_id IS NULL) AS null_stay_id_rows"]
     if "charttime" in primary_key:
         select_parts.append(
             "count(*) FILTER (WHERE charttime IS NULL) AS null_charttime_rows"
@@ -212,8 +292,7 @@ def _validate_file_entry(
         )
     if entry.get("row_grain") != row_grain:
         raise ReleaseValidationError(
-            f"{label}: row_grain must be {row_grain!r}, "
-            f"got {entry.get('row_grain')!r}"
+            f"{label}: row_grain must be {row_grain!r}, got {entry.get('row_grain')!r}"
         )
 
     audit = entry.get("row_grain_audit")
@@ -282,8 +361,9 @@ def _validate_file_entry(
         raise ReleaseValidationError(
             f"{label}: Parquet primary key is not unique under NULL-equal semantics"
         )
-    if "charttime" in primary_key and audit.get("null_charttime_rows_after") != (
-        key_audit["null_charttime_rows"]
+    if (
+        "charttime" in primary_key
+        and audit.get("null_charttime_rows_after") != (key_audit["null_charttime_rows"])
     ):
         raise ReleaseValidationError(
             f"{label}: audited NULL charttime count does not match Parquet"
@@ -329,6 +409,7 @@ def validate_release(run_root: Path) -> dict[str, Any]:
     source_manifest_sha256: dict[str, str] = {}
     database_commits: dict[str, str] = {}
     runtime_provenance: dict[str, dict[str, Any]] = {}
+    module_timing_records: list[dict[str, Any]] = []
     module_receipts: dict[str, list[dict[str, Any]]] = {
         module: [] for module in MODULES
     }
@@ -376,7 +457,9 @@ def validate_release(run_root: Path) -> dict[str, Any]:
                         f"{database}: runtime_provenance is missing"
                     )
                 commit = provenance.get("easyicu_git_commit")
-                if not isinstance(commit, str) or len(commit) != 40:
+                if not isinstance(commit, str) or not re.fullmatch(
+                    r"[0-9a-f]{40}", commit
+                ):
                     raise ReleaseValidationError(
                         f"{database}: runtime EasyICU commit is not a full Git SHA"
                     )
@@ -386,6 +469,49 @@ def validate_release(run_root: Path) -> dict[str, Any]:
                     )
                 database_commits[database] = commit
                 runtime_provenance[database] = provenance
+
+                module_timings = manifest.get("module_timings_seconds")
+                if not isinstance(module_timings, dict) or set(module_timings) != set(
+                    MODULES
+                ):
+                    raise ReleaseValidationError(
+                        f"{database}: module_timings_seconds must contain exactly "
+                        "the 19 release modules"
+                    )
+                module_peak_rss = manifest.get("module_peak_rss_mb")
+                module_peak_working_set = manifest.get("module_peak_working_set_mb")
+                for module in MODULES:
+                    elapsed = module_timings[module]
+                    if (
+                        isinstance(elapsed, bool)
+                        or not isinstance(elapsed, (int, float))
+                        or not math.isfinite(elapsed)
+                        or elapsed < 0
+                    ):
+                        raise ReleaseValidationError(
+                            f"{database}/{module}: module extraction time must be "
+                            f"finite and non-negative, got {elapsed!r}"
+                        )
+                    record: dict[str, Any] = {
+                        "database": database,
+                        "module": module,
+                        "elapsed_seconds": float(elapsed),
+                        "elapsed_minutes": round(float(elapsed) / 60.0, 3),
+                    }
+                    for field, values in (
+                        ("peak_rss_mb", module_peak_rss),
+                        ("peak_working_set_mb", module_peak_working_set),
+                    ):
+                        if isinstance(values, dict):
+                            value = values.get(module)
+                            if (
+                                isinstance(value, (int, float))
+                                and not isinstance(value, bool)
+                                and math.isfinite(value)
+                                and value >= 0
+                            ):
+                                record[field] = float(value)
+                    module_timing_records.append(record)
 
                 entries = manifest.get("files")
                 if not isinstance(entries, list) or len(entries) != len(MODULES):
@@ -458,9 +584,12 @@ def validate_release(run_root: Path) -> dict[str, Any]:
                 )
         module_concepts[module] = list(reference_concepts)
 
+    _validate_corrected_time_commit_ancestry(database_commits)
+
     return {
         "database_commits": database_commits,
         "runtime_provenance": runtime_provenance,
+        "module_timing_records": module_timing_records,
         "source_manifest_sha256": source_manifest_sha256,
         "module_concepts": module_concepts,
         "database_totals": database_totals,
@@ -483,7 +612,9 @@ def validate_extraction_timing(
         with path.open(newline="", encoding="utf-8") as handle:
             rows = list(csv.DictReader(handle))
     except (OSError, csv.Error) as exc:
-        raise ReleaseValidationError(f"Cannot parse extraction timing CSV: {exc}") from exc
+        raise ReleaseValidationError(
+            f"Cannot parse extraction timing CSV: {exc}"
+        ) from exc
     by_database = {row.get("database"): row for row in rows}
     if len(rows) != len(DATABASES) or set(by_database) != set(DATABASES):
         raise ReleaseValidationError(
@@ -540,6 +671,7 @@ def build_run_metadata(
     run_id: str,
     validation: dict[str, Any],
     extraction_timing: dict[str, Any],
+    module_timing: dict[str, Any],
     execution_profile: str,
 ) -> dict[str, Any]:
     if not run_id.strip():
@@ -562,10 +694,21 @@ def build_run_metadata(
         "database_count": len(DATABASES),
         "expected_parquet_count": EXPECTED_PARQUET_COUNT,
         "corrections": list(CORRECTIONS),
+        "release_gate": {
+            "contract": RELEASE_GATE_CONTRACT,
+            "contract_revision": CONTRACT_REVISION,
+            "minimum_easyicu_commit": MINIMUM_CORRECTED_TIME_EASYICU_COMMIT,
+            "required_corrections": list(REQUIRED_CORRECTED_TIME_CORRECTIONS),
+            "affected_database_runtime_commits": {
+                database: validation["database_commits"][database]
+                for database in ("aumc", "eicu")
+            },
+        },
         "extraction_execution": {
             "profile": execution_profile,
             "portable_16gb_validated": execution_profile == "16gb",
             "timing": extraction_timing,
+            "module_timing": module_timing,
         },
         "validation": {
             "audited_parquet_count": EXPECTED_PARQUET_COUNT,
@@ -593,9 +736,7 @@ def build_run_metadata(
 
 
 def _atomic_write_json(path: Path, value: dict[str, Any]) -> None:
-    payload = (json.dumps(value, indent=2, ensure_ascii=False) + "\n").encode(
-        "utf-8"
-    )
+    payload = (json.dumps(value, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
     temporary_path: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -624,6 +765,57 @@ def _atomic_write_json(path: Path, value: dict[str, Any]) -> None:
             temporary_path.unlink(missing_ok=True)
 
 
+def write_module_extraction_timing(
+    *, run_root: Path, validation: dict[str, Any]
+) -> dict[str, Any]:
+    """Write the canonical 6 x 19 module timing table after validation."""
+
+    records = validation["module_timing_records"]
+    if len(records) != EXPECTED_PARQUET_COUNT:
+        raise ReleaseValidationError(
+            "Module timing evidence must contain exactly 114 database/module rows"
+        )
+    fieldnames = (
+        "database",
+        "module",
+        "elapsed_seconds",
+        "elapsed_minutes",
+        "peak_rss_mb",
+        "peak_working_set_mb",
+    )
+    destination = run_root / "module_extraction_timing.csv"
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            newline="",
+            encoding="utf-8",
+            dir=destination.parent,
+            prefix=f".{destination.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary_path = Path(handle.name)
+            writer = csv.DictWriter(handle, fieldnames=fieldnames)
+            writer.writeheader()
+            for record in records:
+                writer.writerow({field: record.get(field, "") for field in fieldnames})
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, destination)
+        temporary_path = None
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+    return {
+        "file": destination.name,
+        "sha256": _sha256_file(destination),
+        "record_count": len(records),
+        "database_count": len(DATABASES),
+        "module_count": len(MODULES),
+    }
+
+
 def seal_release(
     *,
     run_root: Path,
@@ -635,10 +827,14 @@ def seal_release(
     extraction_timing = validate_extraction_timing(
         run_root=resolved_run_root, validation=validation
     )
+    module_timing = write_module_extraction_timing(
+        run_root=resolved_run_root, validation=validation
+    )
     metadata = build_run_metadata(
         run_id=run_id if run_id is not None else resolved_run_root.name,
         validation=validation,
         extraction_timing=extraction_timing,
+        module_timing=module_timing,
         execution_profile=execution_profile,
     )
     destination = resolved_run_root / "run_metadata.json"

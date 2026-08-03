@@ -19,6 +19,8 @@ from easyicu.runtime.memory_manager import (
 from easyicu.api import EXTRACT_MODULES
 from easyicu.api.extraction import (
     _adapt_stream_batch_size_from_first_batch,
+    _interleave_stream_patient_ids,
+    _next_stream_retry_batch_size,
     _resolve_stream_batch_size,
 )
 
@@ -97,6 +99,7 @@ def test_cap_constant_is_three():
         ("eicu", 200_859, 32, 67_000),
         ("eicu", 200_859, 16, 67_000),
         ("eicu", 200_859, 14, 67_000),
+        ("eicu", 200_859, 11, 55_000),
         ("eicu", 200_859, 8, 40_000),
         ("eicu", 200_859, 6, 25_000),
         ("eicu", 200_859, 4, 10_000),
@@ -118,6 +121,16 @@ def test_stream_batch_uses_current_available_memory(
         )
         == expected
     )
+
+
+@pytest.mark.parametrize(
+    ("initial", "expected"),
+    [(67_000, 50_000), (50_000, 35_000), (45_000, 30_000), (10_000, 5_000), (5_000, 5_000)],
+)
+def test_adaptive_worker_crash_retry_reduces_only_the_failed_module(
+    initial, expected
+):
+    assert _next_stream_retry_batch_size(initial) == expected
 
 
 def test_explicit_stream_batch_size_always_wins():
@@ -166,3 +179,49 @@ def test_measured_batch_plan_never_exceeds_remaining_cohort():
         )
         == 12_345
     )
+
+
+def test_interleaved_stream_partition_preserves_exact_ids_and_batch_size():
+    patient_ids = list(range(200_859))
+
+    ordered, planned_batches = _interleave_stream_patient_ids(
+        patient_ids,
+        67_000,
+    )
+
+    assert planned_batches == 3
+    assert len(ordered) == len(patient_ids)
+    assert set(ordered) == set(patient_ids)
+    assert len(set(ordered)) == len(patient_ids)
+    assert [
+        len(ordered[start : start + 67_000])
+        for start in range(0, len(ordered), 67_000)
+    ] == [67_000, 67_000, 66_859]
+
+
+def test_interleaved_stream_partition_balances_source_order_density():
+    patient_ids = list(range(200_859))
+    ordered, _ = _interleave_stream_patient_ids(patient_ids, 67_000)
+    batch_means = [
+        sum(batch) / len(batch)
+        for start in range(0, len(ordered), 67_000)
+        if (batch := ordered[start : start + 67_000])
+    ]
+    sequential_means = [
+        sum(batch) / len(batch)
+        for start in range(0, len(patient_ids), 67_000)
+        if (batch := patient_ids[start : start + 67_000])
+    ]
+
+    # A sequential split differs by ~67k in this monotone density proxy.  The
+    # interleaved split samples the whole source-order range in every batch.
+    assert max(batch_means) - min(batch_means) < (
+        max(sequential_means) - min(sequential_means)
+    ) / 100
+
+
+def test_interleaved_stream_partition_is_noop_for_one_shot_cohort():
+    patient_ids = [11, 12, 13]
+    ordered, planned_batches = _interleave_stream_patient_ids(patient_ids, 10)
+    assert ordered == patient_ids
+    assert planned_batches == 1
