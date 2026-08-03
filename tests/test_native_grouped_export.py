@@ -57,6 +57,70 @@ def test_native_time_axis_uses_los_and_normalises_stay_level_outcomes() -> None:
     assert stay_audit["normalized_stay_level_rows"] == 2
 
 
+def test_native_renal_publication_drops_untimed_negative_rrt_merge_artifact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        api,
+        "EXTRACT_MODULES",
+        {"renal": ["urine", "rrt_criteria"]},
+    )
+    pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3],
+            "charttime": [0.0, None, None],
+            "urine": [100.0, None, None],
+            "rrt_criteria": [False, False, None],
+        }
+    ).to_parquet(tmp_path / "renal.parquet", index=False)
+
+    api._publish_native_export_v2(
+        database="aumc",
+        data_path="/raw/source-must-not-be-read",
+        output_dir=str(tmp_path),
+        modules=["renal"],
+        max_patients=None,
+        result=_completed_result("renal"),
+    )
+
+    exported = pd.read_parquet(tmp_path / "renal.parquet")
+    assert exported[["stay_id", "charttime"]].to_dict("records") == [
+        {"stay_id": 1, "charttime": 0.0}
+    ]
+    manifest = json.loads((tmp_path / "_manifest.json").read_text())
+    audit = manifest["files"][0]["time_axis_audit"]
+    assert audit["excluded_untimed_negative_rrt_criteria_rows"] == 1
+    assert audit["excluded_untimed_empty_rows"] == 1
+    assert manifest["files"][0]["row_grain_audit"][
+        "null_charttime_rows_after"
+    ] == 0
+
+
+def test_native_renal_publication_rejects_positive_untimed_rrt_criteria(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(api, "EXTRACT_MODULES", {"renal": ["rrt_criteria"]})
+    pd.DataFrame(
+        {
+            "stay_id": [1],
+            "charttime": [None],
+            "rrt_criteria": [True],
+        }
+    ).to_parquet(tmp_path / "renal.parquet", index=False)
+
+    with pytest.raises(ValueError, match="positive rrt_criteria rows"):
+        api._publish_native_export_v2(
+            database="aumc",
+            data_path="/raw/source-must-not-be-read",
+            output_dir=str(tmp_path),
+            modules=["renal"],
+            max_patients=None,
+            result=_completed_result("renal"),
+        )
+
+    assert not (tmp_path / "_manifest.json").exists()
+
+
 def test_grouped_output_is_sealed_without_accessing_the_raw_data_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -495,10 +559,13 @@ def test_longitudinal_null_time_boolean_conflicts_use_any_and_are_unique(
     manifest = json.loads((tmp_path / "_manifest.json").read_text())
     audit = manifest["files"][0]["row_grain_audit"]
     assert audit["null_key_equality"] == "nulls_equal"
-    assert audit["null_charttime_rows_before"] == 4
+    assert audit["null_charttime_rows_before"] == 3
     assert audit["null_charttime_rows_after"] == 2
     assert audit["duplicate_key_groups_before"] == 1
-    assert audit["rows_consolidated"] == 2
+    assert audit["rows_consolidated"] == 1
+    assert manifest["files"][0]["time_axis_audit"][
+        "excluded_untimed_empty_rows"
+    ] == 1
 
 
 def test_longitudinal_conflicting_strings_fail_closed() -> None:
