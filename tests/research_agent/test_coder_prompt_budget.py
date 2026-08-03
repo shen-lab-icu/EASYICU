@@ -173,7 +173,18 @@ def test_empty_planner_input_scope_forbids_inferred_provenance_columns(ra):
     assert "host-owned execution receipt" in contract
     assert "No measured/count provenance pair is declared" in contract
     assert "Do not read those companions" in contract
-    assert "Exact Planner-declared inputs for this step: []" in contract
+    # This asserted "Exact Planner-declared inputs for this step: []" and had
+    # been red for as long as the empty branch has existed. That enumeration
+    # line belongs to the NON-empty rendering; the empty case is a separate,
+    # complete branch that replaces it with one sentence covering both input
+    # categories at once. The assertion demanded a rendering this branch
+    # deliberately does not use, so it protected nothing while failing -- which
+    # is the worst of both. What has to stay true is that neither category is
+    # left unstated, and that is checked positively.
+    assert "typed or raw-variable" in contract
+    assert not any(
+        line.startswith("- Exact ") for line in contract.splitlines()
+    ), "the empty branch must not fall through to the enumerated rendering"
 
 
 def test_measurement_provenance_contract_never_binds_value_availability(ra):
