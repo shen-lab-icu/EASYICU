@@ -467,3 +467,86 @@ def test_missing_job_branch_is_reachable_executable_contract() -> None:
         [node, str(test_file)], check=True, capture_output=True, text=True
     )
     assert "keys the missing-job branch on error.status" in result.stdout
+
+
+def test_transitional_css_buckets_hold_no_route_rules() -> None:
+    """A catch-all may only shrink. redesign.css held 30 agent/idea rules.
+
+    Rules moved into agent.css were *prepended*: redesign.css loaded before it,
+    and both files define .ag-list / .ag-pipe / .ag-tab / .ag-body, so
+    appending would have flipped which declaration wins.
+    """
+    import re as _re
+
+    css_dir = STATIC_JS.parent / "css"
+    route_rule = _re.compile(
+        r"^\s*\.(ideas|agent|crossdb|xdb|patient|cohort|guided|extraction|ex-|pt-|ag-|idea-)",
+        _re.M,
+    )
+    for bucket in ("redesign.css", "screens.css", "app.css", "pages.css", "tweaks.css"):
+        text = (css_dir / bucket).read_text(encoding="utf-8")
+        offenders = route_rule.findall(text)
+        assert not offenders, f"{bucket} regained route-specific rules: {offenders[:5]}"
+
+    # The moved rules must still exist at their new owner, not have been dropped.
+    agent_css = (css_dir / "agent.css").read_text(encoding="utf-8")
+    for selector in (
+        ".ag-wrap",
+        ".ag-list-head",
+        ".ag-newbtn",
+        ".ag-studies",
+        ".ag-tabs",
+    ):
+        assert selector in agent_css, f"{selector} lost in the migration"
+    assert ".idea-band" in (css_dir / "ideas.css").read_text(encoding="utf-8")
+    # .agent-entry belongs beside its sibling .ideas-entry in the shell owner.
+    shell_css = (css_dir / "shell.css").read_text(encoding="utf-8")
+    assert ".agent-entry" in shell_css and ".ideas-entry" in shell_css
+
+
+def test_picker_css_has_one_owner_and_is_not_injected_from_js() -> None:
+    """Three screens each carried their own copy of the picker's CSS.
+
+    ensurePickerStyles / ensureSourcePickerStyles / ensureSettingPickerStyles
+    injected ~2 KB of identical rules from JavaScript. Two copies were still
+    byte-identical; the third had already gained a rule the others never got.
+    """
+    js_files = list(STATIC_JS.glob("*.js"))
+    css_dir = STATIC_JS.parent / "css"
+
+    for path in js_files:
+        text = path.read_text(encoding="utf-8")
+        assert ".eu-pick-back{position:fixed" not in text, (
+            f"{path.name} injects picker CSS from JavaScript again"
+        )
+        for gone in (
+            "ensurePickerStyles",
+            "ensureSourcePickerStyles",
+            "ensureSettingPickerStyles",
+        ):
+            assert gone not in text, f"{path.name} still defines/calls {gone}"
+
+    picker_css = (css_dir / "picker.css").read_text(encoding="utf-8")
+    for selector in (
+        ".eu-pick-back",
+        ".eu-pick{",
+        ".eu-pick-h",
+        ".eu-pick-cur",
+        ".eu-pick-sc",
+        ".eu-pick-list",
+        ".eu-pick-row",
+        ".eu-pick-f",
+        ".eu-pick-empty",
+    ):
+        assert selector in picker_css, f"{selector} lost when the copies were merged"
+
+    # The rule that was never a picker rule went back to its own route owner.
+    assert ".setting-input" not in picker_css
+    assert ".setting-input" in (css_dir / "settings.css").read_text(encoding="utf-8")
+
+    # A JS-injected <style> lands after every <link>; keep that precedence.
+    index = (STATIC_JS.parent / "index.html").read_text(encoding="utf-8")
+    links = re.findall(r'<link rel="stylesheet" href="(css/[^"?]+)', index)
+    assert links[-1] == "css/picker.css", (
+        f"picker.css must be the last stylesheet, found {links[-1]}"
+    )
