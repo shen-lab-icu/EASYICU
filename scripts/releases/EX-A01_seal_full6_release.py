@@ -50,11 +50,16 @@ MODULES = (
 NATIVE_SCHEMA_VERSION = "easyicu_native_export_v2"
 CONTRACT_REVISION = "native_v2_row_grain_sha256_size_20260803"
 RELEASE_SCHEMA_VERSION = "easyicu_full6_release_v1"
-RELEASE_GATE_CONTRACT = "easyicu_corrected_time_semantics_release_gate_v1"
-MINIMUM_CORRECTED_TIME_EASYICU_COMMIT = "e27a0e02e7bff25169aa70a487de088b6901ba50"
-REQUIRED_CORRECTED_TIME_CORRECTIONS = (
+RELEASE_GATE_CONTRACT = "easyicu_harmonized_semantics_release_gate_v2"
+MINIMUM_HARMONIZED_EASYICU_COMMIT = "af21256ab54926abc705a5baa586519f95399358"
+REQUIRED_HARMONIZED_CORRECTIONS = (
     "aumc_relative_time_bucketed_before_admission_alignment",
     "eicu_susp_inf_uses_antibiotic_event_time",
+    "explicit_null_time_semantics_allowlist",
+    "interval_total_volume_allocated_by_icu_hour_overlap",
+    "cumulative_fluid_balance_starts_at_icu_hour_zero",
+    "cross_database_samp_means_specimen_collection",
+    "single_clean_easyicu_commit_for_all_six_databases",
 )
 EXPECTED_PARQUET_COUNT = len(DATABASES) * len(MODULES)
 SPECIAL_SHARED_TIMING_MODULES = frozenset(("sepsis3_sofa1", "sepsis3_sofa2"))
@@ -65,10 +70,34 @@ CORRECTIONS = (
     "partial_wide_exact_floating_charttime_key_alignment",
     "aumc_relative_time_bucketed_before_admission_alignment",
     "streamed_non_demographics_charttime_schema_stabilization",
-    "eicu_samp_represents_sampling_event_not_culture_positivity",
+    "cross_database_samp_represents_sampling_event_not_culture_positivity",
     "eicu_susp_inf_uses_antibiotic_event_time",
+    "dynamic_null_charttime_rows_rejected_by_semantic_allowlist",
+    "interval_total_input_volume_overlap_allocated_to_icu_hours",
+    "cumulative_fluid_balance_excludes_preadmission_baseline",
     "per_parquet_sha256_and_byte_size_receipts",
 )
+
+
+# Only these admission-level values may occupy a longitudinal row whose
+# charttime is NULL. The positive allowlist intentionally duplicates the
+# publication QC contract: row-key uniqueness alone cannot prove that an
+# untimed value is clinically meaningful.
+NULL_TIME_CONCEPT_POLICIES: dict[tuple[str, str], frozenset[str]] = {
+    ("other_scores", "apache_iv"): frozenset(("eicu",)),
+    ("other_scores", "apache_iv_pred_hosp_mort"): frozenset(("eicu",)),
+    ("other_scores", "saps3"): frozenset(("sic",)),
+    ("other_scores", "charlson"): frozenset(("eicu", "mimic", "miiv", "sic")),
+    ("other_scores", "elixhauser"): frozenset(
+        ("eicu", "mimic", "miiv", "sic")
+    ),
+    ("sepsis_shared", "culture_positive"): frozenset(
+        ("eicu", "mimic", "miiv")
+    ),
+    ("sepsis_shared", "bld_culture_positive"): frozenset(
+        ("eicu", "mimic", "miiv")
+    ),
+}
 
 
 class ReleaseValidationError(ValueError):
@@ -92,12 +121,12 @@ def _require_git_commit(repository: Path, commit: str, *, label: str) -> None:
         )
 
 
-def _validate_corrected_time_commit_ancestry(
+def _validate_harmonized_commit_ancestry(
     database_commits: dict[str, str],
     *,
     repository: Path | None = None,
-) -> None:
-    """Prove affected runtime commits include the corrected-time implementation."""
+) -> str:
+    """Prove one clean six-database runtime includes every semantic fix."""
     if not isinstance(database_commits, dict):
         raise ReleaseValidationError(
             "database_commits must be a database-to-full-SHA object"
@@ -107,19 +136,25 @@ def _validate_corrected_time_commit_ancestry(
         if repository is None
         else Path(repository).resolve()
     )
-    for database in ("aumc", "eicu"):
+    for database in DATABASES:
         commit = database_commits.get(database)
         if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit):
             raise ReleaseValidationError(
-                f"{database}: corrected-time ancestry requires a full lowercase "
+                f"{database}: harmonized-semantics ancestry requires a full lowercase "
                 f"Git commit SHA, got {commit!r}"
             )
+    unique_commits = set(database_commits.values())
+    if len(unique_commits) != 1:
+        raise ReleaseValidationError(
+            "all six databases must be extracted from one identical clean "
+            f"EasyICU commit, got {sorted(unique_commits)}"
+        )
     _require_git_commit(
         repo,
-        MINIMUM_CORRECTED_TIME_EASYICU_COMMIT,
-        label="minimum corrected-time",
+        MINIMUM_HARMONIZED_EASYICU_COMMIT,
+        label="minimum harmonized-semantics",
     )
-    for database in ("aumc", "eicu"):
+    for database in DATABASES:
         commit = database_commits[database]
         _require_git_commit(repo, commit, label=f"{database} runtime")
         result = subprocess.run(
@@ -127,7 +162,7 @@ def _validate_corrected_time_commit_ancestry(
                 "git",
                 "merge-base",
                 "--is-ancestor",
-                MINIMUM_CORRECTED_TIME_EASYICU_COMMIT,
+                MINIMUM_HARMONIZED_EASYICU_COMMIT,
                 commit,
             ],
             cwd=repo,
@@ -137,8 +172,8 @@ def _validate_corrected_time_commit_ancestry(
         )
         if result.returncode == 1:
             raise ReleaseValidationError(
-                f"{database}: runtime commit {commit} predates required corrected-time "
-                f"commit {MINIMUM_CORRECTED_TIME_EASYICU_COMMIT}"
+                f"{database}: runtime commit {commit} predates required harmonized-"
+                f"semantics commit {MINIMUM_HARMONIZED_EASYICU_COMMIT}"
             )
         if result.returncode != 0:
             detail = (result.stderr or result.stdout).strip()
@@ -146,6 +181,7 @@ def _validate_corrected_time_commit_ancestry(
                 f"{database}: cannot verify corrected-time Git ancestry. Fetch full "
                 f"history before sealing. Git detail: {detail or result.returncode}"
             )
+    return next(iter(unique_commits))
 
 
 def _sha256_file(path: Path) -> str:
@@ -224,6 +260,69 @@ def _actual_key_audit(
     if "charttime" in primary_key:
         result["null_charttime_rows"] = int(null_counts[1])
     result["duplicate_key_groups"] = int(duplicate is not None)
+    return result
+
+
+def _validate_null_time_semantics(
+    connection: duckdb.DuckDBPyConnection,
+    *,
+    parquet_path: Path,
+    database: str,
+    module: str,
+    concepts: list[str],
+) -> dict[str, int]:
+    """Reject untimed dynamic values and value-less outer-merge artifacts."""
+
+    if module == "demographics":
+        return {
+            "null_charttime_rows": 0,
+            "empty_null_charttime_rows": 0,
+            "disallowed_null_charttime_rows": 0,
+        }
+    allowed = {
+        concept
+        for concept in concepts
+        if database in NULL_TIME_CONCEPT_POLICIES.get((module, concept), frozenset())
+    }
+    quoted = [_quote_identifier(concept) for concept in concepts]
+    disallowed = [
+        _quote_identifier(concept) for concept in concepts if concept not in allowed
+    ]
+    any_value = " OR ".join(f"{column} IS NOT NULL" for column in quoted) or "FALSE"
+    any_disallowed = (
+        " OR ".join(f"{column} IS NOT NULL" for column in disallowed) or "FALSE"
+    )
+    counts = connection.execute(
+        f"""
+        SELECT
+            count(*) FILTER (WHERE charttime IS NULL),
+            count(*) FILTER (
+                WHERE charttime IS NULL AND NOT ({any_value})
+            ),
+            count(*) FILTER (
+                WHERE charttime IS NULL AND ({any_disallowed})
+            )
+        FROM read_parquet(?)
+        """,
+        [os.fspath(parquet_path)],
+    ).fetchone()
+    assert counts is not None
+    result = {
+        "null_charttime_rows": int(counts[0]),
+        "empty_null_charttime_rows": int(counts[1]),
+        "disallowed_null_charttime_rows": int(counts[2]),
+    }
+    if result["empty_null_charttime_rows"]:
+        raise ReleaseValidationError(
+            f"{database}/{module}: contains "
+            f"{result['empty_null_charttime_rows']} value-less rows at charttime=NULL"
+        )
+    if result["disallowed_null_charttime_rows"]:
+        raise ReleaseValidationError(
+            f"{database}/{module}: contains "
+            f"{result['disallowed_null_charttime_rows']} charttime=NULL row(s) "
+            "with dynamic or undeclared concept values"
+        )
     return result
 
 
@@ -383,12 +482,20 @@ def _validate_file_entry(
         raise ReleaseValidationError(
             f"{label}: Parquet columns do not follow primary-key + concept order"
         )
+    null_time_audit = _validate_null_time_semantics(
+        connection,
+        parquet_path=parquet_path,
+        database=database,
+        module=module,
+        concepts=physical_concepts,
+    )
     return {
         "module": module,
         "rows": actual_rows,
         "bytes": actual_bytes,
         "schema": tuple(actual_schema.items()),
         "physical_concepts": tuple(physical_concepts),
+        "null_time_audit": null_time_audit,
     }
 
 
@@ -596,10 +703,11 @@ def validate_release(run_root: Path) -> dict[str, Any]:
                 )
         module_concepts[module] = list(reference_concepts)
 
-    _validate_corrected_time_commit_ancestry(database_commits)
+    easyicu_commit = _validate_harmonized_commit_ancestry(database_commits)
 
     return {
         "database_commits": database_commits,
+        "easyicu_commit": easyicu_commit,
         "runtime_provenance": runtime_provenance,
         "module_timing_records": module_timing_records,
         "source_manifest_sha256": source_manifest_sha256,
@@ -688,7 +796,6 @@ def build_run_metadata(
 ) -> dict[str, Any]:
     if not run_id.strip():
         raise ReleaseValidationError("run_id must be non-empty")
-    commits = set(validation["database_commits"].values())
     metadata: dict[str, Any] = {
         "schema_version": RELEASE_SCHEMA_VERSION,
         "run_id": run_id,
@@ -698,6 +805,7 @@ def build_run_metadata(
         "sealed_at": datetime.now(timezone.utc).isoformat(),
         "database_order": list(DATABASES),
         "database_commits": validation["database_commits"],
+        "easyicu_commit": validation["easyicu_commit"],
         "source_manifest_sha256": validation["source_manifest_sha256"],
         "output_layout": "exports/{database}/{module}.parquet",
         "module_order": list(MODULES),
@@ -709,11 +817,11 @@ def build_run_metadata(
         "release_gate": {
             "contract": RELEASE_GATE_CONTRACT,
             "contract_revision": CONTRACT_REVISION,
-            "minimum_easyicu_commit": MINIMUM_CORRECTED_TIME_EASYICU_COMMIT,
-            "required_corrections": list(REQUIRED_CORRECTED_TIME_CORRECTIONS),
+            "minimum_easyicu_commit": MINIMUM_HARMONIZED_EASYICU_COMMIT,
+            "required_corrections": list(REQUIRED_HARMONIZED_CORRECTIONS),
             "affected_database_runtime_commits": {
                 database: validation["database_commits"][database]
-                for database in ("aumc", "eicu")
+                for database in DATABASES
             },
         },
         "extraction_execution": {
@@ -728,6 +836,7 @@ def build_run_metadata(
             "primary_key_contract_verified_count": EXPECTED_PARQUET_COUNT,
             "primary_key_uniqueness_verified_count": EXPECTED_PARQUET_COUNT,
             "row_grain_contract_verified_count": EXPECTED_PARQUET_COUNT,
+            "null_time_semantics_verified_count": EXPECTED_PARQUET_COUNT,
             "parquet_sha256_verified_count": EXPECTED_PARQUET_COUNT,
             "parquet_bytes_verified_count": EXPECTED_PARQUET_COUNT,
             "exact_schema_module_count": len(MODULES),
@@ -742,8 +851,6 @@ def build_run_metadata(
             "sealer_sha256": _sha256_file(Path(__file__)),
         },
     }
-    if len(commits) == 1:
-        metadata["easyicu_commit"] = next(iter(commits))
     return metadata
 
 
