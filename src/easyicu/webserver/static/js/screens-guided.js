@@ -1037,6 +1037,14 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
   function schedule(fn) { const myGen = gen; const t = () => { if (myGen !== gen) return; if (busy) return setTimeout(t, 160); fn(); }; setTimeout(t, 520); }
 
   /* ============== card renderers (one per step) ============== */
+  /* `title` and `sub` are plain text from every caller, and one of them carries
+     the active export's label — which comes from the prepared export's own
+     manifest (`database`), not from anything this app authored. Prepared
+     exports are the artifact researchers hand to each other, so a crafted
+     manifest field would have run in the recipient's page, on an origin that
+     also serves the local filesystem API. Escape at the boundary that renders,
+     so a future caller cannot reintroduce it. `bodyHtml`/`footHtml` are markup
+     by contract and stay raw. */
   function cardShell(step, ico, title, sub, bodyHtml, footHtml) {
     const w = BRANCH[branch].why[step];
     const on = whyOpen[step];
@@ -1044,7 +1052,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     <div class="gd-card" data-card-step="${step}">
       <div class="gc-head">
         <div class="gc-ico">${icon(ico, 15)}</div>
-        <div class="grow"><div class="gc-t">${title}</div><div class="gc-sub">${sub}</div></div>
+        <div class="grow"><div class="gc-t">${esc(title)}</div><div class="gc-sub">${esc(sub)}</div></div>
         ${w ? `<button class="gc-why ${on ? 'on' : ''}" data-why="${step}">${icon('help', 11)} Why${on ? '' : ' this step'}</button>` : ''}
       </div>
       ${w ? `<div class="gd-why" ${on ? '' : 'hidden'}>${w}</div>` : ''}
@@ -3387,7 +3395,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       if (t.card) {
         if (t.step === expandedStep) return CARD[t.step] ? CARD[t.step]() : '';
         const s = summaryOf(t.step);
-        return `<div class="gd-collapsed"><span class="cc-mk">${icon('check', 10, 3)}</span><span class="cc-t">${s.t}</span><span class="cc-v">${s.v}</span>${s.edit ? `<button class="cc-edit" data-edit="${t.step}">${icon('sliders', 11)} Edit</button>` : ''}</div>`;
+        return `<div class="gd-collapsed"><span class="cc-mk">${icon('check', 10, 3)}</span><span class="cc-t">${esc(s.t)}</span><span class="cc-v">${esc(s.v)}</span>${s.edit ? `<button class="cc-edit" data-edit="${t.step}">${icon('sliders', 11)} Edit</button>` : ''}</div>`;
       }
       if (t.bot) return `<div class="msg bot"><div class="m-ava">${icon('spark', 14)}</div><div class="m-body"><div class="m-bubble">${htmlOf(t.html)}</div></div></div>`;
       return `<div class="msg user"><div class="m-ava">LK</div><div class="m-body"><div class="m-bubble">${t.html}</div></div></div>`;
@@ -3457,7 +3465,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         : stt === 'locked' ? `<span class="si-state pill warn" style="height:18px;"><span class="dot"></span></span>`
         : stt === 'beyond' ? `<span class="si-state si-opt">${t('optional', '可选')}</span>` : '';
       const clickable = thread.some(t => t.card && t.step === id);
-      const row = `<div class="study-item ${stt}${clickable ? ' nav' : ''}" ${clickable ? `data-study="${id}" role="button" tabindex="0"` : ''}><span class="si-dot">${dot}</span><div class="si-txt"><div class="si-t">${t(label, labelZh || label)}</div>${v ? `<div class="si-v">${v}</div>` : ''}</div>${badge}</div>`;
+      const row = `<div class="study-item ${stt}${clickable ? ' nav' : ''}" ${clickable ? `data-study="${id}" role="button" tabindex="0"` : ''}><span class="si-dot">${dot}</span><div class="si-txt"><div class="si-t">${t(label, labelZh || label)}</div>${v ? `<div class="si-v">${esc(v)}</div>` : ''}</div>${badge}</div>`;
       // draw the finish line right after the goal step (only when stopping short of the full study)
       const fin = (idx === gi && depth !== 'full')
         ? `<div class="study-finishline"><span class="fl-flag">${icon('check', 10, 3)}</span><span class="fl-t">${t('Finish line', '终点线')} · ${DEPTH[depth].label}</span></div>`
