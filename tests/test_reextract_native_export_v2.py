@@ -133,6 +133,22 @@ def test_data_root_maps_database_aliases_and_overrides_one_path(tmp_path: Path) 
     assert paths["eicu"] == str((data_root / "eicu").resolve())
 
 
+def test_data_root_detects_versioned_mimiciii_dataset(tmp_path: Path) -> None:
+    data_root = tmp_path / "databases"
+    for directory in launcher.DATABASE_DIRECTORY_NAMES.values():
+        (data_root / directory).mkdir(parents=True)
+    versioned = data_root / "mimiciii" / "1.4"
+    versioned.mkdir()
+    (versioned / "ICUSTAYS.csv.gz").touch()
+    args = launcher._parse_args(
+        ["--output-root", str(tmp_path / "run"), "--data-root", str(data_root)]
+    )
+
+    paths = launcher._resolve_data_paths(args)
+
+    assert paths["mimic"] == str(versioned.resolve())
+
+
 def test_dirty_checkout_fails_closed() -> None:
     with pytest.raises(launcher.ExtractionRunError, match="clean EasyICU checkout"):
         launcher._require_clean_identity(
