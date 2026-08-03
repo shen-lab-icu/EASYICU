@@ -30,9 +30,7 @@ def _memory_info(
         effective_total_mb=total_gb * 1024,
         effective_available_mb=available_gb * 1024,
         source=source,
-        cgroup_limit_mb=(
-            None if cgroup_limit_gb is None else cgroup_limit_gb * 1024
-        ),
+        cgroup_limit_mb=(None if cgroup_limit_gb is None else cgroup_limit_gb * 1024),
         cgroup_current_mb=(
             None if cgroup_current_gb is None else cgroup_current_gb * 1024
         ),
@@ -66,8 +64,7 @@ def test_nested_workset_budget_scales_with_current_available_memory(
     expected_budget_mb: int,
 ) -> None:
     assert (
-        launcher._adaptive_oneshot_budget_mb(available_memory_mb)
-        == expected_budget_mb
+        launcher._adaptive_oneshot_budget_mb(available_memory_mb) == expected_budget_mb
     )
 
 
@@ -75,13 +72,23 @@ def test_nested_workset_budget_scales_with_current_available_memory(
     ("available_memory_mb", "cpu_count", "expected"),
     [
         (
-            16 * 1024,
+            8 * 1024,
             8,
             {
                 "duckdb_threads": "1",
                 "duckdb_memory_limit": "1GB",
                 "parallel_max_workers": "1",
                 "cache_budget_mb": "256",
+            },
+        ),
+        (
+            16 * 1024,
+            8,
+            {
+                "duckdb_threads": "2",
+                "duckdb_memory_limit": "2GB",
+                "parallel_max_workers": "2",
+                "cache_budget_mb": "2048",
             },
         ),
         (
@@ -121,10 +128,7 @@ def test_one_shot_runtime_scales_without_weakening_laptop_floor(
     cpu_count: int,
     expected: dict[str, str],
 ) -> None:
-    assert (
-        launcher._one_shot_runtime_limits(available_memory_mb, cpu_count)
-        == expected
-    )
+    assert launcher._one_shot_runtime_limits(available_memory_mb, cpu_count) == expected
 
 
 def test_launcher_is_sequential_private_and_uses_adaptive_external_streaming(
@@ -294,7 +298,9 @@ def test_one_shot_launcher_keeps_external_runtime_but_disables_auto_batches(
     ("available_gb", "expected_workers", "expected_memory", "expected_cache"),
     [
         (8, "1", "1GB", "256"),
-        (16, "1", "1GB", "256"),
+        (12, "1", "1GB", "256"),
+        (14, "2", "2GB", "2048"),
+        (16, "2", "2GB", "2048"),
         (24, "2", "2GB", "2048"),
         (32, "4", "4GB", "6144"),
         (64, "8", "8GB", "8192"),

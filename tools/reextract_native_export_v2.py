@@ -118,8 +118,11 @@ def _one_shot_runtime_limits(
     Both streamed and explicitly requested one-shot exports use the same
     compute tier.  Streamed mode still controls its peak with outer patient
     batches; increasing workers here does not turn eICU into a one-shot run.
-    Keep the conservative profile below 24 GiB available, then scale in
-    bounded tiers up to 8 workers and 8 GiB.
+    A 14-GiB cgroup full-cohort eICU respiratory stress run completed at two
+    workers with a 13.5-GiB peak.  Use that measured dual-worker tier once at
+    least 13 GiB is available; keep one worker below it (including the common
+    8-GiB-available laptop case), then scale in bounded server tiers up to
+    8 workers and 8 GiB.
     """
 
     if available_memory_mb is None:
@@ -133,7 +136,7 @@ def _one_shot_runtime_limits(
         workers, memory_gb, cache_mb = min(8, cpus), 8, 8 * 1024
     elif available >= 32 * 1024:
         workers, memory_gb, cache_mb = min(4, cpus), 4, 6 * 1024
-    elif available >= 24 * 1024:
+    elif available >= 13 * 1024:
         workers, memory_gb, cache_mb = min(2, cpus), 2, 2 * 1024
     else:
         workers, memory_gb, cache_mb = 1, 1, 256
@@ -184,20 +187,14 @@ def _configure_external_runtime(
         logical_cpu_count,
     )
     os.environ["EASYICU_DUCKDB_THREADS"] = runtime_limits["duckdb_threads"]
-    os.environ["EASYICU_DUCKDB_MEMORY_LIMIT"] = runtime_limits[
-        "duckdb_memory_limit"
-    ]
-    os.environ["EASYICU_PARALLEL_MAX_WORKERS"] = runtime_limits[
-        "parallel_max_workers"
-    ]
+    os.environ["EASYICU_DUCKDB_MEMORY_LIMIT"] = runtime_limits["duckdb_memory_limit"]
+    os.environ["EASYICU_PARALLEL_MAX_WORKERS"] = runtime_limits["parallel_max_workers"]
     os.environ["EASYICU_CACHE_BUDGET_MB"] = runtime_limits["cache_budget_mb"]
     parallel_config_memory_gb = max(
         0.0,
         memory_info.effective_available_mb / 1024.0,
     )
-    os.environ["EASYICU_OVERRIDE_MEMORY_GB"] = (
-        f"{parallel_config_memory_gb:.6f}"
-    )
+    os.environ["EASYICU_OVERRIDE_MEMORY_GB"] = f"{parallel_config_memory_gb:.6f}"
     if one_shot:
         # Do not let the export launcher silently turn an explicitly requested
         # all-patient module into auto-batches because of its safety profile.
@@ -212,9 +209,7 @@ def _configure_external_runtime(
         {
             "selection_basis": "effective_available_memory",
             "logical_cpu_count": logical_cpu_count,
-            "selection_tier": _runtime_memory_tier(
-                memory_info.effective_available_mb
-            ),
+            "selection_tier": _runtime_memory_tier(memory_info.effective_available_mb),
             "parallel_config_override_memory_gb": round(
                 parallel_config_memory_gb,
                 6,
@@ -310,14 +305,10 @@ def _run_configured_export(
         "runtime_limits": {
             "duckdb_threads": int(os.environ["EASYICU_DUCKDB_THREADS"]),
             "duckdb_memory_limit": os.environ["EASYICU_DUCKDB_MEMORY_LIMIT"],
-            "parallel_max_workers": int(
-                os.environ["EASYICU_PARALLEL_MAX_WORKERS"]
-            ),
+            "parallel_max_workers": int(os.environ["EASYICU_PARALLEL_MAX_WORKERS"]),
             "cache_budget_mb": int(os.environ["EASYICU_CACHE_BUDGET_MB"]),
             "nested_workset_budget_mb": (
-                None
-                if args.one_shot
-                else int(os.environ["EASYICU_ONESHOT_BUDGET_MB"])
+                None if args.one_shot else int(os.environ["EASYICU_ONESHOT_BUDGET_MB"])
             ),
         },
         "sources": {},
@@ -349,18 +340,14 @@ def _run_configured_export(
                     "stream_retry_history": list(
                         result.get("stream_retry_history", [])
                     ),
-                    "native_manifest_sha256": _sha256(
-                        source_output / "_manifest.json"
-                    ),
+                    "native_manifest_sha256": _sha256(source_output / "_manifest.json"),
                     "column_metadata_sha256": package.column_metadata_sha256,
                     "typed_columns": len(package.concept_index),
                     "missing_selected_concepts": list(
                         package.missing_selected_concepts
                     ),
                     "unavailable_modules": json.loads(
-                        (source_output / "_manifest.json").read_text(
-                            encoding="utf-8"
-                        )
+                        (source_output / "_manifest.json").read_text(encoding="utf-8")
                     ).get("unavailable_modules", []),
                     "output_validation_reads": native["output_validation_reads"],
                     "spill_directory_removed": spill_removed,
