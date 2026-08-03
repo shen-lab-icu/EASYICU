@@ -195,6 +195,44 @@ def distinct_failures(
     return seen
 
 
+def _clip_failure_for_summary(message: str, max_chars: int) -> str:
+    """Bound one failure for the post-mortem without implying it ended there.
+
+    This summary is what a human reads when a task dies at planning and
+    produces nothing else. It used to be a bare ``message[:300]``, which cuts
+    mid-sentence with no signal that anything followed. On the 2026-08-02
+    nine-task run that rendered E3's rejection as::
+
+        model_requirements are currently supported only on
+        method='adjusted_association_models' steps ...; other analysis
+        families must use
+
+    -- a sentence that stops exactly before it says what they must use. The
+    constraint reads as incomplete host guidance rather than as a clipped log
+    line, and the first thing that gets investigated is the wrong thing.
+
+    The module already states the principle for the retry path
+    (:func:`clip_to_whole_lines`: "a violation list cut mid-line reads as a
+    shorter, different constraint than the one the validator raised"). It just
+    was not applied here.
+
+    A pure line-boundary clip is wrong for *this* payload, though. A pydantic
+    rejection is one short header line plus one long line per violation, so
+    clipping to whole lines keeps "1 problem(s), all of which must be fixed
+    together in one corrected response:" and drops every actual violation --
+    honest, and useless. So take whichever clip preserves more text and mark
+    the cut either way: the marker is what stops a clipped line being read as
+    the whole constraint, and that is the property worth guaranteeing.
+    """
+
+    if len(message) <= max_chars:
+        return message
+    by_line = clip_to_whole_lines(message, max_chars)
+    by_char = message[:max_chars]
+    clipped = by_line if len(by_line) >= len(by_char) else by_char
+    return f"{clipped.rstrip()} [...truncated]"
+
+
 def summarise_attempt_history(
     attempts: Sequence[StructuredAttempt],
     *,
@@ -233,7 +271,8 @@ def summarise_attempt_history(
         )
 
     rendered = "; ".join(
-        f"[{index}] {error_class}: {message[:per_failure_chars]}"
+        f"[{index}] {error_class}: "
+        f"{_clip_failure_for_summary(message, per_failure_chars)}"
         for index, (error_class, message) in enumerate(distinct)
     )
     return (
