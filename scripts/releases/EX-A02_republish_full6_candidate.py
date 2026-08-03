@@ -12,6 +12,7 @@ of the original run.
 from __future__ import annotations
 
 import argparse
+import csv
 import hashlib
 import json
 import os
@@ -72,6 +73,62 @@ def _atomic_write_json(path: Path, value: dict[str, Any]) -> None:
         ) as handle:
             temporary = Path(handle.name)
             handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        temporary = None
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
+def _rebind_extraction_timing_receipts(
+    path: Path, native_manifests: dict[str, dict[str, Any]]
+) -> None:
+    """Bind original runtime measurements to the republished package bytes."""
+    with path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        rows = list(reader)
+        fieldnames = list(reader.fieldnames or [])
+    required_fields = {"database", "total_rows", "total_parquet_bytes"}
+    if not required_fields.issubset(fieldnames):
+        raise RepublicationError(
+            "Extraction timing CSV lacks republication receipt columns: "
+            f"{sorted(required_fields - set(fieldnames))}"
+        )
+    by_database = {row.get("database"): row for row in rows}
+    if len(rows) != len(DATABASES) or set(by_database) != set(DATABASES):
+        raise RepublicationError(
+            "Extraction timing CSV must contain exactly one row per database"
+        )
+    for database in DATABASES:
+        files = native_manifests[database].get("files")
+        if not isinstance(files, list) or len(files) != len(MODULES):
+            raise RepublicationError(
+                f"{database}: republished manifest lacks 19 file receipts"
+            )
+        by_database[database]["total_rows"] = str(
+            sum(int(entry["rows"]) for entry in files)
+        )
+        by_database[database]["total_parquet_bytes"] = str(
+            sum(int(entry["parquet_bytes"]) for entry in files)
+        )
+
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            newline="",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary = Path(handle.name)
+            writer = csv.DictWriter(handle, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(rows)
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary, path)
@@ -248,6 +305,9 @@ def republish_candidate(source_run_root: Path, output_root: Path) -> Path:
             )
             for database in DATABASES
         }
+        _rebind_extraction_timing_receipts(
+            destination / "database_extraction_timing.csv", new_manifests
+        )
         provenance = {
             "schema_version": SCHEMA_VERSION,
             "created_at": datetime.now(timezone.utc).isoformat(),
@@ -259,6 +319,8 @@ def republish_candidate(source_run_root: Path, output_root: Path) -> Path:
             "republisher": str(Path(__file__).relative_to(REPOSITORY_ROOT)),
             "republisher_sha256": _sha256_file(Path(__file__)),
             "raw_database_reread": False,
+            "timing_runtime_measurements_preserved": True,
+            "timing_package_receipts_rebound": True,
             "database_count": len(DATABASES),
             "module_count": len(MODULES),
         }

@@ -43,7 +43,11 @@ def _source_run(root: Path, module) -> Path:
         encoding="utf-8",
     )
     (root / "database_extraction_timing.csv").write_text(
-        "database,status\n", encoding="utf-8"
+        "database,status,total_rows,total_parquet_bytes\n"
+        + "".join(
+            f"{database},complete,1,1\n" for database in module.DATABASES
+        ),
+        encoding="utf-8",
     )
     (root / "run_metadata.json").write_text("stale\n", encoding="utf-8")
     (root / "module_extraction_timing.csv").write_text(
@@ -91,7 +95,17 @@ def test_republisher_preserves_source_and_requires_fresh_release_seal(
         assert database_root.parent.name == "exports"
         assert source_receipt["easyicu_git_commit"] == "1" * 40
         assert publication_commit == "2" * 40
-        return {"files": []}
+        return {
+            "files": [
+                {
+                    "module": name,
+                    "rows": index + 1,
+                    "parquet_bytes": index + 2,
+                    "parquet_sha256": str(index).zfill(64),
+                }
+                for index, name in enumerate(module.MODULES)
+            ]
+        }
 
     monkeypatch.setattr(module, "_republish_database", _fake_republish_database)
     output = module.republish_candidate(source, destination)
@@ -104,8 +118,12 @@ def test_republisher_preserves_source_and_requires_fresh_release_seal(
     run_manifest = json.loads((destination / "run_manifest.json").read_text())
     provenance = run_manifest["release_republication"]
     assert provenance["raw_database_reread"] is False
+    assert provenance["timing_runtime_measurements_preserved"] is True
+    assert provenance["timing_package_receipts_rebound"] is True
     assert provenance["publication_easyicu_git_commit"] == "2" * 40
     assert provenance["source_run_manifest_sha256"]
+    timing = (destination / "database_extraction_timing.csv").read_text()
+    assert ",190,209\n" in timing
 
 
 def test_republisher_refuses_incomplete_source(tmp_path: Path) -> None:
