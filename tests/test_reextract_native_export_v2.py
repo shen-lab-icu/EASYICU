@@ -97,6 +97,18 @@ def test_database_concurrency_is_memory_adaptive_and_capped_at_three(
     assert launcher._database_worker_count(memory, 3) == expected
 
 
+def test_single_worker_stream_planning_reserves_available_memory_only_once() -> None:
+    memory = {
+        "effective_total_mb": 16 * 1024,
+        "effective_available_mb": 8 * 1024,
+    }
+    assigned = launcher._assigned_worker_memory_mb(memory, 1)
+
+    assert assigned == 6 * 1024
+    assert launcher._stream_planning_memory_mb(memory, 1, assigned) == 8 * 1024
+    assert launcher._stream_planning_memory_mb(memory, 2, assigned) == assigned
+
+
 def test_data_root_maps_database_aliases_and_overrides_one_path(tmp_path: Path) -> None:
     data_root = tmp_path / "databases"
     for directory in launcher.DATABASE_DIRECTORY_NAMES.values():
@@ -227,6 +239,86 @@ def test_monitored_worker_forces_current_source_pythonpath(
     assert captured["env"]["PYTHONNOUSERSITE"] == "1"
 
 
+def test_worker_passes_one_recorded_initial_batch_and_keeps_adaptation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import easyicu.api as public_api
+    import easyicu.api.extraction as extraction
+
+    attempt_root = tmp_path / "attempt"
+    attempt_root.mkdir()
+    captured = {}
+
+    monkeypatch.setattr(
+        launcher,
+        "_git_identity",
+        lambda: {
+            "repository_root": str(launcher.REPOSITORY_ROOT),
+            "commit": COMMIT,
+            "dirty": False,
+            "dirty_status": [],
+        },
+    )
+    monkeypatch.setattr(
+        launcher,
+        "_configure_worker_runtime",
+        lambda _attempt, assigned: {"assigned_memory_mb": assigned},
+    )
+    monkeypatch.setattr(
+        extraction,
+        "_get_all_patient_ids",
+        lambda *_args, **_kwargs: (list(range(61_532)), "stay_id"),
+    )
+
+    def fake_extract_database(database, **kwargs):
+        captured["database"] = database
+        captured.update(kwargs)
+        Path(kwargs["output_dir"]).mkdir()
+        return {
+            "batch_size": kwargs["batch_size"],
+            "stream_retry_history": [],
+            "modules": {
+                module: {"errors": []} for module in launcher.MODULE_ORDER
+            },
+        }
+
+    monkeypatch.setattr(public_api, "extract_database", fake_extract_database)
+    monkeypatch.setattr(
+        launcher,
+        "_validate_export_package",
+        lambda *_args, **_kwargs: {"module_count": 19},
+    )
+    monkeypatch.setenv("PYTHONPATH", str(launcher.SOURCE_ROOT))
+    spec_path = attempt_root / "worker_spec.json"
+    spec_path.write_text(
+        json.dumps(
+            {
+                "database": "mimic",
+                "data_path": "/data/mimic",
+                "attempt_root": str(attempt_root),
+                "easyicu_git_commit": COMMIT,
+                "assigned_memory_mb": 6 * 1024,
+                "planning_memory_mb": 8 * 1024,
+                "adaptive_core": True,
+                "requested_batch_size": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert launcher._worker_main(spec_path) == 0
+
+    plan = json.loads((attempt_root / "worker_plan.json").read_text())
+    result = json.loads((attempt_root / "worker_result.json").read_text())
+    assert plan["assigned_memory_mb"] == 6 * 1024
+    assert plan["planning_memory_mb"] == 8 * 1024
+    assert plan["planned_initial_batch_size"] == 20_000
+    assert captured["batch_size"] == plan["planned_initial_batch_size"]
+    assert captured["adaptive_stream_batches"] is True
+    assert result["batch_strategy"]["initial_batch_size"] == 20_000
+
+
 def test_successful_database_is_atomically_promoted_and_never_overwritten(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -338,7 +430,15 @@ def test_process_oom_downbatches_only_failed_staging_attempt(
         if len(observed_batches) == 1:
             (attempt / "export").mkdir()
             (attempt / "worker_result.json").write_text(
-                json.dumps({"status": "failed", "error": "MemoryError: OOM"}),
+                json.dumps(
+                    {
+                        "status": "failed",
+                        "error": (
+                            "ExtractionRunError: module extraction errors: "
+                            "streamed module export exhausted memory: other_scores"
+                        ),
+                    }
+                ),
                 encoding="utf-8",
             )
             return {
@@ -395,6 +495,13 @@ def test_process_oom_downbatches_only_failed_staging_attempt(
     assert source["elapsed_seconds"] == 3.0
     assert source["peak_process_tree_rss_mb"] == 7000.0
     assert (run_root / "exports" / "eicu" / "renal.parquet").is_file()
+
+
+def test_streamed_python_memory_error_is_retryable() -> None:
+    assert launcher._looks_like_memory_failure(
+        1,
+        "streamed module export exhausted memory: sofa1_score",
+    )
 
 
 def test_resume_recovers_completed_database_and_returns_only_missing(
