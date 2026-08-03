@@ -1883,6 +1883,21 @@ def _apply_callback(
         if not grp_var and source.params:
             grp_var = source.params.get("grp_var")
         index_var = source.index_var
+        continuous_var = (
+            source.params.get("continuous_var", "iscontinuous")
+            if source.params
+            else "iscontinuous"
+        )
+        action_var = (
+            source.params.get("action_var", "action")
+            if source.params
+            else "action"
+        )
+        merge_gap_minutes = (
+            source.params.get("merge_gap_minutes", 5.0)
+            if source.params
+            else 5.0
+        )
 
         return aumc_dur(
             frame,
@@ -1891,6 +1906,9 @@ def _apply_callback(
             grp_var=grp_var,
             index_var=index_var,
             concept_name=concept_name,
+            continuous_var=continuous_var,
+            action_var=action_var,
+            merge_gap_minutes=merge_gap_minutes,
         )
 
     # Handle aumc_bxs callback - negate values where direction is '-'

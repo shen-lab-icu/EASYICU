@@ -1215,7 +1215,13 @@ def vent_flag(
     return frame
 
 def eicu_duration_callback(gap_length: pd.Timedelta) -> Callable:
-    """Create callback equivalent to R's eicu_duration(gap_length)."""
+    """Infer eICU infusion episodes from charted point sequences.
+
+    Consecutive points no more than ``gap_length`` apart belong to the same
+    episode.  A single point establishes that an infusion was charted, but it
+    does *not* establish how long the infusion ran; singleton durations are
+    therefore returned as missing rather than as a false zero-hour exposure.
+    """
     from ..io.ts_utils import group_measurements
 
     if not isinstance(gap_length, pd.Timedelta):
@@ -1323,12 +1329,11 @@ def eicu_duration_callback(gap_length: pd.Timedelta) -> Callable:
         groupby_cols = valid_id_cols + [group_col]
         
         # R ricu: res <- x[, list(min(min_var), max(max_var)), by = c(id_vars, grp_var)]
-        result = grouped.groupby(groupby_cols, dropna=False).agg({
-            index_var: ['min', 'max']
-        }).reset_index()
-        
-        # Flatten column names
-        result.columns = groupby_cols + ['min_time', 'max_time']
+        result = grouped.groupby(groupby_cols, dropna=False).agg(
+            min_time=(index_var, 'min'),
+            max_time=(index_var, 'max'),
+            observation_count=(index_var, 'size'),
+        ).reset_index()
         
         # R ricu: res <- res[, c(val_var) := get(val_var) - get(index_var)]
         # Calculate duration: max - min
@@ -1344,6 +1349,11 @@ def eicu_duration_callback(gap_length: pd.Timedelta) -> Callable:
         else:
             # Other databases: datetime difference gives timedelta, convert to hours
             result[val_col] = (result['max_time'] - result['min_time']).dt.total_seconds() / 3600.0
+
+        # A singleton has no observed end boundary.  Encoding it as 0 h makes
+        # unknown duration indistinguishable from a known zero-length exposure
+        # and can make the point qualify downstream as real vasopressor time.
+        result.loc[result['observation_count'] < 2, val_col] = np.nan
         
         # Use min_time as the index_var value for this duration
         result[index_var] = result['min_time']
@@ -4678,90 +4688,154 @@ def aumc_dur(
     grp_var: Optional[str],
     index_var: Optional[str],
     concept_name: str,
+    continuous_var: str = "iscontinuous",
+    action_var: str = "action",
+    merge_gap_minutes: float = 5.0,
 ) -> pd.DataFrame:
-    """
-    Calculate duration for AUMC database items.
-    
-    NOTE: AUMC times are preprocessed in datasource.py and converted from 
-    milliseconds to INTEGER MINUTES (floor(ms / 60000)) to match R ricu's as.integer().
-    
-    R ricu's calc_dur behavior:
-    1. Times are first processed by re_time which floors to interval (1 hour)
-    2. Then calc_dur computes: duration = max(stop_floor_hours) - min(start_floor_hours)
-    
-    So: duration = floor(max_stop_min/60) - floor(min_start_min/60)
-    
-    IMPORTANT: This function returns times in MINUTES to allow _align_time_to_admission
-    to perform the final conversion to hours. Only the duration value is in hours.
+    """Build canonical AUMC continuous-infusion episodes.
+
+    ``drugitems`` contains both continuous infusions and bolus/flush rows, and
+    a pump change or rate adjustment commonly creates a new ``orderid``.  An
+    ``orderid`` is therefore a row/order identifier, not a clinical exposure
+    episode.  The canonical episode contract is instead:
+
+    * retain only rows explicitly marked ``iscontinuous == 1`` and exclude
+      administrations labelled flush/bolus/push;
+    * within each stay and canonical drug concept, merge overlapping intervals
+      and intervals separated by at most five minutes; and
+    * report the exact episode span in hours, without flooring absolute source
+      timestamps before computing the difference.
+
+    This callback is invoked once per drug concept, so ``concept_name`` is the
+    drug component of the stay-plus-drug grouping.  ``grp_var`` is accepted for
+    compatibility with older dictionaries but deliberately ignored.
+
+    AUMC start/stop values reach this layer as absolute integer minutes.  The
+    returned start stays in source minutes so the central admission-alignment
+    layer can subtract ``admittedat`` exactly once; only the duration is already
+    expressed in hours.
     
     Args:
         frame: Input dataframe with AUMC data (times in INTEGER MINUTES)
         val_col: Name of the value column (will be replaced with duration)
         stop_var: Column name containing stop timestamps in MINUTES
-        grp_var: Column name for grouping (e.g., 'orderid')
+        grp_var: Deprecated row/order grouping variable; deliberately ignored
         index_var: Column name containing start timestamps in MINUTES
         concept_name: Name of the concept being calculated
+        continuous_var: Source flag identifying continuous administrations
+        action_var: Source administration-action label used to exclude flushes
+        merge_gap_minutes: Maximum gap included in one clinical episode
         
     Returns:
         DataFrame with:
-        - duration column (concept_name) in HOURS (integer)
+        - duration column (concept_name) in HOURS (floating point)
         - start column (index_var) in MINUTES (to be converted by _align_time_to_admission)
     """
-    if frame.empty or not stop_var or stop_var not in frame.columns:
-        return frame
+    # Find start column
+    start_col = index_var if index_var and index_var in frame.columns else None
+    if not start_col:
+        start_col = next(
+            (col for col in ['start', 'charttime', 'time'] if col in frame.columns),
+            None,
+        )
+
+    id_cols = _aumc_get_id_columns(frame)
+    result_cols = list(id_cols)
+    if start_col:
+        result_cols.append(start_col)
+    result_cols.append(concept_name)
+    result_cols = list(dict.fromkeys(result_cols))
+
+    if frame.empty:
+        return pd.DataFrame(columns=result_cols)
+    if not stop_var or stop_var not in frame.columns:
+        raise ValueError("aumc_dur requires a declared stop-time column")
+    if not start_col:
+        raise ValueError("aumc_dur requires a start-time column")
+    if not id_cols:
+        raise ValueError("aumc_dur requires an ICU stay/admission identifier")
+    if continuous_var not in frame.columns:
+        raise ValueError(
+            "aumc_dur requires the source iscontinuous flag; refusing to mix "
+            "bolus/flush rows with continuous infusions"
+        )
+    if action_var not in frame.columns:
+        raise ValueError(
+            "aumc_dur requires the source action label; refusing to retain "
+            "continuous-flagged flush/bolus rows"
+        )
+    try:
+        merge_gap_minutes = float(merge_gap_minutes)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("aumc_dur merge_gap_minutes must be numeric") from exc
+    if not np.isfinite(merge_gap_minutes) or merge_gap_minutes < 0:
+        raise ValueError("aumc_dur merge_gap_minutes must be finite and non-negative")
 
     df = frame.copy()
 
-    # Find start column
-    start_col = index_var if index_var and index_var in df.columns else None
-    if not start_col:
-        start_col = next((col for col in ['start', 'charttime', 'time'] if col in df.columns), None)
-    if not start_col:
-        return df
+    # ``iscontinuous`` is logical in the official AUMC schema, but converted
+    # parquet/custom sources can expose it as 0/1 or a string.  Only explicit
+    # truthy encodings are accepted; missing/unknown values fail closed.
+    continuous = df[continuous_var]
+    if pd.api.types.is_bool_dtype(continuous):
+        continuous_mask = continuous.fillna(False)
+    elif pd.api.types.is_numeric_dtype(continuous):
+        continuous_mask = pd.to_numeric(continuous, errors='coerce').eq(1)
+    else:
+        continuous_mask = (
+            continuous.astype('string').str.strip().str.lower().isin(
+                {'1', 'true', 't', 'yes', 'y'}
+            )
+        )
+    excluded_action = (
+        df[action_var]
+        .astype('string')
+        .str.contains(r'(?i)\b(?:flush|bolus|push)\b', regex=True, na=False)
+    )
 
-    # Get patient ID columns
-    id_cols = _aumc_get_id_columns(df)
-    
-    # Prepare grouping columns
-    group_cols = list(id_cols)
-    if grp_var and grp_var in df.columns:
-        if grp_var not in group_cols:
-            group_cols.append(grp_var)
-    
-    # Times are in INTEGER MINUTES (converted in datasource.py)
     df[start_col] = pd.to_numeric(df[start_col], errors='coerce')
     df[stop_var] = pd.to_numeric(df[stop_var], errors='coerce')
-    
-    # Group by patient (and orderid if available) and aggregate start/stop
-    grouped = df.groupby(group_cols, as_index=False).agg({
-        start_col: 'min',  # earliest start time (minutes)
-        stop_var: 'max',   # latest stop time (minutes)
-    })
-    
-    # R ricu uses floor(hours) for both start and stop before computing duration
-    # duration = floor(max_stop/60) - floor(min_start/60)
-    # 🚀 Vectorized: avoid per-element lambda
-    start_hours_floor = np.floor(grouped[start_col].values / 60.0)
-    stop_hours_floor = np.floor(grouped[stop_var].values / 60.0)
-    duration_hours = stop_hours_floor - start_hours_floor
-    
-    # Create a clean result with the duration in HOURS
-    grouped[concept_name] = duration_hours.astype(float)
-    
-    # IMPORTANT: Keep start time in MINUTES (not hours!)
-    # _align_time_to_admission will convert minutes to hours later
-    # This prevents double conversion: aumc_dur converts to hours, then _align_time_to_admission divides by 60 again
-    # Start time stays as grouped[start_col] which is already in minutes
-    
-    # Keep only necessary columns for the result
-    result_cols = group_cols + [concept_name]
-    # Also keep start_col if it's the index column (e.g., 'start')
-    if start_col not in result_cols:
-        result_cols.append(start_col)
-    
-    result = grouped[result_cols]
-    
-    return result
+    valid = (
+        continuous_mask
+        & ~excluded_action
+        & df[id_cols].notna().all(axis=1)
+        & df[start_col].notna()
+        & df[stop_var].notna()
+        & df[stop_var].gt(df[start_col])
+    )
+    df = df.loc[valid, id_cols + [start_col, stop_var]].copy()
+    if df.empty:
+        return pd.DataFrame(columns=result_cols)
+
+    # Merge against the previous *running* maximum stop, not merely the prior
+    # row's stop.  That distinction is required for nested/overlapping pump
+    # segments: [0, 60], [20, 30], [55, 90] is one episode.
+    df = df.sort_values(id_cols + [start_col, stop_var], kind='stable')
+    running_stop = df.groupby(id_cols, dropna=False)[stop_var].cummax()
+    previous_running_stop = running_stop.groupby(
+        [df[col] for col in id_cols], dropna=False
+    ).shift()
+    first_in_stay = ~df.duplicated(subset=id_cols, keep='first')
+    new_episode = first_in_stay | df[start_col].gt(
+        previous_running_stop + merge_gap_minutes
+    )
+    df['__episode'] = new_episode.groupby(
+        [df[col] for col in id_cols], dropna=False
+    ).cumsum()
+
+    episodes = (
+        df.groupby(id_cols + ['__episode'], as_index=False, dropna=False)
+        .agg(**{start_col: (start_col, 'min'), stop_var: (stop_var, 'max')})
+        .sort_values(id_cols + [start_col], kind='stable')
+    )
+    episodes[concept_name] = (
+        episodes[stop_var] - episodes[start_col]
+    ).astype(float) / 60.0
+
+    # The central loader owns timestamp alignment/flooring.  Returning raw
+    # source minutes here avoids both a second /60 conversion and the old error
+    # of flooring the absolute clock before subtracting admission time.
+    return episodes[id_cols + [start_col, concept_name]].reset_index(drop=True)
 
 
 def hirid_rate_kg(
