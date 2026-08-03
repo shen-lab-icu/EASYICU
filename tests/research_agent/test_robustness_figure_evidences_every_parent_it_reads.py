@@ -28,6 +28,9 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from easyicu.research_agent.execution.runners.deterministic_robustness import (
+    ROBUSTNESS_REPLAY_OUTPUT_FILES,
+)
 from easyicu.research_agent.execution.runners.robustness_figure_executor import (
     ROBUSTNESS_COMPLETE_CASE_INPUT,
     ROBUSTNESS_PRIMARY_ESTIMATE_INPUT,
@@ -253,6 +256,13 @@ def test_the_parents_the_real_run_reported_missing_are_now_covered() -> None:
         pytest.skip("no recorded run reports incomplete source lineage coverage")
     covered = {
         "robustness_summary.csv",
+        # The specification grid joined this set on 2026-08-03, and the run
+        # that put it here is the one that proves the assertion is live: e2 in
+        # ``..._c8a1263_verify04`` is the first recorded run where this
+        # renderer CLAIMED its step, and it was then failed closed for not
+        # evidencing the grid the plan had bound to it. Spelled from the
+        # producer's own map so a producer that renames the file renames this.
+        ROBUSTNESS_REPLAY_OUTPUT_FILES["specification_grid"],
         ROBUSTNESS_PRIMARY_ESTIMATE_INPUT,
         ROBUSTNESS_COMPLETE_CASE_INPUT,
     }
