@@ -920,6 +920,30 @@ def _resolve_typed_input_evidence(
     )
 
 
+#: Serializations a consumer can parse without being told any coordinates.
+#: Read off the recorded corpus rather than enumerated by intent: every typed
+#: input that ever bound without a compiled schema receipt was one of these.
+_SELF_DESCRIBING_TYPED_INPUT_SUFFIXES = frozenset({".json", ".jsonl"})
+
+
+def _binding_is_readable_without_a_schema_receipt(
+    verified_path: Path,
+    producer_contract: Optional[Mapping[str, Any]],
+) -> bool:
+    """Say whether a consumer can locate values without a host schema receipt.
+
+    Two ways, and only two.  The bytes describe themselves, or the producer
+    declared coordinates for them.  A binding that has neither reaches the
+    consumer as a path and a digest.
+    """
+
+    if Path(verified_path).suffix.lower() in _SELF_DESCRIBING_TYPED_INPUT_SUFFIXES:
+        return True
+    return bool(
+        producer_contract and any(key != "schema_version" for key in producer_contract)
+    )
+
+
 def _resolve_typed_artifact_evidence(
     *,
     input_name: str,
@@ -951,8 +975,14 @@ def _resolved_typed_input_binding(
     authoritative_cohort_path: Optional[Path] = None,
     development_sample: Optional[Any] = None,
     locked_cohort_name: object = None,
+    refusals: Optional[List[Dict[str, Any]]] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Build the exact, digest-verified runtime binding for one typed input."""
+    """Build the exact, digest-verified runtime binding for one typed input.
+
+    ``refusals`` collects a typed reason for the refusals this function can
+    explain. A caller that passes one gets a diagnosis it can hand back to the
+    Planner instead of the generic "no verified host binding".
+    """
 
     typed_product = _typed_input_product(input_name)
     if typed_product is None:
@@ -1094,9 +1124,61 @@ def _resolved_typed_input_binding(
         host_contract = merge_host_table_contract(producer_contract, schema_receipt)
         if projection is not None:
             host_contract.update(projection.row_identity_contract)
+    elif not _binding_is_readable_without_a_schema_receipt(
+        verified_path, producer_contract
+    ):
+        # A BINDING MUST TELL ITS CONSUMER WHERE TO LOOK, OR NOT BE PUBLISHED.
+        #
+        # The table branch above compiles a schema receipt; a self-describing
+        # serialization needs none because the reader parses the file itself.
+        # Anything else reaches the consumer as a path and a digest, and the
+        # generated code has no choice but to guess what is inside.
+        #
+        # MEASURED over every recorded resolved input (1,071 bindings,
+        # 2026-08-03): 992 resolve to physical tables and carry a full column /
+        # dtype / row-count receipt; 76 are self-describing JSON scalars; THREE
+        # are neither.  All three are the same pickle bound as
+        # ``artifact:trained_prediction_model``, and all three killed the step
+        # that consumed them -- each in a different way, because each generated
+        # script invented its own guess about the coordinates:
+        #
+        #   06_held_out_discrimination  ValueError: Prediction artifact contract
+        #                               must declare id_column and
+        #                               prediction_column
+        #   08_held_out_calibration     RuntimeError: does not contain a
+        #                               supported held-out prediction table or
+        #                               aligned prediction vectors
+        #   10_clinical_utility         RuntimeError: lacks consumption_contract
+        #
+        # Two further steps died as their collateral, so one unreadable binding
+        # cost five of thirteen steps.  The refusal is keyed on the
+        # SERIALIZATION rather than on the evidence kind or the product name:
+        # ``RUNTIME_TYPED_INPUT_EVIDENCE_KINDS`` maps four typed kinds onto
+        # ``log`` evidence, and what makes a binding readable is whether its
+        # bytes can be parsed without coordinates -- not what the registry
+        # labelled it.
+        if refusals is not None:
+            refusals.append(
+                {
+                    "input": str(input_name),
+                    "reason": "typed_input_serialization_is_unreadable",
+                    "produced_by_step": binding["produced_by_step"],
+                    "serialization": Path(verified_path).suffix.lower() or "(none)",
+                    "message": (
+                        f"{input_name} resolves to a "
+                        f"{Path(verified_path).suffix.lower() or 'suffixless'} file "
+                        "whose contents the host cannot describe, so a consumer "
+                        "cannot locate any value inside it. Declare this product "
+                        "as a table whose columns carry the values downstream "
+                        "steps read."
+                    ),
+                }
+            )
+        return None
     else:
-        # Non-table typed products retain their pre-existing contract and
-        # version. This patch adds physical table schema facts only.
+        # Readable: either the consumer parses the file directly (the recorded
+        # statistic path, 76 of 76 bindings) or the producer declared its own
+        # coordinates. An empty contract here is honest, not missing.
         host_contract = dict(producer_contract or {})
         host_contract["schema_version"] = "easyicu.host_typed_product.v1"
     host_contract.update(
@@ -1556,6 +1638,7 @@ def _resume_typed_input_bindings(
                 f"typed input {input_name} could not be resolved: "
                 + json.dumps(reason, sort_keys=True, default=str)
             )
+        binding_refusals: List[Dict[str, Any]] = []
         binding = _resolved_typed_input_binding(
             input_name=input_name,
             evidence_ref=ref,
@@ -1565,8 +1648,14 @@ def _resume_typed_input_bindings(
             authoritative_cohort_path=cohort_path,
             development_sample=development_sample,
             locked_cohort_name=getattr(getattr(plan, "cohort", None), "name", None),
+            refusals=binding_refusals,
         )
         if binding is None:
+            if binding_refusals:
+                raise ValueError(
+                    f"typed input {input_name} has no verified host binding: "
+                    + json.dumps(binding_refusals[0], sort_keys=True, default=str)
+                )
             raise ValueError(f"typed input {input_name} has no verified host binding")
         try:
             binding = _attach_verified_consumption_contract(
@@ -1680,6 +1769,7 @@ class TypedBindingResolver:
                     seen.add(ref.evidence_id)
                     typed_evidence_ids.append(ref.evidence_id)
                 if ref is not None:
+                    binding_refusals: List[Dict[str, Any]] = []
                     binding = _resolved_typed_input_binding(
                         input_name=value,
                         evidence_ref=ref,
@@ -1691,10 +1781,13 @@ class TypedBindingResolver:
                         locked_cohort_name=getattr(
                             getattr(plan, "cohort", None), "name", None
                         ),
+                        refusals=binding_refusals,
                     )
                     if binding is None:
                         failures.append(
-                            {
+                            binding_refusals[0]
+                            if binding_refusals
+                            else {
                                 "input": value,
                                 "reason": "verified_binding_unavailable",
                             }
