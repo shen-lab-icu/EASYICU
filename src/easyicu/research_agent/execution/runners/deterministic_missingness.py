@@ -67,6 +67,26 @@ __all__ = [
 ]
 
 
+#: This executor's own label for the whole-cohort stratum of the exposure
+#: completeness table. It reads as a total to a person, and to nothing else.
+_ALL_STRATA_LABEL = "__all__"
+
+#: The host's declared row-role vocabulary, so the total row is legible to the
+#: aggregate-row validator rather than only to this producer.
+#:
+#: DUPLICATED, and stated here rather than hidden: the same two strings are
+#: defined in ``audits/aggregate_row.py`` (``OVERALL_ROW_ROLE`` /
+#: ``LEVEL_ROW_ROLE``) and in ``exposure_outcome_distribution_executor.py``
+#: (``_OVERALL_ROLE`` / ``_LEVEL_ROLE``). They are re-declared instead of
+#: imported because this module's body is rendered inline into the container
+#: script, which imports only ``icu_rules`` and ``methods.*``; pulling the
+#: validator package in would drag the schema layer across that boundary for
+#: two string constants. ``test_the_total_row_is_legible_to_its_validator``
+#: asserts all three spellings agree, so the copy cannot drift silently.
+_OVERALL_ROW_ROLE = "overall"
+_LEVEL_ROW_ROLE = "exposure_level"
+
+
 _MISSINGNESS_AVAILABILITY_METHOD_TOKENS = frozenset(
     {
         "and",
@@ -1411,6 +1431,22 @@ def missingness_measurement_audit_code(
                         "value_column": record["value_column"],
                         "exposure_variable": exposure_column or "",
                         "exposure_category": label,
+                        # THE FIRST ROW IS THE WHOLE COHORT, AND THE TABLE HAS
+                        # TO SAY SO IN A SPELLING ITS READERS ALREADY KNOW.
+                        # ``exposure_category='__all__'`` said it, but only to
+                        # someone who knows this producer; the host's own
+                        # aggregate-row validator looks for a declared ROLE
+                        # column, so it read the total as a third exposure
+                        # group.
+                        #
+                        # The three strings are LITERALS because this block is
+                        # a template rendered into the container script, which
+                        # defines no host names -- the module constants above
+                        # exist so a test can assert these literals still match
+                        # the validator's vocabulary.
+                        "row_role": (
+                            "overall" if label == "__all__" else "exposure_level"
+                        ),
                         "n_stratum": stratum_n,
                         "measured_n": measured_n,
                         "measured_pct": (
