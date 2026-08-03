@@ -700,6 +700,46 @@ def _distribution_flags(audit: pd.DataFrame) -> pd.DataFrame:
                         "origin_classification": "conversion_or_source_outlier_requires_traceback",
                     }
                 )
+        # A ratio of positive medians is meaningful only for a structurally
+        # non-negative measurement scale.  Applying it to signed quantities
+        # such as net/cumulative fluid balance can turn an arbitrary sampled
+        # sign change around zero into a spurious 10x/100x "unit mismatch".
+        # Preserve signed heterogeneity as a direction/location review signal,
+        # without claiming a multiplicative scale error.
+        declared_signed = bool(
+            pd.to_numeric(available["catalog_min"], errors="coerce").lt(0).any()
+        )
+        observed_signed = bool(
+            pd.to_numeric(available["minimum"], errors="coerce").lt(0).any()
+        )
+        if declared_signed or observed_signed:
+            negative_medians = available[available["median_sample"] < 0]
+            positive_medians = available[available["median_sample"] > 0]
+            if not negative_medians.empty and not positive_medians.empty:
+                lowest = available.loc[available["median_sample"].idxmin()]
+                highest = available.loc[available["median_sample"].idxmax()]
+                rows.append(
+                    {
+                        "module": module,
+                        "variable": variable,
+                        "database": (
+                            f"{lowest['database']} vs {highest['database']}"
+                        ),
+                        "flag": "signed_median_direction_shift",
+                        "severity": "review",
+                        "evidence": (
+                            "cross-database medians cross zero; "
+                            f"{lowest['database']}={lowest['median_sample']:.6g}; "
+                            f"{highest['database']}={highest['median_sample']:.6g}"
+                        ),
+                        "origin_classification": (
+                            "signed_location_source_definition_or_case_mix_"
+                            "heterogeneity_requires_traceback"
+                        ),
+                    }
+                )
+            continue
+
         positive = available[available["median_sample"] > 0]
         if len(positive) >= 2:
             lowest = positive.loc[positive["median_sample"].idxmin()]
