@@ -272,7 +272,10 @@ def _boolean_series(series: pd.Series, *, label: str) -> pd.Series:
         return series.astype(bool)
     normalized = series.astype("string").str.strip().str.lower()
     mapping = {"true": True, "false": False, "1": True, "0": False}
-    unexpected = sorted(set(normalized.dropna()) - set(mapping))
+    # This is schema validation, not analytical row exclusion: missing values
+    # are rejected explicitly below and no row leaves the figure source.
+    non_missing = normalized[normalized.notna()]
+    unexpected = sorted(set(non_missing) - set(mapping))
     if unexpected or normalized.isna().any():
         detail = ", ".join(unexpected) if unexpected else "missing value"
         raise ValueError(f"{label} contains invalid booleans: {detail}")
@@ -1128,7 +1131,7 @@ def render_figure_1(
                 labels[i, j],
                 ha="center",
                 va="center",
-                fontsize=4.35,
+                fontsize=5.0,
                 color=text_color,
                 fontweight="bold" if fraction >= 0.90 else "normal",
                 zorder=4,
@@ -1480,7 +1483,7 @@ def render_figure_2(
                 textcoords="offset points",
                 va="center",
                 ha="left",
-                fontsize=4.7,
+                fontsize=5.0,
                 color=COLORS["ink"],
             )
         labels = [
@@ -1508,7 +1511,7 @@ def render_figure_2(
             rotation=90,
             va="top",
             ha="right",
-            fontsize=4.5,
+            fontsize=5.0,
             color=COLORS["orange"],
         )
         ax_heterogeneity.set_xlabel("Cross-database median ratio (max/min; log scale)")
@@ -1585,7 +1588,7 @@ def render_figure_2(
             f"{row.passed}/{row.denominator}",
             ha="left",
             va="center",
-            fontsize=4.8,
+            fontsize=5.0,
             color=COLORS["ink"],
         )
     ax_gates.set_yticks(y_gate)
@@ -1658,7 +1661,7 @@ def render_figure_2(
                         str(int(count)),
                         ha="center",
                         va="center",
-                        fontsize=4.7,
+                        fontsize=5.0,
                         color=(
                             COLORS["white"]
                             if trace_status == "source_trace_complete"
@@ -1673,7 +1676,7 @@ def render_figure_2(
         ax_trace.legend(
             loc="lower right",
             ncol=2,
-            fontsize=4.8,
+            fontsize=5.0,
             handlelength=1.2,
             columnspacing=0.8,
         )
