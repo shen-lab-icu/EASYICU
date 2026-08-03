@@ -12320,6 +12320,80 @@ class FigureSourceDataValidator:
         unverified_source_columns = sorted(
             source_value_columns - set(verified_value_mappings)
         )
+        if not source_value_columns and not upstream_value_columns:
+            # A DESIGN TABLE HAS NOTHING TO VERIFY, AND DEMANDING IT VERIFIES
+            # NOTHING.
+            #
+            # The rule above exists so a figure cannot claim a number no bound
+            # parent supports. A parent carrying no value column supports no
+            # number, so "verify its values" is a demand nothing can meet: an
+            # exact row-for-row copy of it fails here with
+            # ``no_verifiable_values``, which is what happened to the robustness
+            # renderer's specification-grid companion on e2 (2026-08-03) -- the
+            # grid is the plan's own description of what each specification
+            # CHANGES (``spec_id``/``axis``/``description`` plus override
+            # columns that are empty), and none of that is a result.
+            #
+            # The filter that already exists for this -- ``result_families``
+            # deciding a bound table is not a value source -- is skipped
+            # whenever the step declares no result family, and a rendering-only
+            # figure step never declares one: measured over every recorded plan,
+            # 912 of 1052 visualization steps (87%). So the guard that would
+            # have excused this case is disabled in exactly the case it is for.
+            #
+            # BOTH SIDES MUST BE VALUE-LESS. If the upstream carries values and
+            # the source does not, the source dropped them and must still fail
+            # -- which is why this is not keyed on the source alone.
+            #
+            # AND THE COPY MUST BE EXACT ON EVERY SHARED COLUMN, not only on
+            # ``_TEXT_COLUMNS``. That list is a fixed 22 names and the grid's
+            # own ``description`` -- the sentence the plan registered for a
+            # specification -- is not among them, so the text check above would
+            # have let an altered description through. With no value to verify,
+            # faithful reproduction is the only verification left, so it is the
+            # one this branch performs.
+            infidelities: List[Dict[str, Any]] = []
+            for column in sorted(set(source.columns) & set(upstream.columns)):
+                if column in cls._TEXT_COLUMNS:
+                    continue  # already compared, and already reported above
+                left = _merged_source(column).fillna("").astype(str).str.strip()
+                right = _merged_upstream(column).fillna("").astype(str).str.strip()
+                disagreeing = left != right
+                if disagreeing.any():
+                    index = int(disagreeing[disagreeing].index[0])
+                    infidelities.append(
+                        {
+                            "column": column,
+                            "key": _format_key(merged.loc[index]),
+                            "source": str(left.loc[index]),
+                            "upstream": str(right.loc[index]),
+                        }
+                    )
+            if infidelities:
+                return {
+                    "ok": False,
+                    "reason": "source_values_disagree",
+                    "key_column": key_label,
+                    "upstream_table": upstream_path.name,
+                    "mismatches": infidelities[:20],
+                    "n_mismatches": len(infidelities),
+                    "message": (
+                        f"{upstream_path.name} carries no value to verify, so the "
+                        "source data must reproduce it exactly; it does not"
+                    ),
+                }
+            return {
+                "ok": True,
+                "reason": "valueless_parent_reproduced",
+                "source_table": source_path.name,
+                "upstream_table": upstream_path.name,
+                "key_column": key_label,
+                "n_source_rows": int(len(source_df)),
+                "verified_value_mappings": {},
+                "join_mode": (
+                    "structural_fallback" if used_structural_fallback else "declared_key"
+                ),
+            }
         if not verified_value_mappings or unverified_source_columns:
             if unverified_source_columns:
                 verification_detail = (
