@@ -22,6 +22,8 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 
@@ -40,6 +42,51 @@ CURRENT_QC_SOURCE_RUN_ID = "full6_native_v2_rowgrain_a9f8464e_20260803"
 CURRENT_QC_SOURCE_RUN_METADATA_SHA256 = (
     "72a0469451f22bc7c7954fbc1f46ec2b3b6925cc04efe7e91ddf1c5bd5a3c4c2"
 )
+
+
+# A longitudinal export may carry charttime=NULL only for a concept whose
+# producer explicitly defines a stay/admission-level value.  Everything else
+# is rejected, including a future concept not listed here.  This small positive
+# allowlist is intentionally semantic rather than count-based: a row-grain
+# receipt saying "nulls equal" proves uniqueness, not that an untimed value is
+# clinically meaningful.
+NULL_TIME_CONCEPT_POLICIES: dict[tuple[str, str], dict[str, Any]] = {
+    ("other_scores", "apache_iv"): {
+        "databases": ("eicu",),
+        "classification": "admission_level_static_score",
+        "evidence": "Native APACHE IVa score is defined for the ICU admission, not an event hour.",
+    },
+    ("other_scores", "apache_iv_pred_hosp_mort"): {
+        "databases": ("eicu",),
+        "classification": "admission_level_static_score",
+        "evidence": "Native APACHE IVa predicted mortality is an admission-level result.",
+    },
+    ("other_scores", "saps3"): {
+        "databases": ("sic",),
+        "classification": "admission_level_static_score",
+        "evidence": "SICdb SAPS-3 is a native admission severity score.",
+    },
+    ("other_scores", "charlson"): {
+        "databases": ("eicu", "mimic", "miiv", "sic"),
+        "classification": "admission_level_static_score",
+        "evidence": "Charlson is derived once per linked hospital/ICU admission.",
+    },
+    ("other_scores", "elixhauser"): {
+        "databases": ("eicu", "mimic", "miiv", "sic"),
+        "classification": "admission_level_static_score",
+        "evidence": "Elixhauser is derived once per linked hospital/ICU admission.",
+    },
+    ("sepsis_shared", "culture_positive"): {
+        "databases": ("eicu", "mimic", "miiv"),
+        "classification": "admission_level_static_flag",
+        "evidence": "Microbiology loader defines any positive culture as one per-stay flag.",
+    },
+    ("sepsis_shared", "bld_culture_positive"): {
+        "databases": ("eicu", "mimic", "miiv"),
+        "classification": "admission_level_static_flag",
+        "evidence": "Microbiology loader defines positive blood culture as one per-stay flag.",
+    },
+}
 
 
 # Direct source traces for the review-only shifts retained by the sealed
@@ -927,6 +974,206 @@ def _row_grain_contract_checks(
     return checks
 
 
+def _arrow_true_count(mask: pa.Array) -> int:
+    """Count true values in a null-free Arrow BooleanArray."""
+
+    if len(mask) == 0:
+        return 0
+    return int(pc.sum(pc.cast(mask, pa.int64())).as_py() or 0)
+
+
+def _null_time_policy(
+    *, module: str, concept: str, database: str
+) -> dict[str, Any] | None:
+    policy = NULL_TIME_CONCEPT_POLICIES.get((module, concept))
+    if not isinstance(policy, dict):
+        return None
+    databases = policy.get("databases")
+    if not isinstance(databases, tuple) or database not in databases:
+        return None
+    return policy
+
+
+def _null_time_concept_contract_checks(
+    *,
+    module: str,
+    database: str,
+    parquet_path: Path,
+    expected_concepts: list[str],
+    manifest_null_charttime_rows: Any,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Audit every NULL-time value against a positive semantic allowlist.
+
+    Parquet row-group statistics avoid reading the 305-million-row full-six
+    payload when a file has no null time.  Only row groups that may contain a
+    NULL charttime are streamed, and every non-null concept cell on those rows
+    must have an explicit database/module/concept policy.  A completely empty
+    row is always invalid because it is an outer-merge artifact, not data.
+    """
+
+    manifest_count = (
+        int(manifest_null_charttime_rows)
+        if isinstance(manifest_null_charttime_rows, int)
+        else None
+    )
+    base: dict[str, Any] = {
+        "null_time_manifest_rows": manifest_count,
+        "null_time_observed_rows": None,
+        "null_time_manifest_count_matches": False,
+        "null_time_empty_rows": None,
+        "null_time_allowed_non_null_cells": None,
+        "null_time_disallowed_non_null_cells": None,
+        "null_time_rows_with_disallowed_concepts": None,
+        "null_time_concept_contract_valid": False,
+    }
+    if module == "demographics":
+        return (
+            {
+                **base,
+                "null_time_observed_rows": 0,
+                "null_time_manifest_count_matches": manifest_count is None,
+                "null_time_empty_rows": 0,
+                "null_time_allowed_non_null_cells": 0,
+                "null_time_disallowed_non_null_cells": 0,
+                "null_time_rows_with_disallowed_concepts": 0,
+                "null_time_concept_contract_valid": manifest_count is None,
+            },
+            [],
+        )
+    if not parquet_path.is_file():
+        return base, []
+
+    parquet = pq.ParquetFile(parquet_path)
+    schema_names = parquet.schema_arrow.names
+    if "charttime" not in schema_names:
+        return base, []
+    physical_concepts = [
+        concept for concept in expected_concepts if concept in schema_names
+    ]
+    selected_columns = ["charttime", *physical_concepts]
+    charttime_index = schema_names.index("charttime")
+    candidate_row_groups: list[int] = []
+    statistics_null_rows = 0
+    statistics_complete = True
+    for row_group_index in range(parquet.metadata.num_row_groups):
+        column = parquet.metadata.row_group(row_group_index).column(charttime_index)
+        statistics = column.statistics
+        if statistics is None or not statistics.has_null_count:
+            statistics_complete = False
+            candidate_row_groups.append(row_group_index)
+            continue
+        null_count = int(statistics.null_count)
+        statistics_null_rows += null_count
+        if null_count:
+            candidate_row_groups.append(row_group_index)
+
+    observed_rows = 0
+    empty_rows = 0
+    allowed_cells = 0
+    disallowed_cells = 0
+    disallowed_rows = 0
+    concept_counts = {concept: 0 for concept in physical_concepts}
+    detail_rows: list[dict[str, Any]] = []
+
+    for batch in parquet.iter_batches(
+        row_groups=candidate_row_groups,
+        columns=selected_columns,
+        batch_size=65_536,
+    ):
+        charttime = batch.column(batch.schema.get_field_index("charttime"))
+        null_time = pc.is_null(charttime)
+        batch_null_rows = _arrow_true_count(null_time)
+        if batch_null_rows == 0:
+            continue
+        observed_rows += batch_null_rows
+        has_any_value = pa.array([False] * len(batch), type=pa.bool_())
+        has_disallowed_value = pa.array([False] * len(batch), type=pa.bool_())
+        for concept in physical_concepts:
+            column = batch.column(batch.schema.get_field_index(concept))
+            value_at_null_time = pc.and_(null_time, pc.is_valid(column))
+            count = _arrow_true_count(value_at_null_time)
+            concept_counts[concept] += count
+            has_any_value = pc.or_(has_any_value, value_at_null_time)
+            if _null_time_policy(
+                module=module,
+                concept=concept,
+                database=database,
+            ) is None:
+                has_disallowed_value = pc.or_(
+                    has_disallowed_value,
+                    value_at_null_time,
+                )
+                disallowed_cells += count
+            else:
+                allowed_cells += count
+        empty_rows += _arrow_true_count(
+            pc.and_(null_time, pc.invert(has_any_value))
+        )
+        disallowed_rows += _arrow_true_count(has_disallowed_value)
+
+    # Complete row-group statistics are an independent exact count.  Missing
+    # statistics fall back to the streamed value above.
+    if statistics_complete and observed_rows != statistics_null_rows:
+        base["null_time_observed_rows"] = observed_rows
+        return base, []
+
+    for concept, count in concept_counts.items():
+        if count == 0:
+            continue
+        policy = _null_time_policy(
+            module=module,
+            concept=concept,
+            database=database,
+        )
+        detail_rows.append(
+            {
+                "database": database,
+                "module": module,
+                "concept": concept,
+                "null_time_non_null_count": count,
+                "allowed": policy is not None,
+                "classification": (
+                    policy["classification"]
+                    if policy is not None
+                    else "unapproved_or_time_dependent_concept"
+                ),
+                "evidence": (
+                    policy["evidence"]
+                    if policy is not None
+                    else "No explicit NULL-time semantic policy; audit fails closed."
+                ),
+            }
+        )
+    if empty_rows:
+        detail_rows.append(
+            {
+                "database": database,
+                "module": module,
+                "concept": "__empty_row__",
+                "null_time_non_null_count": empty_rows,
+                "allowed": False,
+                "classification": "outer_merge_empty_artifact",
+                "evidence": "NULL-time row has no non-null concept value.",
+            }
+        )
+
+    count_matches = manifest_count == observed_rows
+    valid = bool(count_matches and empty_rows == 0 and disallowed_rows == 0)
+    return (
+        {
+            **base,
+            "null_time_observed_rows": observed_rows,
+            "null_time_manifest_count_matches": count_matches,
+            "null_time_empty_rows": empty_rows,
+            "null_time_allowed_non_null_cells": allowed_cells,
+            "null_time_disallowed_non_null_cells": disallowed_cells,
+            "null_time_rows_with_disallowed_concepts": disallowed_rows,
+            "null_time_concept_contract_valid": valid,
+        },
+        detail_rows,
+    )
+
+
 def _metadata_gap_mask(manifests: pd.DataFrame) -> pd.Series:
     complete_metadata = (
         manifests["concept_metadata_complete"].fillna(False).astype(bool)
@@ -1014,6 +1261,32 @@ def _raise_for_row_grain_gaps(manifests: pd.DataFrame) -> None:
         return
     raise ValueError(
         "Manifest row-grain contract gaps detected; audit failed closed: "
+        + json.dumps(
+            gaps.to_dict(orient="records"),
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    )
+
+
+def _raise_for_null_time_contract_gaps(manifests: pd.DataFrame) -> None:
+    gaps = manifests.loc[
+        ~manifests["null_time_concept_contract_valid"].fillna(False).astype(bool),
+        [
+            "database",
+            "module",
+            "null_time_manifest_rows",
+            "null_time_observed_rows",
+            "null_time_manifest_count_matches",
+            "null_time_empty_rows",
+            "null_time_disallowed_non_null_cells",
+            "null_time_rows_with_disallowed_concepts",
+        ],
+    ]
+    if gaps.empty:
+        return
+    raise ValueError(
+        "NULL charttime concept contract gaps detected; audit failed closed: "
         + json.dumps(
             gaps.to_dict(orient="records"),
             ensure_ascii=False,
@@ -1594,6 +1867,7 @@ def main() -> None:
     field_rows: list[dict[str, Any]] = []
     module_rows: list[dict[str, Any]] = []
     manifest_rows: list[dict[str, Any]] = []
+    null_time_detail_rows: list[dict[str, Any]] = []
 
     for module, expected in module_concepts.items():
         schemas: dict[str, dict[str, str]] = {}
@@ -1672,6 +1946,24 @@ def main() -> None:
                 parquet_path=parquet,
                 actual_row_count=actual_row_count,
             )
+            row_grain_audit = entry.get("row_grain_audit")
+            row_grain_audit = (
+                row_grain_audit if isinstance(row_grain_audit, dict) else {}
+            )
+            null_time_checks, null_time_details = (
+                _null_time_concept_contract_checks(
+                    module=module,
+                    database=database,
+                    parquet_path=parquet,
+                    expected_concepts=expected,
+                    manifest_null_charttime_rows=(
+                        None
+                        if module == "demographics"
+                        else row_grain_audit.get("null_charttime_rows_after")
+                    ),
+                )
+            )
+            null_time_detail_rows.extend(null_time_details)
             saved_path = str(parquet)
             manifest_rows.append(
                 {
@@ -1696,6 +1988,7 @@ def main() -> None:
                     "concept_metadata_complete": concept_metadata_complete,
                     **structural_checks,
                     **row_grain_checks,
+                    **null_time_checks,
                     "merge_key_count": int("stay_id" in names)
                     + int("charttime" in names),
                     "manifest_schema_matches_parquet": manifest_schema_matches_parquet,
@@ -1796,6 +2089,18 @@ def main() -> None:
     fields = pd.DataFrame(field_rows)
     modules = pd.DataFrame(module_rows)
     manifests = pd.DataFrame(manifest_rows)
+    null_time_details = pd.DataFrame(
+        null_time_detail_rows,
+        columns=[
+            "database",
+            "module",
+            "concept",
+            "null_time_non_null_count",
+            "allowed",
+            "classification",
+            "evidence",
+        ],
+    )
 
     availability = (
         audit.groupby(
@@ -1824,6 +2129,10 @@ def main() -> None:
     fields.to_csv(args.output_dir / "field_contract_audit.csv", index=False)
     modules.to_csv(args.output_dir / "module_schema_summary.csv", index=False)
     manifests.to_csv(args.output_dir / "manifest_audit.csv", index=False)
+    null_time_details.to_csv(
+        args.output_dir / "null_time_concept_audit.csv",
+        index=False,
+    )
     availability.to_csv(args.output_dir / "concept_availability.csv", index=False)
     findings = _resolved_findings()
     findings.to_csv(args.output_dir / "verified_issue_register.csv", index=False)
@@ -1888,6 +2197,28 @@ def main() -> None:
         "manifest_row_grain_contract_gap_rows": int(
             (~manifests["row_grain_contract_valid"]).sum()
         ),
+        "manifest_null_time_concept_contract_verified_rows": int(
+            manifests["null_time_concept_contract_valid"].sum()
+        ),
+        "manifest_null_time_concept_contract_gap_rows": int(
+            (~manifests["null_time_concept_contract_valid"]).sum()
+        ),
+        "observed_null_charttime_rows": int(
+            pd.to_numeric(
+                manifests["null_time_observed_rows"], errors="coerce"
+            ).fillna(0).sum()
+        ),
+        "null_charttime_empty_rows": int(
+            pd.to_numeric(
+                manifests["null_time_empty_rows"], errors="coerce"
+            ).fillna(0).sum()
+        ),
+        "null_charttime_disallowed_non_null_cells": int(
+            pd.to_numeric(
+                manifests["null_time_disallowed_non_null_cells"],
+                errors="coerce",
+            ).fillna(0).sum()
+        ),
         "parquet_sha256_verified_rows": int(
             manifests["parquet_sha256_matches"].sum()
         ),
@@ -1941,6 +2272,7 @@ def main() -> None:
     )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     _raise_for_row_grain_gaps(manifests)
+    _raise_for_null_time_contract_gaps(manifests)
     _raise_for_metadata_gaps(manifests)
 
 

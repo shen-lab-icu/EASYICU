@@ -8595,9 +8595,20 @@ class ConceptResolver:
         # 🚀 优化：不再 .copy()。merge_concepts_r_style 的 rename/drop_duplicates 
         # 都会创建新对象，不会修改原始 DataFrame。缓存在顶层 finally 中清空。
         concept_data: Dict[str, pd.DataFrame] = {}
+        # Preserve producer-owned time metadata while unwrapping ICUTable /
+        # TsTbl objects.  Falling back only to a hand-maintained list of column
+        # names made valid event concepts look static whenever a source used a
+        # less common index name (for example eICU ``drugoffset`` for
+        # phenytoin, AUMC ``registeredat`` for sampling, or MIMIC
+        # ``chartdate``).  Those concepts then created a synthetic null-time
+        # row during the outer merge.  The table metadata is the authoritative
+        # time binding and must travel with the frame until names are aligned.
+        declared_time_columns: Dict[str, str] = {}
         for name, table in tables.items():
             if isinstance(table, ICUTable):
                 df = table.data
+                if table.index_column and table.index_column in df.columns:
+                    declared_time_columns[name] = table.index_column
                 # 重命名值列为概念名
                 if name not in df.columns:
                     # 查找可能的值列 - 优先使用 ICUTable 元数据中的 value_column
@@ -8613,6 +8624,9 @@ class ConceptResolver:
             elif hasattr(table, 'data') and isinstance(table.data, pd.DataFrame):
                 # Handle WinTbl/TsTbl/IdTbl which have .data but don't inherit from ICUTable
                 df = table.data
+                declared_index = getattr(table, 'index_column', None) or getattr(table, 'index_var', None)
+                if declared_index and declared_index in df.columns:
+                    declared_time_columns[name] = declared_index
                 if name not in df.columns:
                     # For WinTbl, try index_var as value column candidate
                     value_candidates = ['value', 'valuenum']
@@ -8661,6 +8675,9 @@ class ConceptResolver:
                      'Offset', 'offset',  # SICdb: Offset (uppercase)
                      'nursingchartoffset', 'labresultoffset', 'observationoffset',
                      'respchartoffset', 'intakeoutputoffset', 'infusionoffset']
+        for declared_time in declared_time_columns.values():
+            if declared_time not in _time_candidates:
+                _time_candidates.append(declared_time)
         for df in concept_data.values():
             if df is None or df.empty:
                 continue
@@ -8690,7 +8707,13 @@ class ConceptResolver:
                 continue
             if time_col in df.columns:
                 continue
-            for cand in _time_candidates:
+            candidates = [
+                declared_time_columns.get(name),
+                *_time_candidates,
+            ]
+            for cand in candidates:
+                if not cand:
+                    continue
                 if cand in df.columns:
                     concept_data[name] = df.rename(columns={cand: time_col})
                     break

@@ -6706,6 +6706,39 @@ def _callback_rrt_criteria(
     
     # Meets RRT criteria = base injury + crisis - NOT on RRT
     meets_criteria = base_injury & crisis & (~rrt_active)
+
+    # ``_merge_tables(..., how="outer")`` can retain an admission-level
+    # dependency row without an event time.  Comparisons against its missing
+    # measurements evaluate to False, which previously published one synthetic
+    # ``rrt_criteria=False`` row at charttime=NULL.  A time-dependent criterion
+    # cannot be asserted at an unknown time: discard negative merge artifacts
+    # and fail loudly if a future path ever computes a positive untimed event.
+    if index_column and index_column in data.columns:
+        missing_time = data[index_column].isna()
+        positive_missing_time = missing_time & meets_criteria
+        if bool(positive_missing_time.any()):
+            sample_ids = (
+                data.loc[positive_missing_time, id_columns]
+                .drop_duplicates()
+                .head(5)
+                .to_dict(orient="records")
+            )
+            raise ValueError(
+                "rrt_criteria produced positive rows without an event time; "
+                f"sample identifiers={sample_ids}"
+            )
+        data = data.loc[~missing_time].copy()
+        meets_criteria = meets_criteria.loc[~missing_time]
+    elif bool(meets_criteria.any()):
+        raise ValueError("rrt_criteria produced positive rows without a time axis")
+    else:
+        cols = id_columns + ["rrt_criteria"]
+        return _as_icutbl(
+            pd.DataFrame(columns=cols),
+            id_columns=id_columns,
+            index_column=None,
+            value_column="rrt_criteria",
+        )
     
     data["rrt_criteria"] = meets_criteria
     cols = id_columns + ([index_column] if index_column else []) + ["rrt_criteria"]

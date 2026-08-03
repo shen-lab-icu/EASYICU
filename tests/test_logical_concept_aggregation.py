@@ -183,6 +183,94 @@ def test_r_style_merge_preserves_requested_empty_event_concept_column() -> None:
     assert result["rrt"].isna().all()
 
 
+def test_r_style_merge_uses_each_table_declared_time_index() -> None:
+    """Uncommon source index names must not turn event concepts static."""
+
+    class DataSource:
+        config = DataSourceConfig(name="eicu", tables={})
+
+    resolver = ConceptResolver(ConceptDictionary({}))
+    tables = {
+        "abx": ICUTable(
+            data=pd.DataFrame(
+                {
+                    "patientunitstayid": [1],
+                    "charttime": [0.0],
+                    "abx": [True],
+                }
+            ),
+            id_columns=["patientunitstayid"],
+            index_column="charttime",
+            value_column="abx",
+        ),
+        "phenytoin": ICUTable(
+            data=pd.DataFrame(
+                {
+                    "patientunitstayid": [2],
+                    "drugoffset": [6.0],
+                    "phenytoin": [True],
+                }
+            ),
+            id_columns=["patientunitstayid"],
+            index_column="drugoffset",
+            value_column="phenytoin",
+        ),
+    }
+
+    result = resolver._to_r_format_merged_enhanced(
+        tables,
+        ["abx", "phenytoin"],
+        data_source=DataSource(),
+    ).sort_values(["patientunitstayid", "charttime"])
+
+    assert result[["patientunitstayid", "charttime"]].to_dict("records") == [
+        {"patientunitstayid": 1, "charttime": 0.0},
+        {"patientunitstayid": 2, "charttime": 6.0},
+    ]
+    assert bool(result.loc[result["patientunitstayid"].eq(2), "phenytoin"].iloc[0])
+
+
+def test_r_style_merge_drops_value_less_static_outer_artifact() -> None:
+    class DataSource:
+        config = DataSourceConfig(name="eicu", tables={})
+
+    resolver = ConceptResolver(ConceptDictionary({}))
+    tables = {
+        "qsofa": ICUTable(
+            data=pd.DataFrame(
+                {
+                    "patientunitstayid": [1],
+                    "charttime": [0.0],
+                    "qsofa": [1.0],
+                }
+            ),
+            id_columns=["patientunitstayid"],
+            index_column="charttime",
+            value_column="qsofa",
+        ),
+        "apache_iv": ICUTable(
+            data=pd.DataFrame(
+                {
+                    "patientunitstayid": [2],
+                    "apache_iv": [None],
+                }
+            ),
+            id_columns=["patientunitstayid"],
+            index_column=None,
+            value_column="apache_iv",
+        ),
+    }
+
+    result = resolver._to_r_format_merged_enhanced(
+        tables,
+        ["qsofa", "apache_iv"],
+        data_source=DataSource(),
+    )
+
+    assert result["patientunitstayid"].tolist() == [1]
+    assert result["charttime"].tolist() == [0.0]
+
+
 def test_r_style_sparse_merge_does_not_materialise_unused_time_grid(
     monkeypatch,
 ) -> None:
