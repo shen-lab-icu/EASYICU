@@ -100,18 +100,57 @@ def test_manifest_metadata_coverage_treats_typed_structural_placeholders_as_clos
 
 
 @pytest.mark.parametrize(
-    ("module_name", "variable", "database", "evidence_fragment"),
+    ("module_name", "variable", "database", "flag", "evidence_fragment"),
     [
-        ("chemistry", "bili_dir", "aumc vs miiv", "375 numeric records"),
-        ("chemistry", "tri", "eicu vs mimic", "192,317 numeric rows"),
-        ("hematology", "bnd", "mimic vs hirid", "40,560 raw values"),
-        ("vasopressors", "epi_dur", "aumc vs mimic", "2,715 order groups"),
+        (
+            "chemistry",
+            "bili_dir",
+            "aumc vs miiv",
+            "median_scale_shift",
+            "375 numeric records",
+        ),
+        (
+            "chemistry",
+            "tri",
+            "eicu vs mimic",
+            "median_scale_shift",
+            "192,317 numeric rows",
+        ),
+        (
+            "hematology",
+            "bnd",
+            "mimic vs hirid",
+            "median_scale_shift",
+            "40,560 raw values",
+        ),
+        (
+            "vasopressors",
+            "epi_dur",
+            "aumc vs mimic",
+            "median_scale_shift",
+            "2,715 order groups",
+        ),
+        (
+            "renal",
+            "fluid_balance",
+            "eicu vs sic",
+            "signed_median_direction_shift",
+            "4,213,568 records/161,074 stays",
+        ),
+        (
+            "renal",
+            "fluid_balance_cumulative",
+            "eicu vs sic",
+            "signed_median_direction_shift",
+            "4,571,309 eICU",
+        ),
     ],
 )
 def test_distribution_adjudication_preserves_each_exact_flag_and_source_trace(
     module_name: str,
     variable: str,
     database: str,
+    flag: str,
     evidence_fragment: str,
 ) -> None:
     module = _load_script(AUDIT_SCRIPT, "easyicu_qc_a02_adjudication")
@@ -121,7 +160,7 @@ def test_distribution_adjudication_preserves_each_exact_flag_and_source_trace(
                 "module": module_name,
                 "variable": variable,
                 "database": database,
-                "flag": "median_scale_shift",
+                "flag": flag,
                 "severity": "review",
                 "evidence": "positive median ratio=63.45",
                 "origin_classification": "candidate",
