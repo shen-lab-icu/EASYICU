@@ -316,27 +316,7 @@
     return `<div class="path-field"><span class="pf-ico">${icon(iconName, 14)}</span><span class="${cls}">${h(label)}</span></div><button class="btn" data-setting-path="${key}">${T('Change', '更改')}</button>`;
   }
 
-  function ensureSettingPickerStyles() {
-    if (document.getElementById('euPickerCss')) return;
-    const s = document.createElement('style'); s.id = 'euPickerCss';
-    s.textContent = `
-      .eu-pick-back{position:fixed;inset:0;background:rgba(15,18,24,.42);backdrop-filter:blur(2px);z-index:1000;display:flex;align-items:center;justify-content:center;}
-      .eu-pick{width:min(560px,92vw);max-height:78vh;display:flex;flex-direction:column;background:var(--surface,#fff);border:1px solid var(--line,#e6e8ee);border-radius:14px;box-shadow:0 24px 60px rgba(15,18,24,.28);overflow:hidden;}
-      .eu-pick-h{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--line,#e6e8ee);}
-      .eu-pick-h .t{font-weight:650;font-size:14px;}
-      .eu-pick-cur{font-family:var(--mono,monospace);font-size:11px;color:var(--ink-4,#8a91a0);padding:8px 16px;border-bottom:1px solid var(--line,#eef0f4);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-      .eu-pick-sc{display:flex;gap:6px;padding:8px 16px;flex-wrap:wrap;border-bottom:1px solid var(--line,#eef0f4);}
-      .eu-pick-sc button{font-size:11.5px;padding:3px 10px;border:1px solid var(--line,#e0e3ea);border-radius:999px;background:var(--surface-2,#f7f8fb);cursor:pointer;color:var(--ink-2,#3a4150);}
-      .eu-pick-list{overflow:auto;flex:1;padding:6px;}
-      .eu-pick-row{display:flex;align-items:center;gap:10px;width:100%;padding:8px 10px;border:0;background:none;text-align:left;cursor:pointer;border-radius:8px;font-size:13px;color:var(--ink-1,#1a2030);}
-      .eu-pick-row:hover{background:var(--surface-2,#f2f4f8);}
-      .eu-pick-row .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-      .eu-pick-row .hint{font-size:10px;color:var(--ink-4,#8a91a0);border:1px solid var(--line,#e0e3ea);border-radius:5px;padding:0 5px;flex:none;}
-      .eu-pick-f{display:flex;align-items:center;gap:8px;padding:12px 16px;border-top:1px solid var(--line,#e6e8ee);}
-      .eu-pick-empty{padding:24px;text-align:center;color:var(--ink-4,#8a91a0);font-size:12px;}
-      .setting-input{height:34px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--ink-1);padding:0 10px;text-align:right;max-width:140px;}`;
-    document.head.appendChild(s);
-  }
+
 
   function closeSettingsPicker() {
     if (settingsPickerEl) {
@@ -352,7 +332,6 @@
 
   function openSettingsFolderPicker(startPath, title, onPick) {
     if (!window.EU_API || !window.EU_API.listDir) return;
-    ensureSettingPickerStyles();
     closeSettingsPicker();
     let cur = startPath || '';
     const back = document.createElement('div');
@@ -531,7 +510,6 @@
       </div>`;
     },
     afterRender(root) {
-      ensureSettingPickerStyles();
       const rerender = () => { if (typeof window.__euRender === 'function') window.__euRender(); };
       const setNotice = msg => { settingsNotice = msg || ''; rerender(); };
       const persist = (key, value, msg) => {

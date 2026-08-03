@@ -1,3 +1,12 @@
+/* Moved verbatim out of redesign.css. Prepended: redesign.css loaded after
+   this file, so appending would have been the smaller change to cascade
+   order — but nothing else defines .idea-band, and prepending keeps this
+   file's own later rules able to override it, which is the owner's right. */
+.idea-band{ border:1px solid oklch(88% 0.05 280); background:oklch(97% 0.02 280); border-radius:var(--r-3); padding:14px 16px; display:flex; gap:12px; align-items:flex-start; }
+.idea-band .ico{ color:oklch(46% 0.10 280); flex:none; margin-top:1px; }
+
+/* ---------- inline jargon tooltip ---------- */
+
 /* Idea Mining owner styles.
    Route owner: screens-ideas.js / #ideas.
    Do not move these route-specific selectors into redesign.css or app.css. */

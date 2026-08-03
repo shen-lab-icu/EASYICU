@@ -47,3 +47,14 @@ body[data-reduce-motion="true"] .mode-seg.consequential{ box-shadow:none; }
 .wsi-copy{ min-width:0; display:flex; flex-direction:column; gap:1px; }
 .wsitem .wsi-sub{ font-size:10.5px; line-height:1.25; color:var(--ink-4); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .wsitem.active .wsi-sub{ color:var(--ink-3); }
+
+/* Moved verbatim out of redesign.css. The sibling .ideas-entry rules were
+   already here; .agent-entry was stranded in the bucket. Nothing else
+   defines it, and shell.css loads after redesign.css did. */
+.agent-entry{ background:var(--surface); border-color:var(--hair-2); margin-top:8px; }
+.agent-entry:hover{ border-color:var(--hair-3); box-shadow:var(--sh-1); }
+.agent-entry.on{ border-color:var(--ink-3); box-shadow:var(--sh-1); }
+.agent-entry .cp-ico{ background:var(--ink); }
+.agent-entry .cp-t{ color:var(--ink); }
+.agent-entry .cp-d{ color:var(--ink-4); }
+.agent-entry .cp-go{ color:var(--ink-4); }

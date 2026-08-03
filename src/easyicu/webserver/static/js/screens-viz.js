@@ -859,26 +859,7 @@
   }
   let sourcePickerEl = null;
   let sourcePickerReturnFocus = null;
-  function ensureSourcePickerStyles() {
-    if (document.getElementById('euPickerCss')) return;
-    const s = document.createElement('style'); s.id = 'euPickerCss';
-    s.textContent = `
-      .eu-pick-back{position:fixed;inset:0;background:rgba(15,18,24,.42);backdrop-filter:blur(2px);z-index:1000;display:flex;align-items:center;justify-content:center;}
-      .eu-pick{width:min(560px,92vw);max-height:78vh;display:flex;flex-direction:column;background:var(--surface,#fff);border:1px solid var(--line,#e6e8ee);border-radius:14px;box-shadow:0 24px 60px rgba(15,18,24,.28);overflow:hidden;}
-      .eu-pick-h{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--line,#e6e8ee);}
-      .eu-pick-h .t{font-weight:650;font-size:14px;}
-      .eu-pick-cur{font-family:var(--mono,monospace);font-size:11px;color:var(--ink-4,#8a91a0);padding:8px 16px;border-bottom:1px solid var(--line,#eef0f4);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-      .eu-pick-sc{display:flex;gap:6px;padding:8px 16px;flex-wrap:wrap;border-bottom:1px solid var(--line,#eef0f4);}
-      .eu-pick-sc button{font-size:11.5px;padding:3px 10px;border:1px solid var(--line,#e0e3ea);border-radius:999px;background:var(--surface-2,#f7f8fb);cursor:pointer;color:var(--ink-2,#3a4150);}
-      .eu-pick-list{overflow:auto;flex:1;padding:6px;}
-      .eu-pick-row{display:flex;align-items:center;gap:10px;width:100%;padding:8px 10px;border:0;background:none;text-align:left;cursor:pointer;border-radius:8px;font-size:13px;color:var(--ink-1,#1a2030);}
-      .eu-pick-row:hover{background:var(--surface-2,#f2f4f8);}
-      .eu-pick-row .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-      .eu-pick-row .hint{font-size:10px;color:var(--ink-4,#8a91a0);border:1px solid var(--line,#e0e3ea);border-radius:5px;padding:0 5px;flex:none;}
-      .eu-pick-f{display:flex;align-items:center;gap:8px;padding:12px 16px;border-top:1px solid var(--line,#e6e8ee);}
-      .eu-pick-empty{padding:24px;text-align:center;color:var(--ink-4,#8a91a0);font-size:12px;}`;
-    document.head.appendChild(s);
-  }
+
   function closeSourcePicker(options) {
     const returnFocus = sourcePickerReturnFocus;
     if (sourcePickerEl) { sourcePickerEl.remove(); sourcePickerEl = null; }
@@ -912,7 +893,6 @@
       if (onPick) onPick('');
       return;
     }
-    ensureSourcePickerStyles();
     closeSourcePicker({ restoreFocus: false });
     sourcePickerReturnFocus = document.activeElement;
     let cur = startPath || '';
@@ -1987,7 +1967,7 @@
       <p style="font-size:11px;color:var(--ink-4);margin-top:8px;">Signal arrays are capped at ${fmtInt((drill.privacy || {}).max_points_per_signal)} points for browser review.</p>`;
     }
     if (drill) {
-      return `<div class="empty mt-16"><div class="glyph">${icon('viz', 22)}</div><div class="t">No bounded signals in this export</div><div class="d">The active export did not include supported vitals columns for the selected entity.</div></div>`;
+      return `<div class="empty mt-16"><div class="glyph">${icon('viz', 22)}</div><div class="t">${t('No bounded signals in this export', '该导出没有可用的有界信号')}</div><div class="d">${t('The active export did not include supported vitals columns for the selected entity.', '当前导出中，所选实体没有受支持的生命体征列。')}</div></div>`;
     }
     const ws = window.EU_VIZ_WORKSPACE;
     if (ws && Array.isArray(ws.series) && ws.series.length) {
@@ -2199,7 +2179,7 @@
     if (ws && Array.isArray(ws.quality)) {
       return `
       <div class="card pad mt-16">
-        <div class="eyebrow" style="margin-bottom:6px;">Per-module stay-id presence</div>
+        <div class="eyebrow" style="margin-bottom:6px;">${t('Per-module stay-id presence', '各模块 stay-id 出现情况')}</div>
         ${ws.quality.map(q => {
           const hasCoverage = q.coverage_pct != null && Number.isFinite(Number(q.coverage_pct));
           const coverage = hasCoverage ? Math.max(0, Math.min(100, Number(q.coverage_pct))) : null;
@@ -2209,19 +2189,19 @@
       </div>
       <div class="note info mt-16">
         <div class="ico">${icon('shield', 16)}</div>
-        <div class="body"><div class="t">Local export snapshot</div><div class="d">Percentages are unique stay_id values found in each file divided by the loaded stay set. Event-only modules can be sparse by design; analysis gates still resolve denominators separately.</div></div>
+        <div class="body"><div class="t">${t('Local export snapshot', '本地导出快照')}</div><div class="d">${t('Percentages are unique stay_id values found in each file divided by the loaded stay set. Event-only modules can be sparse by design; analysis gates still resolve denominators separately.', '百分比 = 各文件中出现的唯一 stay_id 数 ÷ 已载入的 stay 集合。仅事件类模块本就可能稀疏；分析闸门仍会单独解析分母。')}</div></div>
       </div>`;
     }
     const cov = [['Vitals', 98, 'ok'], ['Labs', 88, 'ok'], ['SOFA / SOFA-2', 94, 'ok'], ['Sepsis-3', 90, 'ok'], ['Fluids', 72, 'warn'], ['Ventilation', 58, 'bad']];
     return `
       <div class="card pad mt-16">
-        <div class="eyebrow" style="margin-bottom:6px;">Per-concept coverage</div>
+        <div class="eyebrow" style="margin-bottom:6px;">${t('Per-concept coverage', '各概念覆盖率')}</div>
         ${cov.map(([n, pct, c]) => `
           <div class="qrow"><span>${n}</span><div class="qbar ${c === 'ok' ? '' : c}"><span style="width:${pct}%"></span></div><span class="qv">${pct}%</span></div>`).join('')}
       </div>
       <div class="note warn mt-16">
         <div class="ico">${icon('beaker', 16)}</div>
-        <div class="body"><div class="t">Ventilation coverage below threshold</div><div class="d">58% of stays have ventilation fields; the agent will flag affected denominators before any analysis uses them.</div></div>
+        <div class="body"><div class="t">${t('Ventilation coverage below threshold', '通气覆盖率低于阈值')}</div><div class="d">${t('Demo figures: 58% of stays have ventilation fields. In a real export the agent flags affected denominators before any analysis uses them.', '演示数值：58% 的 stay 具有通气字段。在真实导出中，代理会在任何分析使用这些分母前先行标记。')}</div></div>
       </div>`;
   }
 
