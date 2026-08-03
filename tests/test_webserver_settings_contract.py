@@ -326,3 +326,144 @@ def test_shell_states_the_two_entry_paths_are_one_pipeline() -> None:
     shell = (STATIC_JS / "app.js").read_text(encoding="utf-8")
     assert "All three feed one pipeline" in shell
     assert "三者进入同一条流水线" in shell
+
+
+def test_a_refusal_names_what_would_clear_it() -> None:
+    """A fail-closed gate that only says "no" leaves the user with no move.
+
+    Every code the backend can block on must have a remedy entry, and a remedy
+    must carry a route — a requirement sentence with nowhere to go is the same
+    dead end in nicer words.
+    """
+    import re as _re
+
+    remedy_js = (STATIC_JS / "gate-remedy.js").read_text(encoding="utf-8")
+    from easyicu.webserver.ideas.mining import EXECUTION_GATE_BLOCKERS
+
+    declared = set(_re.findall(r"^    ([a-z_]+): \(\) => \(\{", remedy_js, _re.M))
+    missing = set(EXECUTION_GATE_BLOCKERS) - declared
+    assert not missing, f"gate codes with no remedy: {sorted(missing)}"
+    # Codes the route layer adds on top of the idea-mining gate.
+    for code in ("seed_gate_missing", "active_export_changed", "crossdb_plan_only"):
+        assert code in declared, f"{code} has no remedy"
+    # Every remedy block declares a route to send the user to.
+    blocks = remedy_js.split("    ")
+    assert remedy_js.count("route:") == len(declared)
+
+
+def test_remedies_are_keyed_on_codes_not_matched_against_prose() -> None:
+    """The gate decided from typed conditions; the UI re-derived it by regex.
+
+    screens-agent.js ran /prior-art/i and friends over the backend's English
+    sentences, so rewording a backend string silently dropped the remedy.
+    """
+    agent_js = (STATIC_JS / "screens-agent.js").read_text(encoding="utf-8")
+    remedy_js = (STATIC_JS / "gate-remedy.js").read_text(encoding="utf-8")
+
+    for pattern in (
+        "/prior-art/i",
+        "/re-extract/i",
+        "/idea feasibility/i",
+        "/same active export/i",
+    ):
+        assert pattern not in agent_js
+    assert "gate.blocker_codes" in agent_js
+    assert "window.EU_GATE_REMEDY" in agent_js
+    # Unknown codes yield nothing rather than a guess.
+    assert "return build ? Object.assign" in remedy_js
+
+
+def test_execution_gate_ships_codes_beside_the_sentences() -> None:
+    from easyicu.webserver.ideas.mining import _execution_gate
+
+    blocked = _execution_gate({"go_no_go": "hold"}, {"status": "blocked"}, None)
+    assert blocked["blocker_codes"] == [
+        "export_not_real",
+        "prior_art_not_reviewed",
+        "idea_not_recommended",
+    ]
+    # The sentences stay for seeds already on disk, and must agree with codes.
+    assert len(blocked["blockers"]) == len(blocked["blocker_codes"])
+    assert blocked["agent_run_ready_after_human_confirmation"] is False
+
+    clear = _execution_gate(
+        {"go_no_go": "recommend"},
+        {"status": "ready"},
+        {"prior_art": {"search_performed": True, "status": "ok"}},
+    )
+    assert clear["blocker_codes"] == []
+    assert clear["agent_run_ready_after_human_confirmation"] is True
+
+
+def test_legacy_seed_sentences_recover_their_code_by_exact_match() -> None:
+    """Old seeds carry prose only; recover by lookup, never by pattern."""
+    from easyicu.webserver.routes.agent import _blocker_codes
+
+    assert _blocker_codes({}, ["run prior-art review before Agent execution"]) == [
+        "prior_art_not_reviewed"
+    ]
+    # A sentence nobody recognises stays unrecognised.
+    assert _blocker_codes({}, ["something a future build invented"]) == []
+    # The gate's own codes win over the sentence lookup.
+    assert _blocker_codes({"blocker_codes": ["export_not_real"]}, ["anything"]) == [
+        "export_not_real"
+    ]
+
+
+def test_data_workspace_shows_producer_before_consumers() -> None:
+    """Four peers hid that extraction must happen first."""
+    shell = (STATIC_JS / "app.js").read_text(encoding="utf-8")
+    shell_css = (STATIC_JS.parent / "css" / "shell.css").read_text(encoding="utf-8")
+    assert "role: 'produces'" in shell
+    assert shell.count("role: 'reads'") == 3
+    assert "wsg-step" in shell and ".wsg-step" in shell_css
+    assert ".wsitem.ws-reads" in shell_css
+
+
+def test_crossdb_states_its_scope_limit_before_the_agent_refuses() -> None:
+    crossdb = (STATIC_JS / "screens-viz-crossdb-results.js").read_text(encoding="utf-8")
+    assert "A cross-DB plan stops at the plan" in crossdb
+    assert "跨库计划止于计划本身" in crossdb
+
+
+def test_the_provenance_card_declares_scope_and_never_infers_it() -> None:
+    """The one card whose job is naming the data must not guess from prose.
+
+    It tested the user's own question text for "mimic-iv" and announced the
+    MIMIC-IV canonical universe on a hit — so asking whether a MIMIC-IV finding
+    replicates, while the active export is eICU, named the wrong database. It
+    then decided "multi-database" by regexing that label for the word
+    "database", which any single-database scope name would satisfy.
+    """
+    agent_js = (STATIC_JS / "screens-agent.js").read_text(encoding="utf-8")
+
+    assert "/mimic-iv/i.test(questionText)" not in agent_js
+    assert "/cross|multi|six|database/i" not in agent_js
+    assert "const isCross = crossScope;" in agent_js
+    assert "s.id === 'crossdb' || !!s.planOnly" in agent_js
+    # An undeclared scope must say so rather than borrow a confident label.
+    assert "Not declared by this run" in agent_js
+    assert "本次运行未声明" in agent_js
+    assert "undeclared" in agent_js
+
+
+def test_missing_job_branch_is_reachable_executable_contract() -> None:
+    """Run the Node contract that reproduces api.js's real error shape.
+
+    Asserting on source text alone would not have caught this: the old code
+    *looked* like it detected a 404. Only building the error the way api.js
+    builds it shows the branch was dead.
+    """
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is required for the executable job-continuity contract")
+
+    root = SRC_ROOT.parents[1]
+    test_file = root / "tests" / "js" / "job_continuity_404.test.js"
+    result = subprocess.run(
+        [node, str(test_file)], check=True, capture_output=True, text=True
+    )
+    assert "keys the missing-job branch on error.status" in result.stdout

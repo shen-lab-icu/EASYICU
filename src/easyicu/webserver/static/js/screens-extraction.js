@@ -709,8 +709,12 @@
         </div>
         <div class="cfg-body">
           <div class="col gap-8">
-            ${[['Locate source folder', '定位源文件夹'], ['Identify database layout', '识别数据库结构'], ['Count tables & columns', '统计表与字段']].map((s, i) =>
-              `<div class="conv-step ${i === 0 ? 'done' : i === 1 ? 'run' : ''}"><div class="conv-node">${i === 0 ? icon('check', 12, 2.8) : i === 1 ? '<span class="spin sm" style="width:12px;height:12px;border-top-color:#fff;"></span>' : icon('clock', 11)}</div><div><div class="conv-t">${t(s[0], s[1])}</div></div><div></div></div>`).join('')}
+            ${/* The scan is a single opaque backend call: it reports no per-step
+                  progress, so pinning step 1 to "done" and step 2 to "running"
+                  asserted work we cannot observe. All three stay indeterminate
+                  until /api/data/scan returns. */''}
+            ${[['Locate source folder', '定位源文件夹'], ['Identify database layout', '识别数据库结构'], ['Count tables & columns', '统计表与字段']].map((s) =>
+              `<div class="conv-step run" data-progress-source="live-indeterminate"><div class="conv-node"><span class="spin sm" style="width:12px;height:12px;border-top-color:#fff;"></span></div><div><div class="conv-t">${t(s[0], s[1])}</div></div><div></div></div>`).join('')}
           </div>
           <div class="note info mt-16" style="padding:10px 12px;"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="d" style="font-size:11px;margin:0;">${t('Read-only — EasyICU only inspects structure here, it doesn’t open patient rows yet.', '只读 —— 此处仅检查结构,尚未读取任何患者数据。')}</div></div></div>
         </div>
@@ -1842,7 +1846,7 @@
         <div class="glyph">${icon('check', 26, 2.6)}</div>
         <div class="st-t">${t('Extraction complete', '抽取完成')}</div>
         <div class="st-d">${r
-          ? `${r.file_count} ${t('concept files', '个概念文件')}${totalRows != null ? ` · ${Number(totalRows).toLocaleString()} ${t('rows total', '行(合计)')}` : ''} + <span class="mono">_manifest.json</span> ${t('written to', '已写入')} <span class="mono">${outDir}</span>. ${cohortScaleNote() ? `${t('Cohort', '队列')}: ${escHtml(cohortScaleNote())}. ` : ''}${t('Everything stayed on your machine.', '全部留在你的机器上。')}`
+          ? `${r.file_count} ${t('concept files', '个概念文件')}${totalRows != null ? ` · ${Number(totalRows).toLocaleString()} ${t('rows total', '行(合计)')}` : ''} + <span class="mono">_manifest.json</span> ${t('written to', '已写入')} <span class="mono">${escHtml(outDir)}</span>. ${cohortScaleNote() ? `${t('Cohort', '队列')}: ${escHtml(cohortScaleNote())}. ` : ''}${t('Everything stayed on your machine.', '全部留在你的机器上。')}`
           : t('Seeded demo preview — no files were written to disk. The ledger below shows what a real run would produce; switch to Real to write an actual export.', '演示种子预览 —— 没有向磁盘写入任何文件。下方清单展示真实运行会产出什么；切换到真实模式才会写出实际导出。')}</div>
         <div class="st-actions">
           <button class="btn primary" data-nav="patient">${icon('patient', 14)} ${t('Open in Patient Review', '打开患者审阅')}</button>
