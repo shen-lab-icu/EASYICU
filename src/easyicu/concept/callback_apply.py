@@ -287,7 +287,8 @@ def _parse_eicu_age(values: pd.Series) -> pd.Series:
 
     text = values.astype("string").str.strip()
     age = pd.to_numeric(text.str.extract(r"(\d+(?:\.\d+)?)", expand=False), errors="coerce")
-    return age.mask(text.str.startswith(">") & age.eq(89), 90.0)
+    over_89 = text.str.startswith(">").fillna(False) & age.eq(89).fillna(False)
+    return age.mask(over_89, 90.0)
 
 
 def _load_eicu_tidal_volume_ages(
@@ -353,6 +354,7 @@ def _normalize_eicu_tidal_volume_frame(
     label_column: Optional[str] = None,
     ages: Optional[pd.Series] = None,
     force_liters: bool = False,
+    force_milliliters: bool = False,
 ) -> pd.DataFrame:
     """Normalize eICU respiratory tidal volume to mL before aggregation.
 
@@ -360,8 +362,11 @@ def _normalize_eicu_tidal_volume_frame(
     recorded in mL, but some interfaces emit L-scale decimals under the same
     label; ``Set Vt (Drager)`` is a separately identified L-scale source.  The
     mixed-label rule therefore uses within-stay evidence first, then adult age,
-    and fails closed for ambiguous paediatric/unknown-age values.  Zero is a
-    valid ventilator setting and is deliberately never rescaled.
+    and fails closed for ambiguous paediatric/unknown-age values.  The eICU
+    ``lab.TV`` source declares mL semantics but contains a sparse implausible
+    low-value tail; ``force_milliliters`` preserves credible values without
+    interpreting those entries as litres.  Zero is a valid ventilator setting
+    and is deliberately never rescaled.
     """
 
     out = frame.copy()
@@ -402,6 +407,8 @@ def _normalize_eicu_tidal_volume_frame(
     else:
         labels = pd.Series(pd.NA, index=out.index, dtype="string")
     explicit_ml = labels.eq("Vt Spontaneous (mL)").fillna(False)
+    if force_milliliters:
+        explicit_ml = pd.Series(True, index=out.index)
     drager = labels.eq("Set Vt (Drager)").fillna(False)
     if force_liters:
         drager = pd.Series(True, index=out.index)
@@ -436,6 +443,8 @@ def _normalize_eicu_tidal_volume_frame(
     normalized.loc[ambiguous_mid] = np.nan
     adult_small_ml = adult & normalized.gt(0) & normalized.lt(50)
     normalized.loc[adult_small_ml] = np.nan
+    unknown_small_ml = ages.isna() & explicit_ml & normalized.gt(0) & normalized.lt(50)
+    normalized.loc[unknown_small_ml] = np.nan
 
     out[value_column] = normalized
     audit = {
@@ -447,6 +456,7 @@ def _normalize_eicu_tidal_volume_frame(
         "ambiguous_low_quarantined_rows": int(ambiguous_low.sum()),
         "ambiguous_mid_quarantined_rows": int(ambiguous_mid.sum()),
         "adult_small_ml_quarantined_rows": int(adult_small_ml.sum()),
+        "unknown_small_ml_quarantined_rows": int(unknown_small_ml.sum()),
         "age_missing_rows": int(ages.isna().sum()),
     }
     out.attrs["eicu_tidal_volume_unit_audit"] = audit
@@ -480,6 +490,7 @@ def _apply_callback(
     if expr in {
         "eicu_tidal_volume_mixed_scale",
         "eicu_tidal_volume_drager_l_to_ml",
+        "eicu_tidal_volume_explicit_ml",
     }:
         value_column = (
             concept_name
@@ -512,6 +523,7 @@ def _apply_callback(
             label_column=source.sub_var,
             ages=ages,
             force_liters=expr == "eicu_tidal_volume_drager_l_to_ml",
+            force_milliliters=expr == "eicu_tidal_volume_explicit_ml",
         )
         # The deprecated ConceptLoader invokes callbacks before its standard
         # value/time projection.  Preserve that compatibility route without

@@ -121,6 +121,57 @@ def test_native_renal_publication_rejects_positive_untimed_rrt_criteria(
     assert not (tmp_path / "_manifest.json").exists()
 
 
+def test_eicu_native_publication_quarantines_adult_and_unknown_small_tidal_volume(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        api,
+        "EXTRACT_MODULES",
+        {"ventilator": ["tidal_vol", "tidal_vol_set"]},
+    )
+    pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3, 4, 5, 6],
+            "age": [60.0, 60.0, 8.0, None, 60.0, 60.0],
+        }
+    ).to_parquet(tmp_path / "demographics.parquet", index=False)
+    pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3, 4, 5, 6],
+            "charttime": [0.0] * 6,
+            "tidal_vol": [0.5, 8.0, 8.0, 8.0, 500.0, 0.0],
+            "tidal_vol_set": [500.0, 500.0, 0.5, 8.0, 8.0, 0.0],
+        }
+    ).to_parquet(tmp_path / "ventilator.parquet", index=False)
+
+    api._publish_native_export_v2(
+        database="eicu",
+        data_path="/raw/source-must-not-be-read",
+        output_dir=str(tmp_path),
+        modules=["ventilator"],
+        max_patients=None,
+        result=_completed_result("ventilator"),
+    )
+
+    exported = pd.read_parquet(tmp_path / "ventilator.parquet").set_index("stay_id")
+    assert pd.isna(exported.loc[1, "tidal_vol"])
+    assert pd.isna(exported.loc[2, "tidal_vol"])
+    assert exported.loc[3, "tidal_vol"] == 8.0
+    assert pd.isna(exported.loc[4, "tidal_vol"])
+    assert exported.loc[5, "tidal_vol"] == 500.0
+    assert exported.loc[6, "tidal_vol"] == 0.0
+    assert exported.loc[1, "tidal_vol_set"] == 500.0
+    assert pd.isna(exported.loc[3, "tidal_vol_set"])
+    assert pd.isna(exported.loc[4, "tidal_vol_set"])
+    assert pd.isna(exported.loc[5, "tidal_vol_set"])
+    assert exported.loc[6, "tidal_vol_set"] == 0.0
+
+    manifest = json.loads((tmp_path / "_manifest.json").read_text())
+    audit = manifest["files"][0]["semantic_audit"]
+    assert audit["tidal_vol"]["excluded_semantically_invalid"] == 3
+    assert audit["tidal_vol_set"]["excluded_semantically_invalid"] == 3
+
+
 def test_grouped_output_is_sealed_without_accessing_the_raw_data_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

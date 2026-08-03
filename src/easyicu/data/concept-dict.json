@@ -14127,7 +14127,9 @@
     {
      "ids": "TV",
      "table": "lab",
-     "sub_var": "labname"
+     "sub_var": "labname",
+     "callback": "eicu_tidal_volume_explicit_ml",
+     "_comment": "2026-08-03 reliability-gate fix: lab.TV is an mL tidal-volume channel (median about 500 mL) but contains a sparse implausible low tail. Preserve known paediatric mL values and quarantine positive values below 50 mL for adults or unknown age; never reinterpret this explicitly mL source as litres."
     }
    ],
    "hirid": [

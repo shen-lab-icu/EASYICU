@@ -53,6 +53,10 @@ def _source_run(root: Path, module) -> Path:
     (root / "module_extraction_timing.csv").write_text(
         "stale\n", encoding="utf-8"
     )
+    (root / "publication_qc").mkdir()
+    (root / "publication_qc" / "stale.json").write_text(
+        "{}\n", encoding="utf-8"
+    )
     for database in module.DATABASES:
         database_root = root / "exports" / database
         database_root.mkdir(parents=True)
@@ -115,6 +119,7 @@ def test_republisher_preserves_source_and_requires_fresh_release_seal(
     assert (source / "run_metadata.json").exists()
     assert not (destination / "run_metadata.json").exists()
     assert not (destination / "module_extraction_timing.csv").exists()
+    assert not (destination / "publication_qc").exists()
     run_manifest = json.loads((destination / "run_manifest.json").read_text())
     provenance = run_manifest["release_republication"]
     assert provenance["raw_database_reread"] is False
