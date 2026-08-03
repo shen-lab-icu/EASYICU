@@ -196,6 +196,23 @@ def test_sealer_validates_6_by_19_and_atomically_writes_metadata(
     assert {(row["database"], row["module"]) for row in module_timing_rows} == {
         (database, module) for database in sealer.DATABASES for module in sealer.MODULES
     }
+    eicu_special = [
+        row
+        for row in module_timing_rows
+        if row["database"] == "eicu"
+        and row["module"] in sealer.SPECIAL_SHARED_TIMING_MODULES
+    ]
+    assert len(eicu_special) == 2
+    assert {row["timing_scope"] for row in eicu_special} == {"shared_stage_wall_time"}
+    assert {row["shared_stage_id"] for row in eicu_special} == {
+        sealer.SPECIAL_SHARED_TIMING_STAGE_ID
+    }
+    assert all(
+        row["timing_scope"] == "module_wall_time" and row["shared_stage_id"] == ""
+        for row in module_timing_rows
+        if row["module"] not in sealer.SPECIAL_SHARED_TIMING_MODULES
+    )
+    assert "count that elapsed time once" in module_timing["semantics"]
     assert metadata["easyicu_commit"] == sealer.MINIMUM_CORRECTED_TIME_EASYICU_COMMIT
     assert set(metadata["source_manifest_sha256"]) == set(sealer.DATABASES)
     assert metadata["validation"] == {
