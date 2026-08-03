@@ -814,7 +814,17 @@ def merge_concepts_r_style(
         if "time" not in df.columns:
             # 静态概念
             if "id" in df.columns and name in df.columns:
-                static_concepts[name] = df[["id", name]].drop_duplicates(subset=["id"], keep="last")
+                # A source row whose value became missing after a sentinel or
+                # bounds transform carries no observation.  Retaining it as a
+                # static row manufactures an all-null (id, time=NULL) record
+                # when no other concept is available for that stay.
+                static = (
+                    df[["id", name]]
+                    .dropna(subset=["id", name])
+                    .drop_duplicates(subset=["id"], keep="last")
+                )
+                if not static.empty:
+                    static_concepts[name] = static
             continue
         
         keep_cols = ["id", "time"]
@@ -846,6 +856,14 @@ def merge_concepts_r_style(
             boolean_concepts.append(name)
         else:
             prepared = df[keep_cols].drop_duplicates(subset=["id", "time"], keep="last")
+
+        # Missing values must not contribute a physical event key.  The outer
+        # merge will still place NA at keys supplied by other concepts, but a
+        # value-less source row can no longer create an otherwise empty module
+        # row on its own.
+        prepared = prepared.dropna(subset=["id", "time", name])
+        if prepared.empty:
+            continue
         
         # Retain only the indexed representation.  Keeping both ``prepared``
         # and ``indexed`` lists until the final concat duplicated the key
