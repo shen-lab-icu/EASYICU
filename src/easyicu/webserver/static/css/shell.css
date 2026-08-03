@@ -34,6 +34,15 @@ body[data-reduce-motion="true"] .mode-seg.consequential{ box-shadow:none; }
 .ideas-entry .cp-d{ color:var(--ink-4); }
 .ideas-entry .cp-go{ color:oklch(48% 0.10 225); }
 
+/* Data Workspace: one producer, three consumers. Rendering them as four peers
+   hid the order of operations, so a new user's first click could only fail. */
+.wsg-step{
+  margin:5px 0 3px 11px; padding-left:9px;
+  border-left:1px solid var(--hair-2);
+  font-size:9.5px; letter-spacing:.02em; color:var(--ink-4);
+}
+.wsitem.ws-reads{ margin-left:11px; }
+
 .wsitem{ align-items:flex-start; min-height:44px; padding:8px 11px; }
 .wsi-copy{ min-width:0; display:flex; flex-direction:column; gap:1px; }
 .wsitem .wsi-sub{ font-size:10.5px; line-height:1.25; color:var(--ink-4); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
