@@ -6234,6 +6234,15 @@ def _callback_susp_inf(
     positive_cultures = _callback_bool(kwargs.get("positive_cultures"), False)
     keep_components = _callback_bool(kwargs.get("keep_components"), False)
 
+    if positive_cultures:
+        raise ValueError(
+            "positive_cultures=True requires event-level culture-result timing, "
+            "which the harmonized `samp` concept intentionally does not encode; "
+            "use the separate admission-level `culture_positive` endpoint for "
+            "stratification, or provide an explicitly time-indexed positive-"
+            "culture component"
+        )
+
     result = susp_inf_detector(
         abx=abx_data,
         samp=samp_data,

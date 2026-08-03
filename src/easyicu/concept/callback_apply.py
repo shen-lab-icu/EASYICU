@@ -809,7 +809,12 @@ def _apply_callback(
     # 匹配 mimic_sampling (R ricu callback-itm.R)
     # mimic_sampling(x, val_var, aux_time, ...)
     # 功能：1) combine_date_time(x, aux_time, hours(12L))
-    #      2) set(x, j = val_var, value = !is.na(x[[val_var]]))
+    #      2) 将每个 microbiology row 标记为一次采样事件。
+    #
+    # ``org_itemid`` 是否缺失描述培养结果是否检出微生物，而不是标本是否
+    # 已采集。把 ``!is.na(org_itemid)`` 暴露为 ``samp`` 会使 MIMIC 的阴性
+    # 培养变成 False，但 eICU/AUMC 的同一概念仍为 True，破坏跨库语义。
+    # 阳性结果由独立的 culture_positive 输出承担。
     if expr == "mimic_sampling":
         frame = frame.copy()
         val_var = source.value_var or concept_name
@@ -838,14 +843,14 @@ def _apply_callback(
                     frame[index_col] = pd.to_datetime(frame[aux_time], errors='coerce')
                     frame = frame.drop(columns=[aux_time])
         
-        # 2. 将val_var转换为布尔值（非NA为True）
+        # 2. microbiologyevents 中每一行都来自一个已采集标本。即使
+        # org_itemid 为空（阴性培养），也必须是 samp=True。
         if val_var in frame.columns:
-            frame[concept_name] = frame[val_var].notna().astype(bool)
+            frame[concept_name] = True
             if val_var != concept_name:
                 frame = frame.drop(columns=[val_var])
         else:
-            # 如果val_var不存在，创建concept_name列（全False）
-            frame[concept_name] = False
+            frame[concept_name] = True
         
         return frame
     

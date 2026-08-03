@@ -62,6 +62,16 @@ def test_eicu_sampling_means_specimen_collected_not_positive_culture() -> None:
         assert source["callback"] == "transform_fun(set_val(TRUE))"
 
 
+def test_mimic_sampling_keeps_negative_cultures_as_collection_events() -> None:
+    concept = _load_json("concept-dict.json")
+    for database in ("miiv", "mimic", "mimic_demo"):
+        source = concept["samp"]["sources"][database][0]
+        assert source["table"] == "microbiologyevents"
+        assert source["callback"] == "mimic_sampling"
+        assert "negative" in source["_comment"]
+        assert "specimen" in source["_comment"]
+
+
 def _data_source_tables() -> dict[str, dict]:
     data_sources = _load_json("data-sources.json")
     return {source["name"]: source["tables"] for source in data_sources}
