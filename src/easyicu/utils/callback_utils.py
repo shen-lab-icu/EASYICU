@@ -1750,11 +1750,18 @@ def _mimic_prepare_time_columns(
     """Coerce source clocks while retaining either datetime or numeric hours."""
 
     result = data.copy()
-    numeric = all(pd.api.types.is_numeric_dtype(result[col]) for col in columns)
+    numeric_columns = [
+        pd.api.types.is_numeric_dtype(result[col]) for col in columns
+    ]
+    numeric = all(numeric_columns)
     if numeric:
         for col in columns:
             result[col] = pd.to_numeric(result[col], errors="coerce")
     else:
+        if any(numeric_columns):
+            raise ValueError(
+                "MIMIC duration received mixed numeric and datetime source clocks"
+            )
         for col in columns:
             result[col] = pd.to_datetime(result[col], errors="coerce")
             if result[col].dt.tz is not None:
@@ -1781,20 +1788,56 @@ def _mimic_clip_episode_end_to_outtime(
             "MIMIC duration clipping requires ICU stay id and outtime columns"
         )
 
-    bounds = icu_stays[[id_col, "outtime"]].dropna(subset=[id_col]).copy()
+    bound_columns = [id_col]
+    if "intime" in icu_stays.columns:
+        bound_columns.append("intime")
+    bound_columns.append("outtime")
+    bounds = icu_stays[bound_columns].dropna(subset=[id_col]).copy()
     conflicting = bounds.dropna(subset=["outtime"]).groupby(id_col)[
         "outtime"
     ].nunique(dropna=True)
     if conflicting.gt(1).any():
         raise ValueError("MIMIC ICU stay table contains conflicting outtimes")
     bounds = bounds.drop_duplicates(subset=[id_col], keep="last")
-    outtime = data[id_col].map(bounds.set_index(id_col)["outtime"])
     if numeric_time:
-        outtime = pd.to_numeric(outtime, errors="coerce")
+        raw_outtime = bounds["outtime"]
+        numeric_outtime = pd.to_numeric(raw_outtime, errors="coerce")
+        nonnull_outtime = raw_outtime.notna()
+        bounds_are_numeric = (
+            not pd.api.types.is_datetime64_any_dtype(raw_outtime)
+            and (
+                pd.api.types.is_numeric_dtype(raw_outtime)
+                or numeric_outtime.loc[nonnull_outtime].notna().all()
+            )
+        )
+        if bounds_are_numeric:
+            bounds["__outtime_clock"] = numeric_outtime
+        else:
+            if "intime" not in bounds.columns:
+                raise ValueError(
+                    "MIMIC numeric duration clocks require ICU intime to "
+                    "convert an absolute outtime"
+                )
+            absolute_outtime = pd.to_datetime(
+                bounds["outtime"], errors="coerce", utc=True
+            ).dt.tz_localize(None)
+            absolute_intime = pd.to_datetime(
+                bounds["intime"], errors="coerce", utc=True
+            ).dt.tz_localize(None)
+            bounds["__outtime_clock"] = (
+                absolute_outtime - absolute_intime
+            ).dt.total_seconds() / 3600.0
     else:
-        outtime = pd.to_datetime(outtime, errors="coerce")
-        if outtime.dt.tz is not None:
-            outtime = outtime.dt.tz_localize(None)
+        if pd.api.types.is_numeric_dtype(bounds["outtime"]):
+            raise ValueError(
+                "MIMIC datetime duration clocks require an absolute ICU outtime"
+            )
+        bounds["__outtime_clock"] = pd.to_datetime(
+            bounds["outtime"], errors="coerce", utc=True
+        ).dt.tz_localize(None)
+    outtime = data[id_col].map(
+        bounds.set_index(id_col)["__outtime_clock"]
+    )
     result = data.copy()
     unresolved = outtime.isna()
     if unresolved.any():
