@@ -223,6 +223,59 @@ def _preserve_callback_dur_var_unit(
     return after
 
 
+def _load_mimic_icu_outtimes(
+    data_source: Optional["ICUDataSource"],
+    frame: pd.DataFrame,
+    id_cols: Optional[List[str]],
+) -> Optional[pd.DataFrame]:
+    """Load the small ICU-discharge lookup required by duration callbacks."""
+
+    if data_source is None:
+        return None
+    id_col = id_cols[0] if id_cols else None
+    if not id_col or id_col not in frame.columns:
+        raise ValueError("MIMIC duration callback requires an ICU stay identifier")
+    try:
+        table = data_source.load_table(
+            "icustays",
+            columns=[id_col, "intime", "outtime", "los"],
+            verbose=False,
+        )
+        bounds = table.data if hasattr(table, "data") else table
+    except Exception as exc:
+        raise ValueError(
+            "MIMIC duration callback could not load ICU outtime for clipping"
+        ) from exc
+    if not isinstance(bounds, pd.DataFrame):
+        bounds = pd.DataFrame(bounds)
+    if id_col not in bounds.columns or "outtime" not in bounds.columns:
+        raise ValueError(
+            "MIMIC icustays must expose the stay identifier and outtime"
+        )
+    stay_ids = frame[id_col].dropna().unique()
+    bounds = bounds.loc[bounds[id_col].isin(stay_ids)].copy()
+    missing_outtime = bounds["outtime"].isna()
+    if missing_outtime.any() and {"intime", "los"}.issubset(bounds.columns):
+        fallback = pd.to_datetime(
+            bounds.loc[missing_outtime, "intime"], errors="coerce"
+        ) + pd.to_timedelta(
+            pd.to_numeric(bounds.loc[missing_outtime, "los"], errors="coerce"),
+            unit="D",
+        )
+        bounds.loc[missing_outtime, "outtime"] = fallback
+    unresolved = set(stay_ids) - set(
+        bounds.loc[bounds["outtime"].notna(), id_col].unique()
+    )
+    # Keep unresolved stays out of the lookup.  The clipping utility drops all
+    # their duration episodes fail-closed and logs the affected count; it must
+    # never infer discharge from a medication event.
+    if unresolved:
+        bounds = bounds.loc[~bounds[id_col].isin(unresolved)].copy()
+    return bounds.loc[
+        bounds["outtime"].notna(), [id_col, "outtime"]
+    ].drop_duplicates()
+
+
 def _apply_callback(
     frame: pd.DataFrame,
     source: ConceptSource,
@@ -1257,31 +1310,18 @@ def _apply_callback(
         # stop_var and grp_var are stored in params dict
         stop_var = source.params.get('stop_var', None) if source.params else None
         grp_var = source.params.get('grp_var', None) if source.params else None
-        # Use unit_column from parent context or source.unit_var
-        unit_col = unit_column or (source.unit_var if hasattr(source, 'unit_var') else None)
+        # ``rateuom`` describes the input rate, not the derived elapsed time.
+        # The concept dictionary owns the canonical output unit (hours), so do
+        # not propagate a medication-rate unit onto a duration value.
+        unit_col = None
         val_col = concept_name
         
-        # Load admission times for proper floor(end_h) - floor(start_h) calculation
-        # R ricu uses: duration = floor(end_hours) - floor(start_hours)
-        # where hours are relative to intime
-        admission_times = None
-        if data_source is not None:
-            try:
-                icustays_result = data_source.load_table('icustays')
-                # ICUTable has .data attribute for the underlying DataFrame
-                if hasattr(icustays_result, 'data'):
-                    icustays_table = icustays_result.data
-                else:
-                    icustays_table = icustays_result
-                if icustays_table is not None and not icustays_table.empty:
-                    # Find the id column and intime column
-                    id_col_name = id_cols[0] if id_cols else 'stay_id'
-                    if id_col_name in icustays_table.columns:
-                        # Keep the original id column name (e.g., 'stay_id') instead of renaming to 'id'
-                        admission_times = icustays_table[[id_col_name, 'intime']].copy()
-            except Exception:
-                pass  # Fallback to floor(duration) if icustays not available
-        
+        icu_stays = _load_mimic_icu_outtimes(data_source, frame, id_cols)
+        status_var = source.params.get("status_var", "statusdescription")
+        cancel_var = source.params.get("cancel_var")
+        excluded_statuses = source.params.get("excluded_statuses")
+        merge_gap_minutes = source.params.get("merge_gap_minutes", 5.0)
+
         return mimic_dur_inmv(
             frame,
             val_col=val_col,
@@ -1289,7 +1329,11 @@ def _apply_callback(
             stop_var=stop_var,
             id_cols=id_cols,
             unit_col=unit_col,
-            admission_times=admission_times,
+            icu_stays=icu_stays,
+            status_var=str(status_var),
+            cancel_var=str(cancel_var) if cancel_var else None,
+            excluded_statuses=excluded_statuses,
+            merge_gap_minutes=merge_gap_minutes,
         )
     
     # Handle mimic_dur_incv callback (for CareVue durations)
@@ -1305,16 +1349,24 @@ def _apply_callback(
                 break
         # grp_var is stored in params dict
         grp_var = source.params.get('grp_var', None) if source.params else None
-        # Use unit_column from parent context or source.unit_var
-        unit_col = unit_column or (source.unit_var if hasattr(source, 'unit_var') else None)
+        # CareVue's source unit is likewise the rate unit, not a duration unit.
+        unit_col = None
         val_col = concept_name
-        
+        icu_stays = _load_mimic_icu_outtimes(data_source, frame, id_cols)
+        boundary_var = source.params.get("boundary_var", "stopped")
+        merge_gap_hours = source.params.get("merge_gap_hours", 5.0)
+        rate_var = source.params.get("rate_var", "rate")
+
         return mimic_dur_incv(
             frame,
             val_col=val_col,
             grp_var=grp_var,
             id_cols=id_cols,
-            unit_col=unit_col
+            unit_col=unit_col,
+            icu_stays=icu_stays,
+            boundary_var=str(boundary_var),
+            merge_gap_hours=merge_gap_hours,
+            rate_var=str(rate_var),
         )
     
     # Handle mimic_rate_cv callback (for CareVue infusion rates)
