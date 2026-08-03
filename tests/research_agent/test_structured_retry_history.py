@@ -233,3 +233,84 @@ def test_no_history_adds_no_note() -> None:
     annotate_with_attempt_history(exc, [], role="planner")
 
     assert not getattr(exc, "__notes__", [])
+
+
+#: The exact ValidationError rendering that killed ``e3_kdigo_gradient`` at
+#: planning on the 2026-08-02 nine-task run: one short header line plus one
+#: long violation line. Kept verbatim because the header/violation shape is
+#: what makes a naive line-boundary clip drop the only useful part.
+_REAL_E3_REJECTION = (
+    "1 problem(s), all of which must be fixed together in one corrected "
+    "response:\n"
+    "    - steps.8: Value error, model_requirements are currently supported "
+    "only on method='adjusted_association_models' steps that declare expected "
+    "output 'table:adjusted_association_estimates'; other analysis families "
+    "must use their family-specific planning and validation contracts"
+)
+
+
+def test_a_clipped_failure_never_reads_as_a_complete_constraint() -> None:
+    """The post-mortem is what a human reads when planning produced nothing.
+
+    Rendered with a bare slice, E3's rejection ended at "other analysis
+    families must use" -- a sentence that stops right before it says what they
+    must use. Nothing marked the cut, so the host's own guidance reads as
+    incomplete and the wrong thing gets investigated first.
+    """
+
+    summary = summarise_attempt_history(
+        [
+            StructuredAttempt(
+                attempt=0,
+                raw_head="",
+                raw_chars=0,
+                error_class="ValidationError",
+                error_message=_REAL_E3_REJECTION,
+            ),
+            StructuredAttempt(
+                attempt=1,
+                raw_head="",
+                raw_chars=0,
+                error_class="JSONDecodeError",
+                error_message="Expecting ',' delimiter: line 1 column 6508",
+            ),
+        ],
+        role="planner",
+    )
+
+    assert "[...truncated]" in summary, (
+        "a clipped failure must say it was clipped; without the marker the "
+        "remaining text reads as the whole constraint"
+    )
+    # The clip must still carry the violation, not just the header line that
+    # says a violation exists.
+    assert "model_requirements are currently supported only" in summary
+    assert "steps.8" in summary
+
+
+def test_a_failure_that_fits_is_not_marked_as_clipped() -> None:
+    """The marker has to mean something, so it may not appear by default."""
+
+    short = "Expecting ',' delimiter: line 1 column 6508 (char 6507)"
+    summary = summarise_attempt_history(
+        [
+            StructuredAttempt(
+                attempt=0,
+                raw_head="",
+                raw_chars=0,
+                error_class="JSONDecodeError",
+                error_message=short,
+            ),
+            StructuredAttempt(
+                attempt=1,
+                raw_head="",
+                raw_chars=0,
+                error_class="ValueError",
+                error_message="two distinct ways are needed to reach the list",
+            ),
+        ],
+        role="planner",
+    )
+
+    assert short in summary
+    assert "[...truncated]" not in summary
