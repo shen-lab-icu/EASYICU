@@ -57,6 +57,8 @@ REQUIRED_CORRECTED_TIME_CORRECTIONS = (
     "eicu_susp_inf_uses_antibiotic_event_time",
 )
 EXPECTED_PARQUET_COUNT = len(DATABASES) * len(MODULES)
+SPECIAL_SHARED_TIMING_MODULES = frozenset(("sepsis3_sofa1", "sepsis3_sofa2"))
+SPECIAL_SHARED_TIMING_STAGE_ID = "sepsis3_sofa1_sofa2_joint_worker"
 CORRECTIONS = (
     "demographics_one_row_per_stay_with_nearest_static_values_and_recomputed_bmi",
     "longitudinal_null_equal_primary_key_consolidation",
@@ -497,6 +499,16 @@ def validate_release(run_root: Path) -> dict[str, Any]:
                         "module": module,
                         "elapsed_seconds": float(elapsed),
                         "elapsed_minutes": round(float(elapsed) / 60.0, 3),
+                        "timing_scope": (
+                            "shared_stage_wall_time"
+                            if module in SPECIAL_SHARED_TIMING_MODULES
+                            else "module_wall_time"
+                        ),
+                        "shared_stage_id": (
+                            SPECIAL_SHARED_TIMING_STAGE_ID
+                            if module in SPECIAL_SHARED_TIMING_MODULES
+                            else ""
+                        ),
                     }
                     for field, values in (
                         ("peak_rss_mb", module_peak_rss),
@@ -780,6 +792,8 @@ def write_module_extraction_timing(
         "module",
         "elapsed_seconds",
         "elapsed_minutes",
+        "timing_scope",
+        "shared_stage_id",
         "peak_rss_mb",
         "peak_working_set_mb",
     )
@@ -813,6 +827,11 @@ def write_module_extraction_timing(
         "record_count": len(records),
         "database_count": len(DATABASES),
         "module_count": len(MODULES),
+        "semantics": (
+            "Rows with timing_scope=shared_stage_wall_time and the same "
+            "database/shared_stage_id describe one jointly executed stage; "
+            "count that elapsed time once when aggregating."
+        ),
     }
 
 
