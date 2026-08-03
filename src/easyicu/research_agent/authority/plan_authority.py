@@ -201,18 +201,35 @@ def _preserve_completed_step_snapshots_after_replan(
         preserved = AnalysisPlan.model_validate(payload)
     except (TypeError, ValueError) as exc:
         return current_plan, [_invalid_authority_projection_finding(exc)]
+    # Say which of the two things actually happened. The single sentence
+    # claiming both used to be emitted whenever EITHER fired, so a run whose
+    # step snapshots were left changed still reported that they had been
+    # restored -- h1 and h2 each recorded exactly that, with
+    # restored_changed_step_ids=[] one line below the claim, and each then lost
+    # every downstream step to producer_plan_snapshot_mismatch on the step the
+    # message said was protected. A guard that reports work it did not do sends
+    # the next reader somewhere else entirely.
+    restored_steps = sorted(set(changed_ids))
+    parts = ["Replanner attempted to change completed execution authority;"]
+    if restored_steps or reinserted_ids:
+        parts.append(
+            "restored the host-recorded step snapshots "
+            f"({len(restored_steps)} changed, {len(reinserted_ids)} reinserted)"
+        )
+    else:
+        parts.append("no completed step snapshot needed restoring")
+    if restored_plan_scope:
+        parts.append("and restored plan-level scientific scope")
+    parts.append(
+        "so registered evidence remains bound to immutable scientific requests."
+    )
     return preserved, [
         ValidationFinding(
             validator="replanner",
             severity="warning",
-            message=(
-                "Replanner attempted to change completed execution authority; "
-                "restored the host-recorded step snapshots and plan-level "
-                "scientific scope so registered evidence remains bound to "
-                "immutable scientific requests."
-            ),
+            message=" ".join(parts),
             detail={
-                "restored_changed_step_ids": sorted(set(changed_ids)),
+                "restored_changed_step_ids": restored_steps,
                 "reinserted_step_ids": reinserted_ids,
                 "restored_plan_scope": restored_plan_scope,
                 "restored_plan_scope_fields": restored_plan_scope_fields,

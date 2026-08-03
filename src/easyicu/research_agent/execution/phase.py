@@ -5025,7 +5025,30 @@ def run_execute_phase(
             "probe_summary" if probe_record is not None else "plan_contract_preflight"
         ),
         probe_summary_payload=probe_summary,
-        completed_records=[probe_record] if probe_record is not None else None,
+        # Every completed record, not just the probe. This used to pass
+        # ``[probe_record]``, which is the one pre-execution record that is NOT
+        # a plan step: it carries no ``analysis_request`` and its step_id is not
+        # in the plan, so the completed-step preservation authority inside
+        # ``normalize_replan_candidate`` built an empty snapshot set and could
+        # restore nothing, whatever else had already been sealed. The three
+        # other _maybe_replan call sites all pass ``per_step_records``; this one
+        # was the outlier.
+        #
+        # It matters because the host cohort materializer also seals a real plan
+        # step before the step loop, and ``record_planned_host_cohort_checkpoint``
+        # is idempotent by step id -- once that checkpoint exists it is never
+        # re-snapshotted, so whichever plan revision sealed it first is the one
+        # every downstream typed consumer is judged against forever. When this
+        # replan then rewrote that step, the guard that exists to reconcile the
+        # two was the one thing that could not see it.
+        #
+        # MEASURED across the recorded corpus: of 12 runs that both materialize
+        # a host cohort and revise their plan, 2 (h1_ventilation_survival,
+        # h2_vasopressor_causal) ended with producer_plan_snapshot_mismatch on
+        # exactly that step, and each lost nearly everything downstream -- h1
+        # completed 1 of 10 steps, h2 1 of 7. Passing the full list is a no-op
+        # when nothing else has been sealed yet.
+        completed_records=per_step_records,
         directive="\n\n".join(
             directive
             for directive in (
