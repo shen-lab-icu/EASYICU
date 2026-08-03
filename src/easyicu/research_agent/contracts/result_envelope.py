@@ -1071,11 +1071,30 @@ def _first_finite_number(
     field_name: str,
     issues: list[NormalizationIssue],
 ) -> int | float | None:
+    declared_not_estimated = payload.get("estimated") is False
     values: list[int | float] = []
     for key in keys:
         if key not in payload:
             continue
         value = payload.get(key)
+        if value is None and declared_not_estimated:
+            # A statistic that says, in the same document, that it was NOT
+            # estimated is making a declaration, not emitting a malformed
+            # number. Absent-vs-null already means two different things to the
+            # figure layer -- "not bound" vs "bound and not estimated" -- and it
+            # requires the key to be present to tell them apart, so the producer
+            # cannot satisfy both readers by omitting it.
+            #
+            # MEASURED 2026-08-02: 25 of 64 recorded complete_case_n sidecars
+            # carry a null, across four different tasks, and every one of them
+            # blocked its step here. The commonest cause is a locked robustness
+            # grid with no complete_case specification -- there is no such N to
+            # report, and inventing one would be worse than saying so.
+            #
+            # Deliberately narrow: only an EXPLICIT ``estimated: false`` earns
+            # this. A bare null with no declaration is still a malformed numeric
+            # field and still fails, because that one really is a producer bug.
+            continue
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             issues.append(
                 NormalizationIssue(

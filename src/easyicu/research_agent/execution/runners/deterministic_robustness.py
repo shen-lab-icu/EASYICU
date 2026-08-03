@@ -1061,9 +1061,30 @@ def _run_robustness_preflight(
         ),
         encoding="utf-8",
     )
+    # ``value`` stays present and stays null when there is nothing to report:
+    # the figure executor requires the key (it raises "sidecar records no
+    # value" without it) and reads null as "bound, not estimated", which is a
+    # state it deliberately keeps distinct from "not bound". What the sidecar
+    # could not previously do is SAY that, so the result-envelope numeric check
+    # -- which is right to reject a non-number under a numeric key -- saw only a
+    # malformed field and blocked the step. No JSON document satisfied both
+    # readers at once. ``estimated`` plus a reason is the missing vocabulary.
     (out_dir / "complete_case_n.json").write_text(
         json.dumps(
-            {"statistic": "complete_case_n", "value": complete_case_n},
+            {
+                "statistic": "complete_case_n",
+                "value": complete_case_n,
+                "estimated": complete_case_n is not None,
+                **(
+                    {}
+                    if complete_case_n is not None
+                    else {
+                        "not_estimated_reason": _complete_case_not_estimated_reason(
+                            matrix_rows, specs
+                        )
+                    }
+                ),
+            },
             indent=2,
             ensure_ascii=False,
             allow_nan=False,
@@ -2909,16 +2930,45 @@ def _complete_case_n(
     matrix_rows: Sequence[Dict[str, Any]],
     specs: Sequence[RobustnessSpec],
 ) -> Optional[int]:
-    complete_ids = {
+    complete_ids = _complete_case_spec_ids(specs)
+    for row in matrix_rows:
+        if row["spec_id"] in complete_ids and row["converged"]:
+            return int(row["modeled_analytic_n"])
+    return None
+
+
+def _complete_case_spec_ids(specs: Sequence[RobustnessSpec]) -> set:
+    return {
         spec.spec_id
         for spec in specs
         if spec.axis == "missing"
         and str((spec.missing_override or {}).get("strategy") or "") == "complete_case"
     }
-    for row in matrix_rows:
-        if row["spec_id"] in complete_ids and row["converged"]:
-            return int(row["modeled_analytic_n"])
-    return None
+
+
+def _complete_case_not_estimated_reason(
+    matrix_rows: Sequence[Dict[str, Any]],
+    specs: Sequence[RobustnessSpec],
+) -> str:
+    """Say why there is no complete-case N, so ``null`` stops being ambiguous.
+
+    ``_complete_case_n`` returns ``None`` for two different, both legitimate,
+    reasons, and a bare ``"value": null`` cannot tell them apart -- nor tell
+    either of them apart from a bug. Naming the reason is what makes the null a
+    declaration rather than a missing number.
+    """
+
+    complete_ids = _complete_case_spec_ids(specs)
+    if not complete_ids:
+        return (
+            "the locked robustness grid declares no complete_case missing-data "
+            "specification, so no complete-case N exists to report"
+        )
+    return (
+        "the locked complete_case specification(s) "
+        f"{sorted(complete_ids)} did not converge, so no complete-case N was "
+        "estimated"
+    )
 
 
 def _finite(value: Any) -> bool:
