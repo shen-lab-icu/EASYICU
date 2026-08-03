@@ -86,6 +86,35 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
             temporary.unlink(missing_ok=True)
 
 
+def _evidence_payload(
+    *,
+    command: Sequence[str],
+    started_at: str,
+    started_wall: float,
+    peak_rss_mb: float,
+    peak_pss_mb: float,
+    peak_process_count: int,
+    interval: float,
+    samples: int,
+    status: str,
+    exit_code: int | None,
+) -> dict[str, Any]:
+    return {
+        "schema_version": "easyicu_process_tree_memory_evidence_v1",
+        "status": status,
+        "command": list(command),
+        "started_at_utc": started_at,
+        "ended_at_utc": _utc_now() if exit_code is not None else None,
+        "elapsed_seconds": round(time.monotonic() - started_wall, 3),
+        "process_exit_code": exit_code,
+        "peak_process_tree_rss_mb": round(peak_rss_mb, 1),
+        "peak_process_tree_pss_mb": round(peak_pss_mb, 1),
+        "peak_process_count": peak_process_count,
+        "sample_interval_seconds": max(0.05, interval),
+        "samples": samples,
+    }
+
+
 def run(command: Sequence[str], *, output: Path, interval: float) -> int:
     if not command:
         raise ValueError("a command is required after --")
@@ -97,6 +126,7 @@ def run(command: Sequence[str], *, output: Path, interval: float) -> int:
     peak_pss_mb = 0.0
     peak_process_count = 0
     samples = 0
+    last_checkpoint = started_wall
     while True:
         rss_mb, pss_mb, process_count = _process_tree_memory_mb(root)
         peak_rss_mb = max(peak_rss_mb, rss_mb)
@@ -106,20 +136,37 @@ def run(command: Sequence[str], *, output: Path, interval: float) -> int:
         exit_code = child.poll()
         if exit_code is not None:
             break
+        now = time.monotonic()
+        if now - last_checkpoint >= 5.0:
+            _atomic_write_json(
+                output,
+                _evidence_payload(
+                    command=command,
+                    started_at=started_at,
+                    started_wall=started_wall,
+                    peak_rss_mb=peak_rss_mb,
+                    peak_pss_mb=peak_pss_mb,
+                    peak_process_count=peak_process_count,
+                    interval=interval,
+                    samples=samples,
+                    status="running",
+                    exit_code=None,
+                ),
+            )
+            last_checkpoint = now
         time.sleep(max(0.05, interval))
-    payload = {
-        "schema_version": "easyicu_process_tree_memory_evidence_v1",
-        "command": list(command),
-        "started_at_utc": started_at,
-        "ended_at_utc": _utc_now(),
-        "elapsed_seconds": round(time.monotonic() - started_wall, 3),
-        "process_exit_code": int(exit_code),
-        "peak_process_tree_rss_mb": round(peak_rss_mb, 1),
-        "peak_process_tree_pss_mb": round(peak_pss_mb, 1),
-        "peak_process_count": peak_process_count,
-        "sample_interval_seconds": max(0.05, interval),
-        "samples": samples,
-    }
+    payload = _evidence_payload(
+        command=command,
+        started_at=started_at,
+        started_wall=started_wall,
+        peak_rss_mb=peak_rss_mb,
+        peak_pss_mb=peak_pss_mb,
+        peak_process_count=peak_process_count,
+        interval=interval,
+        samples=samples,
+        status="complete" if exit_code == 0 else "failed",
+        exit_code=int(exit_code),
+    )
     _atomic_write_json(output, payload)
     return int(exit_code)
 

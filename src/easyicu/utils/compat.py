@@ -25,7 +25,7 @@ from __future__ import annotations
 import math
 import logging
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, List, MutableMapping, Optional
 
 import numpy as np
 import pandas as pd
@@ -598,6 +598,8 @@ def merge_concepts_r_style(
     id_col: str = "stay_id",
     time_col: str = "charttime",
     interval_hours: float = 1.0,
+    *,
+    consume_input: bool = False,
 ) -> pd.DataFrame:
     """以ricu风格合并多个概念数据
     
@@ -611,6 +613,9 @@ def merge_concepts_r_style(
         id_col: ID列名
         time_col: 时间列名
         interval_hours: 时间间隔（小时）
+        consume_input: 内部提取热路径可设为 ``True``，逐概念转移所有权并
+            清空传入字典，从而避免最终宽表合并时仍保留整套上游帧。公开调用
+            默认保留输入，维持既有 API 语义。
         
     Returns:
         合并后的宽格式DataFrame
@@ -622,7 +627,18 @@ def merge_concepts_r_style(
     # 🚀 优化：不再 .copy()，调用者 _to_r_format_merged_enhanced 已经复制过
     # 列重命名使用 .rename() 返回新对象，不会修改原始 DataFrame
     normalized = {}
-    for name, df in concept_data.items():
+    requested_names = list(concept_data)
+    # The old implementation materialised a union ``grid`` containing every
+    # concept's (id, time) pair, but the optimized merge below never consumed
+    # that frame.  On eICU respiratory this retained tens of millions of key
+    # rows beside all prepared concept frames and the final wide result.  Keep
+    # only the exact boolean needed to select the legacy no-grid branch.
+    has_grid_rows = False
+    for name in requested_names:
+        if consume_input and isinstance(concept_data, MutableMapping):
+            df = concept_data.pop(name)
+        else:
+            df = concept_data[name]
         if df is None or df.empty:
             normalized[name] = pd.DataFrame(columns=["id", "time", name])
             continue
@@ -715,11 +731,17 @@ def merge_concepts_r_style(
             )
         
         normalized[name] = df_copy
-    
-    # 构建时间网格
-    grid = build_time_grid(normalized, id_col="id", time_col="time")
-    
-    if grid is None or grid.empty:
+        if not has_grid_rows and "id" in df_copy.columns:
+            if "time" in df_copy.columns:
+                valid_time = df_copy["time"].notna()
+                has_grid_rows = bool(
+                    valid_time.any()
+                    and df_copy.loc[valid_time, "id"].notna().any()
+                )
+            else:
+                has_grid_rows = bool(df_copy["id"].notna().any())
+
+    if not has_grid_rows:
         # 没有时间数据，简单合并
         if len(normalized) == 1:
             name = list(normalized.keys())[0]
@@ -773,11 +795,19 @@ def merge_concepts_r_style(
     # 新路径：prepare each concept (dedup) + reduce outer merge (N-1 merges) = N 操作
     # 性能提升：MIIV 6 vitals ~50s → ~8s
     
-    merge_frames = []
+    normalized_names = list(normalized)
+    indexed_frames = []
     boolean_concepts = []
     static_concepts = {}  # name → df (no time column, per-patient)
     
-    for name, df in normalized.items():
+    for name in normalized_names:
+        # The production caller transfers ownership of its concept frames to
+        # this function.  Pop each normalized frame as soon as it is prepared
+        # so pd.concat never overlaps the originals, prepared frames and the
+        # final wide frame.  This also helps the non-consuming public path by
+        # dropping this function's extra references; the caller's dictionary
+        # itself remains untouched unless ``consume_input=True``.
+        df = normalized.pop(name)
         if df is None or df.empty:
             continue
         
@@ -817,11 +847,14 @@ def merge_concepts_r_style(
         else:
             prepared = df[keep_cols].drop_duplicates(subset=["id", "time"], keep="last")
         
-        merge_frames.append(prepared)
+        # Retain only the indexed representation.  Keeping both ``prepared``
+        # and ``indexed`` lists until the final concat duplicated the key
+        # columns for every concept at the peak-memory boundary.
+        indexed_frames.append(prepared.set_index(["id", "time"], drop=True))
     
-    if not merge_frames:
+    if not indexed_frames:
         if not static_concepts:
-            return pd.DataFrame(columns=[id_col, time_col] + list(normalized.keys()))
+            return pd.DataFrame(columns=[id_col, time_col] + normalized_names)
         # 仅静态概念：按 id 合并
         from functools import reduce
         static_dfs = list(static_concepts.values())
@@ -834,15 +867,8 @@ def merge_concepts_r_style(
         merged = merged.rename(columns={"id": id_col})
         return merged
     
-    # 🚀 优化合并：pd.concat(axis=1) 替代 N-1 次 reduce outer merge
-    # 每个 frame set_index 后 concat，一次操作完成，避免中间 DataFrame 膨胀
-    indexed_frames = []
-    for frame in merge_frames:
-        # 确保 (id, time) 唯一（前面 prepared 已经 dedup）
-        indexed = frame.set_index(["id", "time"], drop=True)
-        indexed_frames.append(indexed)
-    del merge_frames  # 释放原始列表
-    
+    # 🚀 优化合并：pd.concat(axis=1) 替代 N-1 次 reduce outer merge。
+    # ``indexed_frames`` 已在上面逐概念构建，避免同时保留两套列表。
     if len(indexed_frames) == 1:
         merged = indexed_frames[0].reset_index()
     else:

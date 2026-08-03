@@ -13,6 +13,7 @@ from easyicu.concept.parser import default_aggregator_for_dtype
 from easyicu.concept.schema import ConceptDefinition, ConceptDictionary, ConceptSource
 from easyicu.table import ICUTable
 from easyicu.io.ts_utils import change_interval
+from easyicu.utils import compat
 
 
 def test_auto_aggregator_for_bool_uses_any_semantics() -> None:
@@ -180,6 +181,81 @@ def test_r_style_merge_preserves_requested_empty_event_concept_column() -> None:
     assert "urine" in result.columns
     assert "rrt" in result.columns
     assert result["rrt"].isna().all()
+
+
+def test_r_style_sparse_merge_does_not_materialise_unused_time_grid(
+    monkeypatch,
+) -> None:
+    def _unexpected_grid(*_args, **_kwargs):
+        raise AssertionError("optimized merge must not build an unused key grid")
+
+    monkeypatch.setattr(compat, "build_time_grid", _unexpected_grid)
+    source = {
+        "hr": pd.DataFrame(
+            {"id": [1, 1], "time": [0.0, 2.0], "hr": [80.0, 82.0]}
+        ),
+        "map": pd.DataFrame(
+            {"id": [1, 2], "time": [2.0, 1.5], "map": [65.0, 70.0]}
+        ),
+    }
+
+    result = compat.merge_concepts_r_style(source).sort_values(
+        ["stay_id", "charttime"]
+    ).reset_index(drop=True)
+
+    assert result[["stay_id", "charttime"]].to_dict("records") == [
+        {"stay_id": 1, "charttime": 0.0},
+        {"stay_id": 1, "charttime": 2.0},
+        {"stay_id": 2, "charttime": 1.0},
+    ]
+    assert result.loc[0, "hr"] == 80.0
+    assert result.loc[1, "map"] == 65.0
+
+
+def test_r_style_consume_input_releases_owned_source_mapping() -> None:
+    source = {
+        "hr": pd.DataFrame(
+            {"id": [1, 1], "time": [0.0, 1.0], "hr": [80.0, 82.0]}
+        ),
+        "map": pd.DataFrame(
+            {"id": [1], "time": [1.0], "map": [65.0]}
+        ),
+    }
+
+    result = compat.merge_concepts_r_style(source, consume_input=True)
+
+    assert source == {}
+    assert result[["stay_id", "charttime"]].to_dict("records") == [
+        {"stay_id": 1, "charttime": 0.0},
+        {"stay_id": 1, "charttime": 1.0},
+    ]
+    assert result.loc[1, "map"] == 65.0
+
+
+def test_r_style_public_default_preserves_source_mapping() -> None:
+    source = {
+        "hr": pd.DataFrame({"id": [1], "time": [0.0], "hr": [80.0]})
+    }
+
+    compat.merge_concepts_r_style(source)
+
+    assert list(source) == ["hr"]
+
+
+def test_r_style_no_grid_branch_preserves_all_null_timed_frame() -> None:
+    source = {
+        "flag": pd.DataFrame(
+            {"id": [None], "time": [None], "flag": [True]}
+        )
+    }
+
+    result = compat.merge_concepts_r_style(source)
+
+    assert list(result.columns) == ["stay_id", "charttime", "flag"]
+    assert len(result) == 1
+    assert pd.isna(result.loc[0, "stay_id"])
+    assert pd.isna(result.loc[0, "charttime"])
+    assert bool(result.loc[0, "flag"]) is True
 
 
 def test_base_merge_preserves_requested_empty_event_concept_column() -> None:

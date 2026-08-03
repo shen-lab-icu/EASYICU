@@ -346,6 +346,9 @@ def _run_configured_export(
                     "elapsed_sec": round(time.monotonic() - started, 1),
                     "num_patients": result["num_patients"],
                     "effective_batch_size": result.get("batch_size"),
+                    "stream_retry_history": list(
+                        result.get("stream_retry_history", [])
+                    ),
                     "native_manifest_sha256": _sha256(
                         source_output / "_manifest.json"
                     ),

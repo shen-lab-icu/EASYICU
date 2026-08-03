@@ -232,9 +232,13 @@ def test_module_extraction_streams_patient_batches_directly_to_parquet(
 
     manifest = json.loads((tmp_path / "_manifest.json").read_text())
     assert manifest["errors"] == []
-    assert calls == [[1, 2], [3, 4], [5]]
+    assert calls == [[1, 4], [2, 5], [3]]
+    assert manifest["patient_partition_strategy"] == (
+        "source_order_interleaved_v1"
+    )
+    assert manifest["initial_planned_partition_count"] == 3
     exported = pd.read_parquet(manifest["saved"]["test_module"]["path"])
-    assert exported["stay_id"].tolist() == [1, 2, 3, 4, 5]
+    assert exported["stay_id"].tolist() == [1, 4, 2, 5, 3]
     assert not (tmp_path / ".test_module.partial.parquet").exists()
 
 
@@ -379,8 +383,16 @@ def test_streamed_module_keeps_later_charttime_when_first_batch_has_none(
     assert exported["charttime"].iloc[2] == 5.0
 
 
-def test_stream_batch_release_flushes_arrow_pool():
+def test_stream_batch_release_flushes_duckdb_and_arrow_pool(monkeypatch):
+    from easyicu import datasource
+
     released = []
+    closed = []
+    monkeypatch.setattr(
+        datasource,
+        "_close_duckdb_connections",
+        lambda: closed.append(True),
+    )
 
     class Pool:
         def release_unused(self):
@@ -396,6 +408,7 @@ def test_stream_batch_release_flushes_arrow_pool():
         trim_native_allocator=False,
     )
 
+    assert closed == [True]
     assert released == [True]
 
 

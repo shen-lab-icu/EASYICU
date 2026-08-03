@@ -1872,6 +1872,7 @@ class ConceptResolver:
                     interval,
                     data_source=data_source,
                     materialize_missing_concepts=not defer_empty_columns_to_arrow,
+                    consume_sources=True,
                 )
 
             merged = self._ensure_requested_concept_columns(
@@ -8538,6 +8539,7 @@ class ConceptResolver:
         interval: Optional[pd.Timedelta] = None,
         data_source: Optional['ICUDataSource'] = None,  # 🔧 FIX 2025-01-31: 添加数据源参数
         materialize_missing_concepts: bool = True,
+        consume_sources: bool = False,
     ) -> pd.DataFrame:
         """
         将多个概念表以ricu风格合并，实现完整的时间网格对齐和窗口展开
@@ -8553,6 +8555,9 @@ class ConceptResolver:
             concept_names: 概念名称列表（保持顺序）
             interval: 时间间隔，默认1小时
             data_source: 数据源，用于确定默认ID列
+            consume_sources: 内部顶层提取路径在所有概念均加载完毕后可转移
+                输入帧所有权并清除不再需要的 resolver/data-source 缓存。默认
+                ``False``，因此直接调用该兼容方法不会改变传入映射。
             
         Returns:
             ricu风格的宽格式DataFrame
@@ -8629,6 +8634,24 @@ class ConceptResolver:
         
         if not concept_data:
             return pd.DataFrame(columns=list(concept_names))
+
+        if consume_sources:
+            # All source reads and recursive callbacks have completed before
+            # this merge starts.  Retaining resolver/data-source caches and
+            # the ICUTable mapping until after the final wide concat kept
+            # several aliases to every large concept frame alive at the exact
+            # eICU respiratory peak.  ``concept_data`` now owns the frames
+            # required below, so the other references can be released safely.
+            with self._cache_lock:
+                self._concept_cache.clear()
+                self._concept_data_cache.clear()
+                self._raw_concept_cache.clear()
+                self._table_cache.clear()
+                self._drop_cache_accounting()
+            if data_source is not None:
+                data_source.clear_cache()
+            if isinstance(tables, MutableMapping):
+                tables.clear()
         
         # 检测ID列和时间列
         id_col = None
@@ -8678,6 +8701,7 @@ class ConceptResolver:
             id_col=id_col,
             time_col=time_col,
             interval_hours=interval_hours,
+            consume_input=consume_sources,
         )
         result = self._ensure_requested_concept_columns(
             result,

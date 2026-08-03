@@ -108,6 +108,8 @@ _STREAM_BATCH_MB_PER_STAY = 0.15
 _STREAM_BATCH_QUANTUM = 5_000
 _STREAM_BATCH_MIN = 5_000
 _STREAM_BATCH_MAX = 67_000
+_STREAM_BATCH_RETRY_FACTOR = 0.75
+_STREAM_BATCH_MAX_RETRIES = 3
 
 
 def _process_tree_rss_mb() -> float:
@@ -258,11 +260,16 @@ def _resolve_stream_batch_size(
 
     Automatic batches use a continuous capacity estimate: reserve 25% of
     currently available memory (at least 2 GiB), budget 0.15 MiB per stay from
-    the remainder, round down to 5k stays, and cap at the production-proven
-    67k batch.  Thus an 8 GiB-available host starts at 40k rather than falling
-    off a fixed 10k threshold.  Databases whose complete cohort fits that
-    capacity stay one-shot; at >=12 GiB available the five sub-150k databases
-    retain their established one-shot fast path.
+    the remainder, round down to 5k stays, and cap at 67k.  Streamed cohorts
+    are interleaved across the source-order range before chunking so a dense
+    late eICU era is not concentrated into the final batch.  Under a 14-GiB
+    cgroup, all three 67k respiratory partitions completed after the datasource
+    parallelism was made cgroup-aware; at 8 GiB available the same continuous
+    policy starts at 40k.  If a worker is nevertheless killed under memory
+    pressure, adaptive exports retry only that module at a smaller batch.
+    Databases whose complete cohort fits the capacity stay one-shot; at >=12
+    GiB available the five sub-150k databases retain their established
+    one-shot fast path.
     """
 
     total = int(num_patients)
@@ -297,6 +304,51 @@ def _resolve_stream_batch_size(
     capacity = max(_STREAM_BATCH_MIN, capacity)
     capacity = min(_STREAM_BATCH_MAX, capacity)
     return min(capacity, total)
+
+
+def _next_stream_retry_batch_size(current_batch_size: int) -> int:
+    """Return the next bounded batch after one adaptive worker crash."""
+
+    current = max(_STREAM_BATCH_MIN, int(current_batch_size))
+    proposed = int(current * _STREAM_BATCH_RETRY_FACTOR)
+    proposed = (proposed // _STREAM_BATCH_QUANTUM) * _STREAM_BATCH_QUANTUM
+    if proposed >= current:
+        proposed = current - _STREAM_BATCH_QUANTUM
+    return max(_STREAM_BATCH_MIN, proposed)
+
+
+def _interleave_stream_patient_ids(
+    patient_ids: List,
+    batch_size: int,
+) -> tuple[List, int]:
+    """Deterministically spread source-order density across streamed batches.
+
+    eICU event density increases materially across the source-ordered stay
+    list: the last sequential ~67k respiratory stays exceeded a 14-GiB cgroup
+    even in a fresh process, while three equally sized interleaved slices fit.
+    Concatenating ``ids[offset::planned_batches]`` preserves every identifier
+    exactly once and keeps the requested full batch size, but makes each large
+    chunk sample the complete source-order range.  This avoids both a skewed
+    final OOM and the much slower fallback to many tiny batches.
+
+    Row order is not part of the native Parquet semantic contract; the order
+    here is deterministic for a deterministic input cohort and is recorded in
+    module telemetry.
+    """
+
+    ids = list(patient_ids)
+    size = int(batch_size)
+    if size < 1:
+        raise ValueError("stream batch_size must be positive")
+    planned_batches = (len(ids) + size - 1) // size if ids else 0
+    if planned_batches <= 1:
+        return ids, planned_batches
+    interleaved = [
+        patient_id
+        for offset in range(planned_batches)
+        for patient_id in ids[offset::planned_batches]
+    ]
+    return interleaved, planned_batches
 
 
 def _get_extraction_mp_context(mp_module, *, platform_name: Optional[str] = None):
@@ -725,6 +777,18 @@ def _release_stream_batch_memory(
     import gc
     import sys
 
+    # DuckDB keeps an in-memory connection per worker thread.  Clearing the
+    # Python loader drops DataFrames, but it does not release DuckDB's buffer
+    # manager; on the third eICU batch that residual allocation can be the
+    # difference between a bounded 67k batch and a cgroup OOM.  Closing here is
+    # safe because this function is called only at explicit streamed-batch
+    # boundaries; the next query lazily opens a fresh connection.
+    try:
+        from ..datasource import _close_duckdb_connections
+
+        _close_duckdb_connections()
+    except Exception:
+        pass
     gc.collect()
     try:
         pyarrow_module.default_memory_pool().release_unused()
@@ -905,9 +969,12 @@ def _stream_module_batches_to_parquet(
     if not patient_ids_filter or len(patient_ids_filter) != 1:
         raise ValueError("streamed module export requires one patient-id filter")
     id_col, all_ids = next(iter(patient_ids_filter.items()))
-    all_ids = list(all_ids)
     if batch_size < 1:
         raise ValueError("streamed module export batch_size must be positive")
+    all_ids, planned_partition_count = _interleave_stream_patient_ids(
+        list(all_ids),
+        int(batch_size),
+    )
 
     destination = Path(output_dir) / f"{module_name}.parquet"
     partial = destination.with_name(f".{module_name}.partial.parquet")
@@ -1015,6 +1082,8 @@ def _stream_module_batches_to_parquet(
         "initial_batch_size": int(batch_size),
         "final_planned_batch_size": current_batch_size,
         "adaptive_batch_growth": bool(adaptive_batch_growth),
+        "patient_partition_strategy": "source_order_interleaved_v1",
+        "initial_planned_partition_count": planned_partition_count,
     }
 
 
@@ -1235,6 +1304,12 @@ def _run_module_extraction(
             "adaptive_batch_growth",
             False,
         )
+        manifest["patient_partition_strategy"] = stream_info.get(
+            "patient_partition_strategy"
+        )
+        manifest["initial_planned_partition_count"] = stream_info.get(
+            "initial_planned_partition_count"
+        )
     with open(os.path.join(output_dir, "_manifest.json"), "w") as f:
         json.dump(manifest, f)
 
@@ -1338,7 +1413,6 @@ def _stream_special_extraction_batches(
     if not patient_ids_filter or len(patient_ids_filter) != 1:
         raise ValueError("streamed special export requires one patient-id filter")
     id_col, all_ids = next(iter(patient_ids_filter.items()))
-    all_ids = list(all_ids)
     # These inputs are already projected dependency parquets (id, time, one
     # score/flag), not raw SOFA source tables.  The former hard 2,000-stay cap
     # caused up to 101 full parquet filter passes for eICU even when the outer
@@ -1354,6 +1428,10 @@ def _stream_special_extraction_batches(
             )
         except ValueError:
             pass
+    all_ids, planned_partition_count = _interleave_stream_patient_ids(
+        list(all_ids),
+        safe_batch_size,
+    )
     concepts = [
         concept
         for module_name in special_modules
@@ -1526,6 +1604,8 @@ def _stream_special_extraction_batches(
             if all_ids
             else 0
         ),
+        "patient_partition_strategy": "source_order_interleaved_v1",
+        "initial_planned_partition_count": planned_partition_count,
         **module_memory_sampler.stop(),
     }
     with open(os.path.join(output_dir, "_manifest.json"), "w") as handle:
@@ -3439,6 +3519,7 @@ def _publish_native_export_v2(
         "module_timings_seconds": module_timings,
         "module_peak_rss_mb": module_peak_rss_mb,
         "module_peak_working_set_mb": module_peak_working_set_mb,
+        "stream_retry_history": list(result.get("stream_retry_history", [])),
         "runtime_provenance": _native_export_runtime_provenance(),
         "unavailable_modules": unavailable_modules,
         "unavailable_concepts": unavailable_concepts,
@@ -3684,6 +3765,7 @@ def extract_database(
         "num_patients": num_patients,
         "batch_size": batch_size,
         "adaptive_stream_batches": _adaptive_stream_batches,
+        "stream_retry_history": [],
         "stream_output_batches": stream_output_batches,
         "modules": {},
         "total_elapsed": 0,
@@ -3770,6 +3852,12 @@ def extract_database(
             "adaptive_batch_growth": manifest.get(
                 "adaptive_batch_growth",
                 False,
+            ),
+            "patient_partition_strategy": manifest.get(
+                "patient_partition_strategy"
+            ),
+            "initial_planned_partition_count": manifest.get(
+                "initial_planned_partition_count"
             ),
         }
         # 每个模块一个宽表 parquet：manifest["saved"] 只有一条（键=模块名），
@@ -3892,6 +3980,12 @@ def extract_database(
                     ),
                     "batch_size": manifest.get("batch_size"),
                     "batch_count": manifest.get("batch_count"),
+                    "patient_partition_strategy": manifest.get(
+                        "patient_partition_strategy"
+                    ),
+                    "initial_planned_partition_count": manifest.get(
+                        "initial_planned_partition_count"
+                    ),
                 }
                 for c_name in concepts:
                     info = manifest.get("saved", {}).get(c_name)
@@ -3938,6 +4032,8 @@ def extract_database(
     pending_groups = deque(groups)
     while pending_groups:
         group = pending_groups.popleft()
+        group_batch_size = int(group.get("_batch_size", batch_size))
+        stream_retry_attempt = int(group.get("_stream_retry_attempt", 0))
         group_mods = [m for m in group["modules"] if EXTRACT_MODULES.get(m)]
         group_special = list(group["special"])
         if not group_mods and not group_special:
@@ -3962,7 +4058,7 @@ def extract_database(
                 database,
                 data_path,
                 patient_ids_filter,
-                batch_size,
+                group_batch_size,
                 tmp_root,
                 group_use_sofa2,
                 stream_output_batches,
@@ -3986,7 +4082,50 @@ def extract_database(
             os.path.join(tmp_root, _SPECIAL_OUTPUT_DIRNAME, "_manifest.json")
         )
         can_split = len(group_mods) + (1 if group_special else 0) > 1
-        if crashed and can_split and (incomplete_mods or special_incomplete):
+        incomplete = bool(incomplete_mods or special_incomplete)
+        can_retry_smaller = (
+            crashed
+            and incomplete
+            and _adaptive_stream_batches
+            and stream_output_batches
+            and stream_retry_attempt < _STREAM_BATCH_MAX_RETRIES
+            and group_batch_size > _STREAM_BATCH_MIN
+        )
+        if can_retry_smaller and not can_split:
+            retry_batch_size = _next_stream_retry_batch_size(group_batch_size)
+            retry_modules = list(group_mods)
+            retry_special = list(group_special)
+            result["stream_retry_history"].append(
+                {
+                    "modules": retry_modules + retry_special,
+                    "worker_exit_code": proc.exitcode,
+                    "attempt": stream_retry_attempt + 1,
+                    "previous_batch_size": group_batch_size,
+                    "retry_batch_size": retry_batch_size,
+                }
+            )
+            if verbose:
+                print(
+                    f"   ⚠️ worker exit={proc.exitcode}; adaptive memory retry "
+                    f"{retry_modules + retry_special}: "
+                    f"batch_size {group_batch_size} -> {retry_batch_size} "
+                    f"(attempt {stream_retry_attempt + 1}/"
+                    f"{_STREAM_BATCH_MAX_RETRIES})"
+                )
+            pending_groups.appendleft(
+                {
+                    "modules": retry_modules,
+                    "special": retry_special,
+                    "_batch_size": retry_batch_size,
+                    "_stream_retry_attempt": stream_retry_attempt + 1,
+                }
+            )
+            # Do not publish an error result from the killed attempt.  Its
+            # private temporary directory is removed below; earlier completed
+            # modules in the database output remain untouched.
+            group_mods = []
+            group_special = []
+        elif crashed and can_split and incomplete:
             if verbose:
                 retry_units = incomplete_mods + (
                     group_special if special_incomplete else []
@@ -3996,10 +4135,24 @@ def extract_database(
                     f"retrying individually: {retry_units}"
                 )
             if special_incomplete:
-                pending_groups.appendleft({"modules": [], "special": group_special})
+                pending_groups.appendleft(
+                    {
+                        "modules": [],
+                        "special": group_special,
+                        "_batch_size": group_batch_size,
+                        "_stream_retry_attempt": stream_retry_attempt,
+                    }
+                )
                 group_special = []
             for m in reversed(incomplete_mods):
-                pending_groups.appendleft({"modules": [m], "special": []})
+                pending_groups.appendleft(
+                    {
+                        "modules": [m],
+                        "special": [],
+                        "_batch_size": group_batch_size,
+                        "_stream_retry_attempt": stream_retry_attempt,
+                    }
+                )
             group_mods = [m for m in group_mods if m not in incomplete_mods]
 
         for mod_name in group_mods:

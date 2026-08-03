@@ -4,6 +4,7 @@ import csv
 import hashlib
 import importlib.util
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -19,7 +20,9 @@ SEALER_PATH = (
     / "releases"
     / "EX-A01_seal_full6_release.py"
 )
-SPEC = importlib.util.spec_from_file_location("easyicu_full6_release_sealer", SEALER_PATH)
+SPEC = importlib.util.spec_from_file_location(
+    "easyicu_full6_release_sealer", SEALER_PATH
+)
 assert SPEC is not None and SPEC.loader is not None
 sealer = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = sealer
@@ -95,8 +98,17 @@ def _build_synthetic_release(run_root: Path) -> None:
             "contract_revision": sealer.CONTRACT_REVISION,
             "database": database,
             "runtime_provenance": {
-                "easyicu_git_commit": "a" * 40,
+                "easyicu_git_commit": (sealer.MINIMUM_CORRECTED_TIME_EASYICU_COMMIT),
                 "easyicu_git_dirty": False,
+            },
+            "module_timings_seconds": {
+                module: float(index + 1) for index, module in enumerate(sealer.MODULES)
+            },
+            "module_peak_rss_mb": {
+                module: 100.0 + index for index, module in enumerate(sealer.MODULES)
+            },
+            "module_peak_working_set_mb": {
+                module: 90.0 + index for index, module in enumerate(sealer.MODULES)
             },
             "column_metadata": {
                 "file": sidecar.name,
@@ -150,23 +162,41 @@ def test_sealer_validates_6_by_19_and_atomically_writes_metadata(
     assert metadata["expected_parquet_count"] == 114
     assert metadata["contract_revision"] == sealer.CONTRACT_REVISION
     assert (
-        "partial_wide_exact_floating_charttime_key_alignment"
-        in metadata["corrections"]
+        "partial_wide_exact_floating_charttime_key_alignment" in metadata["corrections"]
     )
     assert (
         "aumc_relative_time_bucketed_before_admission_alignment"
         in metadata["corrections"]
     )
-    assert (
-        "eicu_susp_inf_uses_antibiotic_event_time"
-        in metadata["corrections"]
-    )
+    assert "eicu_susp_inf_uses_antibiotic_event_time" in metadata["corrections"]
+    assert metadata["release_gate"] == {
+        "contract": sealer.RELEASE_GATE_CONTRACT,
+        "contract_revision": sealer.CONTRACT_REVISION,
+        "minimum_easyicu_commit": (sealer.MINIMUM_CORRECTED_TIME_EASYICU_COMMIT),
+        "required_corrections": list(sealer.REQUIRED_CORRECTED_TIME_CORRECTIONS),
+        "affected_database_runtime_commits": {
+            "aumc": sealer.MINIMUM_CORRECTED_TIME_EASYICU_COMMIT,
+            "eicu": sealer.MINIMUM_CORRECTED_TIME_EASYICU_COMMIT,
+        },
+    }
     assert metadata["extraction_execution"]["profile"] == "server-adaptive"
     assert not metadata["extraction_execution"]["portable_16gb_validated"]
     assert set(metadata["extraction_execution"]["timing"]["databases"]) == set(
         sealer.DATABASES
     )
-    assert metadata["easyicu_commit"] == "a" * 40
+    module_timing = metadata["extraction_execution"]["module_timing"]
+    assert module_timing["record_count"] == 114
+    assert module_timing["database_count"] == 6
+    assert module_timing["module_count"] == 19
+    module_timing_path = run_root / module_timing["file"]
+    assert _sha256(module_timing_path) == module_timing["sha256"]
+    with module_timing_path.open(newline="", encoding="utf-8") as handle:
+        module_timing_rows = list(csv.DictReader(handle))
+    assert len(module_timing_rows) == 114
+    assert {(row["database"], row["module"]) for row in module_timing_rows} == {
+        (database, module) for database in sealer.DATABASES for module in sealer.MODULES
+    }
+    assert metadata["easyicu_commit"] == sealer.MINIMUM_CORRECTED_TIME_EASYICU_COMMIT
     assert set(metadata["source_manifest_sha256"]) == set(sealer.DATABASES)
     assert metadata["validation"] == {
         "audited_parquet_count": 114,
@@ -179,8 +209,7 @@ def test_sealer_validates_6_by_19_and_atomically_writes_metadata(
         "exact_schema_module_count": 19,
         "total_rows": 228,
         "total_parquet_bytes": sum(
-            path.stat().st_size
-            for path in (run_root / "exports").glob("*/*.parquet")
+            path.stat().st_size for path in (run_root / "exports").glob("*/*.parquet")
         ),
         "failures": [],
     }
@@ -199,12 +228,25 @@ def test_failed_validation_preserves_existing_run_metadata(tmp_path: Path) -> No
     manifest_path.write_text(json.dumps(manifest) + "\n", encoding="utf-8")
 
     with pytest.raises(sealer.ReleaseValidationError, match="size mismatch"):
-        sealer.seal_release(
-            run_root=run_root, execution_profile="server-adaptive"
-        )
+        sealer.seal_release(run_root=run_root, execution_profile="server-adaptive")
 
     assert destination.read_bytes() == original
     assert not list(run_root.glob(".run_metadata.json.*.tmp"))
+
+
+def test_missing_module_timing_fails_closed(tmp_path: Path) -> None:
+    run_root = tmp_path / "missing_module_timing"
+    _build_synthetic_release(run_root)
+    manifest_path = run_root / "exports" / "eicu" / "_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    del manifest["module_timings_seconds"]["respiratory"]
+    manifest_path.write_text(json.dumps(manifest) + "\n", encoding="utf-8")
+
+    with pytest.raises(sealer.ReleaseValidationError, match="module_timings_seconds"):
+        sealer.seal_release(run_root=run_root, execution_profile="server-adaptive")
+
+    assert not (run_root / "module_extraction_timing.csv").exists()
+    assert not (run_root / "run_metadata.json").exists()
 
 
 def test_null_charttime_keys_are_compared_with_nulls_equal(tmp_path: Path) -> None:
@@ -220,9 +262,7 @@ def test_null_charttime_keys_are_compared_with_nulls_equal(tmp_path: Path) -> No
     )
     connection = duckdb.connect(":memory:")
     try:
-        audit = sealer._actual_key_audit(
-            connection, parquet, ["stay_id", "charttime"]
-        )
+        audit = sealer._actual_key_audit(connection, parquet, ["stay_id", "charttime"])
     finally:
         connection.close()
 
@@ -237,3 +277,94 @@ def test_stable_module_contract_matches_public_extractor() -> None:
     from easyicu.api import EXTRACT_MODULE_ORDER
 
     assert tuple(EXTRACT_MODULE_ORDER) == sealer.MODULES
+
+
+def test_corrected_time_ancestry_rejects_old_and_unknown_runtime_commits() -> None:
+    commits = {
+        database: sealer.MINIMUM_CORRECTED_TIME_EASYICU_COMMIT
+        for database in sealer.DATABASES
+    }
+    sealer._validate_corrected_time_commit_ancestry(commits)
+
+    commits["aumc"] = "ebb802598c8c6d2ae55715dde1699075260f9429"
+    with pytest.raises(sealer.ReleaseValidationError, match="predates required"):
+        sealer._validate_corrected_time_commit_ancestry(commits)
+
+    commits["aumc"] = sealer.MINIMUM_CORRECTED_TIME_EASYICU_COMMIT
+    commits["eicu"] = "f" * 40
+    with pytest.raises(
+        sealer.ReleaseValidationError,
+        match="Fetch full history.*shallow",
+    ):
+        sealer._validate_corrected_time_commit_ancestry(commits)
+
+
+def _git(repo: Path, *args: str) -> str:
+    result = subprocess.run(
+        ["git", *args],
+        cwd=repo,
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    return result.stdout.strip()
+
+
+def _commit(repo: Path, filename: str, content: str, message: str) -> str:
+    (repo / filename).write_text(content, encoding="utf-8")
+    _git(repo, "add", filename)
+    _git(repo, "commit", "-m", message)
+    return _git(repo, "rev-parse", "HEAD")
+
+
+def test_corrected_time_gate_uses_real_git_dag_and_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "test@example.invalid")
+    _git(repo, "config", "user.name", "Test User")
+    root = _commit(repo, "history.txt", "root\n", "root")
+    minimum = _commit(repo, "fix.txt", "corrected time\n", "corrected-time")
+    descendant = _commit(repo, "runtime.txt", "runtime\n", "runtime")
+    monkeypatch.setattr(
+        sealer,
+        "MINIMUM_CORRECTED_TIME_EASYICU_COMMIT",
+        minimum,
+    )
+
+    commits = {database: descendant for database in sealer.DATABASES}
+    sealer._validate_corrected_time_commit_ancestry(
+        commits,
+        repository=repo,
+    )
+
+    _git(repo, "checkout", "--detach", root)
+    divergent = _commit(repo, "divergent.txt", "old branch\n", "divergent")
+    commits["aumc"] = divergent
+    with pytest.raises(sealer.ReleaseValidationError, match="predates required"):
+        sealer._validate_corrected_time_commit_ancestry(
+            commits,
+            repository=repo,
+        )
+
+    commits["aumc"] = descendant
+    commits["eicu"] = "f" * 40
+    with pytest.raises(sealer.ReleaseValidationError, match="not available"):
+        sealer._validate_corrected_time_commit_ancestry(
+            commits,
+            repository=repo,
+        )
+
+
+@pytest.mark.parametrize("bad", [None, "abc", "A" * 40])
+def test_corrected_time_gate_rejects_missing_or_noncanonical_sha(bad) -> None:
+    commits = {
+        database: sealer.MINIMUM_CORRECTED_TIME_EASYICU_COMMIT
+        for database in sealer.DATABASES
+    }
+    commits["eicu"] = bad
+    with pytest.raises(sealer.ReleaseValidationError, match="full lowercase"):
+        sealer._validate_corrected_time_commit_ancestry(commits)
