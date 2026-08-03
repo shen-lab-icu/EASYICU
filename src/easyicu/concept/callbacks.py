@@ -7724,7 +7724,12 @@ def _callback_fluid_balance_cumulative(
     tables: Dict[str, "ICUTable"],
     ctx: "ConceptCallbackContext",
 ) -> "ICUTable":
-    """Cumulative fluid balance = running sum of hourly fluid_balance per stay."""
+    """Cumulative fluid balance since ICU admission (hour zero).
+
+    Native exports may retain observations up to 24 hours before admission.
+    Those rows can remain useful point measurements, but they must not become a
+    hidden offset in a variable described as cumulative *since admission*.
+    """
     fb_tbl = tables.get("fluid_balance")
     if fb_tbl is None or fb_tbl.data.empty:
         return _as_icutbl(
@@ -7755,7 +7760,13 @@ def _callback_fluid_balance_cumulative(
         if non_meta:
             val_col = non_meta[0]
 
-    df[val_col] = pd.to_numeric(df[val_col], errors="coerce").fillna(0)
+    df[time_col] = pd.to_numeric(df[time_col], errors="coerce")
+    df[val_col] = pd.to_numeric(df[val_col], errors="coerce")
+    df = df.loc[
+        df[time_col].notna()
+        & df[val_col].notna()
+        & df[time_col].ge(0)
+    ].copy()
     df = df.sort_values([id_col, time_col])
     df["fluid_balance_cumulative"] = df.groupby(id_col)[val_col].cumsum()
     result = df[[id_col, time_col, "fluid_balance_cumulative"]].copy()

@@ -485,7 +485,6 @@ def distribute_amount(
             return result
         else:
             return data
-    
     else:
         # datetime 逻辑 - 需要转换为相对时间然后展开
         # 
@@ -676,6 +675,272 @@ def distribute_amount(
             return result
         else:
             return data
+
+
+def normalize_volume_to_ml(values: pd.Series, units: pd.Series) -> pd.Series:
+    """Normalize explicit metric volume units to mL, failing closed on unknowns."""
+
+    normalized_units = (
+        units.astype("string")
+        .str.strip()
+        .str.lower()
+        .str.replace("μ", "µ", regex=False)
+    )
+    factors = normalized_units.map(
+        {
+            "ml": 1.0,
+            "milliliter": 1.0,
+            "milliliters": 1.0,
+            "cc": 1.0,
+            "cm3": 1.0,
+            "cm^3": 1.0,
+            "l": 1000.0,
+            "liter": 1000.0,
+            "liters": 1000.0,
+            "litre": 1000.0,
+            "litres": 1000.0,
+            "ul": 0.001,
+            "µl": 0.001,
+            "mm3": 0.001,
+            "mm^3": 0.001,
+            "nl": 0.000001,
+            "pl": 0.000000001,
+        }
+    )
+    unknown = normalized_units.notna() & factors.isna()
+    if unknown.any():
+        labels = sorted(normalized_units.loc[unknown].dropna().unique().tolist())
+        logger.warning(
+            "dropping %d volume row(s) with unknown units: %s",
+            int(unknown.sum()),
+            labels,
+        )
+    return pd.to_numeric(values, errors="coerce") * factors.astype(float)
+
+
+def distribute_volume_hourly(
+    data: pd.DataFrame,
+    val_col: str = "value",
+    end_col: str = "endtime",
+    index_col: str = "starttime",
+    *,
+    id_col: Optional[str] = None,
+    origin_times: Optional[pd.DataFrame] = None,
+    origin_col: Optional[str] = None,
+    numeric_time_unit: str = "hours",
+    output_time_unit: str = "relative_hours",
+    row_chunk_size: int = 100_000,
+) -> pd.DataFrame:
+    """Allocate an interval's total volume exactly across ICU-hour bins.
+
+    ``inputevents.amount`` and AmsterdamUMCdb ``drugitems.fluidin`` are
+    interval totals, not point measurements. Assigning the whole amount to the
+    start creates artificial intake spikes and shifts cumulative balance. This
+    transform allocates each total in proportion to overlap with half-open
+    ICU-hour bins ``[h, h + 1)`` anchored at ICU admission.
+
+    Positive-duration rows conserve volume (apart from floating-point
+    round-off). Zero-duration rows and rows without an end are treated as
+    boluses at their start; negative durations are malformed and dropped.
+
+    ``absolute_minutes`` output exists for AUMC: the generic alignment layer
+    still needs the source's absolute-minute clock in order to subtract
+    ``admittedat`` exactly once.
+    """
+
+    if val_col not in data.columns or index_col not in data.columns:
+        return data
+
+    frame = data.copy()
+    if id_col is None:
+        preferred_ids = (
+            "stay_id",
+            "icustay_id",
+            "admissionid",
+            "patientunitstayid",
+            "patientid",
+            "CaseID",
+        )
+        id_col = next(
+            (column for column in preferred_ids if column in frame.columns),
+            None,
+        )
+    if id_col is None or id_col not in frame.columns:
+        raise ValueError("distribute_volume_hourly requires a stay-level identifier")
+    if numeric_time_unit not in {"hours", "minutes"}:
+        raise ValueError("numeric_time_unit must be 'hours' or 'minutes'")
+    if output_time_unit not in {"relative_hours", "absolute_minutes"}:
+        raise ValueError(
+            "output_time_unit must be 'relative_hours' or 'absolute_minutes'"
+        )
+    if output_time_unit == "absolute_minutes" and (
+        origin_times is None or not origin_col
+    ):
+        raise ValueError("absolute-minute output requires declared origin times")
+    if not isinstance(row_chunk_size, int) or row_chunk_size < 1:
+        raise ValueError("row_chunk_size must be a positive integer")
+
+    raw_end = (
+        frame[end_col]
+        if end_col in frame.columns
+        else pd.Series(pd.NA, index=frame.index, dtype="object")
+    )
+    raw_start = frame[index_col]
+
+    origin_by_id: Optional[pd.Series] = None
+    if origin_times is not None:
+        if (
+            origin_col is None
+            or id_col not in origin_times.columns
+            or origin_col not in origin_times.columns
+        ):
+            raise ValueError(
+                "origin_times must contain the stay identifier and origin column"
+            )
+        origins = origin_times[[id_col, origin_col]].drop_duplicates(
+            subset=[id_col], keep="last"
+        )
+        origin_by_id = origins.set_index(id_col)[origin_col]
+
+    source_is_numeric = pd.api.types.is_numeric_dtype(raw_start)
+    if source_is_numeric:
+        scale = 60.0 if numeric_time_unit == "minutes" else 1.0
+        start = pd.to_numeric(raw_start, errors="coerce") / scale
+        end = pd.to_numeric(raw_end, errors="coerce") / scale
+        if origin_by_id is not None:
+            origin = (
+                pd.to_numeric(frame[id_col].map(origin_by_id), errors="coerce")
+                / scale
+            )
+            start = start - origin
+            end = end - origin
+    else:
+        start_dt = pd.to_datetime(raw_start, errors="coerce", utc=True)
+        end_dt = pd.to_datetime(raw_end, errors="coerce", utc=True)
+        if origin_by_id is None:
+            raise ValueError(
+                "datetime interval allocation requires ICU admission origins"
+            )
+        origin_dt = pd.to_datetime(
+            frame[id_col].map(origin_by_id), errors="coerce", utc=True
+        )
+        start = (start_dt - origin_dt).dt.total_seconds() / 3600.0
+        end = (end_dt - origin_dt).dt.total_seconds() / 3600.0
+
+    amount = pd.to_numeric(frame[val_col], errors="coerce")
+    valid = frame[id_col].notna() & start.notna() & amount.notna()
+    malformed = valid & end.notna() & (end < start)
+    if malformed.any():
+        logger.warning(
+            "dropping %d end-before-start volume interval row(s)",
+            int(malformed.sum()),
+        )
+    valid &= ~malformed
+    if not valid.any():
+        return pd.DataFrame(columns=[id_col, index_col, val_col])
+
+    ids = frame.loc[valid, id_col].reset_index(drop=True)
+    starts = start.loc[valid].astype(float).reset_index(drop=True)
+    ends = end.loc[valid].astype(float).reset_index(drop=True)
+    amounts = amount.loc[valid].astype(float).reset_index(drop=True)
+
+    def _reduce_pieces(pieces: List[pd.DataFrame]) -> pd.DataFrame:
+        if len(pieces) == 1:
+            return pieces[0]
+        return (
+            pd.concat(pieces, ignore_index=True)
+            .groupby([id_col, index_col], as_index=False, sort=False)[val_col]
+            .sum(min_count=1)
+        )
+
+    def _allocate_piece(lo: int, hi: int) -> pd.DataFrame:
+        piece_ids = ids.iloc[lo:hi].reset_index(drop=True)
+        piece_starts = starts.iloc[lo:hi].reset_index(drop=True)
+        piece_ends = ends.iloc[lo:hi].reset_index(drop=True)
+        piece_amounts = amounts.iloc[lo:hi].reset_index(drop=True)
+        bolus = piece_ends.isna() | np.isclose(piece_ends, piece_starts)
+        duration = piece_ends - piece_starts
+        start_bins = np.floor(piece_starts).astype(np.int64)
+        interval_end_bins = (
+            np.ceil(piece_ends.fillna(piece_starts)).astype(np.int64) - 1
+        )
+        end_bins = interval_end_bins.where(~bolus, start_bins)
+        counts = (end_bins - start_bins + 1).clip(lower=1).astype(np.int64)
+
+        counts_array = counts.to_numpy()
+        source_row = np.repeat(
+            np.arange(len(piece_ids), dtype=np.int64), counts_array
+        )
+        starts_repeated = np.repeat(start_bins.to_numpy(), counts_array)
+        block_starts = np.repeat(
+            np.cumsum(counts_array) - counts_array,
+            counts_array,
+        )
+        bins = starts_repeated + (
+            np.arange(len(source_row), dtype=np.int64) - block_starts
+        )
+
+        repeated_start = piece_starts.to_numpy()[source_row]
+        repeated_end = piece_ends.to_numpy()[source_row]
+        repeated_duration = duration.to_numpy()[source_row]
+        repeated_amount = piece_amounts.to_numpy()[source_row]
+        repeated_bolus = bolus.to_numpy()[source_row]
+
+        overlap = np.minimum(repeated_end, bins + 1.0) - np.maximum(
+            repeated_start, bins
+        )
+        overlap = np.clip(overlap, 0.0, 1.0)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            allocated = np.where(
+                repeated_bolus,
+                repeated_amount,
+                repeated_amount * overlap / repeated_duration,
+            )
+
+        piece = pd.DataFrame(
+            {
+                id_col: piece_ids.to_numpy()[source_row],
+                index_col: bins.astype(float),
+                val_col: allocated.astype(float),
+            }
+        )
+        piece = piece[np.isfinite(piece[val_col])]
+        return (
+            piece.groupby([id_col, index_col], as_index=False, sort=False)[val_col]
+            .sum(min_count=1)
+            .reset_index(drop=True)
+        )
+
+    # Binary-tree compaction keeps the largest live intermediate close to the
+    # final hourly output size instead of retaining one expanded array for all
+    # source intervals. This is the important 16-GB portability bound.
+    reduction_levels: List[Optional[pd.DataFrame]] = []
+    for lo in range(0, len(ids), row_chunk_size):
+        carry = _allocate_piece(lo, min(lo + row_chunk_size, len(ids)))
+        level = 0
+        while level < len(reduction_levels) and reduction_levels[level] is not None:
+            carry = _reduce_pieces([reduction_levels[level], carry])
+            reduction_levels[level] = None
+            level += 1
+        if level == len(reduction_levels):
+            reduction_levels.append(carry)
+        else:
+            reduction_levels[level] = carry
+
+    result = _reduce_pieces(
+        [piece for piece in reduction_levels if piece is not None]
+    ).reset_index(drop=True)
+
+    if output_time_unit == "absolute_minutes":
+        if not source_is_numeric:
+            raise ValueError("absolute-minute output is only valid for numeric sources")
+        source_origins = pd.to_numeric(
+            result[id_col].map(origin_by_id), errors="coerce"
+        )
+        result[index_col] = source_origins + result[index_col] * 60.0
+
+    return result
+
 
 def aggregate_fun(agg_func: str, new_unit: str) -> Callable:
     """Create aggregation callback.
