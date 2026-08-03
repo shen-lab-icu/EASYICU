@@ -2830,6 +2830,8 @@ def _try_publish_native_export_arrow_fast_path(
             else:
                 for field in (
                     "excluded_rows",
+                    "excluded_untimed_empty_rows",
+                    "excluded_untimed_negative_rrt_criteria_rows",
                     "normalized_stay_level_rows",
                     "rows_with_los_bound",
                 ):
@@ -2965,6 +2967,8 @@ def _enforce_native_export_time_axis(
     audit: Dict[str, object] = {
         "policy": "icu_episode_with_24h_pre_post_allowance",
         "excluded_rows": 0,
+        "excluded_untimed_empty_rows": 0,
+        "excluded_untimed_negative_rrt_criteria_rows": 0,
         "normalized_stay_level_rows": 0,
         "fallback_upper_hours": ICU_TIME_FALLBACK_LIMIT_HOURS,
     }
@@ -2992,9 +2996,65 @@ def _enforce_native_export_time_axis(
     audit["rows_with_los_bound"] = int(
         frame["stay_id"].isin(stay_time_upper_bounds).sum()
     )
-    if not bool(invalid.any()):
+    kept = frame.loc[~invalid].copy() if bool(invalid.any()) else frame
+
+    # A full outer merge can retain a dependency-only row with no event time.
+    # In particular, ``rrt_criteria`` is calculated as a boolean expression, so
+    # an otherwise empty row becomes ``False`` instead of remaining missing.
+    # It is not a negative observation at an unknown time; it is a merge
+    # artifact.  The concept callback already removes this case, but the native
+    # publication boundary repeats the guard because later module-wide joins
+    # can recreate it.  Positive untimed criteria fail closed.
+    null_time = kept["charttime"].isna()
+    concept_columns = [
+        column
+        for column in kept.columns
+        if column not in {*_NATIVE_EXPORT_ID_COLUMNS, "charttime"}
+    ]
+    # Fold one column at a time instead of materialising a dense
+    # rows-by-concepts boolean DataFrame at the publication memory peak.
+    any_concept_value = pd.Series(False, index=kept.index)
+    for column in concept_columns:
+        any_concept_value |= kept[column].notna()
+    empty_untimed = null_time & ~any_concept_value
+    audit["excluded_untimed_empty_rows"] = int(empty_untimed.sum())
+
+    negative_rrt_artifact = pd.Series(False, index=kept.index)
+    if module == "renal" and "rrt_criteria" in kept.columns:
+        rrt_criteria = kept["rrt_criteria"].astype("boolean")
+        positive_untimed = null_time & rrt_criteria.eq(True).fillna(False)
+        if bool(positive_untimed.any()):
+            sample_ids = (
+                kept.loc[positive_untimed, "stay_id"]
+                .drop_duplicates()
+                .head(5)
+                .tolist()
+            )
+            raise ValueError(
+                "native renal export contains positive rrt_criteria rows without "
+                f"an event time; sample stay_id={sample_ids}"
+            )
+        other_concepts = [
+            column for column in concept_columns if column != "rrt_criteria"
+        ]
+        other_value = pd.Series(False, index=kept.index)
+        for column in other_concepts:
+            other_value |= kept[column].notna()
+        negative_rrt_artifact = (
+            null_time
+            & rrt_criteria.eq(False).fillna(False)
+            & ~other_value
+        )
+        audit["excluded_untimed_negative_rrt_criteria_rows"] = int(
+            negative_rrt_artifact.sum()
+        )
+
+    excluded_untimed = empty_untimed | negative_rrt_artifact
+    if bool(excluded_untimed.any()):
+        kept = kept.loc[~excluded_untimed].copy()
+    elif kept is frame:
         return frame, audit
-    kept = frame.loc[~invalid].copy()
+
     # Preserve canonical numeric dtype even when every row was excluded.
     kept["charttime"] = pd.to_numeric(
         kept["charttime"], errors="coerce"
