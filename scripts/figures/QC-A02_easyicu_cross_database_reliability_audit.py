@@ -38,9 +38,9 @@ ID_COLUMNS = {
 }
 INDEX_COLUMNS = ID_COLUMNS | {"charttime"}
 NATIVE_SCHEMA_VERSION = "easyicu_native_export_v2"
-CURRENT_QC_SOURCE_RUN_ID = "full6_native_v2_rowgrain_a9f8464e_20260803"
+CURRENT_QC_SOURCE_RUN_ID = "full6_native_v2_harmonized_e142e66a_20260804_r6"
 CURRENT_QC_SOURCE_RUN_METADATA_SHA256 = (
-    "72a0469451f22bc7c7954fbc1f46ec2b3b6925cc04efe7e91ddf1c5bd5a3c4c2"
+    "f969fd0c1570da8b97b2d0f9379cae21e3276dbdf21ee0f4816dabe462851200"
 )
 
 
@@ -180,6 +180,59 @@ DISTRIBUTION_ADJUDICATIONS: dict[
         "required_action": (
             "Do not rescale; use duration descriptively and account for "
             "database-specific infusion-record construction in pooled models."
+        ),
+    },
+    (
+        CURRENT_QC_SOURCE_RUN_ID,
+        CURRENT_QC_SOURCE_RUN_METADATA_SHA256,
+        "renal",
+        "fluid_balance",
+        "eicu vs sic",
+        "signed_median_direction_shift",
+    ): {
+        "adjudication_status": "source_trace_complete",
+        "adjudicated_origin": (
+            "source_coverage_and_recording_definition_heterogeneity"
+        ),
+        "adjudication_evidence": (
+            "Raw eICU matched input rows cover 3,092,548 records/98,282 "
+            "stays (median 50 mL), whereas matched urine rows cover "
+            "4,213,568 records/161,074 stays (median 140 mL). SIC uses paired "
+            "native hourly channels: DataID 2200 input has 1,965,368 "
+            "records/27,282 stays (median 82 mL) and DataID 725 urine has "
+            "1,691,793 records/22,926 stays (median 50 mL). The resulting "
+            "full-export medians are -50 mL in eICU and +28.33 mL in SIC."
+        ),
+        "required_action": (
+            "Do not rescale. Report the source-coverage difference, retain "
+            "database-stratified summaries and avoid interpreting pooled "
+            "absolute fluid-balance levels without coverage sensitivity."
+        ),
+    },
+    (
+        CURRENT_QC_SOURCE_RUN_ID,
+        CURRENT_QC_SOURCE_RUN_METADATA_SHA256,
+        "renal",
+        "fluid_balance_cumulative",
+        "eicu vs sic",
+        "signed_median_direction_shift",
+    ): {
+        "adjudication_status": "source_trace_complete",
+        "adjudicated_origin": (
+            "propagated_source_coverage_and_case_mix_heterogeneity"
+        ),
+        "adjudication_evidence": (
+            "Cumulative balance is the within-stay sum of the audited hourly "
+            "balance from ICU hour 0. This identity holds within 0.01 mL for "
+            "all 4,571,309 eICU and 2,074,074 SIC cumulative rows. Full-export "
+            "medians are -890 mL and +5,420.54 mL, respectively, so the sign "
+            "difference propagates the verified hourly source-coverage and "
+            "recording difference rather than a unit conversion."
+        ),
+        "required_action": (
+            "Do not rescale. Use database-stratified or within-database "
+            "change analyses, disclose input/output coverage and include a "
+            "coverage-sensitive pooled analysis if this variable is modeled."
         ),
     },
 }
