@@ -437,6 +437,20 @@ _MATRIX_COLUMNS = [
     "independent_variant",
     "notes",
 ]
+#: The flat columns ``sensitivity_specification_grid.csv`` always carries.
+#:
+#: The grid is ``RobustnessSpec.to_dict()`` run through ``json_normalize``, so
+#: the three override dicts flatten into a variable number of dotted columns
+#: (``missing_override.strategy`` and friends) that depend on which axes the
+#: plan locked.  These three are the ones every grid has, and ``description``
+#: is carried by no other product this runner writes -- which is what lets a
+#: consumer recognise the grid from its contract instead of from whichever
+#: name the Planner happened to promise it under.
+_SPECIFICATION_GRID_COLUMNS = [
+    "spec_id",
+    "axis",
+    "description",
+]
 _MEMBERSHIP_COLUMNS = [
     "spec_id",
     "axis",

@@ -35,6 +35,30 @@ specifications are compared against, the complete-case count as an
 annotation. A bound statistic whose recorded value is null is annotated as
 not reported rather than skipped; a real ``complete_case_n.json`` in the
 corpus carries exactly that.
+
+THE SPECIFICATION GRID IS THE PRODUCER'S OWN PRODUCT AND WAS NOT READABLE.
+The replay owner registers eight products; this capability listed five. A plan
+that bound one of the other three was refused -- silently, because declining
+is how a renderer says no -- and the figure went to the Coder, whose
+hand-written source-data bundle then failed ``figure_source_data`` lineage and
+killed the step. Measured 2026-08-03 over the 364 recorded robustness-figure
+steps: 56 refused, and **38 of the 56 (68%) were refused only for products
+this renderer's own producer had written**. The grid alone accounts for 22.
+
+The grid is read, not waved through. It carries one row per locked
+specification with the sentence the plan registered for it; the matrix carries
+only ``spec_id``. Labelling a forest plot ``complete case required variables``
+when the plan wrote a sentence explaining what that specification changes is
+the same figure with its legend deleted, so the description becomes the row
+label wherever the grid supplies one.
+
+It is recognised by CONTRACT, not by name. Real plans promise this one file
+under ``table:robustness_grid`` (x20) and ``table:specification_grid`` (x4);
+the binding's ``product`` field carries whichever name the Planner chose, so
+matching on it would own two spellings and abandon the third. What is
+invariant is the producer's own header -- ``description`` appears in no other
+product it writes -- and its own file stem, both imported from the producer so
+that a producer that changes its contract changes this gate with it.
 """
 
 from __future__ import annotations
@@ -55,7 +79,11 @@ from ...figures.publication import (
     save_publication_figure,
 )
 from ...schema import AnalysisStep
-from .deterministic_robustness import _MATRIX_COLUMNS
+from .deterministic_robustness import (
+    _MATRIX_COLUMNS,
+    _SPECIFICATION_GRID_COLUMNS,
+    ROBUSTNESS_REPLAY_OUTPUT_FILES,
+)
 from .effect_scale import describe_effect_scale
 from .figure_input_capability import TypedInputCapability
 
@@ -124,21 +152,96 @@ ROBUSTNESS_FIGURE_CAPABILITY = TypedInputCapability(
 #: that changes its contract changes this gate with it.
 _PRODUCER_CONTRACT_COLUMNS = frozenset(_MATRIX_COLUMNS)
 
+#: The same, for the specification grid: its guaranteed columns and the stem
+#: the producer writes it to.
+_PRODUCER_GRID_COLUMNS = frozenset(_SPECIFICATION_GRID_COLUMNS)
+_PRODUCER_GRID_FILENAME = ROBUSTNESS_REPLAY_OUTPUT_FILES["specification_grid"]
 
-def _binding_is_producer_contract(binding: Any) -> bool:
-    """Whether this binding is the deterministic replay owner's own matrix."""
+
+def _contract_columns(binding: Any) -> set[str] | None:
+    """The declared column header of a bound table, or ``None``."""
 
     if not isinstance(binding, Mapping):
-        return False
+        return None
     contract = binding.get("product_contract")
     if not isinstance(contract, Mapping):
-        return False
+        return None
     columns = contract.get("columns")
     if not isinstance(columns, list) or not all(
         isinstance(value, str) for value in columns
     ):
+        return None
+    return set(columns)
+
+
+def _binding_is_producer_contract(binding: Any) -> bool:
+    """Whether this binding is the deterministic replay owner's own matrix."""
+
+    columns = _contract_columns(binding)
+    return columns is not None and _PRODUCER_CONTRACT_COLUMNS <= columns
+
+
+def _binding_is_specification_grid(binding: Any) -> bool:
+    """Whether this binding is the replay owner's own specification grid.
+
+    Both halves are required. The header alone would also admit a Coder-written
+    table that happened to carry the three columns, and the file stem alone
+    would admit anything a step copied to that name; together they say the
+    producer wrote this file for this run.
+    """
+
+    if not isinstance(binding, Mapping):
         return False
-    return _PRODUCER_CONTRACT_COLUMNS <= set(columns)
+    if (
+        binding.get("declared_kind") != "table"
+        or binding.get("evidence_kind") != "table"
+    ):
+        return False
+    relative_path = binding.get("relative_path")
+    if not isinstance(relative_path, str) or not relative_path.endswith(
+        _PRODUCER_GRID_FILENAME
+    ):
+        return False
+    columns = _contract_columns(binding)
+    return columns is not None and _PRODUCER_GRID_COLUMNS <= columns
+
+
+def _specification_grid_key(resolved_bindings: Any) -> str | None:
+    """The one declared input key bound to the producer's grid, if exactly one.
+
+    Two keys bound to it would be one file promised as two products, and the
+    renderer cannot say which of the two the figure's lineage belongs to.
+    Returning ``None`` there declines the step, which is what already happened
+    before the grid was readable at all -- ambiguity must not buy ownership.
+    """
+
+    if not isinstance(resolved_bindings, Mapping):
+        return None
+    matches = [
+        str(key)
+        for key, binding in resolved_bindings.items()
+        if _binding_is_specification_grid(binding)
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _capability_for(resolved_bindings: Any) -> TypedInputCapability:
+    """This renderer's capability, widened by the grid key the plan chose.
+
+    ``TypedInputCapability`` is a set of literal keys because that is what a
+    step declares. The grid's key is not literal -- it is whatever the Planner
+    promised the product under -- so it can only be known once the bindings are
+    resolved, and it is added here rather than by relaxing the shared check for
+    every renderer.
+    """
+
+    grid_key = _specification_grid_key(resolved_bindings)
+    if grid_key is None or grid_key in ROBUSTNESS_FIGURE_CAPABILITY.readable:
+        return ROBUSTNESS_FIGURE_CAPABILITY
+    return TypedInputCapability(
+        required=ROBUSTNESS_FIGURE_CAPABILITY.required,
+        optional=ROBUSTNESS_FIGURE_CAPABILITY.optional | {grid_key},
+    )
 
 
 def robustness_figure_executor_owns_step(
@@ -170,7 +273,7 @@ def robustness_figure_executor_owns_step(
     if not (
         step.planned_analysis_role == "auxiliary"
         and _method_head(step.method) == "visualization"
-        and ROBUSTNESS_FIGURE_CAPABILITY.admits_step(step)
+        and _capability_for(resolved_bindings).admits_step(step)
         and len(products) == 1
         and products[0] is not None
         # A renderer that also froze a clustering would be choosing science.
@@ -317,6 +420,69 @@ def _load_matrix(
     return frame, binding, inputs
 
 
+def _load_specification_grid(
+    *,
+    run_dir: Path,
+    inputs: Mapping[str, Any],
+) -> tuple[str | None, pd.DataFrame | None]:
+    """Read the bound specification grid, verified the way the matrix is.
+
+    Returns ``(None, None)`` when the plan bound no grid. Anything bound but
+    unreadable raises: this renderer already claimed the step on the strength
+    of that binding, so degrading to unlabelled rows would publish a figure
+    quietly missing what the plan asked it to show.
+    """
+
+    key = _specification_grid_key(inputs)
+    if key is None:
+        return None, None
+    binding = inputs[key]
+    expected_sha256 = str(binding.get("sha256") or "")
+    relative_path = binding.get("relative_path")
+    if not re.fullmatch(r"[0-9a-f]{64}", expected_sha256) or not isinstance(
+        relative_path, str
+    ):
+        raise ValueError(f"{key} authority binding is incomplete")
+    path = (run_dir.resolve() / relative_path).resolve()
+    try:
+        path.relative_to(run_dir.resolve())
+    except ValueError as exc:
+        raise ValueError(f"{key} binding escapes the run directory") from exc
+    if path.is_symlink() or not path.is_file() or path.suffix.lower() != ".csv":
+        raise ValueError(f"{key} must be a regular bound CSV")
+    if _canonical_sha256(path) != expected_sha256:
+        raise ValueError(f"{key} digest verification failed")
+    frame = pd.read_csv(path)
+    if not _PRODUCER_GRID_COLUMNS <= set(frame.columns):
+        raise ValueError(f"{key} bytes disagree with the producer's grid header")
+    return key, frame
+
+
+def _specification_notes(grid: pd.DataFrame | None) -> list[str]:
+    """What each locked specification changes, as the figure's own notes.
+
+    This is where the grid's ``description`` belongs, and it is not the axis.
+    Measured over the 65 recorded specification descriptions: 95 to 232
+    characters, median 161 -- full sentences. Set as tick labels they pushed
+    the axes into the right quarter of the canvas and produced an unreadable
+    forest plot; a figure note is where a journal puts the sentence explaining
+    a specification, and the axis keeps the short identity that distinguishes
+    the rows.
+
+    A blank description contributes nothing rather than an empty note.
+    """
+
+    if grid is None:
+        return []
+    notes: list[str] = []
+    for spec_id, description in zip(grid["spec_id"], grid["description"]):
+        key = str(spec_id).strip()
+        text = str(description).strip()
+        if key and text and text.lower() != "nan":
+            notes.append(f"{_reader_label(key)}: {text}")
+    return notes
+
+
 ROBUSTNESS_SUMMARY_TABLE_INPUT = "table:robustness_summary"
 
 
@@ -337,10 +503,9 @@ def robustness_figure_consumed_input_keys(
     """
 
     bound = resolved_bindings if isinstance(resolved_bindings, Mapping) else {}
+    capability = _capability_for(resolved_bindings)
     keys = [ROBUSTNESS_FIGURE_INPUT]
-    keys.extend(
-        key for key in sorted(ROBUSTNESS_FIGURE_CAPABILITY.optional) if key in bound
-    )
+    keys.extend(key for key in sorted(capability.optional) if key in bound)
     return tuple(dict.fromkeys(keys))
 
 
@@ -351,6 +516,7 @@ def _write_bound_parent_source_data(
     figure_product: str,
     bound_inputs: Mapping[str, Any],
     bound_statistics: Sequence[tuple[str, bool, float | None]],
+    specification_grid: pd.DataFrame | None = None,
 ) -> list[str]:
     """Write one source-data companion per bound parent beyond the matrix.
 
@@ -383,6 +549,14 @@ def _write_bound_parent_source_data(
                 )
                 pd.read_csv(summary_path).to_csv(companion, index=False)
                 written.append(companion.name)
+
+    if specification_grid is not None:
+        companion = out_dir / f"{figure_product}_specification_grid_source_data.csv"
+        # Written verbatim, like the matrix: a copy is traceable to its parent
+        # row for row, and any reshaping here would be the renderer inventing a
+        # lineage the producer never wrote.
+        specification_grid.to_csv(companion, index=False)
+        written.append(companion.name)
 
     rows = [
         {"statistic": input_key.split(":", 1)[-1], "value": value}
@@ -522,6 +696,10 @@ def run_robustness_figure(
         inputs=bound_inputs,
         input_key=ROBUSTNESS_COMPLETE_CASE_INPUT,
     )
+    _grid_key, specification_grid = _load_specification_grid(
+        run_dir=Path(run_dir),
+        inputs=bound_inputs,
+    )
 
     source_path = out_dir / f"{figure_product}_source_data.csv"
     frame.to_csv(source_path, index=False)
@@ -542,6 +720,7 @@ def run_robustness_figure(
             (ROBUSTNESS_PRIMARY_ESTIMATE_INPUT, anchor_bound, anchor_value),
             (ROBUSTNESS_COMPLETE_CASE_INPUT, complete_case_bound, complete_case_n),
         ),
+        specification_grid=specification_grid,
     )
     source_data_names = [source_path.name, *companion_sources]
 
@@ -654,12 +833,16 @@ def run_robustness_figure(
             }
         ],
         source_data=list(source_data_names),
-        statistics_note=(
-            "Estimates and intervals are reproduced from the bound robustness "
-            "matrix without recomputation. The executor introduces no cohort, "
-            "exposure, outcome, specification, missing-data or modeling "
-            "decision, and draws every locked specification."
-        ),
+        statistics_note=[
+            (
+                "Estimates and intervals are reproduced from the bound "
+                "robustness matrix without recomputation. The executor "
+                "introduces no cohort, exposure, outcome, specification, "
+                "missing-data or modeling decision, and draws every locked "
+                "specification."
+            ),
+            *_specification_notes(specification_grid),
+        ],
     )
     outputs = save_publication_figure(
         fig,
