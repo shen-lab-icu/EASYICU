@@ -988,6 +988,35 @@ def _dictionary_declared_levels(source_concept: Optional[str]) -> Optional[List[
     return levels
 
 
+#: Representation transforms whose column still holds the SOURCE CONCEPT'S OWN
+#: VALUES, and is therefore described by that concept's declared levels.
+#:
+#: Everything else is a different quantity derived from those values -- a count
+#: of them, a flag that any were seen, the time of the first one, a numeric
+#: summary -- and the concept's level set says nothing about its domain.
+#:
+#: MEASURED over every recorded resolved-input contract, which is where this
+#: enumeration comes from rather than from judgement: 13 distinct
+#: (physical_role, representation_transform) pairs exist, and exactly one --
+#: ``stay_level_unique_value`` -- carries the value itself. The rest are
+#: ``window_nonnull_count`` (a count), ``window_measurement_status`` /
+#: ``window_presence_max`` / ``whole_stay_any_truthy`` (0-1 flags),
+#: ``window_first_time`` / ``window_last_time`` / ``first_truthy_event_time``
+#: (timestamps) and ``window_numeric_first|max|mean|min`` (numeric summaries).
+_VALUE_PRESERVING_TRANSFORMS = frozenset({"stay_level_unique_value"})
+
+
+def _transform_preserves_concept_values(transform: Any) -> bool:
+    """Whether a column under this transform still holds the concept's values.
+
+    An unknown transform answers False. A new derived representation must say
+    it preserves the value domain before it inherits one -- the failure this
+    guards is a contract nothing can satisfy, so ambiguity fails closed.
+    """
+
+    return str(transform or "") in _VALUE_PRESERVING_TRANSFORMS
+
+
 def _declared_domain(
     variable: ConceptDescriptor,
 ) -> tuple[Optional[List[Any]], Optional[str]]:
@@ -1093,6 +1122,31 @@ def resolved_raw_input_contracts(
         declared_levels, declared_basis = (
             _declared_domain(variable) if variable is not None else (None, None)
         )
+        if declared_basis == "declared_concept_dictionary_levels" and not (
+            _transform_preserves_concept_values(fact.get("representation_transform"))
+        ):
+            # A CONCEPT'S LEVELS DESCRIBE ITS VALUES, NOT A COUNT OF THEM.
+            #
+            # This fallback borrows the source concept's declared levels when
+            # nothing else fixed a domain. For the concept's own column that is
+            # right; for a companion derived from it, it publishes a contract
+            # the column cannot satisfy. h1 (2026-08-03) died on exactly that:
+            # ``mech_vent_n`` is ``physical_role=count`` /
+            # ``window_nonnull_count`` / int64, holding 20-25 observations per
+            # stay, and it was handed ``['invasive', 'noninvasive']`` --
+            # 92,398 of 92,398 rows outside their own declared domain, and the
+            # generated code raised, correctly, on what it had been told.
+            #
+            # The sibling ``mech_vent_measured`` escaped only by accident: its
+            # metadata already declared ``[0, 1]``, so this fallback never ran
+            # for it. The count had no metadata domain, so it took the
+            # concept's.
+            #
+            # Only the ORDINAL branch is left alone: those levels come from the
+            # host's own ICU rules, and a max over ordinal stages is still a
+            # stage. The dictionary branch is the one that borrows a
+            # categorical value domain, so it is the one gated.
+            declared_levels, declared_basis = None, None
         if "allowed_values" not in fact and declared_levels:
             fact["allowed_values"] = list(declared_levels)
             fact["allowed_values_basis"] = declared_basis
