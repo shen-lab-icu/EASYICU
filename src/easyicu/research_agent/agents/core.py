@@ -70,6 +70,10 @@ from ..icu_rules import (
 )
 from ..providers.protocol import LLMClient, LLMMessage
 from ..providers.llm import llm_is_mockish
+from ..providers.prompt_budget import (
+    CONSERVATIVE_BYTES_PER_TOKEN,
+    DEFAULT_MAX_PROMPT_TOKENS,
+)
 from ..providers.factory import authorized_complete
 from ..repairs.patch import (
     PATCH_FORMAT,
@@ -1137,7 +1141,39 @@ def _validate_table_one_observed_levels(
         bind_step_declared_levels(step, context)
 
 
-_PLANNER_PROMPT_BYTE_LIMIT = 80_000
+# The Planner's plan-generation call is the largest prompt this system builds,
+# and it is the one budgeted role ``PromptBudgetClient`` does not wrap (only the
+# Coder transports are, in execution/phase.py). So this constant is that call's
+# ONLY ceiling -- not a second opinion layered on a transport check.
+#
+# It used to be a hard-coded 80,000. That number predates the review written
+# down in ``providers/prompt_budget.py``, which asked exactly this question for
+# every other consumer and answered it: a guard meant to catch runaway assembly
+# belongs ABOVE normal traffic, not inside it, so every declared consumer gets
+# ``DEFAULT_MAX_PROMPT_TOKENS``. Under the same conservative estimator 80,000
+# bytes is ~26,700 tokens -- two thirds of that reviewed envelope -- and the
+# module that raised the others names byte-written ceilings as precisely the
+# thing that "kept tripping, and why past work went into shrinking prompts to
+# fit rather than questioning the number."
+#
+# MEASURED on the full nine-task benchmark, 2026-08-02, from each run's own
+# ``planner_prompt_metrics.json`` (see 项目进度/benchmark实验/
+# measure_planner_prompt_headroom.py): of the seven tasks that reached a
+# Planner call, FOUR had already spent the entire catalog ladder, and h3
+# cleared 80,000 by 189 bytes. Two more -- m2 (82,987) and h2 -- were refused
+# outright and produced zero steps for zero cost. A guard that seven of nine
+# real tasks graze and two cross is inside normal traffic by definition. The
+# transport never imposed 80,000 either: a 101,878-byte Planner prompt was
+# delivered successfully in a recorded E1 replay.
+#
+# Deriving it keeps ONE reviewed number where there were two, so the next
+# revision of the envelope moves both together. This raises the ceiling; it
+# does not license a fatter directive. The fixed-cost ratchet in
+# ``test_the_planner_prompt_leaves_room_for_the_context.py`` is untouched and
+# still binds the part that is ours to control.
+_PLANNER_PROMPT_BYTE_LIMIT = int(
+    DEFAULT_MAX_PROMPT_TOKENS * CONSERVATIVE_BYTES_PER_TOKEN
+)
 _PLANNER_RETRY_PROJECTION_BYTE_LIMIT = 9_000
 
 
