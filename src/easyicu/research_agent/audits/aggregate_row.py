@@ -78,6 +78,35 @@ MAX_ROWS_FOR_AGGREGATE_ROW = 60
 #: How many independent count columns must agree that the same row is the total.
 MIN_AGREEING_COUNT_COLUMNS = 2
 
+#: How many of the OTHER rows must actually contribute to that sum.
+#:
+#: ``MIN_ROWS_FOR_AGGREGATE_ROW`` states the same argument in terms of rows: with
+#: two rows, "A equals the sum of the others" is just ``A == B``, which is a
+#: coincidence and not a total.  But the degeneracy is not about how many rows
+#: exist -- it is about how many of them carry any of the quantity.  A five-row
+#: table whose other four read ``[52707, 0, 0, 0]`` says exactly ``A == B``
+#: again, and the row floor does not see it.
+#:
+#: MEASURED on m1_hepatobiliary_missingness, 2026-08-03 (``..._7e98a59_verify05``).
+#: Step 03 emitted five audit tables over the concepts bili, sofa2_liver, death,
+#: age and sex.  SOFA-2 liver stage is COMPUTED FROM bilirubin, so the two share
+#: a missingness count to the row (52,707 of 94,458); death, age and sex are
+#: never missing, so they contribute 0.  Row 0 therefore "equalled the sum of the
+#: others" in several independent columns at once, and all five tables were
+#: refused as unlabelled totals.  None of them has a total row.  The step's own
+#: correct output went to the Coder for repair, the repair mutated it, the
+#: concept audit then blocked the mutated code, and 08_missingness_audit_panel
+#: died as collateral -- three of the task's failures from one arithmetic
+#: coincidence with a clinical cause.
+#:
+#: MEASURED over the recorded corpus: 1,374 emitted tables of 3-60 rows, 143
+#: flagged, 111 of which already declare a role column.  137 have two or more
+#: contributing rows and stay flagged -- including ``absolute_risk_context.csv``
+#: (13 runs), the table this module was written for, whose 660 + 340 = 1000 is
+#: exactly the shape this rule preserves.  Six are degenerate: the five above,
+#: and one that already declares ``status`` and so was never refused.
+MIN_CONTRIBUTING_ROWS_FOR_AGGREGATE_ROW = 2
+
 
 def _role_column(columns: Sequence[Any]) -> str | None:
     for column in columns:
@@ -130,12 +159,17 @@ def aggregate_row_candidates(frame: pd.DataFrame) -> dict[int, list[str]]:
         return {}
     agreeing: dict[int, list[str]] = {}
     for position in range(len(frame)):
-        columns = [
-            column
-            for column, values in counts.items()
-            if values.drop(values.index[position]).sum() == values.iloc[position]
-            and values.drop(values.index[position]).sum() > 0
-        ]
+        columns = []
+        for column, values in counts.items():
+            others = values.drop(values.index[position])
+            if others.sum() <= 0 or others.sum() != values.iloc[position]:
+                continue
+            # A sum only one row contributes to is that row, and "equal to the
+            # one other nonzero row" is the coincidence MIN_ROWS_FOR_AGGREGATE_ROW
+            # already refuses to read as a total.
+            if int((others > 0).sum()) < MIN_CONTRIBUTING_ROWS_FOR_AGGREGATE_ROW:
+                continue
+            columns.append(column)
         if len(columns) >= MIN_AGREEING_COUNT_COLUMNS:
             agreeing[position] = sorted(columns)
     return agreeing
