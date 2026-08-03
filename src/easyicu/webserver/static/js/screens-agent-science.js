@@ -495,7 +495,7 @@
           </div>
           <div class="row gap-8 wrap" style="justify-content:flex-end;">
             <span class="pill ${ready ? 'ok' : 'warn'}"><span class="dot"></span>${esc(pipeline.status_label || bi('Needs review', '待审阅'))}</span>
-            <button class="btn sm" data-ag-sci-open-ideas>${icon('arrow', 12)} ${bi('Open Idea Mining', '打开 Idea Mining')}</button>
+            <button class="btn sm" data-ag-sci-open-ideas>${icon('arrow', 12)} ${bi('Open Idea Mining', '打开想法挖掘')}</button>
           </div>
         </div>
         <div class="ag-sci-discovery-stats">

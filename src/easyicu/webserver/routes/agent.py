@@ -363,10 +363,7 @@ def post_agent_run_provider_config(body: Dict[str, Any]) -> dict:
 
     # Fail closed: writing provider credentials must not silently flip the
     # global AI opt-in — only an explicit enable_ai=true may enable it.
-    updates: Dict[str, Any] = {"ai_enabled": enable_ai}
-    if updates["ai_enabled"]:
-        updates["agent_model_mode"] = "external"
-    settings = settings_store.update_settings(updates)
+    settings = settings_store.update_settings({"ai_enabled": enable_ai})
     return {
         **meta,
         "settings": {**settings, "about": settings_store.about()},
