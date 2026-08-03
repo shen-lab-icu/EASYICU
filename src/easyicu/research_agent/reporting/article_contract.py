@@ -448,6 +448,44 @@ def _declared_primary_lineage_step_ids(plan: AnalysisPlan) -> Set[str]:
     return allowed
 
 
+#: Roles for which the SCHEMA, not this contract, fixes the product name.
+#:
+#: ``AnalysisStep`` refuses a step carrying a ``table_one_spec`` unless its
+#: expected outputs include ``table:table_one`` -- there is exactly one way to
+#: declare a Table 1, and it is not the contract's display id.  Every playbook
+#: family names this role's module ``baseline_table`` or ``descriptive_table``,
+#: so a remediation hint built from the module id alone names the one product
+#: the schema will reject, while ``table:table_one`` -- which ``_ROLE_ALIASES``
+#: already credits for this role -- is never mentioned.
+#:
+#: MEASURED on h1_ventilation_survival, 2026-08-03: five planner attempts, five
+#: distinct rejections, two of them this loop -- ``missing required article
+#: contract role(s): baseline_context ... 'table:baseline_table'`` followed by
+#: ``table_one_spec requires expected output 'table:table_one'``.  The task has
+#: never produced a plan.
+#:
+#: This is a schema law with one entry, not a name allowlist: the accompanying
+#: test derives the check from ``AnalysisStep`` itself and fails if a hinted
+#: product stops being legally emittable, so a future law cannot drift from it.
+SCHEMA_MANDATED_ROLE_PRODUCTS: Dict[str, str] = {
+    "baseline_context": "table:table_one",
+}
+
+
+def hinted_typed_products(role: str, module_ids: Sequence[str]) -> List[str]:
+    """The typed products to offer the Planner for an unmet role.
+
+    Returns the schema-mandated product where one exists, because a hint the
+    schema refuses is worse than no hint: it costs an attempt and returns the
+    Planner to the same wall.
+    """
+
+    mandated = SCHEMA_MANDATED_ROLE_PRODUCTS.get(role)
+    if mandated is not None:
+        return [mandated]
+    return [f"table:{module_id}" for module_id in module_ids]
+
+
 def _plan_outputs_match_requirement(
     output_declarations: Set[str],
     requirement: ArticleDisplayRequirement,

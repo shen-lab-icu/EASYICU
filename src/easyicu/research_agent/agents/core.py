@@ -1630,6 +1630,7 @@ class PlannerAgent:
             from ..reporting.article_contract import (
                 build_article_analysis_contract,
                 empty_primary_lineage_reason,
+                hinted_typed_products,
                 validate_plan_against_article_contract,
             )
 
@@ -1683,7 +1684,8 @@ class PlannerAgent:
                     if not module_ids:
                         continue
                     typed_examples = ", ".join(
-                        f"'table:{module_id}'" for module_id in module_ids[:3]
+                        f"{product!r}"
+                        for product in hinted_typed_products(role, module_ids)[:3]
                     )
                     marker = " (headline_owned)" if role in headline_roles else ""
                     completion_hints.append(f"{role}{marker} -> {typed_examples}")
