@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 
 from easyicu.webserver import capabilities
@@ -39,8 +39,17 @@ def get_settings() -> dict:
 
 @router.post("/api/settings")
 def post_settings(patch: Dict[str, Any]) -> dict:
-    """Merge-update known settings keys and persist locally."""
-    return {**settings_store.update_settings(patch), "about": settings_store.about()}
+    """Merge-update known settings keys and persist locally.
+
+    A patch naming an unknown, retired or invalid key is a 400. Answering 200
+    and dropping the key left the client unable to tell a stored value from a
+    discarded one.
+    """
+    try:
+        updated = settings_store.update_settings(patch)
+    except settings_store.SettingsValidationError as exc:
+        raise HTTPException(status_code=400, detail=exc.detail) from exc
+    return {**updated, "about": settings_store.about()}
 
 
 @router.post("/api/settings/reset")

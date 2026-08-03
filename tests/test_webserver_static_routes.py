@@ -172,7 +172,7 @@ def test_native_assistant_labels_disambiguate_page_guide_guided_copilot_and_agen
     assert "Open Copilot" not in help_js
 
     assert "css/dock.css?v=20260625-stage99" in index_html
-    assert "js/app.js?v=20260728-demo-mode1" in index_html
+    assert "js/app.js?v=20260802-stage-status" in index_html
     assert "js/copilot-dock.js?v=20260712-ux-fixes" in index_html
     assert "js/screens-extraction.js?v=20260712-ux-fixes" in index_html
     assert "js/screens-agent.js?v=20260712-ux-fixes" in index_html
@@ -315,7 +315,7 @@ def test_native_tutorial_screen_uses_active_language_without_mixed_copy() -> Non
     assert ">No tokens, no setup, no patient data. The demo generates" not in help_js
     assert "How a study moves through EasyICU</h2>" not in help_js
 
-    assert "js/app.js?v=20260728-demo-mode1" in index_html
+    assert "js/app.js?v=20260802-stage-status" in index_html
     assert "js/screens-help.js?v=20260712-ux-fixes" in index_html
 
 
@@ -1007,9 +1007,12 @@ def test_native_settings_controls_are_backend_wired() -> None:
     assert ".set-nav-btn" in _static_css("pages.css")
     assert "easyicu_settings_diagnostics.json" in settings_js
     assert "lockedCtl" in settings_js
-    assert "per run in Agent Projects" in settings_js
-    assert "strict enforced" in settings_js
-    assert "There is no telemetry collector" in settings_js
+    # The Research Agent section used to hold four inert placards asserting run
+    # behaviour the page could not observe. It now points at the surface that
+    # actually owns those decisions.
+    assert "data-settings-open=\"agent\"" in settings_js
+    assert "strict enforced" not in settings_js
+    assert "There is no telemetry collector" not in settings_js
     assert "恢复默认设置" in settings_js
     assert "工作区 · 设置" in settings_js
     assert "本地路径" in settings_js
@@ -1406,9 +1409,9 @@ def test_native_idea_mining_is_first_class_route_and_backend_wired() -> None:
     assert "Already have data? Start with Extract Data." in app_js
     assert "wsi-sub" in app_js
     assert "css/ideas.css?v=20260630-gate-first-ideas" in index_html
-    assert "css/shell.css?v=20260626-owner" in index_html
+    assert "css/shell.css?v=20260802-stage-status" in index_html
     assert "js/icons.js?v=20260625-stage84" in index_html
-    assert "js/app.js?v=20260728-demo-mode1" in index_html
+    assert "js/app.js?v=20260802-stage-status" in index_html
     assert "css/ideas-review.css?v=20260702-idea-review-handoff" in index_html
     assert "css/ideas-connectors.css?v=20260702-zotero-simple" in index_html
     assert "js/screens-ideas-zotero.js?v=20260702-zotero-origin" in index_html

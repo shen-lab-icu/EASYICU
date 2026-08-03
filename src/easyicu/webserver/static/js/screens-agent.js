@@ -845,7 +845,7 @@
           <h3>${t('No local projects yet', '还没有本地项目')}</h3>
           <p>${t('An Agent project is a local study folder — a question plus its runs, outputs, and an evidence-checked draft. Two ways to start one: turn a question into a plan in Idea Mining, or extract a cohort and hand it off from Data Extraction. Then it appears here.', 'Agent 项目就是一个本地研究文件夹 —— 一个问题加上它的运行、产出和经过证据核验的草稿。两种创建方式：在 Idea 挖掘里把问题变成计划，或先抽取队列再从数据抽取交接过来。之后它会出现在这里。')}</p>
           <div class="row gap-8 mt-12" style="justify-content:center;flex-wrap:wrap;">
-            <button class="btn primary sm" data-nav="ideas">${icon('target', 12)} ${t('Open Idea Mining', '打开 Idea Mining')}</button>
+            <button class="btn primary sm" data-nav="ideas">${icon('target', 12)} ${t('Open Idea Mining', '打开想法挖掘')}</button>
             <button class="btn sm" data-nav="extraction">${icon('extract', 12)} ${t('Extract data', '抽取数据')}</button>
             <button class="btn sm" data-ag-refresh-projects>${icon('refresh', 12)} ${t('Refresh', '刷新')}</button>
           </div>
@@ -906,7 +906,7 @@
             ${icon(listCollapsed ? 'list' : 'close', 13)} ${listCollapsed ? t('Show projects', '显示项目') : t('Focus view', '专注视图')}
           </button>
           <button class="btn sm" data-ag-tab="workflow">${icon('layers', 13)} ${t('Planning Blocks', '规划块')}</button>
-          ${s.projectKind === 'canonical9' ? '' : `<button class="btn sm" data-nav="ideas">${icon('target', 13)} ${t('Open Idea Mining', '打开 Idea 挖掘')}</button>`}
+          ${s.projectKind === 'canonical9' ? '' : `<button class="btn sm" data-nav="ideas">${icon('target', 13)} ${t('Open Idea Mining', '打开想法挖掘')}</button>`}
           <span class="pill ok"><span class="dot"></span>${t('Analysis workspace', '分析运行工作台')}</span>
         </div>
       </div>
@@ -1491,7 +1491,7 @@
             <div class="ag-block-detail-desc">${bi(selected.desc)}</div>
             ${blockContract(selected)}
             <div class="row wrap gap-8 mt-12">
-              <button class="btn sm" data-nav="${selected.route || 'agent'}">${icon('arrow', 12)} ${selected.route === 'ideas' ? t('Open Idea Mining', '打开 Idea Mining') : t('Open Agent Projects', '打开研究项目')}</button>
+              <button class="btn sm" data-nav="${selected.route || 'agent'}">${icon('arrow', 12)} ${selected.route === 'ideas' ? t('Open Idea Mining', '打开想法挖掘') : t('Open Agent Projects', '打开研究项目')}</button>
               <span class="ag-block-note">${t('Selected step details. Execution remains gated by active export, provider consent, and evidence review.', '当前选中步骤详情。执行仍由 active export、provider 授权和证据审阅约束。')}</span>
             </div>
           </div>` : ''}

@@ -1,10 +1,65 @@
-"""Host-header protection with correct bracketed IPv6 handling."""
+"""Host-header protection with correct bracketed IPv6 handling.
+
+This module owns the *host access policy* — which Host headers are accepted
+and whether a forwarding proxy is trusted. Both the middleware that enforces
+it and the Settings → Privacy panel that reports it read it from here, so the
+UI cannot claim a guarantee the running server is not applying.
+"""
 
 from __future__ import annotations
 
+import os
+from typing import Any, Dict
 from urllib.parse import urlsplit
 
 from starlette.responses import PlainTextResponse
+
+#: Headers a reverse proxy adds. A browser on this machine never sends them.
+PROXY_HEADERS = (
+    "x-forwarded-for",
+    "x-forwarded-host",
+    "x-forwarded-proto",
+    "x-real-ip",
+    "forwarded",
+)
+
+DEFAULT_ALLOWED_HOSTS = ("127.0.0.1", "localhost", "[::1]", "testserver")
+
+_TRUTHY = {"1", "true", "yes", "on"}
+
+
+def _env_flag(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in _TRUTHY
+
+
+def trusts_proxy() -> bool:
+    """True when an operator has vouched that the proxy authenticates."""
+    return _env_flag("EASYICU_WEB_TRUST_PROXY")
+
+
+def resolve_allowed_hosts() -> list[str]:
+    configured = [
+        host.strip()
+        for host in os.getenv("EASYICU_WEB_ALLOWED_HOSTS", "").split(",")
+        if host.strip()
+    ]
+    if "*" in configured and not _env_flag("EASYICU_WEB_ALLOW_ANY_HOST"):
+        configured = [host for host in configured if host != "*"]
+    return configured or list(DEFAULT_ALLOWED_HOSTS)
+
+
+def local_access_policy() -> Dict[str, Any]:
+    """The live local-access facts the Privacy panel renders."""
+    allowed = resolve_allowed_hosts()
+    proxy_trusted = trusts_proxy()
+    return {
+        "loopback_clients_only": True,
+        "allowed_hosts": allowed,
+        "any_host_allowed": "*" in allowed,
+        "proxy_headers_trusted": proxy_trusted,
+        "proxy_headers_rejected": not proxy_trusted,
+        "enforced": "*" not in allowed and not proxy_trusted,
+    }
 
 
 def _normalize_host(value: str) -> str | None:
