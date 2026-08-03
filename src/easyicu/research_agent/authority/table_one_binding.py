@@ -92,7 +92,32 @@ def bind_table_one_execution_spec(
     payload["group_levels"] = group_levels
     observed_payload: dict[str, Any] = {planner_spec.group_by: observed_groups}
     for index, variable_spec in enumerate(planner_spec.variables):
-        if variable_spec.summary != "count_percent":
+        # WHAT NEEDS RESOLVING IS A DECLARED LEVEL SET, NOT A SUMMARY STYLE.
+        #
+        # This read ``summary != "count_percent": continue``, and an ordinal row
+        # declares closed levels while summarising as ``median_iqr`` -- so its
+        # placeholders survived into the execution spec, into the host's own
+        # generated code, and into ``build_grouped_table_one``, which refused
+        # the column it was handed: "sofa2_resp_max contains values outside the
+        # Planner-declared closed levels". The five declared tokens were the
+        # host's own; the column held 0/1/2/3/4. The Coder was then asked to
+        # repair the host's script, changed the spec -- the only change that
+        # could make it run -- and ``table_one_spec_not_planner_owned`` refused
+        # that too. Two host layers, one contradiction, and the step plus the
+        # figure depending on it both died (m1, 2026-08-03).
+        #
+        # MEASURED over every recorded plan, deduplicated per (run, step): 348
+        # Table 1 specs, 18 (5.2%) carry a level set this filter skipped, 56
+        # variables in all, and every one of them is ordinal x median_iqr.
+        #
+        # Nothing that resolves today stops resolving, and that is a type
+        # guarantee rather than a corpus observation: ``TableOneVariableSpec``
+        # refuses ``count_percent`` with fewer than two declared levels, so
+        # every variable the old clause admitted this one admits too. Keeping
+        # ``or summary == "count_percent"`` beside it was drafted and dropped
+        # -- the schema makes it unreachable, and a clause that can never fire
+        # reads as protection while protecting nothing.
+        if not variable_spec.levels:
             continue
         levels, observed = _resolve_levels(
             name=variable_spec.name,
