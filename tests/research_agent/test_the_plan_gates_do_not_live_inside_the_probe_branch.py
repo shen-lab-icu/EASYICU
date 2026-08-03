@@ -97,14 +97,73 @@ def test_the_replan_still_receives_the_probe_payload_when_there_is_one() -> None
 
     The probe summary is real evidence for a replan when it exists; the point
     of the change is that its ABSENCE no longer cancels the gates.
+
+    This used to assert the literal expression
+    ``completed_records=[probe_record] if probe_record is not None else None``.
+    That is a source-text lock, not the property: it fails for any rewrite that
+    still delivers the probe, and it passes for any rewrite that keeps the
+    spelling while breaking delivery. It duly failed when that argument became
+    ``per_step_records`` -- a list the probe record is appended to, so the probe
+    still reaches the replanner, along with every other completed step the
+    replan's completed-step preservation authority has to see.
+
+    So assert the composition instead: the probe record goes into
+    ``per_step_records``, and ``per_step_records`` is what the replan is given.
     """
 
     source = _source()
+    tree = ast.parse(source)
 
     assert "probe_summary_payload=probe_summary" in source
-    assert (
-        "completed_records=[probe_record] if probe_record is not None else None"
-        in source
+    assert "per_step_records.append(probe_record)" in source, (
+        "the probe record must still be recorded as a completed record, or "
+        "handing per_step_records to the replan no longer delivers the probe"
+    )
+
+    replan_calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_maybe_replan"
+    ]
+    assert replan_calls, "the replan call is no longer recognisable"
+
+    probe_replans = [
+        call
+        for call in replan_calls
+        if any(
+            keyword.arg == "probe_summary_payload"
+            and (ast.get_source_segment(source, keyword.value) or "")
+            == "probe_summary"
+            for keyword in call.keywords
+        )
+    ]
+    assert probe_replans, "no replan call is fed the probe payload any more"
+
+    offenders = {
+        call.lineno: next(
+            (
+                ast.get_source_segment(source, keyword.value) or ""
+                for keyword in call.keywords
+                if keyword.arg == "completed_records"
+            ),
+            None,
+        )
+        for call in probe_replans
+    }
+    offenders = {
+        line: value for line, value in offenders.items() if value != "per_step_records"
+    }
+    assert not offenders, (
+        "every replan fed the probe payload must also be fed EVERY completed "
+        f"record, not a hand-built subset; these are not: {offenders}. A subset "
+        "that omits an already-sealed plan step leaves the completed-step "
+        "preservation authority with nothing to restore -- it then reports a "
+        "restore it did not perform, and every downstream consumer of that "
+        "step dies on producer_plan_snapshot_mismatch. Measured: 2 of the 12 "
+        "recorded runs that both materialize a host cohort and revise their "
+        "plan ended exactly there (h1 completed 1 of 10 steps, h2 1 of 7)."
     )
 
 
