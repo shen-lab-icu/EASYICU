@@ -161,7 +161,13 @@
       .then(snapshot => applySnapshot(record, snapshot, requestGeneration))
       .catch(error => {
         if (!isCurrent(record, requestGeneration)) return false;
-        if (/HTTP\s+404\b/.test(String(error && error.message || error))) {
+        // err.status, not the message. api.js puts the backend's human reason
+        // in .message for 4xx and the "path -> HTTP 404" string in .technical,
+        // and this route answers 404 with detail="unknown job" — so matching
+        // /HTTP 404/ against .message never fired, and a job the server had
+        // already forgotten was reported to the user as a dropped connection
+        // they could resume.
+        if (error && error.status === 404) {
           surfaceMissing(record);
         } else {
           closeStream();
