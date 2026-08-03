@@ -14121,7 +14121,8 @@
       "Tidal Volume, Delivered",
       "Vt Spontaneous (mL)"
      ],
-     "_comment": "2026-07-03 semantic coverage review: added delivered/spontaneous observed tidal-volume labels; settings and RSBI-derived labels remain excluded."
+     "callback": "eicu_tidal_volume_mixed_scale",
+     "_comment": "2026-08-03 unit audit: respiratoryCharting has no unit column and these labels mix mL values with L-scale decimals. Normalize per raw row before hourly aggregation using same-stay mL evidence or adult age; preserve explicit paediatric mL and fail closed on ambiguous low values. Settings and RSBI-derived labels remain excluded."
     },
     {
      "ids": "TV",
@@ -14283,9 +14284,18 @@
      "ids": [
       "Tidal Volume (set)",
       "Set Vt (Servo,LTV)",
-      "Adult Con Setting Set Vt",
-      "Set Vt (Drager)"
-     ]
+      "Adult Con Setting Set Vt"
+     ],
+     "callback": "eicu_tidal_volume_mixed_scale",
+     "_comment": "2026-08-03 unit audit: non-Drager set labels are predominantly mL but contain unit-ambiguous low values; normalize with same-stay/adult evidence and quarantine unresolved values before aggregation."
+    },
+    {
+     "table": "respiratorycharting",
+     "sub_var": "respchartvaluelabel",
+     "val_var": "respchartvalue",
+     "ids": "Set Vt (Drager)",
+     "callback": "eicu_tidal_volume_drager_l_to_ml",
+     "_comment": "2026-08-03 unit audit: Set Vt (Drager) is predominantly an L-scale interface below 2 (median about 0.473 L), but 26 raw rows >=50 are already mL. Convert only 0<v<=2 x1000, retain >=50, quarantine 2<v<50 and preserve zero before bounds/hourly aggregation."
     }
    ],
    "hirid": [
