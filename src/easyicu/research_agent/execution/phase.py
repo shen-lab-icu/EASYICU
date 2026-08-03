@@ -11862,21 +11862,60 @@ def run_execute_phase(
             )
         )
 
+    development_sample_blocked = (
+        pipeline._development_sample_size is not None
+        and run_input_authority_state.development_sample is None
+    )
+    plan_block_reason = (
+        "trajectory_plan_contract_blocked"
+        if trajectory_plan_blocked
+        else "typed_plan_dag_blocked"
+        if typed_plan_dag_blocked
+        else "development_sample_unauthorized"
+        if development_sample_blocked
+        else None
+    )
     steps_to_run = (
         []
-        if (
-            trajectory_plan_blocked
-            or typed_plan_dag_blocked
-            or (
-                pipeline._development_sample_size is not None
-                and run_input_authority_state.development_sample is None
-            )
-        )
+        if plan_block_reason is not None
         else resume_controller.remaining_steps(
             plan=plan,
             executed_step_ids=set(preexecuted_step_ids),
         )
     )
+    if plan_block_reason is not None:
+        # A RUN MUST SAY WHEN IT DECIDES TO EXECUTE NOTHING.
+        #
+        # Each block above already records findings and a partial-manifest flag,
+        # but neither reaches the audit log -- the run's own narrative. So the
+        # log read "skipped 00_probe, skipped 01_define_analysis_cohort" and
+        # then "Auditing generated figures / run complete", with the seven
+        # remaining steps simply absent: no start, no failure, no reason.
+        #
+        # MEASURED on h3_trajectory_clustering (..._e13587c_nine2). The plan had
+        # 9 steps; step_attempt_history recorded 2. Reconstructing why cost a
+        # full diagnostic pass over the manifest, run_status and plan before the
+        # trajectory block was found -- and h3 has never executed past step 01
+        # in any of its 7 recorded runs, so this silence is what every one of
+        # them looked like.
+        dropped = [
+            step.step_id
+            for step in plan.steps
+            if step.step_id not in preexecuted_step_ids
+        ]
+        emit_progress(
+            "step",
+            f"Plan blocked before execution ({plan_block_reason}); "
+            f"{len(dropped)} planned step(s) will not run.",
+            status="blocked",
+            run_id=run_id,
+            # Passed as flat keywords: the emitter forwards every extra kwarg
+            # except status/step_id into the audit record's detail, so a
+            # ``detail=`` argument would arrive nested one level too deep.
+            block_reason=plan_block_reason,
+            dropped_step_ids=dropped,
+            planned_step_count=len(plan.steps),
+        )
     has_typed_input_dependencies = any(
         _typed_input_product(input_name) is not None
         for step in steps_to_run
