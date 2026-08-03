@@ -10,8 +10,9 @@ those values as **hours since ICU admission** — the post
 from types import SimpleNamespace
 
 import pandas as pd
+import pytest
 
-from easyicu.concept import ConceptResolver
+from easyicu.concept import ConceptResolver, ConceptSource, _apply_callback
 from easyicu.concept.callbacks import (
     ConceptCallbackContext,
     _callback_susp_inf,
@@ -30,6 +31,63 @@ def _eicu_context() -> ConceptCallbackContext:
         patient_ids=None,
         kwargs={"si_mode": "auto"},
     )
+
+
+def test_mimic_sampling_event_is_true_even_when_culture_is_negative() -> None:
+    frame = pd.DataFrame(
+        {
+            "subject_id": [1, 1],
+            "chartdate": pd.to_datetime(["2025-01-01", "2025-01-02"]),
+            "charttime": [pd.NaT, pd.Timestamp("2025-01-02 08:00")],
+            "samp": [pd.NA, 12345],
+        }
+    )
+    source = ConceptSource.from_mapping(
+        {
+            "table": "microbiologyevents",
+            "val_var": "org_itemid",
+            "index_var": "chartdate",
+            "callback": "mimic_sampling",
+            "aux_time": "charttime",
+        }
+    )
+
+    result = _apply_callback(frame, source, concept_name="samp")
+
+    assert result["samp"].tolist() == [True, True]
+    assert result["chartdate"].tolist() == [
+        pd.Timestamp("2025-01-01 12:00"),
+        pd.Timestamp("2025-01-02 08:00"),
+    ]
+
+
+def test_recursive_suspicion_fails_closed_for_unavailable_timed_positivity() -> None:
+    tables = {
+        "abx": ICUTable(
+            pd.DataFrame({"stay_id": [1], "charttime": [0.0], "abx": [True]}),
+            id_columns=["stay_id"],
+            index_column="charttime",
+            value_column="abx",
+        ),
+        "samp": ICUTable(
+            pd.DataFrame({"stay_id": [1], "charttime": [1.0], "samp": [True]}),
+            id_columns=["stay_id"],
+            index_column="charttime",
+            value_column="samp",
+        ),
+    }
+    context = ConceptCallbackContext(
+        concept_name="susp_inf",
+        target=None,
+        interval=pd.Timedelta(hours=1),
+        resolver=None,
+        data_source=SimpleNamespace(config=SimpleNamespace(name="miiv")),
+        patient_ids=None,
+        kwargs={"si_mode": "and", "positive_cultures": True},
+    )
+
+    with pytest.raises(ValueError, match="event-level culture-result timing"):
+        _callback_susp_inf(tables, context)
 
 
 def _eicu_icd_abx_tables(abx_times: list[float]) -> dict[str, ICUTable]:

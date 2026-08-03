@@ -12953,7 +12953,7 @@
  "samp": {
   "class_name": "lgl_cncpt",
   "category": "microbiology",
-  "description": "body fluid sampling",
+  "description": "body-fluid specimen collection event; True denotes collection regardless of culture result, while culture positivity is exported separately",
   "omopid": 4133843,
   "sources": {
    "aumc": [
@@ -13008,7 +13008,8 @@
      "val_var": "org_itemid",
      "callback": "mimic_sampling",
      "aux_time": "charttime",
-     "class_name": "col_itm"
+     "class_name": "col_itm",
+     "_comment": "org_itemid is used only to load microbiologyevents; missing org_itemid denotes a negative result, not absence of specimen collection"
     }
    ],
    "mimic": [
@@ -13018,7 +13019,8 @@
      "val_var": "org_itemid",
      "callback": "mimic_sampling",
      "aux_time": "charttime",
-     "class_name": "col_itm"
+     "class_name": "col_itm",
+     "_comment": "org_itemid is used only to load microbiologyevents; missing org_itemid denotes a negative result, not absence of specimen collection"
     }
    ],
    "mimic_demo": [
@@ -13026,9 +13028,10 @@
      "table": "microbiologyevents",
      "id_var": "subject_id",
      "val_var": "org_itemid",
-     "callback": "transform_fun(comp_na())",
+     "callback": "mimic_sampling",
      "aux_time": "charttime",
-     "class_name": "col_itm"
+     "class_name": "col_itm",
+     "_comment": "demo and full MIMIC use the same event semantics; negative cultures remain specimen-collection events"
     }
    ]
   }
