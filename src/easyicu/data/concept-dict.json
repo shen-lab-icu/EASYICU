@@ -5723,7 +5723,7 @@
   "unit": "mL",
   "min": -100000,
   "max": 100000,
-  "description": "cumulative fluid balance since admission (running sum of hourly fluid_balance)",
+  "description": "cumulative fluid balance since ICU admission (hour 0); pre-admission fluid rows do not contribute to the baseline",
   "concepts": [
    "fluid_balance"
   ],
@@ -14175,7 +14175,7 @@
   "min": 0,
   "max": 10000,
   "aggregate": "sum",
-  "description": "total fluid input per hour — MIIV/MIMIC-III inputevents.amount, AUMC drugitems.fluidin (43-item subset), eICU intakeoutput IV-fluid labels, SIC DataID 2200 FluidPerHour. HiRID pending (needs pharma.fluidamount_calc callback). Per-DB intake capture differs — not perfectly harmonized; see _comment on sic.",
+  "description": "total fluid input volume in each ICU-anchored hour (mL) — MIIV/MIMIC-III interval amounts and AUMC drugitems fluid totals are overlap-allocated with exact volume conservation; eICU uses intakeoutput IV-fluid events and SIC uses native DataID 2200 FluidPerHour. HiRID is unavailable. Per-database intake capture remains source-heterogeneous and requires stratified sensitivity analysis.",
   "category": "output",
   "sources": {
    "miiv": [
@@ -14331,7 +14331,14 @@
      ],
      "table": "inputevents",
      "sub_var": "itemid",
-     "val_var": "amount"
+     "val_var": "amount",
+     "unit_var": "amountuom",
+     "index_var": "starttime",
+     "callback": "distribute_volume_hourly",
+     "end_var": "endtime",
+     "extra_vars": [
+      "endtime"
+     ]
     }
    ],
    "mimic": [
@@ -14472,7 +14479,14 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "val_var": "amount"
+     "val_var": "amount",
+     "unit_var": "amountuom",
+     "index_var": "starttime",
+     "callback": "distribute_volume_hourly",
+     "end_var": "endtime",
+     "extra_vars": [
+      "endtime"
+     ]
     }
    ],
    "mimic_demo": [
@@ -14613,7 +14627,14 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "val_var": "amount"
+     "val_var": "amount",
+     "unit_var": "amountuom",
+     "index_var": "starttime",
+     "callback": "distribute_volume_hourly",
+     "end_var": "endtime",
+     "extra_vars": [
+      "endtime"
+     ]
     }
    ],
    "aumc": [
@@ -14665,7 +14686,15 @@
      ],
      "table": "drugitems",
      "sub_var": "itemid",
-     "val_var": "fluidin"
+     "val_var": "fluidin",
+     "index_var": "start",
+     "callback": "distribute_volume_hourly",
+     "end_var": "stop",
+     "alternate_value_var": "solutionadministered",
+     "extra_vars": [
+      "stop",
+      "solutionadministered"
+     ]
     }
    ],
    "eicu": [

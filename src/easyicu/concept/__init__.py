@@ -4246,9 +4246,12 @@ class ConceptResolver:
             if (source_index_column and
                     source_index_column not in frame.columns and
                     len(frame) > 0):
+                consumed_source_index = source_index_column
                 for fallback_time in ['charttime', 'starttime', 'datetime']:
                     if fallback_time in frame.columns:
                         source_index_column = fallback_time
+                        if index_column == consumed_source_index:
+                            index_column = fallback_time
                         break
             
             # 单位过滤（在回调之后）
@@ -5189,6 +5192,8 @@ class ConceptResolver:
                 # 🔧 FIX 2026-02-05: distribute_amount 内部已经处理时间展开，不需要再次 expand
                 # MIMIC-III ins 概念使用 inputevents_mv 的 distribute_amount callback
                 'distribute_amount',
+                # Interval totals are allocated into ICU-hour bins internally.
+                'distribute_volume_hourly',
             ]
             callback_already_expanded = False
             if sources:

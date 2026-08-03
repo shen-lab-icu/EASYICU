@@ -2368,6 +2368,115 @@ def _apply_callback(
             admission_times=admission_times,  # 🔧 Pass admission times for proper floor behavior
         )
 
+    if expr.strip() == "distribute_volume_hourly":
+        from ..utils.callback_utils import (
+            distribute_volume_hourly,
+            normalize_volume_to_ml,
+        )
+
+        params = source.params or {}
+        end_col = params.get("end_var")
+        if not end_col:
+            end_col = "endtime" if "endtime" in frame.columns else "stop"
+        index_col = source.index_var
+        if not index_col:
+            index_col = next(
+                (
+                    candidate
+                    for candidate in ("starttime", "start", "charttime")
+                    if candidate in frame.columns
+                ),
+                None,
+            )
+        if not index_col or index_col not in frame.columns:
+            return frame
+
+        db_name = ""
+        if data_source is not None:
+            db_name = getattr(getattr(data_source, "config", None), "name", "")
+        id_preferences = {
+            "aumc": ("admissionid",),
+            "mimic": ("icustay_id",),
+            "mimic_demo": ("icustay_id",),
+            "miiv": ("stay_id",),
+        }.get(db_name, ("stay_id", "icustay_id", "admissionid"))
+        id_col = next((column for column in id_preferences if column in frame.columns), None)
+        if id_col is None:
+            raise ValueError(
+                f"{db_name or 'unknown database'} total-input allocation has no "
+                "stay-level identifier"
+            )
+
+        alternate_value_col = params.get("alternate_value_var")
+        if alternate_value_col and alternate_value_col in frame.columns:
+            frame = frame.copy()
+            frame[concept_name] = pd.concat(
+                [
+                    pd.to_numeric(frame[concept_name], errors="coerce"),
+                    pd.to_numeric(frame[alternate_value_col], errors="coerce"),
+                ],
+                axis=1,
+            ).max(axis=1, skipna=True)
+
+        volume_unit_col = source.unit_var or unit_column
+        if volume_unit_col and volume_unit_col in frame.columns:
+            frame = frame.copy()
+            frame[concept_name] = normalize_volume_to_ml(
+                frame[concept_name], frame[volume_unit_col]
+            )
+
+        origin_times = None
+        origin_col = None
+        numeric_time_unit = "hours"
+        output_time_unit = "relative_hours"
+        if db_name == "aumc":
+            if data_source is None:
+                raise ValueError("AUMC volume allocation requires admissions.admittedat")
+            origin_col = "admittedat"
+            origin_result = data_source.load_table(
+                "admissions",
+                columns=[id_col, origin_col],
+                verbose=False,
+            )
+            origin_times = (
+                origin_result.data
+                if hasattr(origin_result, "data")
+                else origin_result
+            )
+            numeric_time_unit = "minutes"
+            output_time_unit = "absolute_minutes"
+        elif not pd.api.types.is_numeric_dtype(frame[index_col]):
+            if data_source is None:
+                raise ValueError(
+                    "datetime volume allocation requires icustays.intime"
+                )
+            origin_col = "intime"
+            origin_result = data_source.load_table(
+                "icustays",
+                columns=[id_col, origin_col],
+                verbose=False,
+            )
+            origin_times = (
+                origin_result.data
+                if hasattr(origin_result, "data")
+                else origin_result
+            )
+
+        result = distribute_volume_hourly(
+            frame,
+            val_col=concept_name,
+            end_col=end_col,
+            index_col=index_col,
+            id_col=id_col,
+            origin_times=origin_times,
+            origin_col=origin_col,
+            numeric_time_unit=numeric_time_unit,
+            output_time_unit=output_time_unit,
+        )
+        if index_col != "charttime" and index_col in result.columns:
+            result = result.rename(columns={index_col: "charttime"})
+        return result
+
     if expr.strip() == "mimv_rate":
         from ..utils.callback_utils import mimv_rate
         duration_col = None
