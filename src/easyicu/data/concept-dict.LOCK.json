@@ -1,8 +1,8 @@
 {
   "finalized": false,
-  "finalized_note": "2026-08-03 待 AUMC/eICU 全量纠正重跑 — 逐值审计发现 AUMC 曾在按 ICU 入科时间归零前对绝对时间取整，且部分宽表合并曾把浮点 charttime 截断为整数；eICU suspected infection 则曾误用 diagnosisoffset 而非抗菌药事件时间。根因分别已在 7e35f2c1、7a75f1cf 和 497cc5fc 修复。旧 a9f8464e 发布仅保留历史证据，不得进入论文派生链；只有基于 f5da6d92 或其后继提交重跑、质控并封存的新六库发布才可提升为 current。",
-  "locked_for_extraction_run": "pending_aumc_eicu_time_semantics_rerun_f5da6d92_20260803",
-  "concept_dict_sha256": "f1a3cfa5c5e3c09f4f167a9cb95450844e47641ba662c53a13e1e1d31f22509c",
+  "finalized_note": "2026-08-03 待六库全量纠正重跑 — 除 AUMC/eICU 时间和 sepsis sampling 修复外，血管活性药 duration 现统一为连续输注 episode：AUMC 排除 bolus/flush 并合并换泵、调速、重叠及 <=5 分钟间隔，eICU 单点序列标记为未知而非 0 小时。旧发布仅保留历史证据，不得进入论文派生链；只有基于这些修复后继提交重跑、质控并封存的新六库发布才可提升为 current。",
+  "locked_for_extraction_run": "pending_harmonized_vasopressor_episode_rerun_20260803",
+  "concept_dict_sha256": "d14647cf2f6bacb61ac61eca1d8249db1b07d34d52f7ca9d2c1f565cbdd7aeb9",
   "sofa2_dict_sha256": "ab39bdcf03ad481dd65bbd5f6e63bdc71612a2267539aa76cc9fb415e19a0fca",
   "total_concepts": 251,
   "own_concepts_not_in_ricu": 130,

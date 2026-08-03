@@ -3728,7 +3728,7 @@
   "class_name": "rec_cncpt"
  },
  "dobu_dur": {
-  "description": "dobutamine duration",
+  "description": "dobutamine continuous-infusion episode duration; AUMC merges overlapping or <=5-minute pump/order segments and excludes non-continuous administrations; eICU singleton duration is unknown",
   "category": "medications",
   "unit": "hours",
   "min": 0,
@@ -3740,7 +3740,13 @@
      "table": "drugitems",
      "sub_var": "itemid",
      "stop_var": "stop",
-     "grp_var": "orderid",
+     "extra_vars": [
+      "iscontinuous",
+      "action"
+     ],
+     "continuous_var": "iscontinuous",
+     "action_var": "action",
+     "merge_gap_minutes": 5,
      "callback": "aumc_dur"
     }
    ],
@@ -3960,7 +3966,7 @@
   "class_name": "rec_cncpt"
  },
  "dopa_dur": {
-  "description": "dopamine duration",
+  "description": "dopamine continuous-infusion episode duration; AUMC merges overlapping or <=5-minute pump/order segments and excludes non-continuous administrations; eICU singleton duration is unknown",
   "category": "medications",
   "unit": "hours",
   "min": 0,
@@ -3972,7 +3978,13 @@
      "table": "drugitems",
      "sub_var": "itemid",
      "stop_var": "stop",
-     "grp_var": "orderid",
+     "extra_vars": [
+      "iscontinuous",
+      "action"
+     ],
+     "continuous_var": "iscontinuous",
+     "action_var": "action",
+     "merge_gap_minutes": 5,
      "callback": "aumc_dur"
     }
    ],
@@ -4561,7 +4573,7 @@
   "class_name": "rec_cncpt"
  },
  "epi_dur": {
-  "description": "epinephrine duration",
+  "description": "epinephrine continuous-infusion episode duration; AUMC merges overlapping or <=5-minute pump/order segments and excludes non-continuous administrations; eICU singleton duration is unknown",
   "category": "medications",
   "unit": "hours",
   "min": 0,
@@ -4573,7 +4585,13 @@
      "table": "drugitems",
      "sub_var": "itemid",
      "stop_var": "stop",
-     "grp_var": "orderid",
+     "extra_vars": [
+      "iscontinuous",
+      "action"
+     ],
+     "continuous_var": "iscontinuous",
+     "action_var": "action",
+     "merge_gap_minutes": 5,
      "callback": "aumc_dur"
     }
    ],
@@ -9851,7 +9869,7 @@
   "class_name": "rec_cncpt"
  },
  "norepi_dur": {
-  "description": "norepinephrine duration",
+  "description": "norepinephrine continuous-infusion episode duration; AUMC merges overlapping or <=5-minute pump/order segments and excludes non-continuous administrations; eICU singleton duration is unknown",
   "category": "medications",
   "unit": "hours",
   "min": 0,
@@ -9863,7 +9881,13 @@
      "table": "drugitems",
      "sub_var": "itemid",
      "stop_var": "stop",
-     "grp_var": "orderid",
+     "extra_vars": [
+      "iscontinuous",
+      "action"
+     ],
+     "continuous_var": "iscontinuous",
+     "action_var": "action",
+     "merge_gap_minutes": 5,
      "callback": "aumc_dur"
     }
    ],
