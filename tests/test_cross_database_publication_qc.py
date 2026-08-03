@@ -534,7 +534,8 @@ def test_verified_findings_registers_eicu_tidal_volume_unit_defect() -> None:
 
     finding = findings.loc["EICU-QC-P0-013"]
     assert finding["severity"] == "critical"
-    assert "rerun required" in finding["status"]
+    assert "publication guard" in finding["status"]
+    assert "release gate required" in finding["status"]
     assert "stay 168728" in finding["evidence"]
 
 

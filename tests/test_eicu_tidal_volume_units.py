@@ -7,7 +7,10 @@ import numpy as np
 import pandas as pd
 
 from easyicu.concept import ConceptSource, _apply_callback
-from easyicu.concept.callback_apply import _normalize_eicu_tidal_volume_frame
+from easyicu.concept.callback_apply import (
+    _normalize_eicu_tidal_volume_frame,
+    _parse_eicu_age,
+)
 
 
 def _mixed_frame(values, *, stays=None, labels=None, ages=None, concept="tidal_vol"):
@@ -25,6 +28,13 @@ def _mixed_frame(values, *, stays=None, labels=None, ages=None, concept="tidal_v
         concept_name=concept,
         ages=pd.Series(ages or [40.0] * count, index=frame.index),
     )
+
+
+def test_eicu_age_parser_preserves_missing_and_maps_over_89_sentinel() -> None:
+    parsed = _parse_eicu_age(pd.Series([None, np.nan, "> 89", "62"]))
+
+    assert parsed.iloc[:2].isna().all()
+    assert parsed.iloc[2:].tolist() == [90.0, 62.0]
 
 
 def test_same_stay_ml_reference_converts_liter_decimal() -> None:
@@ -136,15 +146,28 @@ def test_deprecated_loader_projection_receives_value_and_time_columns() -> None:
     assert result.loc[0, "time"] == 60
 
 
-def test_lab_tv_source_is_not_rescaled() -> None:
-    frame = pd.DataFrame({"TV": [500.0]})
+def test_lab_tv_explicit_ml_source_quarantines_only_uncredible_small_values() -> None:
+    frame = pd.DataFrame(
+        {
+            "patientunitstayid": [1, 2, 3, 4],
+            "TV": [500.0, 0.5, 8.0, 8.0],
+            "age": [60.0, 60.0, 8.0, np.nan],
+        }
+    )
     result = _apply_callback(
         frame,
-        ConceptSource(table="lab", value_var="TV"),
+        ConceptSource(
+            table="lab",
+            value_var="TV",
+            callback="eicu_tidal_volume_explicit_ml",
+        ),
         concept_name="tidal_vol",
     )
 
-    pd.testing.assert_frame_equal(result, frame)
+    assert result.loc[0, "value"] == 500.0
+    assert np.isnan(result.loc[1, "value"])
+    assert result.loc[2, "value"] == 8.0
+    assert np.isnan(result.loc[3, "value"])
 
 
 def test_catalog_scopes_callbacks_to_respiratory_sources() -> None:
@@ -160,7 +183,7 @@ def test_catalog_scopes_callbacks_to_respiratory_sources() -> None:
     measured = catalog["tidal_vol"]["sources"]["eicu"]
     assert measured[0]["callback"] == "eicu_tidal_volume_mixed_scale"
     assert measured[1]["table"] == "lab"
-    assert "callback" not in measured[1]
+    assert measured[1]["callback"] == "eicu_tidal_volume_explicit_ml"
 
     set_sources = catalog["tidal_vol_set"]["sources"]["eicu"]
     assert set_sources[0]["callback"] == "eicu_tidal_volume_mixed_scale"

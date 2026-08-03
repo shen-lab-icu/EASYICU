@@ -296,6 +296,10 @@ def republish_candidate(source_run_root: Path, output_root: Path) -> Path:
         # release evidence after this command completes.
         (destination / "run_metadata.json").unlink(missing_ok=True)
         (destination / "module_extraction_timing.csv").unlink(missing_ok=True)
+        # Publication QC is derived from the exact sealed bytes.  Carrying it
+        # across a republication would make a new candidate appear audited by
+        # evidence generated from its parent package.
+        shutil.rmtree(destination / "publication_qc", ignore_errors=True)
         new_manifests = {
             database: _republish_database(
                 destination / "exports" / database,

@@ -246,7 +246,10 @@ RESOLUTION_UPDATES: dict[str, dict[str, str]] = {
         ),
     },
     "EICU-QC-P0-013": {
-        "status": "fixed in current code; eICU ventilator rerun required",
+        "status": (
+            "fixed by source normalization plus age-aware native-v2 "
+            "publication guard; release gate required"
+        ),
         "required_action": (
             "Rerun the eICU ventilator module and require the tidal-volume unit gate: "
             "zero unresolved (0, 2] mL set values, zero adult (0, 2] or (2, 50) mL "

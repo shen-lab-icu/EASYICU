@@ -2599,6 +2599,100 @@ def _native_export_empty_schema_frame(
     return pd.DataFrame(columns)
 
 
+def _load_eicu_tidal_volume_age_lookup(output_root: Path) -> pd.Series:
+    """Load the canonical eICU age evidence used by the publication gate."""
+
+    import pyarrow.parquet as pq
+
+    path = output_root / "demographics.parquet"
+    if not path.is_file() or path.is_symlink():
+        raise ValueError(
+            "eICU ventilator publication requires demographics.parquet for "
+            "age-aware tidal-volume validation"
+        )
+    names = set(pq.read_schema(path).names)
+    identity = next(
+        (
+            column
+            for column in ("stay_id", "patientunitstayid")
+            if column in names
+        ),
+        None,
+    )
+    if identity is None or "age" not in names:
+        raise ValueError(
+            "eICU demographics lacks stay identity or age for tidal-volume "
+            "publication validation"
+        )
+    demographics = pd.read_parquet(path, columns=[identity, "age"])
+    demographics = demographics.dropna(subset=[identity]).drop_duplicates(
+        subset=[identity], keep="first"
+    )
+    return pd.Series(
+        pd.to_numeric(demographics["age"], errors="coerce").to_numpy(),
+        index=pd.to_numeric(demographics[identity], errors="coerce"),
+        dtype="float64",
+    )
+
+
+def _enforce_eicu_tidal_volume_publication_semantics(
+    frame,
+    *,
+    database: str,
+    module: str,
+    age_lookup: Optional[pd.Series],
+) -> Dict[str, Dict[str, object]]:
+    """Fail closed on implausibly small canonical eICU tidal volumes.
+
+    eICU's respiratoryCharting source mixes L- and mL-scale values, while its
+    separate ``lab.TV`` channel is nominally mL but has a sparse low-value
+    tail.  Source callbacks resolve the raw-source semantics.  This final
+    native-v2 guard prevents an adult or unknown-age value below 50 mL from
+    surviving a later multi-source merge.  Known paediatric measured values
+    remain valid.  Set tidal volume additionally rejects all positive values
+    at or below 2 mL, matching the sealed-release unit gate.
+    """
+
+    if database != "eicu" or module != "ventilator":
+        return {}
+    if age_lookup is None:
+        raise ValueError("eICU tidal-volume publication age lookup is missing")
+    if "stay_id" not in frame.columns:
+        raise ValueError("eICU ventilator publication lacks canonical stay_id")
+
+    ages = pd.to_numeric(frame["stay_id"].map(age_lookup), errors="coerce")
+    adult_or_unknown = ages.ge(18) | ages.isna()
+    audit: Dict[str, Dict[str, object]] = {}
+    for concept in ("tidal_vol", "tidal_vol_set"):
+        if concept not in frame.columns:
+            continue
+        values = pd.to_numeric(frame[concept], errors="coerce")
+        positive_small = values.gt(0) & values.lt(50)
+        invalid = positive_small & adult_or_unknown
+        if concept == "tidal_vol_set":
+            invalid |= values.gt(0) & values.le(2)
+        invalid_count = int(invalid.sum())
+        if invalid_count:
+            frame.loc[invalid, concept] = float("nan")
+        audit[concept] = {
+            "policy": (
+                "known-paediatric measured values may be below 50 mL; "
+                "adult/unknown-age values below 50 mL are quarantined; "
+                "set values at or below 2 mL are always quarantined"
+            ),
+            "excluded_semantically_invalid": invalid_count,
+            "adult_or_unknown_small_rows": int(
+                (positive_small & adult_or_unknown).sum()
+            ),
+            "all_age_set_le_2_rows": int(
+                ((values.gt(0) & values.le(2)).sum())
+                if concept == "tidal_vol_set"
+                else 0
+            ),
+        }
+    return audit
+
+
 def _native_export_arrow_batch_rows() -> int:
     """Resolve a bounded publisher batch without exposing an unbounded knob."""
     raw = os.environ.get("EASYICU_NATIVE_PUBLISH_BATCH_ROWS")
@@ -2742,6 +2836,8 @@ def _try_publish_native_export_arrow_fast_path(
     requested_concepts: List[str],
     dictionary,
     stay_time_upper_bounds: Dict[int, float],
+    database: str,
+    eicu_tidal_volume_age_lookup: Optional[pd.Series],
 ) -> Optional[Dict[str, object]]:
     """Publish a unique longitudinal module without a full pandas payload.
 
@@ -2792,6 +2888,7 @@ def _try_publish_native_export_arrow_fast_path(
     )
     time_axis_audit: Optional[Dict[str, object]] = None
     bounds_audit: Optional[Dict[str, Dict[str, object]]] = None
+    semantic_audit: Optional[Dict[str, Dict[str, object]]] = None
     concept_non_null = {concept: 0 for concept in requested_concepts}
     writer = None
     try:
@@ -2814,6 +2911,14 @@ def _try_publish_native_export_arrow_fast_path(
                 module=module,
                 requested_concepts=requested_concepts,
                 dictionary=dictionary,
+            )
+            batch_semantic_audit = (
+                _enforce_eicu_tidal_volume_publication_semantics(
+                    frame,
+                    database=database,
+                    module=module,
+                    age_lookup=eicu_tidal_volume_age_lookup,
+                )
             )
             frame, batch_time_audit = _enforce_native_export_time_axis(
                 frame,
@@ -2849,6 +2954,25 @@ def _try_publish_native_export_arrow_fast_path(
                     bounds_audit[concept]["excluded_out_of_bounds"] = int(
                         bounds_audit[concept]["excluded_out_of_bounds"]
                     ) + int(record["excluded_out_of_bounds"])
+            if semantic_audit is None:
+                semantic_audit = {
+                    concept: dict(record)
+                    for concept, record in batch_semantic_audit.items()
+                }
+            else:
+                for concept, record in batch_semantic_audit.items():
+                    if concept not in semantic_audit:
+                        semantic_audit[concept] = dict(record)
+                        continue
+                    current = semantic_audit[concept]
+                    for field in (
+                        "excluded_semantically_invalid",
+                        "adult_or_unknown_small_rows",
+                        "all_age_set_le_2_rows",
+                    ):
+                        current[field] = int(current.get(field, 0)) + int(
+                            record.get(field, 0)
+                        )
             for concept in requested_concepts:
                 concept_non_null[concept] += int(frame[concept].notna().sum())
             output = pa.Table.from_pandas(
@@ -2897,6 +3021,7 @@ def _try_publish_native_export_arrow_fast_path(
         "rows": int(row_grain_audit["published_rows"]),
         "time_axis_audit": time_axis_audit,
         "bounds_audit": bounds_audit,
+        "semantic_audit": semantic_audit or {},
         "row_grain_audit": row_grain_audit,
         "concept_non_null": concept_non_null,
     }
@@ -3280,6 +3405,11 @@ def _publish_native_export_v2(
         stay_time_upper_bounds = _native_export_stay_time_upper_bounds(
             pd.read_parquet(outcome_source)
         )
+    eicu_tidal_volume_age_lookup = None
+    if normalized_database == "eicu" and "ventilator" in published_modules:
+        eicu_tidal_volume_age_lookup = _load_eicu_tidal_volume_age_lookup(
+            output_root
+        )
 
     for module in published_modules:
         relative_path = f"{module}.parquet"
@@ -3392,6 +3522,8 @@ def _publish_native_export_v2(
                     requested_concepts=requested_concept_plan[module],
                     dictionary=dictionary,
                     stay_time_upper_bounds=stay_time_upper_bounds,
+                    database=normalized_database,
+                    eicu_tidal_volume_age_lookup=eicu_tidal_volume_age_lookup,
                 )
             if arrow_result is None:
                 # Demographics has a concept-wise nearest-time selection policy;
@@ -3426,6 +3558,14 @@ def _publish_native_export_v2(
                     module=module,
                     requested_concepts=requested_concept_plan[module],
                     dictionary=dictionary,
+                )
+                semantic_audit = (
+                    _enforce_eicu_tidal_volume_publication_semantics(
+                        frame,
+                        database=normalized_database,
+                        module=module,
+                        age_lookup=eicu_tidal_volume_age_lookup,
+                    )
                 )
                 frame, time_axis_audit = _enforce_native_export_time_axis(
                     frame,
@@ -3492,6 +3632,7 @@ def _publish_native_export_v2(
             else:
                 time_axis_audit = arrow_result["time_axis_audit"]
                 bounds_audit = arrow_result["bounds_audit"]
+                semantic_audit = arrow_result["semantic_audit"]
                 row_grain_audit = arrow_result["row_grain_audit"]
                 metadata_frame = arrow_result["schema_frame"]
                 published_rows = int(arrow_result["rows"])
@@ -3539,6 +3680,12 @@ def _publish_native_export_v2(
                     "excluded_out_of_bounds"
                 ],
             }
+            if concept in semantic_audit:
+                status["excluded_semantically_invalid"] = int(
+                    semantic_audit[concept].get(
+                        "excluded_semantically_invalid", 0
+                    )
+                )
             if "declared_bounds" in bounds_audit[concept]:
                 status["declared_bounds"] = bounds_audit[concept]["declared_bounds"]
             concept_status[concept] = status
@@ -3570,6 +3717,7 @@ def _publish_native_export_v2(
                 "row_grain": row_grain_audit["row_grain"],
                 "row_grain_audit": row_grain_audit,
                 "time_axis_audit": time_axis_audit,
+                "semantic_audit": semantic_audit,
                 "concept_status": concept_status,
                 "column_metadata_columns": list(binding.columns),
             }
