@@ -3728,7 +3728,7 @@
   "class_name": "rec_cncpt"
  },
  "dobu_dur": {
-  "description": "dobutamine continuous-infusion episode duration; AUMC merges overlapping or <=5-minute pump/order segments and excludes non-continuous administrations; eICU singleton duration is unknown",
+  "description": "dobutamine continuous-infusion episode duration in hours; MIMIC MetaVision uses status-filtered explicit intervals merged across <=5-minute gaps and clipped to ICU outtime; MIMIC CareVue uses positive-rate points, explicit stop/zero-rate boundaries, and <=5-hour gaps to report an inferred rate-set span (not exact pump-on time) with singleton duration unknown; AUMC uses explicit continuous intervals and eICU singleton duration is unknown",
   "category": "medications",
   "unit": "hours",
   "min": 0,
@@ -3784,6 +3784,18 @@
      "sub_var": "itemid",
      "stop_var": "endtime",
      "grp_var": "linkorderid",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled",
+      "Flushed",
+      "Bolus"
+     ],
+     "merge_gap_minutes": 5,
      "callback": "mimic_dur_inmv"
     }
    ],
@@ -3795,7 +3807,13 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "grp_var": "linkorderid",
+     "extra_vars": [
+      "stopped",
+      "rate"
+     ],
+     "boundary_var": "stopped",
+     "rate_var": "rate",
+     "merge_gap_hours": 5,
      "callback": "mimic_dur_incv"
     },
     {
@@ -3804,6 +3822,20 @@
      "sub_var": "itemid",
      "stop_var": "endtime",
      "grp_var": "linkorderid",
+     "extra_vars": [
+      "statusdescription",
+      "cancelreason"
+     ],
+     "status_var": "statusdescription",
+     "cancel_var": "cancelreason",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled",
+      "Flushed",
+      "Bolus"
+     ],
+     "merge_gap_minutes": 5,
      "callback": "mimic_dur_inmv"
     }
    ],
@@ -3815,7 +3847,13 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "grp_var": "linkorderid",
+     "extra_vars": [
+      "stopped",
+      "rate"
+     ],
+     "boundary_var": "stopped",
+     "rate_var": "rate",
+     "merge_gap_hours": 5,
      "callback": "mimic_dur_incv"
     },
     {
@@ -3824,6 +3862,20 @@
      "sub_var": "itemid",
      "stop_var": "endtime",
      "grp_var": "linkorderid",
+     "extra_vars": [
+      "statusdescription",
+      "cancelreason"
+     ],
+     "status_var": "statusdescription",
+     "cancel_var": "cancelreason",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled",
+      "Flushed",
+      "Bolus"
+     ],
+     "merge_gap_minutes": 5,
      "callback": "mimic_dur_inmv"
     }
    ],
@@ -3966,7 +4018,7 @@
   "class_name": "rec_cncpt"
  },
  "dopa_dur": {
-  "description": "dopamine continuous-infusion episode duration; AUMC merges overlapping or <=5-minute pump/order segments and excludes non-continuous administrations; eICU singleton duration is unknown",
+  "description": "dopamine continuous-infusion episode duration in hours; MIMIC MetaVision uses status-filtered explicit intervals merged across <=5-minute gaps and clipped to ICU outtime; MIMIC CareVue uses positive-rate points, explicit stop/zero-rate boundaries, and <=5-hour gaps to report an inferred rate-set span (not exact pump-on time) with singleton duration unknown; AUMC uses explicit continuous intervals and eICU singleton duration is unknown",
   "category": "medications",
   "unit": "hours",
   "min": 0,
@@ -4013,6 +4065,18 @@
      "sub_var": "itemid",
      "stop_var": "endtime",
      "grp_var": "linkorderid",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled",
+      "Flushed",
+      "Bolus"
+     ],
+     "merge_gap_minutes": 5,
      "callback": "mimic_dur_inmv"
     }
    ],
@@ -4025,7 +4089,13 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "grp_var": "linkorderid",
+     "extra_vars": [
+      "stopped",
+      "rate"
+     ],
+     "boundary_var": "stopped",
+     "rate_var": "rate",
+     "merge_gap_hours": 5,
      "callback": "mimic_dur_incv"
     },
     {
@@ -4034,6 +4104,20 @@
      "sub_var": "itemid",
      "stop_var": "endtime",
      "grp_var": "linkorderid",
+     "extra_vars": [
+      "statusdescription",
+      "cancelreason"
+     ],
+     "status_var": "statusdescription",
+     "cancel_var": "cancelreason",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled",
+      "Flushed",
+      "Bolus"
+     ],
+     "merge_gap_minutes": 5,
      "callback": "mimic_dur_inmv"
     }
    ],
@@ -4046,7 +4130,13 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "grp_var": "linkorderid",
+     "extra_vars": [
+      "stopped",
+      "rate"
+     ],
+     "boundary_var": "stopped",
+     "rate_var": "rate",
+     "merge_gap_hours": 5,
      "callback": "mimic_dur_incv"
     },
     {
@@ -4055,6 +4145,20 @@
      "sub_var": "itemid",
      "stop_var": "endtime",
      "grp_var": "linkorderid",
+     "extra_vars": [
+      "statusdescription",
+      "cancelreason"
+     ],
+     "status_var": "statusdescription",
+     "cancel_var": "cancelreason",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled",
+      "Flushed",
+      "Bolus"
+     ],
+     "merge_gap_minutes": 5,
      "callback": "mimic_dur_inmv"
     }
    ],
@@ -4573,7 +4677,7 @@
   "class_name": "rec_cncpt"
  },
  "epi_dur": {
-  "description": "epinephrine continuous-infusion episode duration; AUMC merges overlapping or <=5-minute pump/order segments and excludes non-continuous administrations; eICU singleton duration is unknown",
+  "description": "epinephrine continuous-infusion episode duration in hours; MIMIC MetaVision uses status-filtered explicit intervals merged across <=5-minute gaps and clipped to ICU outtime; MIMIC CareVue uses positive-rate points, explicit stop/zero-rate boundaries, and <=5-hour gaps to report an inferred rate-set span (not exact pump-on time) with singleton duration unknown; AUMC uses explicit continuous intervals and eICU singleton duration is unknown",
   "category": "medications",
   "unit": "hours",
   "min": 0,
@@ -4635,6 +4739,18 @@
      "sub_var": "itemid",
      "stop_var": "endtime",
      "grp_var": "linkorderid",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled",
+      "Flushed",
+      "Bolus"
+     ],
+     "merge_gap_minutes": 5,
      "callback": "mimic_dur_inmv"
     }
    ],
@@ -4647,7 +4763,13 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "grp_var": "linkorderid",
+     "extra_vars": [
+      "stopped",
+      "rate"
+     ],
+     "boundary_var": "stopped",
+     "rate_var": "rate",
+     "merge_gap_hours": 5,
      "callback": "mimic_dur_incv"
     },
     {
@@ -4656,6 +4778,20 @@
      "sub_var": "itemid",
      "stop_var": "endtime",
      "grp_var": "linkorderid",
+     "extra_vars": [
+      "statusdescription",
+      "cancelreason"
+     ],
+     "status_var": "statusdescription",
+     "cancel_var": "cancelreason",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled",
+      "Flushed",
+      "Bolus"
+     ],
+     "merge_gap_minutes": 5,
      "callback": "mimic_dur_inmv"
     }
    ],
@@ -4668,7 +4804,13 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "grp_var": "linkorderid",
+     "extra_vars": [
+      "stopped",
+      "rate"
+     ],
+     "boundary_var": "stopped",
+     "rate_var": "rate",
+     "merge_gap_hours": 5,
      "callback": "mimic_dur_incv"
     },
     {
@@ -4677,6 +4819,20 @@
      "sub_var": "itemid",
      "stop_var": "endtime",
      "grp_var": "linkorderid",
+     "extra_vars": [
+      "statusdescription",
+      "cancelreason"
+     ],
+     "status_var": "statusdescription",
+     "cancel_var": "cancelreason",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled",
+      "Flushed",
+      "Bolus"
+     ],
+     "merge_gap_minutes": 5,
      "callback": "mimic_dur_inmv"
     }
    ],
@@ -9869,7 +10025,7 @@
   "class_name": "rec_cncpt"
  },
  "norepi_dur": {
-  "description": "norepinephrine continuous-infusion episode duration; AUMC merges overlapping or <=5-minute pump/order segments and excludes non-continuous administrations; eICU singleton duration is unknown",
+  "description": "norepinephrine continuous-infusion episode duration in hours; MIMIC MetaVision uses status-filtered explicit intervals merged across <=5-minute gaps and clipped to ICU outtime; MIMIC CareVue uses positive-rate points, explicit stop/zero-rate boundaries, and <=5-hour gaps to report an inferred rate-set span (not exact pump-on time) with singleton duration unknown; AUMC uses explicit continuous intervals and eICU singleton duration is unknown",
   "category": "medications",
   "unit": "hours",
   "min": 0,
@@ -9930,6 +10086,18 @@
      "sub_var": "itemid",
      "stop_var": "endtime",
      "grp_var": "linkorderid",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled",
+      "Flushed",
+      "Bolus"
+     ],
+     "merge_gap_minutes": 5,
      "callback": "mimic_dur_inmv"
     }
    ],
@@ -9941,7 +10109,13 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "grp_var": "linkorderid",
+     "extra_vars": [
+      "stopped",
+      "rate"
+     ],
+     "boundary_var": "stopped",
+     "rate_var": "rate",
+     "merge_gap_hours": 5,
      "callback": "mimic_dur_incv"
     },
     {
@@ -9950,6 +10124,20 @@
      "sub_var": "itemid",
      "stop_var": "endtime",
      "grp_var": "linkorderid",
+     "extra_vars": [
+      "statusdescription",
+      "cancelreason"
+     ],
+     "status_var": "statusdescription",
+     "cancel_var": "cancelreason",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled",
+      "Flushed",
+      "Bolus"
+     ],
+     "merge_gap_minutes": 5,
      "callback": "mimic_dur_inmv"
     }
    ],
@@ -9961,7 +10149,13 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "grp_var": "linkorderid",
+     "extra_vars": [
+      "stopped",
+      "rate"
+     ],
+     "boundary_var": "stopped",
+     "rate_var": "rate",
+     "merge_gap_hours": 5,
      "callback": "mimic_dur_incv"
     },
     {
@@ -9970,6 +10164,20 @@
      "sub_var": "itemid",
      "stop_var": "endtime",
      "grp_var": "linkorderid",
+     "extra_vars": [
+      "statusdescription",
+      "cancelreason"
+     ],
+     "status_var": "statusdescription",
+     "cancel_var": "cancelreason",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled",
+      "Flushed",
+      "Bolus"
+     ],
+     "merge_gap_minutes": 5,
      "callback": "mimic_dur_inmv"
     }
    ],

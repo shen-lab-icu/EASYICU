@@ -1,8 +1,8 @@
 {
   "finalized": false,
-  "finalized_note": "2026-08-03 待六库全量纠正重跑 — 除 AUMC/eICU 时间和 sepsis sampling 修复外，血管活性药 duration 现统一为连续输注 episode：AUMC 排除 bolus/flush 并合并换泵、调速、重叠及 <=5 分钟间隔，eICU 单点序列标记为未知而非 0 小时。旧发布仅保留历史证据，不得进入论文派生链；只有基于这些修复后继提交重跑、质控并封存的新六库发布才可提升为 current。",
-  "locked_for_extraction_run": "pending_harmonized_vasopressor_episode_rerun_20260803",
-  "concept_dict_sha256": "d14647cf2f6bacb61ac61eca1d8249db1b07d34d52f7ca9d2c1f565cbdd7aeb9",
+  "finalized_note": "2026-08-03 待六库全量纠正重跑 — 血管活性药 duration 现统一为小时制 episode 合同：MetaVision 排除 rewritten/cancelled/flush/bolus，按显式区间和 <=5 分钟 gap 合并并裁到 ICU outtime；CareVue 按正 rate、显式 stop/零 rate 与 <=5 小时 gap 推断观察跨度，单点为未知且不把该跨度写成精确泵时长；AUMC/eICU 的连续 episode 修复保持生效。旧发布仅保留历史证据，不得进入论文派生链；只有基于这些修复后继提交重跑、质控并封存的新六库发布才可提升为 current。",
+  "locked_for_extraction_run": "pending_harmonized_vasopressor_duration_rerun_20260803",
+  "concept_dict_sha256": "2e5fe81ca1a954262c55ffa5a655b9a89d95e0107d08da8746c303960066c60b",
   "sofa2_dict_sha256": "ab39bdcf03ad481dd65bbd5f6e63bdc71612a2267539aa76cc9fb415e19a0fca",
   "total_concepts": 251,
   "own_concepts_not_in_ricu": 130,
