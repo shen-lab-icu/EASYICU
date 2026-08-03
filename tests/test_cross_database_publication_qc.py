@@ -191,6 +191,32 @@ def test_distribution_adjudication_rejects_non_exact_run_or_flag(
     assert result.iloc[0]["adjudication_status"] == "unadjudicated"
 
 
+def test_signed_distribution_never_uses_positive_median_ratio_as_unit_evidence() -> None:
+    module = _load_script(AUDIT_SCRIPT, "easyicu_qc_a02_signed_distribution")
+    audit = pd.DataFrame(
+        {
+            "module": ["renal"] * 4,
+            "variable": ["fluid_balance_cumulative"] * 4,
+            "database": ["aumc", "eicu", "miiv", "sic"],
+            "plot_kind": ["continuous"] * 4,
+            "non_null_or_finite": [1000] * 4,
+            "median_sample": [-57.5, -1000.0, 3850.0, 5432.0],
+            "minimum": [-5000.0, -9000.0, -2000.0, -1000.0],
+            "maximum": [8000.0, 3000.0, 12000.0, 15000.0],
+            "catalog_min": [-100000.0] * 4,
+            "catalog_max": [100000.0] * 4,
+        }
+    )
+
+    flags = module._distribution_flags(audit)
+
+    assert "median_scale_shift" not in set(flags["flag"])
+    signed = flags[flags["flag"] == "signed_median_direction_shift"]
+    assert signed.shape[0] == 1
+    assert signed.iloc[0]["database"] == "eicu vs sic"
+    assert "cross zero" in signed.iloc[0]["evidence"]
+
+
 def test_source_manifest_hashes_are_required_and_verified(tmp_path: Path) -> None:
     module = _load_script(AUDIT_SCRIPT, "easyicu_qc_a02_manifest_hashes")
     expected: dict[str, str] = {}
