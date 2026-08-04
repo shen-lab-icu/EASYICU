@@ -186,6 +186,12 @@ from ..resources.coder import (
 )
 from ..research_context.typed import resolved_raw_input_contracts_for_step
 from ..contracts.runtime import ValidationFinding, _ExecutePhaseResult, _PlanPhaseResult
+from ..gates.plausibility_obligation import (
+    flag_only_plausibility_obligation_findings as _flag_only_plausibility_obligation_findings,
+)
+from .runners.plausibility_receipt import (
+    host_plausibility_receipt_injected as _host_plausibility_receipt_injected,
+)
 from .runners.deterministic_descriptive import absolute_risk_context_code
 from .runners.deterministic_missingness import (
     missingness_audit_input_scope_supported,
@@ -7482,6 +7488,29 @@ def run_execute_phase(
                 step=step,
                 host_authority=coder_authority,
             )
+
+        # Every branch above has now settled `code`. The flag-only plausibility
+        # receipt is mechanical and host-owned, and it is the single largest
+        # pre-execution blocker on record: 37 findings over 32 distinct steps in
+        # 8 of the 9 tasks, 53 % of all mechanical-preflight findings. The
+        # deterministic executors get it rendered for them; agent-authored steps
+        # had to hand-write it and repeatedly could not -- h2's causal step spent
+        # BOTH LLM repairs on this one message with five provider calls unspent.
+        #
+        # Injecting HERE, before the concept audit, is what keeps the digests
+        # honest: `concept_approved_code_sha256` hashes this same `code` string
+        # and `executed_code_sha256` hashes the file written from it, so both
+        # cover the assembled script and their identity holds by construction.
+        code = _host_plausibility_receipt_injected(
+            code,
+            scope=plausibility_authority.scope,
+            already_satisfied=not _flag_only_plausibility_obligation_findings(
+                None,
+                script_text=code,
+                step=step,
+                scope=plausibility_authority.scope,
+            ),
+        )
 
         concept_audit = ConceptAuditCoordinator(
             authority=ConceptAuditAuthority(

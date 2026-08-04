@@ -26,7 +26,116 @@ import textwrap
 
 from ...authority.plausibility import FlagOnlyPlausibilityScope
 
-__all__ = ["render_standard_plausibility_receipt_code"]
+__all__ = [
+    "host_plausibility_receipt_injected",
+    "render_standard_plausibility_receipt_code",
+]
+
+#: Host-owned names. Prefixed because the injected prologue shares one module
+#: namespace with agent-authored code that frequently defines
+#: ``plausibility_audit`` itself -- and the body runs AFTER the prologue, so an
+#: unprefixed name would let the agent's version silently win the epilogue.
+_HOST_AUDIT_NAME = "_easyicu_host_plausibility_audit"
+
+
+def host_plausibility_receipt_injected(
+    code: str,
+    *,
+    scope: "FlagOnlyPlausibilityScope | None",
+    already_satisfied: bool,
+) -> str:
+    """Return ``code`` with the host's own receipt around it, when it is owed.
+
+    MEASURED over every recorded run, ``flag_only_plausibility_obligation`` is
+    the single largest pre-execution blocker: 37 findings across 32 distinct
+    steps in 8 of the 9 tasks, 53 % of all mechanical-preflight findings. The
+    obligation is mechanical -- read each declared column's bounds from the
+    sealed manifest, count what falls outside, file the counts under one exact
+    key -- and the host renders it correctly for its own executors. Only
+    agent-authored steps must hand-write it, and they get it wrong: h2's
+    causal step spent BOTH of its LLM repairs on this one message, with five
+    provider calls still unspent, and died anyway.
+
+    The alternative considered and rejected was a host helper the agent calls.
+    It fails on the decisive point: it still depends on the agent REMEMBERING
+    to call it, which is the exact thing that fails 37 times. This module's own
+    docstring gives the second reason -- the comparisons are rendered into the
+    source so the static gate can verify the code that will actually run, which
+    an imported helper defeats.
+
+    Injection happens before the concept audit, so the approved digest and the
+    executed digest both cover the assembled script and their identity is
+    preserved by construction.
+    """
+
+    body = str(code or "")
+    if scope is None or not scope.expected_columns or already_satisfied:
+        return body
+    if not body.strip():
+        return body
+
+    receipt = render_standard_plausibility_receipt_code(
+        scope,
+        frame_name="plausibility_frame",
+    )
+    # The names here are PLAIN, matching what the deterministic executors emit.
+    # A first version prefixed them all and copied the receipt into
+    # ``_easyicu_host_plausibility_audit`` before filing it, to stop an agent
+    # body from shadowing the name. Verified against the real gate on the real
+    # recorded script: that broke it. The obligation gate follows the receipt
+    # value by NAME into the summary write, and a rename -- even one rebound
+    # immediately before the write -- loses the flow and the step stays refused.
+    # So the shadowing risk is handled at RUNTIME instead, by comparing against
+    # the host's own copy and failing closed, which leaves the tracked name
+    # untouched in the delivery the gate reads.
+    prologue = "\n\n".join(
+        (
+            textwrap.dedent(
+                """
+                import json
+                import os
+                from pathlib import Path
+
+                import pandas as pd
+
+                plausibility_frame = pd.read_parquet(
+                    os.environ.get("EASYICU_UNIVERSE_PARQUET")
+                    or os.environ["COHORT_PARQUET"]
+                )
+                """
+            ).strip(),
+            receipt,
+            f"{_HOST_AUDIT_NAME} = dict(plausibility_audit)",
+        )
+    )
+    # The body may not write a summary at all -- a step that failed earlier, or
+    # one whose product is a figure. Creating one here would manufacture a
+    # record the step never produced, so the patch is guarded on the file the
+    # body actually wrote. (Verified: the guard does not cost the gate; both a
+    # guarded and an unguarded epilogue clear it.)
+    epilogue = textwrap.dedent(
+        f"""
+        _easyicu_host_summary_path = (
+            Path(os.environ["STEP_OUT_DIR"]) / "step_summary.json"
+        )
+        if plausibility_audit != {_HOST_AUDIT_NAME}:
+            raise RuntimeError(
+                "The host-computed plausibility receipt was overwritten by the "
+                "step body; the recorded counts would not be the ones the host "
+                "compared."
+            )
+        if _easyicu_host_summary_path.exists():
+            _easyicu_host_summary = json.loads(
+                _easyicu_host_summary_path.read_text(encoding="utf-8")
+            )
+            _easyicu_host_summary["plausibility_audit"] = plausibility_audit
+            _easyicu_host_summary_path.write_text(
+                json.dumps(_easyicu_host_summary, indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
+        """
+    ).strip()
+    return "\n\n".join((prologue, body, epilogue)) + "\n"
 
 
 def render_standard_plausibility_receipt_code(
