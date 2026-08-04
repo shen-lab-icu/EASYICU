@@ -50,6 +50,14 @@ from ..authority.provider_budget import (
 
 REPAIR_AUTHORITY_BINDING_SCHEMA_VERSION = "easyicu.repair_authority_binding/2"
 
+#: Repair classes raised by the LAST gate a step can fail -- the concept audit,
+#: which reads the code only after it has run.  Every other class (runtime,
+#: contract, compatibility, visual, critic_resume) is discovered earlier and
+#: draws from the same pool, so the terminal gate is the only one that can be
+#: starved by a failure that came before it.  See
+#: :meth:`StepRepairBudget.effective_limit`.
+TERMINAL_GATE_REPAIR_CLASSES = frozenset({"concept", "post_mutation_concept"})
+
 
 def resume_deterministic_repair_candidate(
     *,
@@ -294,14 +302,50 @@ class StepRepairBudget:
             else None
         )
 
-    def logical_available(self) -> bool:
+    def effective_limit(self, repair_class: Optional[str] = None) -> int:
+        """Return the logical allowance visible to ``repair_class``.
+
+        The concept audit is the LAST gate a step can fail and the only one
+        whose finding cannot be known before the code runs.  It nevertheless
+        drew from the same flat pool as every earlier class, so a step could
+        spend its whole allowance on runtime or contract failures and then be
+        refused at a gate it was never given one chance to answer.
+
+        MEASURED over every recorded run: 80 steps ended
+        ``blocked_by_concept_audit``; 30 of them -- across 7 of the 9 tasks --
+        had spent ZERO concept-class repairs, the pool having gone to
+        ``runtime`` (14), ``contract`` (6+3), ``compatibility`` (2) and others.
+        28 of those 30 still had unspent provider calls.  A concept repair is
+        worth attempting: of the 171 steps that ever spent one, 65 (38 %)
+        finished ``ok``.
+
+        The reserve is ADDITIVE, not a partition of the existing pool.  The
+        strict alternative -- holding one of the two back -- was measured and
+        rejected: 40 steps that currently finish ``ok`` spent two non-concept
+        repairs and would have lost one.
+
+        This mirrors the rule the provider-call budget already applies one
+        level down (``reserved_final_category = "concept_audit"``); the logical
+        allowance simply never had it.
+        """
+
+        limit = self._max_llm_repairs
+        if str(repair_class or "").strip() not in TERMINAL_GATE_REPAIR_CLASSES:
+            return limit
+        spent = self._provider_budget.logical_repair_classes
+        if any(str(item).strip() in TERMINAL_GATE_REPAIR_CLASSES for item in spent):
+            return limit
+        return limit + 1
+
+    def logical_available(self, repair_class: Optional[str] = None) -> bool:
+        limit = self.effective_limit(repair_class)
         next_attempt_id = self._provider_budget.next_logical_repair_attempt_id()
         durable_attempts = int(
             self._provider_budget.snapshot()["logical_repair_attempts"]
         )
         if next_attempt_id <= durable_attempts:
-            return next_attempt_id <= self._max_llm_repairs
-        return max(self._llm_repair_attempts, durable_attempts) < self._max_llm_repairs
+            return next_attempt_id <= limit
+        return max(self._llm_repair_attempts, durable_attempts) < limit
 
     @property
     def next_attempt_id(self) -> int:
@@ -320,8 +364,8 @@ class StepRepairBudget:
             self.sync_provider()
         return available
 
-    def available(self) -> bool:
-        return self.logical_available() and self.provider_available()
+    def available(self, repair_class: Optional[str] = None) -> bool:
+        return self.logical_available(repair_class) and self.provider_available()
 
     def consume(
         self,
@@ -329,11 +373,11 @@ class StepRepairBudget:
         *,
         authority_binding: Optional[RepairAuthorityBinding] = None,
     ) -> bool:
-        if not self.logical_available():
+        normalized_class = str(repair_class).strip()
+        if not self.logical_available(normalized_class):
             self._step_record["step_llm_repair_budget_exhausted"] = True
             self._step_record["step_llm_repair_budget"] = self._max_llm_repairs
             return False
-        normalized_class = str(repair_class).strip()
         expected_attempt_id = self.next_attempt_id
         if authority_binding is not None:
             if authority_binding.attempt_id != expected_attempt_id:
@@ -350,7 +394,7 @@ class StepRepairBudget:
         )
         attempt_id = self._provider_budget.reserve_logical_repair(
             normalized_class,
-            max_repairs=self._max_llm_repairs,
+            max_repairs=self.effective_limit(normalized_class),
             binding=(
                 authority_binding.payload() if authority_binding is not None else None
             ),
@@ -359,7 +403,7 @@ class StepRepairBudget:
             ),
         )
         if attempt_id is None:
-            if not self.logical_available():
+            if not self.logical_available(normalized_class):
                 self._step_record["step_llm_repair_budget_exhausted"] = True
                 self._step_record["step_llm_repair_budget"] = self._max_llm_repairs
             else:
@@ -370,6 +414,13 @@ class StepRepairBudget:
         self._llm_repair_attempts = max(self._llm_repair_attempts, attempt_id)
         self._step_record["step_llm_repair_attempts"] = self._llm_repair_attempts
         self._step_record["step_llm_repair_budget"] = self._max_llm_repairs
+        if attempt_id > self._max_llm_repairs:
+            # Otherwise the record reads "budget 2, attempts 3" with nothing
+            # saying why. The reserve is a host decision and belongs in the
+            # manifest beside the allowance it extends.
+            self._step_record["step_llm_repair_terminal_gate_reserve"] = (
+                normalized_class
+            )
         if not resumed_unpaid_attempt:
             self._step_record.setdefault("step_llm_repair_classes", []).append(
                 normalized_class
