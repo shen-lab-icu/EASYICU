@@ -1274,7 +1274,31 @@ def evaluate_trajectory_plan_dag(
             for family, windows in selected_by_family.items()
             if len(windows) >= 2
         }
-        if not multi_window_families:
+        # The ONLY way this rule can be satisfied is a declared input whose
+        # variable carries ``fixed_window_trajectory`` -- metadata inferred by
+        # parsing a wide column name (``<family>_h<start>_<end>``).  A run whose
+        # trajectory is bound in the LONG tier has no such column to parse:
+        # this module's own applicability docstring records that a run holding
+        # 19,067,154 verified trajectory rows "still presented zero trajectory
+        # variables here".  So for a long-bound run the rule applies and cannot
+        # be satisfied by any plan -- h3 has never passed step 01 in any
+        # recorded run, and this is why.
+        #
+        # This is the THIRD time the tier flag was threaded to one decision in
+        # this file and not another; the docstring above already records two.
+        # The waiver is narrow: the plan must still declare the window manifest,
+        # which is where a long-bound run's windows are recorded and where they
+        # are verified after the representation step actually runs. A long-bound
+        # plan that declares no manifest still fails, one line below.
+        long_tier_defers_windows_to_the_manifest = long_trajectory_bound and any(
+            _is_window_manifest_product(product)
+            for step in (representation_step, window_source_step)
+            for product in (
+                *_step_typed_inputs(step),
+                *_step_products(step),
+            )
+        )
+        if not multi_window_families and not long_tier_defers_windows_to_the_manifest:
             findings.append(
                 _finding(
                     "trajectory_window_family_not_resolved",
@@ -1284,6 +1308,7 @@ def evaluate_trajectory_plan_dag(
                     step_id=representation_owner,
                     window_source_step_id=window_source_step.step_id,
                     selected_families=sorted(selected_by_family),
+                    long_trajectory_bound=long_trajectory_bound,
                 )
             )
         available_by_family: Dict[str, List[Tuple[float, float, str]]] = defaultdict(
