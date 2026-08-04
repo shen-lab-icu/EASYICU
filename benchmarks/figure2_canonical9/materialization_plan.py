@@ -36,6 +36,15 @@ class Canonical9MaterializationSpec:
     emit_trajectory: bool = False
     trajectory_concepts: tuple[str, ...] = ()
     trajectory_window: Optional[tuple[float, float]] = None
+    #: Width (hours) of the uniform grid the cohort's ``<family>_h<start>_<end>``
+    #: columns are summarized onto, and how each window is reduced.  ``None``
+    #: emits no such columns, which is every task but the trajectory one.
+    #:
+    #: This is a CASE decision and belongs here rather than in the engine: the
+    #: engine's ``FixedWindowGrid`` chooses no family, width, horizon or
+    #: aggregate, and its parser only requires that the grid be uniform.
+    trajectory_panel_width_hours: Optional[float] = None
+    trajectory_panel_aggregate: str = "max"
     identity_mode: str = "stay"
     positive_only_event_concepts: tuple[str, ...] = ()
     additional_expected_outputs: tuple[str, ...] = ()
@@ -323,6 +332,22 @@ CANONICAL9_MIMIC_IV_PLAN: tuple[Canonical9MaterializationSpec, ...] = (
         emit_trajectory=True,
         trajectory_concepts=("sofa2", *_SOFA2_COMPONENTS, "lact"),
         trajectory_window=(0.0, 72.0),
+        # THE COMMON TIME GRID THE NOTE BELOW ASKS FOR, MADE EXECUTABLE.
+        #
+        # 12 h over 0-72 gives six points per family. Uniform, as the note
+        # requires. Six is enough to separate the shapes a phenotyping study is
+        # for -- rising, falling, flat, late deterioration -- while staying a
+        # sub-daily resolution the data actually supports: MEASURED on the
+        # sealed long table, sofa2 total is present in 100.0 / 97.7 / 92.8 /
+        # 87.7 / 82.1 / 76.7 % of stays across the six windows, and 97.7 % of
+        # stays have at least two. The decline is discharge and death, not
+        # measurement failure -- exactly the length-biased sampling this task's
+        # guardrails name, and the reason missing windows are left missing.
+        #
+        # Change this line to change the study's time resolution; nothing in the
+        # engine hard-codes it.
+        trajectory_panel_width_hours=12.0,
+        trajectory_panel_aggregate="max",
         notes=(
             "Build fixed-anchor ICU-hour trajectories over hours 0-72 from the "
             "typed long table. Use a common time grid, make missingness explicit, "
