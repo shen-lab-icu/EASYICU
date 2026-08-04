@@ -130,8 +130,7 @@ counts = closed_categorical_counts(count, declared_levels=count_levels)
         ("closed_categorical_counts", 7, "value_n"),
     ]
     assert all(
-        repair_reason_for_finding(finding).value
-        == "SCIENTIFIC_SEMANTICS_VIOLATION"
+        repair_reason_for_finding(finding).value == "SCIENTIFIC_SEMANTICS_VIOLATION"
         for finding in findings
     )
 
@@ -242,9 +241,7 @@ receipt = measurement_provenance_receipt(
     findings = _provenance_scope_findings(script, _step(ra))
 
     assert len(findings) == 1
-    assert findings[0].detail["declared_pairs"] == [
-        ["value_measured", "value_n"]
-    ]
+    assert findings[0].detail["declared_pairs"] == [["value_measured", "value_n"]]
     assert findings[0].detail["observed_pair"] == [
         "other_measured",
         "other_n",
@@ -279,8 +276,7 @@ receipt = measurement_provenance_receipt(
     findings = [
         finding
         for finding in audit_mechanical_code_contracts(script, _step(ra))
-        if (finding.detail or {}).get("reason")
-        == "host_helper_runtime_introspection"
+        if (finding.detail or {}).get("reason") == "host_helper_runtime_introspection"
     ]
 
     assert len(findings) == 1
@@ -802,8 +798,7 @@ def test_table_one_sdk_call_that_passes_no_spec_is_refused_before_launch(ra):
     # already classified that way. Left unmapped this fell into the generic
     # output-contract bucket, which blames the wrong layer in the ledger.
     assert (
-        repair_reason_for_finding(findings[0])
-        is RepairReason.INVALID_HELPER_SIGNATURE
+        repair_reason_for_finding(findings[0]) is RepairReason.INVALID_HELPER_SIGNATURE
     )
 
 
@@ -959,8 +954,7 @@ def add_categorical(series, allowed_values, name):
     ]
     assert names == ["closed_counts_stable_keywords_v1"]
     assert (
-        "closed_categorical_counts(series, declared_levels=allowed_values)"
-        in repaired
+        "closed_categorical_counts(series, declared_levels=allowed_values)" in repaired
     )
     assert "variable_name=name" not in repaired
     assert _signature_findings(repaired, ra) == []
@@ -1181,14 +1175,22 @@ qa = audit_publication_exports(out_dir=out_dir, stem=stem)
     )
 
     assert len(findings) == 1
-    assert findings[0].detail == {
-        "reason": "host_helper_call_signature_invalid",
-        "helper_name": "audit_publication_exports",
-        "line": 3,
-        "max_positional": 1,
-        "required_keywords": [],
-        "violations": ["paths_argument_missing", "unknown_keyword_argument"],
-    }
+    detail = findings[0].detail
+    # The stable identity of the finding. Asserted item by item rather than as
+    # whole-dict equality: an added diagnostic field is not a contract change,
+    # and equality made every one of them look like one.
+    assert detail["reason"] == "host_helper_call_signature_invalid"
+    assert detail["helper_name"] == "audit_publication_exports"
+    assert detail["line"] == 3
+    assert detail["max_positional"] == 1
+    assert detail["required_keywords"] == []
+    assert detail["violations"] == [
+        "paths_argument_missing",
+        "unknown_keyword_argument",
+    ]
+    # And the names a repair needs in order to act without guessing.
+    assert detail["unknown_keywords"] == ["out_dir", "stem"]
+    assert "paths" in detail["allowed_keywords"]
     assert names == ["publication_export_audit_paths_v1"]
     assert "audit_publication_exports(paths=out_dir)" in repaired
     assert "stem=" not in repaired

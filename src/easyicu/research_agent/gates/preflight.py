@@ -50,7 +50,10 @@ _TRY_STAR_NODE_TYPES = (
 )
 _TRY_NODE_TYPES = (ast.Try, *_TRY_STAR_NODE_TYPES)
 _TYPE_PARAMETER_NODE_TYPES = tuple(
-    filter(None, (getattr(ast, name, None) for name in ("TypeVar", "ParamSpec", "TypeVarTuple")))
+    filter(
+        None,
+        (getattr(ast, name, None) for name in ("TypeVar", "ParamSpec", "TypeVarTuple")),
+    )
 )
 _STRUCTURAL_ACCOUNTING_PRODUCTS = frozenset(
     {
@@ -1217,9 +1220,7 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
             ambiguous_names.add(str(node.name))
         if isinstance(node, ast.MatchMapping) and node.rest in marker_names:
             ambiguous_names.add(str(node.rest))
-        if isinstance(node, _TYPE_PARAMETER_NODE_TYPES) and (
-            node.name in marker_names
-        ):
+        if isinstance(node, _TYPE_PARAMETER_NODE_TYPES) and (node.name in marker_names):
             ambiguous_names.add(node.name)
         targets: list[ast.AST] = []
         if isinstance(node, ast.Assign):
@@ -3584,9 +3585,7 @@ def _pre312_fstring_subscript_quote_findings(
     occurrences = [
         {
             **occurrence,
-            "outer_quote": (
-                "double" if occurrence["outer_quote"] == '"' else "single"
-            ),
+            "outer_quote": ("double" if occurrence["outer_quote"] == '"' else "single"),
         }
         for occurrence in occurrences
     ]
@@ -4489,9 +4488,7 @@ def _names_bound_in_scope(scope: ast.AST) -> set[str]:
 
     def _walk(node: ast.AST) -> None:
         for child in ast.iter_child_nodes(node):
-            if isinstance(
-                child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
-            ):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
                 bound.add(child.name)
                 continue
             if isinstance(child, ast.Lambda):
@@ -5787,9 +5784,7 @@ def _builtin_int_binding_is_unmodified(tree: ast.Module) -> bool:
             return False
         if isinstance(node, ast.MatchMapping) and node.rest == "int":
             return False
-        if isinstance(node, _TYPE_PARAMETER_NODE_TYPES) and (
-            node.name == "int"
-        ):
+        if isinstance(node, _TYPE_PARAMETER_NODE_TYPES) and (node.name == "int"):
             return False
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             if any(alias.name == "*" for alias in node.names):
@@ -7228,6 +7223,108 @@ _HOST_HELPER_CALL_CONTRACTS: dict[tuple[str, str], dict[str, object]] = {
 }
 
 
+#: Host entry points whose contract is COMPILED from their own signature.
+#:
+#: The registry above is hand-transcribed, and its own comment records the cost:
+#: "a drifted copy is how this registry has produced wrong blocks before."  For
+#: a keyword-only host entry point there is nothing to transcribe -- Python
+#: reports the parameter list exactly -- and transcription can only introduce
+#: the drift.
+#:
+#: MEASURED over 1,068 recorded step logs: six steps died on
+#: ``TypeError: <helper>() got an unexpected keyword argument``, and every one
+#: was a host-owned function that the hand table did not list.  The most recent
+#: killed m1's ``07_adjusted_association_figure`` on 2026-08-04 with ``dpi=``,
+#: two code repairs deep and seven provider calls still unspent, at the step
+#: that stood between a nine-step-green run and its manuscript.  ``dpi`` is a
+#: real parameter -- of ``save_publication_figure``, which the Coder prompt
+#: names two paragraphs away -- so the model was transposing a documented
+#: keyword onto the wrong callee, which no prompt edit reliably prevents and a
+#: signature comparison catches exactly.
+#:
+#: Entries are added by naming the function, never by copying its parameters.
+#: A callee that accepts ``**kwargs`` is skipped: nothing can be unexpected.
+_SIGNATURE_DERIVED_HOST_HELPERS: tuple[tuple[str, str], ...] = (
+    (
+        "easyicu.research_agent.execution.runners.adjusted_association_figure_executor",
+        "run_adjusted_association_figure",
+    ),
+    (
+        "easyicu.research_agent.execution.runners.adjusted_association_executor",
+        "run_adjusted_association_from_env",
+    ),
+    (
+        "easyicu.research_agent.methods.descriptive_inputs",
+        "strict_numeric_input",
+    ),
+    (
+        "easyicu.research_agent.methods.source_status",
+        "reconcile_binary_event_presence",
+    ),
+)
+
+
+def _compile_signature_derived_contracts() -> None:
+    """Fill the registry from the callees' own signatures, once, at import.
+
+    A helper that cannot be imported or inspected is skipped rather than
+    guessed at: an unknown signature must not become a block.
+    """
+
+    import inspect as _inspect
+    import importlib as _importlib
+
+    for module_name, symbol in _SIGNATURE_DERIVED_HOST_HELPERS:
+        key = (module_name, symbol)
+        if key in _HOST_HELPER_CALL_CONTRACTS:
+            continue
+        try:
+            function = getattr(_importlib.import_module(module_name), symbol)
+            signature = _inspect.signature(function)
+        except Exception:  # noqa: BLE001 - an uninspectable helper is not a block
+            continue
+        parameters = list(signature.parameters.values())
+        if any(
+            parameter.kind is _inspect.Parameter.VAR_KEYWORD for parameter in parameters
+        ):
+            continue
+        positional = [
+            parameter
+            for parameter in parameters
+            if parameter.kind
+            in (
+                _inspect.Parameter.POSITIONAL_ONLY,
+                _inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            )
+        ]
+        if any(
+            parameter.kind is _inspect.Parameter.VAR_POSITIONAL
+            for parameter in parameters
+        ):
+            continue
+        _HOST_HELPER_CALL_CONTRACTS[key] = {
+            "max_positional": len(positional),
+            "positional_parameter": positional[0].name if positional else "",
+            # Only the unknown-keyword half is derived. Which of a helper's
+            # parameters a given step is REQUIRED to pass is a scientific
+            # decision the signature does not encode, so it stays empty here
+            # and remains the hand table's business where one exists.
+            "required_keywords": (),
+            "allowed_keywords": tuple(
+                parameter.name
+                for parameter in parameters
+                if parameter.kind
+                in (
+                    _inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                    _inspect.Parameter.KEYWORD_ONLY,
+                )
+            ),
+        }
+
+
+_compile_signature_derived_contracts()
+
+
 def _measurement_provenance_scope_findings(
     tree: ast.Module,
     step: AnalysisStep,
@@ -7248,9 +7345,7 @@ def _measurement_provenance_scope_findings(
     declared_pairs = {
         (measured_column, count_column)
         for measured_column in declared_inputs
-        if (
-            count_column := companion_count_column_for_measured(measured_column)
-        )
+        if (count_column := companion_count_column_for_measured(measured_column))
         and count_column in declared_inputs
     }
     findings: list[ValidationFinding] = []
@@ -7295,9 +7390,7 @@ def _measurement_provenance_scope_findings(
                     "reason": "measurement_provenance_pair_undeclared",
                     "helper_name": "measurement_provenance_receipt",
                     "line": int(node.lineno),
-                    "declared_pairs": [
-                        list(pair) for pair in sorted(declared_pairs)
-                    ],
+                    "declared_pairs": [list(pair) for pair in sorted(declared_pairs)],
                     **(
                         {"observed_pair": list(observed_pair)}
                         if observed_pair is not None
@@ -7471,12 +7564,21 @@ def _host_helper_call_signature_findings(
         explicit_keywords = [name for name in keyword_names if name is not None]
         if len(explicit_keywords) != len(set(explicit_keywords)):
             violations.append("duplicate_keyword_arguments")
-        if any(name not in allowed_keywords for name in explicit_keywords):
+        unknown_keywords = [
+            name for name in explicit_keywords if name not in allowed_keywords
+        ]
+        if unknown_keywords:
             violations.append("unknown_keyword_argument")
-        if node.args and positional_parameter in explicit_keywords:
-            violations.append(f"{positional_parameter}_bound_more_than_once")
-        if not node.args and positional_parameter not in explicit_keywords:
-            violations.append(f"{positional_parameter}_argument_missing")
+        # A contract that names no positional parameter cannot demand one.
+        # Every hand-written entry has a first positional argument that is in
+        # practice required; a keyword-only host entry point has none, and
+        # before this guard such a contract reported ``_argument_missing`` on
+        # every correct call.
+        if positional_parameter:
+            if node.args and positional_parameter in explicit_keywords:
+                violations.append(f"{positional_parameter}_bound_more_than_once")
+            if not node.args and positional_parameter not in explicit_keywords:
+                violations.append(f"{positional_parameter}_argument_missing")
         if not set(required_keywords) <= set(explicit_keywords):
             violations.append("required_keyword_only_argument_missing")
         if helper_name == "measurement_provenance_receipt":
@@ -7578,6 +7680,20 @@ def _host_helper_call_signature_findings(
                     "max_positional": max_positional,
                     "required_keywords": list(required_keywords),
                     "violations": sorted(set(violations)),
+                    # Which keywords, and which the helper actually has. A
+                    # repair handed only "unknown_keyword_argument" has to
+                    # guess what to drop; m1's 07_adjusted_association_figure
+                    # spent two repairs on exactly that and still shipped
+                    # ``dpi=`` into the sandbox. The violation CODE stays
+                    # stable; the names travel beside it.
+                    **(
+                        {
+                            "unknown_keywords": sorted(unknown_keywords),
+                            "allowed_keywords": list(allowed_keywords),
+                        }
+                        if unknown_keywords
+                        else {}
+                    ),
                     **detail_additions,
                 },
             )
@@ -7651,8 +7767,7 @@ def _count_companion_closed_domain_findings(
             implicated.update(
                 closed_level_bindings[nested.id]
                 for nested in ast.walk(argument)
-                if isinstance(nested, ast.Name)
-                and nested.id in closed_level_bindings
+                if isinstance(nested, ast.Name) and nested.id in closed_level_bindings
             )
         for count_column in sorted(implicated):
             findings.append(
@@ -8147,12 +8262,9 @@ def _host_helper_runtime_introspection_findings(
                     helper_references[f"{alias.asname}.save_publication_figure"] = (
                         "save_publication_figure"
                     )
-                elif (
-                    alias.asname
-                    and any(
-                        module == alias.name
-                        for module, _symbol in _HOST_HELPER_CALL_CONTRACTS
-                    )
+                elif alias.asname and any(
+                    module == alias.name
+                    for module, _symbol in _HOST_HELPER_CALL_CONTRACTS
                 ):
                     helper_references.update(
                         {
@@ -8177,8 +8289,7 @@ def _host_helper_runtime_introspection_findings(
                     }
                 )
             elif any(
-                module == node.module
-                for module, _symbol in _HOST_HELPER_CALL_CONTRACTS
+                module == node.module for module, _symbol in _HOST_HELPER_CALL_CONTRACTS
             ):
                 helper_references.update(
                     {
