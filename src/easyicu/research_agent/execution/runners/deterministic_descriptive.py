@@ -20,6 +20,9 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 import numpy as np
 import pandas as pd
 
+from ...authority.plausibility import FlagOnlyPlausibilityScope
+from .plausibility_receipt import render_standard_plausibility_receipt_code
+
 __all__ = ["absolute_risk_context_code", "run_absolute_risk_context"]
 
 _COMPANION_SUFFIXES = (
@@ -47,10 +50,35 @@ _VALUE_SUFFIXES = (
 )
 
 
-def absolute_risk_context_code() -> str:
-    """Return the small script consumed by the instrumented step runner."""
+def absolute_risk_context_code(
+    *,
+    plausibility_scope: FlagOnlyPlausibilityScope | None = None,
+) -> str:
+    """Return the small script consumed by the instrumented step runner.
 
-    return textwrap.dedent(
+    The body is one call into host code, but the plausibility receipt is
+    RENDERED here rather than computed inside it.  The obligation gate reads
+    the script's own source to find a comparison against bounds taken from the
+    contract, and a call into an imported function shows it nothing -- so a
+    delegating stub is refused with ``plausibility_check_not_attributable``
+    however correctly the callee behaves.
+
+    That refusal was invisible until 2026-08-04, because this owner had never
+    claimed a step: its ownership predicate carried a method allowlist the
+    Planner never matched, 0 claims in 89 opportunities. The first run in which
+    it did claim died here. The six sibling runners that were reachable all
+    render the receipt the same way.
+    """
+
+    receipt = (
+        render_standard_plausibility_receipt_code(
+            plausibility_scope,
+            frame_name="plausibility_frame",
+        )
+        if plausibility_scope is not None and plausibility_scope.expected_columns
+        else ""
+    )
+    body = textwrap.dedent(
         """
         from easyicu.research_agent.execution.runners.deterministic_descriptive import (
             run_absolute_risk_context,
@@ -59,6 +87,38 @@ def absolute_risk_context_code() -> str:
         run_absolute_risk_context()
         """
     ).strip()
+    if not receipt:
+        return body
+    # One read-modify-write after the body has written its summary, matching
+    # the robustness runner: a second canonical write would give the static
+    # obligation gate two writers to reason about.
+    return "\n\n".join(
+        (
+            textwrap.dedent(
+                """
+                import json
+                import os
+                from pathlib import Path
+
+                import pandas as pd
+
+                plausibility_frame = pd.read_parquet(os.environ["COHORT_PARQUET"])
+                """
+            ).strip(),
+            receipt,
+            body,
+            textwrap.dedent(
+                """
+                summary_path = Path(os.environ["STEP_OUT_DIR"]) / "step_summary.json"
+                summary = json.loads(summary_path.read_text(encoding="utf-8"))
+                summary["plausibility_audit"] = plausibility_audit
+                summary_path.write_text(
+                    json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8"
+                )
+                """
+            ).strip(),
+        )
+    )
 
 
 def _read_json(path: Path) -> Dict[str, Any]:

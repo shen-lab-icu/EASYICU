@@ -6867,7 +6867,9 @@ def run_execute_phase(
                 total_steps=total_steps,
                 fallback_reason=reason,
             )
-            return absolute_risk_context_code()
+            return absolute_risk_context_code(
+                plausibility_scope=plausibility_authority.scope
+            )
 
         def _robustness_sensitivity_preflight_supported() -> bool:
             if _step_expects_figure(step):
