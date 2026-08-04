@@ -87,6 +87,24 @@ def test_every_honoured_name_is_one_this_owner_would_claim():
         assert owns_step("descriptive", "04_context", [f"table:{product}"]), product
 
 
+def test_the_registration_carries_a_kind_prefix(tmp_path):
+    """The canonical envelope refuses a bare name.
+
+    verify20: this step was the only one of ten registering a bare name, and
+    the bounded-metric shadow blocked it with ``invalid_product_identity`` --
+    "a registered product did not use a valid kind:name identity". Every
+    sibling registers ``table:``/``figure:``/``log:``.
+    """
+
+    summary = _run_against(tmp_path, "table:absolute_risk_context")
+
+    for identity in summary["output_files"]:
+        kind, separator, name = identity.partition(":")
+        assert separator, identity
+        assert kind == "table", identity
+        assert name in _SUPPORTED_PRODUCTS, identity
+
+
 def test_the_kind_prefix_is_required():
     """A bare filename is not a typed product declaration."""
 
@@ -185,7 +203,10 @@ def test_the_runner_registers_the_declared_name_end_to_end(tmp_path):
     summary = _run_against(tmp_path, "table:absolute_risk_context")
 
     assert summary["status"] == "ok", summary
-    assert list(summary["output_files"]) == ["absolute_risk_context"], summary[
+    # ``kind:name``, as every other runner registers. A bare name is refused by
+    # the canonical envelope with ``invalid_product_identity`` -- measured in
+    # verify20, where this step was the ONLY one of ten registering a bare name.
+    assert list(summary["output_files"]) == ["table:absolute_risk_context"], summary[
         "output_files"
     ]
 
@@ -195,9 +216,11 @@ def test_the_registered_name_always_matches_the_file_written(tmp_path):
 
     for declared in ("table:absolute_risk_context", "table:exposure_outcome_summary"):
         summary = _run_against(tmp_path / declared.replace(":", "_"), declared)
-        ((product, filename),) = summary["output_files"].items()
+        ((identity, filename),) = summary["output_files"].items()
+        kind, separator, product = identity.partition(":")
+        assert separator and kind == "table", identity
         assert filename == f"{product}.csv", summary["output_files"]
-        assert declared.partition(":")[2] == product
+        assert declared == identity
 
 
 def test_the_recorded_failure_is_what_this_repairs():

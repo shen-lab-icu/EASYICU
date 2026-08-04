@@ -16,7 +16,7 @@ table:
 * 9 name one whose producing step ALSO produces the other.  One string on the
   figure step is the entire gap, the parent and its digest do not change, and
   those are what this reports.
-* 25 name one whose sibling no step in the plan produces.  Closing those means
+* 31 name one whose sibling NO step in the plan produces.  Closing those means
   asking a parent for a different analysis -- a scientific choice this owner
   does not get to make -- so the verdict stays silent, the same boundary the
   distribution owner had to be narrowed to after canary33.
@@ -160,25 +160,35 @@ def test_a_sibling_no_step_produces_is_not_demanded():
     verdict = _verdict(plan)
 
     assert verdict.missing_declarations == ()
-    assert "no single step in this plan produces both" in verdict.reason
+    assert "no step in this plan produces" in verdict.reason
 
 
-def test_two_different_parents_are_not_one_digest():
-    """The renderer reads both tables under ONE parent's digest binding.
+def test_two_separate_audit_steps_are_still_reportable():
+    """CORRECTED 2026-08-04. The first version asserted the opposite.
 
-    Two producers satisfy "somebody writes it" without satisfying what the
-    renderer requires, so the gap is not closable by editing this step.
+    It read the renderer's docstring -- "the two digest-bound audit tables
+    declared by one direct parent" -- and required one producer. No code
+    requires that: ``owns_step`` asks only that both keys resolve to bindings
+    carrying the columns it reads, and each binding is digest-pinned to its own
+    producer. The narrow rule was mine, and it cost a real case at once:
+    e2/verify20 planned the two audits as separate steps 04 and 05, its figure
+    named one, this stayed silent, and the step fell to the Coder and died on
+    source-data traceability.
     """
 
     other = dict(_audit_step(MEASUREMENT_PROCESS_AUDIT_INPUT))
-    other["step_id"] = "04_second_audit"
+    other["step_id"] = "05_measurement_process_audit"
     plan = _plan(
         _audit_step(MISSINGNESS_MEASUREMENT_AUDIT_INPUT),
         other,
         _figure_step(MISSINGNESS_MEASUREMENT_AUDIT_INPUT),
     )
 
-    assert _verdict(plan).missing_declarations == ()
+    verdict = _verdict(plan)
+
+    assert verdict.missing_declarations == (MEASUREMENT_PROCESS_AUDIT_INPUT,)
+    # The reason must name the step that really produces it, not the other one.
+    assert "05_measurement_process_audit" in verdict.reason
 
 
 def test_a_step_this_owner_could_never_draw_is_not_asked():
@@ -271,7 +281,7 @@ def test_the_gate_turns_the_verdict_into_a_repairable_finding():
 # ---------------------------------------------------------------------------
 
 
-def test_the_corpus_fires_only_on_the_same_parent_shape():
+def test_the_corpus_fires_only_where_the_plan_can_close_the_gap():
     """Re-derives the 9/16/25 split rather than restating it.
 
     A verdict that fired on the 25 would demand a different analysis; one that
@@ -303,10 +313,13 @@ def test_the_corpus_fires_only_on_the_same_parent_shape():
                 absent = next(
                     k for k in MISSINGNESS_MEASUREMENT_FIGURE_INPUTS if k != named[0]
                 )
-                same = producer.get(named[0]) is not None and producer.get(
-                    named[0]
-                ) is producer.get(absent)
-                shape = "one_same_parent" if same else "one_no_sibling"
+                # The only question that matters: does ANY step produce the
+                # sibling? If not, the plan cannot close the gap here.
+                shape = (
+                    "one_producible"
+                    if producer.get(absent) is not None
+                    else "one_no_sibling"
+                )
             verdict = missingness_measurement_figure_declaration_verdict(
                 step, plan=plan
             )
@@ -314,8 +327,9 @@ def test_the_corpus_fires_only_on_the_same_parent_shape():
 
     if not (fires or silent):
         pytest.skip("no recorded plan names an audit table on a figure step")
-    assert fires["one_same_parent"] > 0, "the verdict never fires on real input"
+    assert fires["one_producible"] > 0, "the verdict never fires on real input"
     assert fires["both"] == 0, fires
+    # The load-bearing half: a sibling nobody writes is never demanded.
     assert fires["one_no_sibling"] == 0, fires
     assert silent["both"] > 0 and silent["one_no_sibling"] > 0, silent
 
