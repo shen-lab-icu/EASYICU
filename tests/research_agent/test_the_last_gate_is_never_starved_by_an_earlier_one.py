@@ -40,6 +40,7 @@ import pytest
 from easyicu.research_agent.authority.provider_budget import StepProviderCallBudget
 from easyicu.research_agent.repairs.coordination import (
     TERMINAL_GATE_REPAIR_CLASSES,
+    TERMINAL_STAGE_REPAIR_CLASSES,
     StepRepairBudget,
 )
 
@@ -115,7 +116,7 @@ def test_two_runtime_repairs_no_longer_starve_the_concept_gate(tmp_path):
     assert record["step_llm_repair_classes"] == ["runtime", "runtime", "concept"]
     # And the record says WHY it shows 3 attempts against a budget of 2.
     assert record["step_llm_repair_budget"] == 2
-    assert record["step_llm_repair_terminal_gate_reserve"] == "concept"
+    assert record["step_llm_repair_terminal_gate_reserve"] == ["concept"]
 
 
 def test_a_step_that_never_needed_the_reserve_does_not_claim_one(tmp_path):
@@ -166,12 +167,18 @@ def test_the_two_terminal_classes_share_one_reserve(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_an_earlier_class_still_sees_exactly_the_configured_pool(tmp_path):
-    """The 40 steps that finish ok on two non-concept repairs are untouched."""
+def test_a_pre_execution_class_still_sees_exactly_the_configured_pool(tmp_path):
+    """The steps that finish ok on two ordinary repairs are untouched.
+
+    RENAMED. ``runtime`` used to be listed here as "an earlier class". It is
+    not: execution is the LAST thing that happens, and a traceback cannot exist
+    until every pre-execution gate has already had its chance at the pool. It
+    now has a reserve of its own, so it is asserted with the other terminal
+    stages below instead.
+    """
 
     provider, _record, budget = _budget(tmp_path)
 
-    assert budget.effective_limit("runtime") == 2
     assert budget.effective_limit("contract") == 2
     assert budget.effective_limit("visual") == 2
     assert budget.effective_limit("compatibility") == 2
@@ -293,3 +300,106 @@ def test_the_recorded_starvation_is_broad_and_not_one_task():
         if int(record.get("step_provider_call_remaining") or 0) > 0
     ]
     assert len(with_headroom) >= len(starved) // 2
+
+
+# ---------------------------------------------------------------------------
+# Execution is a terminal stage too, and it has its own reserve
+# ---------------------------------------------------------------------------
+
+
+def test_a_traceback_can_still_be_answered_after_the_gates_took_the_pool(tmp_path):
+    """m2 05/06, verify31: classes ('contract','contract'), then KeyError.
+
+    That step died ``execution_failed`` on ``KeyError: 'row_count'`` at line 52
+    -- a one-line defect, the most specific repair signal the pipeline
+    produces -- with SIX provider calls unspent and ``runtime_repair_attempts``
+    of zero, because both repairs had gone to the contract gate before the
+    script ever ran.
+
+    MEASURED: 20 of the 89 recorded ``execution_failed`` steps, across 7 of the
+    9 tasks, died with zero runtime repairs and calls remaining. Of the 211
+    steps that ever spent a runtime repair, 90 (43 %) finished ok.
+    """
+
+    provider, record, budget = _budget(tmp_path)
+
+    assert _spend(budget, provider, "contract")
+    assert _spend(budget, provider, "contract")
+
+    assert not budget.available("contract")
+    assert not budget.available("visual")
+    assert budget.available("runtime")
+    assert _spend(budget, provider, "runtime")
+    assert record["step_llm_repair_terminal_gate_reserve"] == ["runtime"]
+
+
+def test_the_two_reserves_are_independent(tmp_path):
+    """Spending the audit's reserve must not cost execution its own.
+
+    They answer different questions at different moments, and a step can
+    genuinely need both: the gate refuses the script, the repaired script then
+    crashes.
+    """
+
+    provider, record, budget = _budget(tmp_path)
+
+    assert _spend(budget, provider, "contract")
+    assert _spend(budget, provider, "contract")
+    assert _spend(budget, provider, "concept")
+    assert budget.available("runtime")
+    assert _spend(budget, provider, "runtime")
+
+    assert record["step_llm_repair_terminal_gate_reserve"] == ["concept", "runtime"]
+    # And neither stage gets a second.
+    assert not budget.available("runtime")
+    assert not budget.available("post_mutation_concept")
+
+
+def test_each_stage_reserve_is_granted_once_only(tmp_path):
+    provider, _record, budget = _budget(tmp_path)
+
+    assert _spend(budget, provider, "runtime")
+    assert _spend(budget, provider, "runtime")
+    # runtime is already paid, so the pool is genuinely gone for it
+    assert not budget.available("runtime")
+    assert budget.available("concept")
+    assert _spend(budget, provider, "concept")
+    assert not budget.available("concept")
+    assert not budget.available("runtime")
+
+
+def test_the_stages_are_disjoint_and_cover_the_two_that_run_last():
+    """A class in two stages would grant two reserves for one failure."""
+
+    seen: set[str] = set()
+    for stage in TERMINAL_STAGE_REPAIR_CLASSES:
+        assert not (seen & stage), stage
+        seen |= set(stage)
+    assert TERMINAL_GATE_REPAIR_CLASSES in TERMINAL_STAGE_REPAIR_CLASSES
+    assert "runtime" in seen
+    # Everything discovered BEFORE the script runs stays on the shared pool.
+    for earlier in ("contract", "compatibility", "visual", "critic_resume"):
+        assert earlier not in seen
+
+
+def test_the_execute_phase_asks_the_budget_about_runtime_too():
+    """A class-blind guard refuses before ``consume`` is ever reached."""
+
+    import inspect
+
+    from easyicu.research_agent.execution import phase as execution_phase
+
+    tree = ast.parse(inspect.getsource(execution_phase))
+    asked: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+            continue
+        if node.func.id not in {
+            "_llm_repair_budget_available",
+            "_logical_llm_repair_budget_available",
+        }:
+            continue
+        if node.args and isinstance(node.args[0], ast.Constant):
+            asked.add(str(node.args[0].value))
+
+    assert "runtime" in asked, asked

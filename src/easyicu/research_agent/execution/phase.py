@@ -10576,7 +10576,7 @@ def run_execute_phase(
             if (
                 worker_progress.runtime_repair_attempts
                 >= pipeline._max_code_repair_attempts
-                or not _llm_repair_budget_available()
+                or not _llm_repair_budget_available("runtime")
             ):
                 fallback_code = _deterministic_fallback_code("execution_failure")
                 if fallback_code is not None:
@@ -10613,7 +10613,7 @@ def run_execute_phase(
             while (
                 worker_progress.runtime_repair_attempts
                 < pipeline._max_code_repair_attempts
-                and _llm_repair_budget_available()
+                and _llm_repair_budget_available("runtime")
             ):
                 worker_progress.repair_attempts += 1
                 worker_progress.runtime_repair_attempts += 1
@@ -10692,7 +10692,7 @@ def run_execute_phase(
                         (is_transient or is_noop_repair)
                         and worker_progress.runtime_repair_attempts
                         < pipeline._max_code_repair_attempts
-                        and _llm_repair_budget_available()
+                        and _llm_repair_budget_available("runtime")
                         and not provider_budget.exhausted
                     )
                     if can_retry_repair:
