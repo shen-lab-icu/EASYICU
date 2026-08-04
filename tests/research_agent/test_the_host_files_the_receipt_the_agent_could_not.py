@@ -125,17 +125,24 @@ def test_the_agent_body_survives_verbatim():
     ast.parse(out)
 
 
-def test_the_receipt_runs_before_the_body_and_files_after_it():
+def test_the_receipt_runs_after_the_body_and_files_last():
+    """CORRECTED. The first version asserted the receipt ran FIRST.
+
+    A prologue would have been worse than useless: agent bodies routinely bind
+    ``plausibility_audit`` themselves, and a body running after a prologue
+    silently overwrites the host's value. Measured on the recorded scripts,
+    three of them do exactly that. Running last makes the host's value win by
+    construction.
+    """
+
     out = host_plausibility_receipt_injected(
         _BODY, scope=_scope("age"), already_satisfied=False
     )
 
-    receipt_at = out.index("plausibility_audit = {}")
-    # A marker unique to the body: the prologue also binds a frame from
-    # pd.read_parquet, and "frame = pd.read_parquet" matches it too.
     body_at = out.index("print(len(frame))")
+    receipt_at = out.index("EASYICU_RESOLVED_INPUTS_JSON")
     filing_at = out.index('_easyicu_host_summary["plausibility_audit"]')
-    assert receipt_at < body_at < filing_at
+    assert body_at < receipt_at < filing_at
 
 
 def test_the_bounds_are_read_from_the_sealed_manifest():
@@ -148,22 +155,27 @@ def test_the_bounds_are_read_from_the_sealed_manifest():
     assert "a" * 64 in out  # the scope digest the receipt self-checks against
 
 
-def test_a_body_that_overwrites_the_receipt_fails_closed():
-    """The tracked name must stay plain for the gate, so guard it at runtime.
+def test_a_body_that_binds_the_same_name_is_overridden_not_killed():
+    """The case that forced the design, taken from the recorded scripts.
 
-    A first version renamed the host copy to stop an agent shadowing it. The
-    real gate then refused the result: it follows the receipt value by NAME
-    into the summary write, and the rename lost the flow. So the name stays and
-    the tampering is caught when the script runs.
+    Three recorded bodies bind ``plausibility_audit`` themselves --
+    ``= {}`` and ``= build_plausibility_audit(...)``. A first version put the
+    receipt in a prologue and added a runtime check that RAISED when the value
+    changed; against those bodies it would have killed the very steps it was
+    meant to save, from host-injected code. The host now simply computes last.
     """
 
+    body = "plausibility_audit = {}\nprint(len(plausibility_audit))\n"
     out = host_plausibility_receipt_injected(
-        _BODY, scope=_scope("age"), already_satisfied=False
+        body, scope=_scope("age"), already_satisfied=False
     )
 
-    assert "_easyicu_host_plausibility_audit = dict(plausibility_audit)" in out
-    assert "if plausibility_audit != _easyicu_host_plausibility_audit:" in out
-    assert "raise RuntimeError" in out
+    assert out.index("plausibility_audit = {}") < out.index(
+        "EASYICU_RESOLVED_INPUTS_JSON"
+    )
+    assert 'raise RuntimeError(\n        "The host-computed' not in out
+    # And the host's own name is not leaked into the tracked flow.
+    assert "_easyicu_host_plausibility_audit" not in out
 
 
 def test_the_filing_is_guarded_on_a_summary_the_body_actually_wrote():
