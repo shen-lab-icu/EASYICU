@@ -194,6 +194,57 @@ def cohort_hygiene_findings(
                     )
                 )
 
+    # (C) Elapsed-time columns that contradict their own anchor. The export
+    # writes ``<concept>_time`` as hours elapsed from the cohort anchor, so a
+    # negative value places the event before the anchor that defines the row.
+    #
+    # The rule is STRUCTURAL, not a named-column rule: it reads the export's
+    # own convention off the export. MEASURED on the real MIMIC-IV cohort --
+    # 21 elapsed-time columns, and 20 of them have min EXACTLY 0.00. The
+    # convention is not in doubt; one column breaks it, in 28 of 94,458 rows.
+    #
+    # Every one of the nine recorded tasks carries those same 28 rows and NONE
+    # was told. Only a survival analysis ever compares the columns, so h1 hit
+    # it 20 minutes into its primary step, wrote its own guard, raised, and
+    # died with four provider calls unspent -- having discovered a property of
+    # the cohort that was fixed before it was ever handed one.
+    #
+    # Reported, never enforced: 0.03 % of rows is a data-quality fact, not a
+    # reason to refuse an analysis, and which rows to drop or censor is the
+    # analyst's call. Same severity and impartiality as (A) and (B).
+    for column in df.columns:
+        if not str(column).lower().endswith("_time"):
+            continue
+        elapsed = pd.to_numeric(df[column], errors="coerce").dropna()
+        if elapsed.empty:
+            continue
+        negative_n = int((elapsed < 0).sum())
+        if not negative_n:
+            continue
+        findings.append(
+            ValidationFinding(
+                validator="cohort_auditor",
+                severity="warning",
+                message=(
+                    f"{negative_n} row(s) give column '{column}' a negative "
+                    "elapsed time, placing the event before the anchor the row "
+                    f"is measured from (minimum {float(elapsed.min()):.4g}). "
+                    "Every other elapsed-time column in this export starts at "
+                    "0. No row is dropped or censored — recorded for the "
+                    "analyst to judge before any time-to-event analysis."
+                ),
+                detail={
+                    "kind": "cohort_hygiene",
+                    "subkind": "elapsed_time_precedes_anchor",
+                    "column": str(column),
+                    "negative_n": negative_n,
+                    "minimum": float(elapsed.min()),
+                    "n_rows": int(len(df)),
+                    "impartial": True,
+                },
+            )
+        )
+
     return findings
 
 
