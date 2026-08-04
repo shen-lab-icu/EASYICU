@@ -13,6 +13,8 @@ import argparse
 import hashlib
 import json
 import math
+import os
+import sys
 import textwrap
 import time
 from collections import Counter
@@ -30,6 +32,43 @@ import pyarrow.parquet as pq
 from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.lines import Line2D
 from scipy.ndimage import gaussian_filter1d
+
+
+def _prefer_checkout_src(script_path: Path | None = None) -> Path | None:
+    """Put this checkout's ``src`` first when the script runs from a clone.
+
+    A server may also have an older editable EasyICU installation.  Direct
+    execution from ``scripts/figures`` must use the matching source tree on
+    Windows, macOS and Linux without relying on a shell-specific ``PYTHONPATH``.
+    Installed/copied scripts simply leave ``sys.path`` unchanged.
+    """
+
+    script = (script_path or Path(__file__)).resolve()
+    try:
+        checkout_root = script.parents[2]
+    except IndexError:
+        return None
+    checkout_src = checkout_root / "src"
+    if not (checkout_src / "easyicu" / "__init__.py").is_file():
+        return None
+
+    normalized_src = os.path.normcase(os.path.realpath(os.fspath(checkout_src)))
+    retained: list[str] = []
+    for entry in sys.path:
+        try:
+            normalized_entry = os.path.normcase(
+                os.path.realpath(os.fspath(entry or Path.cwd()))
+            )
+        except TypeError:
+            retained.append(entry)
+            continue
+        if normalized_entry != normalized_src:
+            retained.append(entry)
+    sys.path[:] = [os.fspath(checkout_src), *retained]
+    return checkout_src
+
+
+CHECKOUT_SRC = _prefer_checkout_src()
 
 plt.rcParams["font.family"] = "sans-serif"
 plt.rcParams["font.sans-serif"] = ["Arial", "DejaVu Sans", "Liberation Sans"]
@@ -80,6 +119,7 @@ DISPLAY_Q_HIGH = 0.995
 width_mm = 183
 DOUBLE_COLUMN_WIDTH_IN = width_mm / 25.4
 PANELS_PER_PAGE = 12
+NON_DISPLAY_UNITS = frozenset({"boolean", "category", "datetime"})
 
 
 @dataclass
@@ -117,7 +157,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--catalog",
         type=Path,
-        help="Concept catalog JSON. Required for a full scan; unused by --render-only.",
+        help=(
+            "Concept catalog JSON. Required for a full scan; when supplied with "
+            "--render-only, refreshes audit metadata without rescanning Parquet."
+        ),
+    )
+    parser.add_argument(
+        "--run-metadata",
+        type=Path,
+        help=(
+            "Source run_metadata.json. Defaults to the sibling of --input-root "
+            "(for example, RUN/exports -> RUN/run_metadata.json)."
+        ),
     )
     parser.add_argument(
         "--modules",
@@ -176,13 +227,12 @@ def load_catalog(path: Path) -> dict[str, dict[str, Any]]:
     from easyicu.concept.catalog import CONCEPT_DICTIONARY
 
     for concept, metadata in CONCEPT_DICTIONARY.items():
-        if concept in catalog:
-            continue
         description, _, unit = metadata
-        catalog[concept] = {
-            "description": description,
-            "unit": unit or None,
-        }
+        item = catalog.setdefault(concept, {})
+        if item.get("description") in (None, ""):
+            item["description"] = description
+        if item.get("unit") in (None, "", []):
+            item["unit"] = unit or None
     return catalog
 
 
@@ -209,6 +259,17 @@ def numeric_or_none(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return result if math.isfinite(result) else None
+
+
+def display_unit(unit: str | None) -> str | None:
+    """Return a reader-facing unit while retaining canonical audit metadata."""
+
+    if unit is None:
+        return None
+    value = str(unit).strip()
+    if not value or value.casefold() in NON_DISPLAY_UNITS:
+        return None
+    return value
 
 
 def module_names(root: Path) -> list[str]:
@@ -726,14 +787,16 @@ def wrap_identifier(value: str, width: int = 20) -> str:
 
 def axis_label(payload: PlotPayload, *, compact: bool) -> str:
     label = wrap_identifier(payload.variable, 18) if compact else payload.variable
-    if payload.unit:
-        label += f"\n({payload.unit})" if compact else f" ({payload.unit})"
+    unit = display_unit(payload.unit)
+    if unit:
+        label += f"\n({unit})" if compact else f" ({unit})"
     return label
 
 
 def value_axis_label(payload: PlotPayload) -> str:
     """Short value-axis label; the concept identifier remains in the title."""
-    return f"Value ({payload.unit})" if payload.unit else "Value"
+    unit = display_unit(payload.unit)
+    return f"Value ({unit})" if unit else "Value"
 
 
 def panel_label(index: int) -> str:
@@ -921,8 +984,9 @@ def draw_payload(
         ax.set_yticks([])
     ax.grid(axis="y", color="#D8D8D8", linewidth=0.5, alpha=0.55)
     title = wrap_identifier(payload.variable, 24)
-    if payload.unit:
-        title = f"{title} [{payload.unit}]"
+    unit = display_unit(payload.unit)
+    if unit:
+        title = f"{title} [{unit}]"
     ax.set_title(
         title,
         loc="left",
@@ -1080,16 +1144,75 @@ def payload_notes(kind: str) -> tuple[str, str]:
     )
 
 
+def source_run_lineage(run_metadata_path: Path) -> dict[str, str]:
+    """Bind a QC artifact to the exact source run metadata bytes."""
+
+    if not run_metadata_path.is_file():
+        raise FileNotFoundError(f"Missing source run metadata: {run_metadata_path}")
+    raw_metadata = run_metadata_path.read_bytes()
+    metadata = json.loads(raw_metadata)
+    run_id = metadata.get("run_id") if isinstance(metadata, dict) else None
+    if not isinstance(run_id, str) or not run_id.strip():
+        raise ValueError(
+            f"Source run metadata has no non-empty run_id: {run_metadata_path}"
+        )
+    return {
+        "source_run_id": run_id.strip(),
+        "source_run_metadata_sha256": hashlib.sha256(raw_metadata).hexdigest(),
+    }
+
+
+def refresh_audit_catalog_metadata(
+    audit: pd.DataFrame,
+    catalog: dict[str, dict[str, Any]],
+) -> pd.DataFrame:
+    """Refresh catalog-only columns without touching record-level audit values."""
+
+    required = {
+        "variable",
+        "description",
+        "unit",
+        "catalog_min",
+        "catalog_max",
+    }
+    missing = sorted(required - set(audit.columns))
+    if missing:
+        raise ValueError(
+            "Render audit is missing catalog metadata columns: "
+            + ", ".join(missing)
+        )
+    refreshed = audit.copy()
+    for column in ("description", "unit"):
+        refreshed[column] = refreshed[column].astype("object")
+    for column in ("catalog_min", "catalog_max"):
+        refreshed[column] = pd.to_numeric(refreshed[column], errors="coerce")
+    for variable in refreshed["variable"].dropna().astype(str).unique():
+        description, unit, lower, upper = concept_metadata(catalog, variable)
+        selector = refreshed["variable"].astype(str) == variable
+        refreshed.loc[selector, "description"] = description
+        refreshed.loc[selector, "unit"] = unit
+        refreshed.loc[selector, "catalog_min"] = lower
+        refreshed.loc[selector, "catalog_max"] = upper
+    return refreshed
+
+
 def render_from_source(
     output_root: Path,
     modules: list[str] | None,
     dpi: int,
     panels_per_page: int,
+    *,
+    catalog: dict[str, dict[str, Any]] | None,
+    catalog_sha256: str | None,
+    lineage: dict[str, str],
 ) -> int:
     audit_path = output_root / "audit" / "variable_audit.csv"
     if not audit_path.exists():
         raise FileNotFoundError(f"Missing render audit: {audit_path}")
     audit = pd.read_csv(audit_path)
+    if catalog is not None:
+        audit = refresh_audit_catalog_metadata(audit, catalog)
+        audit.to_csv(audit_path, index=False)
     available_modules = list(dict.fromkeys(audit["module"].astype(str)))
     selected_modules = modules or available_modules
     unknown = sorted(set(selected_modules) - set(available_modules))
@@ -1134,20 +1257,26 @@ def render_from_source(
             flush=True,
         )
     manifest_path = output_root / "audit" / "run_manifest.json"
-    if manifest_path.exists():
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        manifest["last_rendered_at_utc"] = datetime.now(UTC).isoformat()
-        manifest["render_layout"] = "adaptive_module_atlas"
-        rendered_modules = set(manifest.get("modules") or [])
-        rendered_modules.update(manifest.get("rendered_modules") or [])
-        rendered_modules.update(selected_modules)
-        manifest["rendered_modules"] = sorted(rendered_modules)
-        manifest["render_dpi"] = dpi
-        manifest["panels_per_page"] = panels_per_page
-        manifest_path.write_text(
-            json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
+    manifest = (
+        json.loads(manifest_path.read_text(encoding="utf-8"))
+        if manifest_path.exists()
+        else {}
+    )
+    manifest.update(lineage)
+    manifest["last_rendered_at_utc"] = datetime.now(UTC).isoformat()
+    manifest["render_layout"] = "adaptive_module_atlas"
+    rendered_modules = set(manifest.get("modules") or [])
+    rendered_modules.update(manifest.get("rendered_modules") or [])
+    rendered_modules.update(selected_modules)
+    manifest["rendered_modules"] = sorted(rendered_modules)
+    manifest["render_dpi"] = dpi
+    manifest["panels_per_page"] = panels_per_page
+    if catalog_sha256 is not None:
+        manifest["catalog_sha256"] = catalog_sha256
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
     return 0
 
 
@@ -1165,17 +1294,28 @@ def run() -> int:
     started = time.perf_counter()
     input_root = args.input_root.resolve()
     output_root = args.output_root.resolve()
+    run_metadata_path = (
+        args.run_metadata.resolve()
+        if args.run_metadata is not None
+        else input_root.parent / "run_metadata.json"
+    )
+    lineage = source_run_lineage(run_metadata_path)
+    catalog_path = args.catalog.resolve() if args.catalog is not None else None
+    catalog = load_catalog(catalog_path) if catalog_path is not None else None
     if args.render_only:
         return render_from_source(
             output_root,
             args.modules,
             args.dpi,
             args.panels_per_page,
+            catalog=catalog,
+            catalog_sha256=(
+                file_sha256(catalog_path) if catalog_path is not None else None
+            ),
+            lineage=lineage,
         )
-    if args.catalog is None:
+    if catalog_path is None or catalog is None:
         raise ValueError("--catalog is required unless --render-only is used")
-    catalog_path = args.catalog.resolve()
-    catalog = load_catalog(catalog_path)
     available_modules = module_names(input_root)
     modules = args.modules or available_modules
     unknown = sorted(set(modules) - set(available_modules))
@@ -1370,6 +1510,7 @@ def run() -> int:
         ),
         "excluded_columns": sorted(INDEX_COLUMNS),
         "catalog_sha256": file_sha256(catalog_path),
+        **lineage,
     }
     (audit_root / "run_manifest.json").write_text(
         json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",

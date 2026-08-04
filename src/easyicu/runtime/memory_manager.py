@@ -19,16 +19,196 @@ Usage:
 
 import os
 import gc
+import sys
 import time
 import ctypes
 import logging
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, List, Union, Dict
 
 import pandas as pd
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class EffectiveMemoryInfo:
+    """Host memory after applying the current cgroup-v2 memory envelope.
+
+    Linux containers commonly expose the host's full RAM through ``psutil``.
+    The usable memory for this process is instead bounded by ``memory.max``
+    and the remaining allowance is ``memory.max - memory.current``.  Keeping
+    both host and effective values makes runtime selection auditable while the
+    same helper remains portable on macOS and Windows.
+    """
+
+    host_total_mb: float
+    host_available_mb: float
+    effective_total_mb: float
+    effective_available_mb: float
+    source: str
+    cgroup_limit_mb: Optional[float] = None
+    cgroup_current_mb: Optional[float] = None
+
+    def to_manifest_dict(self) -> Dict[str, Union[str, float, None]]:
+        """Return stable, rounded values suitable for a run manifest."""
+
+        return {
+            "source": self.source,
+            "host_total_mb": round(self.host_total_mb, 1),
+            "host_available_mb": round(self.host_available_mb, 1),
+            "effective_total_mb": round(self.effective_total_mb, 1),
+            "effective_available_mb": round(self.effective_available_mb, 1),
+            "cgroup_limit_mb": (
+                None
+                if self.cgroup_limit_mb is None
+                else round(self.cgroup_limit_mb, 1)
+            ),
+            "cgroup_current_mb": (
+                None
+                if self.cgroup_current_mb is None
+                else round(self.cgroup_current_mb, 1)
+            ),
+        }
+
+
+def _host_memory_mb() -> tuple[float, float]:
+    """Return physical host total/available memory with portable fallbacks."""
+
+    try:
+        import psutil
+
+        memory = psutil.virtual_memory()
+        return memory.total / (1024**2), memory.available / (1024**2)
+    except Exception:
+        pass
+
+    try:
+        values: Dict[str, int] = {}
+        with open("/proc/meminfo", encoding="utf-8") as handle:
+            for line in handle:
+                key, separator, raw = line.partition(":")
+                if separator and raw.split():
+                    values[key] = int(raw.split()[0])
+        total_kb = values["MemTotal"]
+        available_kb = values.get("MemAvailable", values.get("MemFree", 0))
+        return total_kb / 1024.0, available_kb / 1024.0
+    except (OSError, KeyError, ValueError):
+        # Conservative, deterministic fallback for minimal Python installs.
+        return 16 * 1024.0, 8 * 1024.0
+
+
+def _current_cgroup_v2_dir(cgroup_root: Path) -> Optional[Path]:
+    """Resolve the current unified cgroup directory, if one is mounted."""
+
+    # On a non-namespaced host, /sys/fs/cgroup is the mount root and the
+    # process-relative path is reported by the unified ``0::`` entry.
+    try:
+        with open("/proc/self/cgroup", encoding="utf-8") as handle:
+            for line in handle:
+                hierarchy, controllers, relative = line.rstrip().split(":", 2)
+                if hierarchy == "0" and not controllers:
+                    candidate = cgroup_root / relative.lstrip("/")
+                    if (candidate / "memory.max").is_file():
+                        return candidate
+    except (OSError, ValueError):
+        pass
+    # In a cgroup namespace, the mounted root already represents the current
+    # process (and /proc/self/cgroup normally reports ``0::/``).  This is also
+    # the injectable layout used by unit tests.
+    if (cgroup_root / "memory.max").is_file():
+        return cgroup_root
+    return None
+
+
+def _read_cgroup_v2_memory_mb(
+    cgroup_root: Union[str, Path],
+) -> tuple[Optional[float], Optional[float]]:
+    """Read finite ``memory.max`` and ``memory.current`` values in MiB."""
+
+    directory = _current_cgroup_v2_dir(Path(cgroup_root))
+    if directory is None:
+        return None, None
+    try:
+        raw_limit = (directory / "memory.max").read_text(encoding="utf-8").strip()
+        if raw_limit == "max":
+            return None, None
+        limit_bytes = int(raw_limit)
+        if limit_bytes <= 0:
+            return None, None
+    except (OSError, ValueError):
+        return None, None
+    try:
+        current_bytes = int(
+            (directory / "memory.current").read_text(encoding="utf-8").strip()
+        )
+    except (OSError, ValueError):
+        current_bytes = 0
+    return limit_bytes / (1024**2), max(0, current_bytes) / (1024**2)
+
+
+def get_effective_memory_info(
+    *,
+    cgroup_root: Optional[Union[str, Path]] = None,
+    host_total_mb: Optional[float] = None,
+    host_available_mb: Optional[float] = None,
+) -> EffectiveMemoryInfo:
+    """Detect memory available to this process, including cgroup-v2 limits.
+
+    ``host_*`` and ``cgroup_root`` are injectable so the policy can be tested
+    without changing the machine running the tests.  On macOS and Windows the
+    psutil-backed host values are returned unchanged.
+    """
+
+    detected_total, detected_available = _host_memory_mb()
+    host_total = max(
+        0.0,
+        float(detected_total if host_total_mb is None else host_total_mb),
+    )
+    host_available = max(
+        0.0,
+        float(
+            detected_available
+            if host_available_mb is None
+            else host_available_mb
+        ),
+    )
+    host_available = min(host_available, host_total)
+
+    limit_mb: Optional[float] = None
+    current_mb: Optional[float] = None
+    if sys.platform.startswith("linux"):
+        limit_mb, current_mb = _read_cgroup_v2_memory_mb(
+            cgroup_root or "/sys/fs/cgroup"
+        )
+
+    if limit_mb is None:
+        return EffectiveMemoryInfo(
+            host_total_mb=host_total,
+            host_available_mb=host_available,
+            effective_total_mb=host_total,
+            effective_available_mb=host_available,
+            source="host",
+        )
+
+    effective_total = min(host_total, max(0.0, limit_mb))
+    cgroup_available = max(0.0, limit_mb - float(current_mb or 0.0))
+    effective_available = min(
+        host_available,
+        effective_total,
+        cgroup_available,
+    )
+    return EffectiveMemoryInfo(
+        host_total_mb=host_total,
+        host_available_mb=host_available,
+        effective_total_mb=effective_total,
+        effective_available_mb=effective_available,
+        source="cgroup_v2",
+        cgroup_limit_mb=limit_mb,
+        cgroup_current_mb=current_mb,
+    )
 
 # ============================================================
 # 内存释放
@@ -148,20 +328,9 @@ def get_rss_mb() -> float:
 
 
 def get_available_memory_mb() -> float:
-    """获取系统可用内存 (MB)"""
-    try:
-        with open('/proc/meminfo') as f:
-            for line in f:
-                if line.startswith('MemAvailable:'):
-                    return int(line.split()[1]) / 1024.0
-    except (OSError, ValueError):
-        pass
-    
-    try:
-        import psutil
-        return psutil.virtual_memory().available / (1024 ** 2)
-    except ImportError:
-        return 8 * 1024  # 默认 8GB
+    """获取当前进程实际可用内存 (MB)，包含 Linux cgroup-v2 上限。"""
+
+    return get_effective_memory_info().effective_available_mb
 
 
 # ============================================================
