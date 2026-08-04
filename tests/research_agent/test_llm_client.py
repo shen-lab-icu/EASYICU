@@ -392,9 +392,7 @@ def test_openai_client_supports_local_noauth_proxy_mode(monkeypatch, ra):
     }
 
 
-def test_openai_client_uses_legacy_token_cap_for_non_reasoning_model(
-    monkeypatch, ra
-):
+def test_openai_client_uses_legacy_token_cap_for_non_reasoning_model(monkeypatch, ra):
     from easyicu.research_agent.providers.llm import LLMMessage, OpenAIClient
 
     captured = {}
@@ -404,9 +402,7 @@ def test_openai_client_uses_legacy_token_cap_for_non_reasoning_model(
             captured.update(kwargs)
             message = SimpleNamespace(content="OK")
             return SimpleNamespace(
-                choices=[
-                    SimpleNamespace(message=message, finish_reason="stop")
-                ],
+                choices=[SimpleNamespace(message=message, finish_reason="stop")],
                 usage=None,
             )
 
@@ -417,10 +413,13 @@ def test_openai_client_uses_legacy_token_cap_for_non_reasoning_model(
         completions=_Completions(),
     )
 
-    assert client.complete(
-        [LLMMessage(role="user", content="return OK")],
-        max_tokens=77,
-    ) == "OK"
+    assert (
+        client.complete(
+            [LLMMessage(role="user", content="return OK")],
+            max_tokens=77,
+        )
+        == "OK"
+    )
     assert captured["max_tokens"] == 77
     assert "max_completion_tokens" not in captured
 
@@ -518,7 +517,15 @@ def test_openai_client_ignores_invalid_retry_after_values(monkeypatch, ra, retry
     assert sleeps == [5.0]
 
 
-def test_openai_client_transport_retry_consumes_provider_budget(monkeypatch, ra):
+def test_openai_client_transport_retry_costs_one_slot_not_two(monkeypatch, ra):
+    """A 500 that is retried and then answered is one ask, charged once.
+
+    Reversed on 2026-08-04. The step allowance is funded in logical attempts,
+    so charging the retry spent one of the code repairs the configuration had
+    just certified. Rationale and the real-run evidence:
+    ``test_a_retried_request_is_not_a_second_repair.py``.
+    """
+
     from easyicu.research_agent.providers.llm import LLMMessage
     from easyicu.research_agent.authority.provider_budget import (
         StepProviderCallBudget,
@@ -539,11 +546,17 @@ def test_openai_client_transport_retry_consumes_provider_budget(monkeypatch, ra)
     )
 
     assert result == "OK"
-    assert completions.calls == 2
-    assert budget.categories == ("coder", "coder")
+    assert completions.calls == 2, "the transport still retried"
+    assert budget.categories == ("coder",), "but the step was asked once"
 
 
-def test_openai_client_does_not_sleep_or_call_over_provider_budget(monkeypatch, ra):
+def test_openai_client_retries_the_ask_the_step_already_paid_for(monkeypatch, ra):
+    """An exhausted allowance no longer cancels retries of a paid call.
+
+    It never was the retry bound: ``manual_attempts`` is, and it still is.
+    What the allowance gates is the NEXT ask, asserted at the end.
+    """
+
     from easyicu.research_agent.providers.llm import LLMMessage
     from easyicu.research_agent.authority.provider_budget import (
         ProviderCallBudgetExhausted,
@@ -559,15 +572,18 @@ def test_openai_client_does_not_sleep_or_call_over_provider_budget(monkeypatch, 
     monkeypatch.delenv("EASYICU_LLM_STREAM", raising=False)
     monkeypatch.setattr("time.sleep", sleeps.append)
 
-    with pytest.raises(ProviderCallBudgetExhausted):
-        complete_with_provider_budget(
-            budget=budget,
-            category="coder",
-            call=lambda: client.complete(
-                [LLMMessage(role="user", content="return OK")]
-            ),
-        )
+    result = complete_with_provider_budget(
+        budget=budget,
+        category="coder",
+        call=lambda: client.complete([LLMMessage(role="user", content="return OK")]),
+    )
 
-    assert completions.calls == 1
-    assert budget.categories == ("coder",)
-    assert sleeps == []
+    # The budget was down to its last slot and the first attempt returned 504.
+    # Before, that cancelled the retry and the step got nothing for what it had
+    # already paid. Now the paid ask is allowed to finish, and it succeeds.
+    assert result == "OK"
+    assert completions.calls > 1, "the paid ask was allowed to retry"
+    assert budget.categories == ("coder",), "and cost exactly one slot"
+    assert sleeps, "the retry backed off rather than hammering"
+    with pytest.raises(ProviderCallBudgetExhausted):
+        budget.consume("coder")

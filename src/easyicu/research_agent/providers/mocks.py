@@ -198,9 +198,9 @@ class BudgetAwareScriptedMockLLMClient(ScriptedMockLLMClient):
         register_offline_test_client(self)
 
     def complete(self, messages: Sequence[LLMMessage], **kwargs: Any) -> str:
-        from ..authority.provider_budget import consume_active_transport_attempt
+        from ..authority.provider_budget import consume_active_provider_handoff
 
-        consume_active_transport_attempt()
+        consume_active_provider_handoff()
         self.calls.append((list(messages), dict(kwargs)))
         if not self.responses:
             raise RuntimeError("scripted mock response sequence exhausted")

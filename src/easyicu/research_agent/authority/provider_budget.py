@@ -1836,6 +1836,29 @@ class StepProviderCallBudget:
 
 
 class _ActiveProviderCall:
+    """The one logical call a scoped transport is currently serving.
+
+    Retrying the SAME request used to consume another slot of this step's
+    budget. That budget is funded in logical attempts -- ``config.py``
+    certifies "1 initial generation + N code repairs + M LLM repairs + 1
+    reserved concept audit" -- so an HTTP retry spent one of the repairs the
+    certificate had just promised. With ``--transport-max-attempts 8`` a single
+    flaky generation could take 8 of 9 before the script had run once, and the
+    step then failed the way a scientifically broken step fails, which is the
+    exact outcome the certificate beside it exists to prevent.
+
+    Removing that charge weakens no bound. Retries are limited by
+    ``providers/llm.py``'s own ``manual_attempts`` loop, and total spend by the
+    run/batch hard stop, which :func:`consume_active_transport_attempt`
+    reserves first and independently.
+
+    A *handoff* is the other thing that used to share this counter and is not
+    the same event: ``FallbackLLMClient`` moving the same question to a
+    DIFFERENT supplier is a new logical call, and still costs a slot. The two
+    were routed through one function, which is how one rule ended up governing
+    both.
+    """
+
     def __init__(
         self,
         *,
@@ -1844,15 +1867,19 @@ class _ActiveProviderCall:
     ) -> None:
         self.budget = budget
         self.category = category
-        self._transport_attempts = 0
+        self._suppliers = 0
         self._lock = Lock()
 
-    def consume_transport_attempt(self) -> None:
-        # The outer complete call reserves the first attempt before entering
-        # the scope. Every subsequent transport retry must reserve another.
+    def consume_provider_handoff(self) -> None:
+        """Charge a second supplier answering the question already paid for.
+
+        The outer complete call reserves the first supplier before entering the
+        scope; every further one must reserve its own.
+        """
+
         with self._lock:
-            self._transport_attempts += 1
-            already_reserved = self._transport_attempts == 1
+            self._suppliers += 1
+            already_reserved = self._suppliers == 1
         if not already_reserved:
             self.budget.consume(self.category)
 
@@ -1879,25 +1906,36 @@ def provider_call_scope(
 
 
 def consume_active_transport_attempt() -> Optional[float]:
-    """Charge retries for a budget-scoped transport call, if one is active."""
+    """Charge one real HTTP attempt of the SAME request to the stop-loss.
+
+    The per-step allowance is deliberately NOT charged here: it counts logical
+    asks, and a retry is the same ask. See :class:`_ActiveProviderCall`. Use
+    :func:`consume_active_provider_handoff` when a different supplier takes
+    the question over.
+    """
 
     # The run/batch stop-loss is independent from the per-step allowance.
     # Reserve it first so a paid transport cannot start unless the outer
     # ceilings were durably recorded.
     from .provider_hard_stop import consume_active_provider_hard_stop_attempt
 
+    return consume_active_provider_hard_stop_attempt()
+
+
+def consume_active_provider_handoff() -> Optional[float]:
+    """Charge a different supplier taking over the same question.
+
+    This is a new logical call, not a retry, so it costs the step a slot as
+    well as the run/batch stop-loss.
+    """
+
+    from .provider_hard_stop import consume_active_provider_hard_stop_attempt
+
     hard_stop_remaining = consume_active_provider_hard_stop_attempt()
     state = _ACTIVE_PROVIDER_CALL.get()
     if state is not None:
-        state.consume_transport_attempt()
+        state.consume_provider_handoff()
     return hard_stop_remaining
-
-
-def active_provider_retry_available() -> bool:
-    """Return whether a scoped transport call can afford another attempt."""
-
-    state = _ACTIVE_PROVIDER_CALL.get()
-    return state is None or state.budget.can_consume(state.category)
 
 
 def complete_with_provider_budget(

@@ -792,7 +792,24 @@ def test_analyzer_charges_the_same_step_budget_and_stops_when_exhausted():
     assert len(llm.calls) == 1
 
 
-def test_openai_transport_retries_consume_the_same_provider_budget(monkeypatch):
+def test_openai_transport_retries_do_not_consume_the_step_allowance(monkeypatch):
+    """Retrying the SAME request is one ask, so it costs one slot.
+
+    This asserted the opposite until 2026-08-04, when a real run showed what
+    that cost: the step allowance is funded in logical attempts by
+    ``step_provider_call_entitlement`` ("1 generation + 3 code repairs + ..."),
+    so charging HTTP retries against it spent the repairs that certificate had
+    just promised. h1's ``04_event_censoring_audit`` reached a repairable
+    ValueError traceback with 0 of its 3 code repairs left, having been charged
+    5 calls for 2 logical generations.
+
+    The retry bound did not live here -- ``manual_attempts`` in
+    ``providers/llm.py`` bounds retries, and the run/batch hard stop bounds
+    spend -- so this charge only converted a transport failure into a
+    scientific one. See
+    ``test_a_retried_request_is_not_a_second_repair.py``.
+    """
+
     from easyicu.research_agent.providers.llm import LLMMessage, OpenAIClient
 
     class _Completions:
@@ -834,10 +851,11 @@ def test_openai_transport_retries_consume_the_same_provider_budget(monkeypatch):
 
     assert result == "ok"
     assert completions.calls == 2
-    assert budget.categories == ("repair_patch", "repair_patch")
+    assert budget.categories == ("repair_patch",)
+    assert budget.remaining == 1
 
 
-def test_openai_transport_retry_stops_before_exceeding_budget(monkeypatch):
+def test_a_paid_call_may_finish_its_own_retries(monkeypatch):
     from easyicu.research_agent.providers.llm import LLMMessage, OpenAIClient
 
     class _Completions:
@@ -866,7 +884,9 @@ def test_openai_transport_retry_stops_before_exceeding_budget(monkeypatch):
     monkeypatch.setattr("time.sleep", sleeps.append)
     budget = StepProviderCallBudget(1, step_id="transport")
 
-    with pytest.raises(ProviderCallBudgetExhausted):
+    # The step pays once, up front, for the ask. What it bought is an answer,
+    # so the transport may finish its own bounded retries trying to get one.
+    with pytest.raises(Exception):
         complete_with_provider_budget(
             budget=budget,
             category="repair_patch",
@@ -875,9 +895,12 @@ def test_openai_transport_retry_stops_before_exceeding_budget(monkeypatch):
             ),
         )
 
-    assert completions.calls == 1
-    assert budget.used == 1
-    assert sleeps == []
+    assert completions.calls == 3, "max_retries=3 is what bounds the attempts"
+    assert budget.used == 1, "and the ask still cost exactly one slot"
+
+    # An exhausted allowance still refuses the NEXT ask, which is the real gate.
+    with pytest.raises(ProviderCallBudgetExhausted):
+        budget.consume("repair_patch")
 
 
 def test_budget_receipt_is_atomic_restorable_and_survives_lower_limit(tmp_path):
