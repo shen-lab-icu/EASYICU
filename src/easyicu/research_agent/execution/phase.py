@@ -2082,13 +2082,6 @@ _COMPACT_MISSINGNESS_METHODS = frozenset(
         "data_quality",
     }
 )
-_ABSOLUTE_RISK_CONTEXT_METHODS = frozenset(
-    {
-        "absolute_risk_context",
-        "descriptive_context",
-        "exposure_outcome_summary",
-    }
-)
 _ROBUSTNESS_SENSITIVITY_METHODS = frozenset(
     {
         "prespecified_robustness",
@@ -2189,17 +2182,39 @@ def _absolute_risk_context_runner_owns_step(
     """True for a descriptive exposure-prevalence / absolute-risk owner."""
 
     del step_id
-    outputs = {str(item or "").lower() for item in (expected_outputs or [])}
-    if any(item.startswith("figure:") for item in outputs):
-        return False
+    # No figure clause. MEASURED over 1,965 recorded plan steps: 597 declare a
+    # figure and the closed-product clause below refuses every one of them on
+    # its own -- ``figure:absolute_risk_context`` is not a supported PRODUCT, so
+    # the set never closes. A guard that has never decided a case reads as
+    # protection while protecting nothing; the property it stood for is pinned
+    # by a test instead, so a change to the product reader fails loudly rather
+    # than being silently absorbed here.
     supported_products = {
         "exposure_outcome_summary",
         "exposure_prevalence_and_absolute_risk",
         "absolute_risk",
         "absolute_risk_context",
     }
-    if _method_head(method) not in _ABSOLUTE_RISK_CONTEXT_METHODS:
-        return False
+    # No method allowlist. It had three spellings -- ``absolute_risk_context``,
+    # ``descriptive_context``, ``exposure_outcome_summary`` -- and MEASURED over
+    # 89 recorded steps promising ``table:absolute_risk_context``, the Planner
+    # wrote none of them: 52 said ``descriptive``, 7
+    # ``descriptive_binary_outcome_summary``, 5
+    # ``prevalence_and_absolute_risk_summary``, and so on down a tail of
+    # synonyms. So this owner -- registered in the capability registry,
+    # advertised to the Planner, and wired into the dispatcher -- claimed 0 of
+    # 89, the Coder wrote the table every time, and the figures drawn over it
+    # died 46 times out of 47. The sibling table written by a real owner ran the
+    # other way: 40 of 51 figures over it passed.
+    #
+    # The promised product IS the claim, and the clauses below already do every
+    # bit of the discrimination: a figure output, an effect method or an effect
+    # output, and a product set outside this owner's four are each refused.
+    # Re-measured over all 1,965 recorded plan steps, dropping the allowlist
+    # claims 77 of the 89 and adds exactly ZERO steps that do not promise the
+    # product -- so the allowlist only ever subtracted correct claims. This is
+    # the same conclusion the exposure/outcome distribution owner reached about
+    # its own two-string allowlist.
     if _method_is_effect_or_association(method) or _declares_effect_output(
         expected_outputs
     ):
@@ -11869,11 +11884,15 @@ def run_execute_phase(
     plan_block_reason = (
         "trajectory_plan_contract_blocked"
         if trajectory_plan_blocked
-        else "typed_plan_dag_blocked"
-        if typed_plan_dag_blocked
-        else "development_sample_unauthorized"
-        if development_sample_blocked
-        else None
+        else (
+            "typed_plan_dag_blocked"
+            if typed_plan_dag_blocked
+            else (
+                "development_sample_unauthorized"
+                if development_sample_blocked
+                else None
+            )
+        )
     )
     steps_to_run = (
         []
