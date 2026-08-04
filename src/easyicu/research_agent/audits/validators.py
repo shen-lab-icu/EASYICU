@@ -12391,10 +12391,44 @@ class FigureSourceDataValidator:
                 "n_source_rows": int(len(source_df)),
                 "verified_value_mappings": {},
                 "join_mode": (
-                    "structural_fallback" if used_structural_fallback else "declared_key"
+                    "structural_fallback"
+                    if used_structural_fallback
+                    else "declared_key"
                 ),
             }
         if not verified_value_mappings or unverified_source_columns:
+            # WHY no column matched, when the answer is mechanical.
+            #
+            # A source table that carries SEVERAL rows per upstream row -- one
+            # per panel, per statistic, per level -- holds values from several
+            # upstream columns in one source column, so by construction no
+            # single upstream vector matches it and every column arrives here
+            # unverified. The reader is then told which columns failed but not
+            # the one fact that explains all of them, and the repair that
+            # follows tends to rename columns, which the Coder prompt already
+            # says "is not a repair".
+            #
+            # MEASURED over the recorded corpus: 12 of 361 source-data tables
+            # carry duplicate keys, and 6 of the 8 whose step status is known
+            # failed. It is not fatal on its own -- 2 passed -- so this reports
+            # the shape and does not judge it.
+            #
+            # m1's 09_missingness_audit_figure, 2026-08-04: 6 rows over 3
+            # upstream rows, one per panel, so ``count`` alternated between the
+            # upstream's ``missing_n`` and ``measured_n``.
+            rows_per_upstream_row: dict[str, object] = {}
+            try:
+                distinct_keys = int(source[list(key_cols)].drop_duplicates().shape[0])
+                if distinct_keys and len(source) > distinct_keys:
+                    rows_per_upstream_row = {
+                        "source_rows_per_upstream_row": round(
+                            len(source) / distinct_keys, 3
+                        ),
+                        "n_source_rows": int(len(source)),
+                        "n_distinct_source_keys": distinct_keys,
+                    }
+            except Exception:  # noqa: BLE001 - a diagnostic must never fail the audit
+                rows_per_upstream_row = {}
             if unverified_source_columns:
                 verification_detail = (
                     "these source-data value columns were not verified against "
@@ -12402,6 +12436,14 @@ class FigureSourceDataValidator:
                     f"{unverified_source_columns}; one verified column cannot "
                     "authenticate another renamed, formatted, or transformed value"
                 )
+                if rows_per_upstream_row:
+                    verification_detail += (
+                        f"; the source carries {rows_per_upstream_row['n_source_rows']}"
+                        f" rows over {rows_per_upstream_row['n_distinct_source_keys']}"
+                        " upstream rows, so one source column holds values from"
+                        " several upstream columns and no single upstream vector"
+                        " can match it"
+                    )
             else:
                 verification_detail = (
                     "no source-data value column was available for a real "
@@ -12416,6 +12458,7 @@ class FigureSourceDataValidator:
                 "verified_source_value_columns": sorted(verified_value_mappings),
                 "verified_value_mappings": verified_value_mappings,
                 "ambiguous_value_mappings": ambiguous_value_mappings,
+                **rows_per_upstream_row,
                 "message": (
                     f"source rows joined to {upstream_path.name} on {key_label}, "
                     f"but {verification_detail}"
