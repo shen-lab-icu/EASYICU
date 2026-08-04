@@ -653,7 +653,7 @@ def run_absolute_risk_context() -> Dict[str, Any]:
         "source_state_columns": source_columns,
         "n_summary_rows": int(len(table)),
         "adjusted_effect": None,
-        "output_files": {product: table_path.name},
+        "output_files": {f"table:{product}": table_path.name},
         "notes": [
             "Exposure columns came from the current plan step's structured inputs.",
             "Continuous exposures use median and IQR; no post-hoc bins were created.",

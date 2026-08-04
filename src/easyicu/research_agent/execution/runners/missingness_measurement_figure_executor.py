@@ -277,26 +277,39 @@ def missingness_measurement_figure_declaration_verdict(
     have = named[0]
     missing = next(key for key in MISSINGNESS_MEASUREMENT_FIGURE_INPUTS if key != have)
 
-    # The gap is only reportable when the plan can close it here. If no step
+    # The gap is only reportable when the plan can close it here. If NO step
     # produces the sibling table, adding it to this figure's inputs names an
-    # artifact nobody writes; asking the parent to produce it is asking for a
+    # artifact nobody writes; asking a step to produce it is asking for a
     # different analysis, and that belongs to the Planner directive rather than
     # to a refusal raised at this step.
+    #
+    # WIDENED 2026-08-04 from "the same step produces both" to "any step
+    # produces it". The first version read the renderer's docstring, which
+    # speaks of "one direct parent" -- but no code requires that: ``owns_step``
+    # asks only that both keys resolve to bindings carrying the columns it
+    # reads, and each binding is digest-pinned to its own producer. The
+    # narrower rule was a restriction I introduced, not one the renderer has.
+    #
+    # It cost a real case immediately. e2/verify20 planned the two audits as
+    # SEPARATE steps (04 and 05), its figure named one, the verdict stayed
+    # silent, the step fell to the Coder and died on source-data traceability.
+    # Measured over every recorded plan, the split is 9 same-step, 1
+    # different-step, 31 produced-by-nobody -- so this widening reports exactly
+    # one more case and still refuses the 31 it must.
     producer_of = {}
     for candidate in getattr(plan, "steps", None) or []:
         for output in getattr(candidate, "expected_outputs", None) or []:
             producer_of.setdefault(str(output or "").strip(), candidate)
-    parent = producer_of.get(have)
-    sibling_parent = producer_of.get(missing)
-    if parent is None or sibling_parent is None or parent is not sibling_parent:
+    if producer_of.get(have) is None or producer_of.get(missing) is None:
         return OwnershipVerdict.wrong_shape(
             MISSINGNESS_MEASUREMENT_FIGURE_ANALYSIS_KIND,
             reason=(
-                f"no single step in this plan produces both {have!r} and "
-                f"{missing!r}, so this owner could not be given both tables "
-                "under one parent's digest however this step were declared"
+                f"no step in this plan produces {missing!r}, so this owner "
+                "could not be given the second table however this step were "
+                "declared"
             ),
         )
+    parent = producer_of[missing]
 
     return OwnershipVerdict.incomplete_declaration(
         MISSINGNESS_MEASUREMENT_FIGURE_ANALYSIS_KIND,
