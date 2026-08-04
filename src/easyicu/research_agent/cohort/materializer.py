@@ -79,6 +79,7 @@ from ..intake.materialized_metadata import (
 from ..intake.materialized_trajectory import (
     publish_materialized_trajectory_authority,
 )
+from ..trajectory.panel import FixedWindowGrid, fixed_window_panel
 from easyicu.concept.metadata_projection import ConceptColumnRole
 
 Window = Tuple[float, float]
@@ -1796,6 +1797,7 @@ def materialize_to_parquet(
     emit_trajectory: bool = False,
     trajectory_concepts: Optional[Sequence[str]] = None,
     trajectory_window: Optional[Window] = None,
+    trajectory_panel_grid: Optional[FixedWindowGrid] = None,
     source_package: Optional[ExportPackage] = None,
     replacement_identity_path: Optional[Union[str, Path]] = None,
     replacement_identity_sha256: Optional[str] = None,
@@ -1905,6 +1907,107 @@ def materialize_to_parquet(
         "identity_column": identity_column,
         "replacement_row_identity": identity_binding,
     }
+    trajectory_concepts_resolved: Optional[List[str]] = None
+    _trajectory_long_once: List[Any] = []
+
+    def _trajectory_long() -> Any:
+        """Build the long per-timepoint table at most once.
+
+        The trajectory block below used to build it after the cohort was already
+        written.  A fixed-window panel has to reach the cohort BEFORE it is
+        sealed -- otherwise the sealed authority does not contain the columns
+        the trajectory contract reads -- so the build is hoisted here and the
+        block reuses this result rather than paying for a second pass over the
+        raw concept streams.
+        """
+
+        if _trajectory_long_once:
+            return _trajectory_long_once[0]
+        if source_package is None:
+            built = build_trajectory_long(
+                data_path=materialize_args["data_path"],
+                concepts=trajectory_concepts_resolved,
+                database=materialize_args["database"],
+                window=trajectory_window,
+                patient_ids=materialize_args["patient_ids"],
+                prefer_existing=materialize_args["prefer_existing"],
+                bounds_violation_policy=materialize_args["bounds_violation_policy"],
+            )
+        else:
+            built = _trajectory_with_open_export_package(
+                source_package,
+                concepts=trajectory_concepts_resolved,
+                materialize_args=materialize_args,
+                window=trajectory_window,
+            )
+        _trajectory_long_once.append(built)
+        return built
+
+    if emit_trajectory:
+        trajectory_concepts_resolved = list(
+            trajectory_concepts
+            if trajectory_concepts is not None
+            else [
+                *materialize_args["outcome_concepts"],
+                *materialize_args["feature_concepts"],
+            ]
+        )
+    if emit_trajectory and trajectory_panel_grid is not None:
+        # THE COLUMNS THE TRAJECTORY CONTRACT READS HAVE TO BE IN THE COHORT.
+        #
+        # ``trajectory/contract.py`` parses ``<family>_h<start>_<end>`` off the
+        # sealed cohort's columns, and the trajectory plan contract's primary
+        # path needs two of them from one family.  Over the recorded corpus that
+        # parser answered None for every column of all 234 sealed contexts,
+        # because nothing ever emitted such a column: the wide cohort carries
+        # whole-stay summaries and the per-timepoint values live only in the long
+        # table beside it.  h3_trajectory_clustering has never executed past
+        # step 01 in any of its 7 recorded runs.
+        #
+        # The grid is the caller's declaration; this function does not invent
+        # one, and ``trajectory_panel_grid=None`` leaves every existing caller's
+        # output byte-identical.
+        panel_long, _ = _trajectory_long()
+        panel = fixed_window_panel(
+            panel_long,
+            grid=trajectory_panel_grid,
+            id_column=ID_COL,
+            time_column=TIME_COL,
+            concepts=trajectory_concepts_resolved,
+            ids=cohort[ID_COL].tolist(),
+        )
+        collisions = sorted(set(panel.columns) & set(cohort.columns))
+        if collisions:
+            raise ValueError(
+                "fixed-window panel columns already exist in the cohort, so a "
+                "declared window would silently overwrite a materialized "
+                f"feature: {collisions}"
+            )
+        cohort = cohort.merge(
+            panel.reset_index(), on=ID_COL, how="left", validate="one_to_one"
+        )
+        # A sealed cohort column with no typed metadata is refused outright, and
+        # rightly so -- an undescribed column is one a reader cannot bind. Each
+        # window is described by its OWN interval, which is what makes the set
+        # of them a trajectory rather than repeated aggregates of one interval.
+        for concept in trajectory_concepts_resolved:
+            metadata_collector.add_fixed_window_panel(
+                concept,
+                output_columns=list(panel.columns),
+                windows=trajectory_panel_grid.edges,
+                aggregation=str(trajectory_panel_grid.aggregate),
+            )
+        # The provenance's column list and cohort digest were taken before this
+        # merge, and the authority is validated against both. Refreshing them
+        # here is what keeps "what the authority seals" and "what the provenance
+        # says was sealed" the same set.
+        provenance["columns"] = list(cohort.columns)
+        provenance["cohort_sha256"] = _hash_df(cohort.reset_index(drop=True))
+        producer_parameters["trajectory_panel_grid"] = (
+            trajectory_panel_grid.as_manifest()
+        )
+        producer_parameters["trajectory_panel_columns"] = list(panel.columns)
+
     if metadata_collector.enabled:
         _atomic_write_provenance(
             prov_path,
@@ -1955,29 +2058,11 @@ def materialize_to_parquet(
         paths["cohort_authority"] = out / str(authority["file"])
 
     if emit_trajectory:
-        concepts = trajectory_concepts
-        if concepts is None:
-            concepts = [
-                *materialize_args["outcome_concepts"],
-                *materialize_args["feature_concepts"],
-            ]
-        if source_package is None:
-            long_df, traj_prov = build_trajectory_long(
-                data_path=materialize_args["data_path"],
-                concepts=concepts,
-                database=materialize_args["database"],
-                window=trajectory_window,
-                patient_ids=materialize_args["patient_ids"],
-                prefer_existing=materialize_args["prefer_existing"],
-                bounds_violation_policy=materialize_args["bounds_violation_policy"],
-            )
-        else:
-            long_df, traj_prov = _trajectory_with_open_export_package(
-                source_package,
-                concepts=concepts,
-                materialize_args=materialize_args,
-                window=trajectory_window,
-            )
+        concepts = trajectory_concepts_resolved
+        assert concepts is not None
+        # Reuses the hoisted build when a panel already needed it, so declaring
+        # a grid costs no second pass over the raw concept streams.
+        long_df, traj_prov = _trajectory_long()
         # A trajectory bound to this universe may contain only identities the
         # universe owns.  This matters when the materializer applied a host-
         # declared cohort definition after reading the raw concept streams.
