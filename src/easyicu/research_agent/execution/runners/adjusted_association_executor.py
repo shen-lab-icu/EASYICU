@@ -943,11 +943,22 @@ def run_adjusted_association_from_env(
         "n": int(result.n),
         "event_n": n_events,
         "fit_status": "fitted",
-        # Reaching here means the fit converged with a finite estimate and a
-        # finite interval; a separated design cannot satisfy both, and the
-        # branches above return rather than reporting one that does not.
         "converged": True,
-        "separation_detected": False,
+        # ASSERTED AFTER CHECKING, NOT BECAUSE THE FIT RETURNED NUMBERS.
+        #
+        # This used to be a literal False, justified by "a separated design
+        # cannot satisfy both a finite estimate and a finite interval". That is
+        # not true: quasi-separation routinely returns an enormous coefficient,
+        # an interval spanning orders of magnitude, and converged=True. The
+        # figure renderer beside this already had a test for exactly that state
+        # (estimate 2.9e7, interval 1e-8 to 8.4e22), so one layer knew it
+        # existed while the producer asserted it could not.
+        #
+        # The contract's own validator refuses a missing value, so an answer is
+        # obligatory -- which is the reason it has to be computed. The fit now
+        # reports it; anything that is not a logistic fit has no separation to
+        # report and keeps the field False rather than inventing a verdict.
+        "separation_detected": bool(result.separation_detected),
         "penalized": False,
         "fit_method": _FIT_METHODS[estimator_kind],
     }
