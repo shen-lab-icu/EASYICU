@@ -45,7 +45,7 @@ import math
 from pathlib import Path
 import re
 import textwrap
-from typing import Any, Mapping
+from typing import Any, Mapping, Optional
 
 import pandas as pd
 
@@ -90,6 +90,15 @@ _READ_COLUMNS = (
     "analysis_set",
     "n",
     "n_events",
+    # What each ROW is, as opposed to what the model is. The producer writes
+    # these four; reading none of them is what made three contrasts share one
+    # label. Safe to require: the ownership check above already refuses any
+    # binding whose contract does not declare the producer's full column set,
+    # so a table reaching here has them.
+    "exposure_level",
+    "reference_level",
+    "contrast",
+    "is_primary_contrast",
 )
 
 ADJUSTED_ASSOCIATION_FIGURE_CAPABILITY = TypedInputCapability(
@@ -342,11 +351,61 @@ def _sole(frame: pd.DataFrame, column: str) -> str:
 
 
 def _row_label(row: Mapping[str, Any], index: int) -> str:
+    """Name what the ROW is before what the whole model is.
+
+    ``analysis_set`` and ``estimator_kind`` describe the model, so they are
+    identical on every row of it.  Used alone they render a four-level ordinal
+    exposure as three rows reading ``complete_case``, and no reader can tell
+    which one is stage 3 versus stage 0.
+
+    The producer already writes what each row is: ``contrast``,
+    ``exposure_level`` and ``reference_level`` are three of the twenty columns in
+    its own product contract, and this renderer read none of them.  MEASURED
+    over the recorded corpus: 99 emitted estimates tables carry those columns
+    and 33 have more than one row -- 32 with three, one with four.
+
+    Model-level fields stay as the fallback, which is what keeps the 66 one-row
+    tables labelled exactly as before.
+    """
+
+    contrast = _text(row.get("contrast"))
+    if contrast:
+        return contrast
+    level = _text(row.get("exposure_level"))
+    reference = _text(row.get("reference_level"))
+    if level and reference:
+        return f"{level} vs {reference}"
+    if level:
+        return level
     for column in ("analysis_set", "estimator_kind"):
         value = _text(row.get(column))
         if value:
             return value
     return f"estimate {index + 1}"
+
+
+def _is_primary_contrast(row: Mapping[str, Any]) -> bool:
+    return _text(row.get("is_primary_contrast")).strip().lower() in {
+        "true",
+        "1",
+        "yes",
+    }
+
+
+def _primary_contrast_label(frame: Any, labels: Any) -> Optional[str]:
+    """The label of the one row the study's claim is about, when it says so.
+
+    Returns None rather than guessing when no row declares itself primary or
+    when more than one does -- a figure that named the wrong row as the headline
+    would be worse than one that names none.
+    """
+
+    marked = [
+        str(label)
+        for row, label in zip(frame.to_dict("records"), labels, strict=True)
+        if _is_primary_contrast(row)
+    ]
+    return marked[0] if len(marked) == 1 else None
 
 
 def _reader_label(value: str) -> str:
@@ -660,6 +719,11 @@ def run_adjusted_association_figure(
         "axis_scale": "log" if ax.get_xscale() == "log" else "linear",
         "estimates_drawn": int(len(drawn)),
         "estimates_not_drawn": int(len(rows) - len(drawn)),
+        # What the reader sees against each interval, and which of them the
+        # study's claim is about. Without these a staged figure is three
+        # unlabelled points and a caption that cannot say which is which.
+        "row_labels": [str(label) for label in rows["__label"]],
+        "primary_contrast_label": _primary_contrast_label(frame, rows["__label"]),
         "adjustment_note": adjustment,
         "source_data_files": [source_path.name],
         "figure_files": figure_files,
