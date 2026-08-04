@@ -260,26 +260,16 @@ def test_the_recorded_failure_is_cleared():
     assert _gate(injected, scope, step) == []
 
 
-def test_the_injection_runs_before_the_concept_audit():
-    """Digest identity depends on the ORDER, so read it as a syntax tree.
+def _injection_assignments(tree: ast.AST) -> list[ast.Assign]:
+    """Every ``code = _host_plausibility_receipt_injected(...)`` assignment.
 
-    ``concept_approved_code_sha256`` hashes the ``code`` string and
-    ``executed_code_sha256`` hashes the file written from it. Injecting after
-    the audit would make the executed script differ from the approved one; a
-    source-text test would survive commenting the call out, so this walks the
-    module.
+    The assignment, not merely the call: a mutation reading
+    ``code = code or _host_plausibility_receipt_injected(...)`` leaves the call
+    in place and never runs it, and a call-only test survives that.
     """
 
-    import inspect
-
-    from easyicu.research_agent.execution import phase as execution_phase
-
-    tree = ast.parse(inspect.getsource(execution_phase))
-    # The assignment, not merely the call: a mutation reading
-    # ``code = code or _host_plausibility_receipt_injected(...)`` leaves the
-    # call in place and never runs it, and a call-only test survives that.
-    inject_lines = [
-        node.lineno
+    return [
+        node
         for node in ast.walk(tree)
         if isinstance(node, ast.Assign)
         and any(
@@ -290,14 +280,88 @@ def test_the_injection_runs_before_the_concept_audit():
         and isinstance(node.value.func, ast.Name)
         and node.value.func.id == "_host_plausibility_receipt_injected"
     ]
-    audit_lines = [
+
+
+def test_the_injection_runs_on_every_candidate_the_audit_will_judge():
+    """CORRECTED. The first version asserted "before the concept audit".
+
+    That was too weak, and a live run proved it. In verify30 (m2
+    ``05_fit_prediction_model``) the initial script WAS injected, approved and
+    executed -- and it clears the gate offline with 0 findings. Then two
+    ``post_mutation_concept`` FULL REWRITES regenerated the script from the
+    prompt and dropped the appended host block. The step was blocked citing a
+    quarantined draft that carried no receipt, while the code that actually ran
+    carried one. Replayed on that exact recorded draft: 1 finding before
+    injection, 0 after.
+
+    Injecting once, wherever ``code`` is first settled, is therefore not the
+    invariant. The invariant is that EVERY candidate the audit loop is about to
+    judge carries it -- so the injection must live inside that loop.
+    """
+
+    import inspect
+
+    from easyicu.research_agent.execution import phase as execution_phase
+
+    tree = ast.parse(inspect.getsource(execution_phase))
+    injections = _injection_assignments(tree)
+    assert injections, "the host never injects the receipt"
+
+    # Find the audit loop by what it does, not by line number: the `while`
+    # whose body normalises `code` for the round.
+    loops = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.While, ast.For))
+        and any(
+            isinstance(inner, ast.Call)
+            and isinstance(inner.func, ast.Name)
+            and inner.func.id == "reorder_forward_references"
+            for inner in ast.walk(node)
+        )
+    ]
+    assert loops, "the per-round code normalisation loop is gone"
+
+    def _within(loop: ast.AST, node: ast.AST) -> bool:
+        return any(inner is node for inner in ast.walk(loop))
+
+    assert any(
+        _within(loop, injection) for loop in loops for injection in injections
+    ), "the receipt is injected outside the loop; a repaired rewrite loses it"
+
+
+def test_the_injection_precedes_the_digest_that_seals_the_candidate():
+    """Injecting after the digest would seal a script that is not what runs."""
+
+    import inspect
+
+    from easyicu.research_agent.execution import phase as execution_phase
+
+    source = inspect.getsource(execution_phase)
+    tree = ast.parse(source)
+    injections = _injection_assignments(tree)
+    seals = [
         node.lineno
         for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id == "ConceptAuditCoordinator"
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "candidate_code_digest"
+            for target in node.targets
+        )
     ]
 
-    assert inject_lines, "the host never injects the receipt"
-    assert audit_lines, "the concept audit coordinator is no longer constructed"
-    assert min(inject_lines) < min(audit_lines)
+    assert injections and seals
+    assert min(node.lineno for node in injections) < min(seals)
+
+
+def test_re_injection_is_a_no_op_so_the_loop_can_run_it_every_round():
+    """The loop head runs on every iteration; a second render would duplicate."""
+
+    once = host_plausibility_receipt_injected(
+        _BODY, scope=_scope("age"), already_satisfied=False
+    )
+    twice = host_plausibility_receipt_injected(
+        once, scope=_scope("age"), already_satisfied=True
+    )
+
+    assert twice == once
