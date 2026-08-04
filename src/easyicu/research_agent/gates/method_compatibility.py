@@ -494,15 +494,32 @@ def _call_matches_forbidden_pattern(
     pattern: object,
     estimator_aliases: Dict[str, str],
 ) -> bool:
-    path = _normalized_pattern(_callable_path(call.func, estimator_aliases))
+    raw_path = _callable_path(call.func, estimator_aliases)
+    path = _normalized_pattern(raw_path)
     token = _normalized_pattern(pattern)
     if not path or not token:
         return False
+    # These two are deliberately prose, not callables: they describe a reporting
+    # habit and a misuse, so they stay substring tests over the whole path.
     if token.startswith("reportmean"):
         return "mean" in path
     if token == "kmeansonbinary":
         return "kmeans" in path
-    return token in path
+    # Every other pattern names a CALLABLE, so it must match a name, not a
+    # substring of one. The naked `token in path` test fired exactly once in the
+    # whole recorded corpus and that once was wrong: `ols(` matched
+    # `matched_controls.append(...)` -- "contr-OLS" -- in a propensity-score
+    # script, told the agent it had run ordinary least squares on a binary
+    # outcome, and burned both repairs on a call that did not exist. The step
+    # died with zero true positives ever found by this rule.
+    #
+    # Comparing dotted segments keeps every real hit -- `sm.ols`, `np.mean`,
+    # `x.mean()`, `sklearn.cluster.KMeans`, `LinearRegression()` -- and drops
+    # the accidental ones, including the latent twin of the same bug where
+    # `.mean()` matched a helper called `weighted_mean`.
+    segments = {_normalized_pattern(part) for part in raw_path.split(".")}
+    segments.discard("")
+    return token in segments or token == path
 
 
 def _node_variable_sources(
