@@ -58,6 +58,28 @@ REPAIR_AUTHORITY_BINDING_SCHEMA_VERSION = "easyicu.repair_authority_binding/2"
 #: :meth:`StepRepairBudget.effective_limit`.
 TERMINAL_GATE_REPAIR_CLASSES = frozenset({"concept", "post_mutation_concept"})
 
+#: The stages whose failures cannot be known until everything before them has
+#: already had its chance to spend the pool.  Each gets ONE repair of its own,
+#: once, on top of the shared allowance.
+#:
+#: * the concept audit -- it reads the code only after it has run;
+#: * execution itself -- a traceback exists only once the script runs, and
+#:   every pre-execution gate (contract, compatibility, visual, and the audit)
+#:   draws from the same pool first.
+#:
+#: MEASURED over every recorded run: 89 steps ended ``execution_failed`` and 20
+#: of them -- across 7 of the 9 tasks -- had spent ZERO runtime repairs while
+#: provider calls remained, the pool having gone to ``contract`` (11),
+#: ``post_mutation_concept`` (5) and ``concept`` (3+1).  A runtime repair is
+#: worth attempting: of the 211 steps that ever spent one, 90 (43 %) finished
+#: ``ok`` -- a better rate than the concept gate's 38 %.  A traceback is the
+#: most specific repair signal the pipeline produces, and it was the one most
+#: often unaffordable.
+TERMINAL_STAGE_REPAIR_CLASSES: Tuple[frozenset, ...] = (
+    TERMINAL_GATE_REPAIR_CLASSES,
+    frozenset({"runtime"}),
+)
+
 
 def resume_deterministic_repair_candidate(
     *,
@@ -330,12 +352,23 @@ class StepRepairBudget:
         """
 
         limit = self._max_llm_repairs
-        if str(repair_class or "").strip() not in TERMINAL_GATE_REPAIR_CLASSES:
+        normalized = str(repair_class or "").strip()
+        stage = next(
+            (item for item in TERMINAL_STAGE_REPAIR_CLASSES if normalized in item),
+            None,
+        )
+        if stage is None:
             return limit
-        spent = self._provider_budget.logical_repair_classes
-        if any(str(item).strip() in TERMINAL_GATE_REPAIR_CLASSES for item in spent):
+        spent = [str(item).strip() for item in self._provider_budget.logical_repair_classes]
+        if any(item in stage for item in spent):
             return limit
-        return limit + 1
+        # One repair for this stage, whenever it is reached. Expressed against
+        # the attempts already made rather than as a fixed "+1" so that each
+        # stage's reserve is independent: a step that has already spent its
+        # concept reserve must still be able to answer a traceback, and vice
+        # versa. Bounded by construction -- a stage that has been paid takes
+        # the branch above and never gets a second.
+        return max(limit, len(spent) + 1)
 
     def logical_available(self, repair_class: Optional[str] = None) -> bool:
         limit = self.effective_limit(repair_class)
@@ -418,9 +451,17 @@ class StepRepairBudget:
             # Otherwise the record reads "budget 2, attempts 3" with nothing
             # saying why. The reserve is a host decision and belongs in the
             # manifest beside the allowance it extends.
-            self._step_record["step_llm_repair_terminal_gate_reserve"] = (
-                normalized_class
+            self._step_record.setdefault(
+                "step_llm_repair_terminal_gate_reserve", []
             )
+            reserves = self._step_record["step_llm_repair_terminal_gate_reserve"]
+            if isinstance(reserves, list):
+                reserves.append(normalized_class)
+            else:  # a pre-existing scalar record from an earlier run
+                self._step_record["step_llm_repair_terminal_gate_reserve"] = [
+                    reserves,
+                    normalized_class,
+                ]
         if not resumed_unpaid_attempt:
             self._step_record.setdefault("step_llm_repair_classes", []).append(
                 normalized_class
