@@ -41,6 +41,7 @@ from .deterministic_missingness import (
     source_availability_audit_executor_owns_step,
 )
 from .missingness_measurement_figure_executor import (
+    missingness_measurement_figure_declaration_verdict,
     MISSINGNESS_MEASUREMENT_FIGURE_INPUTS,
     missingness_measurement_figure_executor_code,
     missingness_measurement_figure_executor_owns_step,
@@ -387,7 +388,21 @@ def select_standard_executor(
                 consumed_input_keys=MISSINGNESS_MEASUREMENT_FIGURE_INPUTS,
             )
         )
-    _missed("missingness_measurement_figure")
+    # Not a bare miss when one string is the only thing between the plan and a
+    # deterministic figure. Measured over every recorded run, 9 figure steps
+    # name one of the two audit tables while their own parent produces both;
+    # the renderer sits idle and the Coder writes a source-data table whose
+    # columns cannot be traced to the parent they came from, which is exactly
+    # how m1's 09_missingness_audit_figure died. The verdict stays quiet on the
+    # 31 steps whose sibling table no step produces: closing those means asking
+    # a parent for a different analysis, which is not this owner's call.
+    missingness_declaration_verdict = (
+        missingness_measurement_figure_declaration_verdict(step, plan=plan)
+    )
+    if missingness_declaration_verdict.missing_declarations:
+        _declined(missingness_declaration_verdict)
+    else:
+        _missed("missingness_measurement_figure")
     if table_one_executor_owns_step(step):
         typed_cohort_inputs = _consumed_typed_cohort_inputs(step)
         return _selected(

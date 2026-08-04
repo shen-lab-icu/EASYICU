@@ -34,13 +34,16 @@ from ...figures.publication import (
     make_figure_contract,
     save_publication_figure,
 )
+from ...contracts.ownership_verdict import OwnershipVerdict
 from ...schema import AnalysisStep
 from .figure_input_capability import TypedInputCapability
 
 __all__ = [
     "MEASUREMENT_PROCESS_AUDIT_INPUT",
     "MISSINGNESS_MEASUREMENT_AUDIT_INPUT",
+    "MISSINGNESS_MEASUREMENT_FIGURE_ANALYSIS_KIND",
     "MISSINGNESS_MEASUREMENT_FIGURE_INPUTS",
+    "missingness_measurement_figure_declaration_verdict",
     "missingness_measurement_figure_executor_code",
     "missingness_measurement_figure_executor_owns_step",
     "run_missingness_measurement_figure",
@@ -53,6 +56,8 @@ MISSINGNESS_MEASUREMENT_FIGURE_INPUTS = (
     MISSINGNESS_MEASUREMENT_AUDIT_INPUT,
     MEASUREMENT_PROCESS_AUDIT_INPUT,
 )
+#: One stable name for this owner across the claim, the decline and the trace.
+MISSINGNESS_MEASUREMENT_FIGURE_ANALYSIS_KIND = "missingness_measurement_figure"
 #: A figure product id is a Planner-owned *label*, not a capability claim.  What
 #: this renderer can draw is fixed by its two required typed inputs and their
 #: verified schemas, both checked below; the id never selects a panel, a
@@ -208,6 +213,104 @@ def missingness_measurement_figure_executor_owns_step(
     return all(
         _binding_carries_the_columns_read(resolved_bindings.get(key), key)
         for key in MISSINGNESS_MEASUREMENT_FIGURE_INPUTS
+    )
+
+
+def missingness_measurement_figure_declaration_verdict(
+    step: AnalysisStep,
+    *,
+    plan: Any,
+) -> OwnershipVerdict:
+    """Report the one input a step must add for this owner to draw its figure.
+
+    This renderer needs both audit tables because it builds a panel from each.
+    A plan that names only one leaves it unclaimed, and the step falls to the
+    Coder -- which is how a figure the host can draw deterministically ends up
+    as a hand-written source-data table the traceability validator refuses.
+
+    MEASURED over every recorded run: 59 figure steps name at least one of the
+    two audit tables.  19 name both and this owner can claim them.  40 name one
+    -- and they split in two, which is the whole reason this function has a
+    guard rather than firing on all 40:
+
+    * 9 declare one table whose producing step ALSO produces the other.  The
+      plan can close the gap by adding one string to the figure step, and
+      nothing about the science changes: the same parent, the same digest, the
+      same two tables already on disk.  Those are what this reports.
+    * 31 name a table whose sibling no step in the plan produces at all.
+      Closing those means asking the parent for a different analysis, which is
+      a scientific choice this owner does not get to make -- the same boundary
+      the distribution owner had to be narrowed to after canary33.
+
+    m1's ``09_missingness_audit_figure`` is the first kind: its parent declares
+    both tables and writes both files, the figure step names one, and the
+    renderer sat idle while the Coder produced a source-data table whose
+    columns could not be traced back to any upstream vector.
+    """
+
+    products = [_figure_product(value) for value in step.expected_outputs or []]
+    if not (
+        len(products) == 1
+        and products[0] is not None
+        and step.planned_analysis_role == "auxiliary"
+        and _method_head(step.method) == "visualization"
+        and step.trajectory_stability_spec is None
+    ):
+        return OwnershipVerdict.wrong_shape(
+            MISSINGNESS_MEASUREMENT_FIGURE_ANALYSIS_KIND,
+            reason=(
+                "the step is not one auxiliary visualization promising a single "
+                "figure, so this owner could not draw it however it were declared"
+            ),
+        )
+
+    declared = {str(value or "").strip() for value in step.inputs or []}
+    named = [key for key in MISSINGNESS_MEASUREMENT_FIGURE_INPUTS if key in declared]
+    if len(named) != 1:
+        return OwnershipVerdict.wrong_shape(
+            MISSINGNESS_MEASUREMENT_FIGURE_ANALYSIS_KIND,
+            reason=(
+                "the step does not name exactly one of this owner's two audit "
+                "tables, so the gap is not a single missing input declaration"
+            ),
+        )
+    have = named[0]
+    missing = next(key for key in MISSINGNESS_MEASUREMENT_FIGURE_INPUTS if key != have)
+
+    # The gap is only reportable when the plan can close it here. If no step
+    # produces the sibling table, adding it to this figure's inputs names an
+    # artifact nobody writes; asking the parent to produce it is asking for a
+    # different analysis, and that belongs to the Planner directive rather than
+    # to a refusal raised at this step.
+    producer_of = {}
+    for candidate in getattr(plan, "steps", None) or []:
+        for output in getattr(candidate, "expected_outputs", None) or []:
+            producer_of.setdefault(str(output or "").strip(), candidate)
+    parent = producer_of.get(have)
+    sibling_parent = producer_of.get(missing)
+    if parent is None or sibling_parent is None or parent is not sibling_parent:
+        return OwnershipVerdict.wrong_shape(
+            MISSINGNESS_MEASUREMENT_FIGURE_ANALYSIS_KIND,
+            reason=(
+                f"no single step in this plan produces both {have!r} and "
+                f"{missing!r}, so this owner could not be given both tables "
+                "under one parent's digest however this step were declared"
+            ),
+        )
+
+    return OwnershipVerdict.incomplete_declaration(
+        MISSINGNESS_MEASUREMENT_FIGURE_ANALYSIS_KIND,
+        missing=(missing,),
+        reason=(
+            f"the host draws this figure deterministically from {have!r} and "
+            f"{missing!r} together, and step "
+            f"{str(getattr(parent, 'step_id', '') or '')!r} already produces "
+            f"both. This step names only {have!r}, so the renderer cannot be "
+            f"given the second panel's table: declare {missing!r} beside it. "
+            "Without it the figure is written by the Coder, whose source-data "
+            "table renames the audited columns and cannot be traced back to "
+            "the parent it came from"
+        ),
     )
 
 
