@@ -7796,10 +7796,10 @@ def run_execute_phase(
             if (
                 worker_progress.concept_repair_attempts
                 >= pipeline._max_code_repair_attempts
-                or not _llm_repair_budget_available()
+                or not _llm_repair_budget_available("concept")
                 or provider_budget.exhausted
             ):
-                if not _logical_llm_repair_budget_available():
+                if not _logical_llm_repair_budget_available("concept"):
                     step_record["step_llm_repair_budget_exhausted"] = True
                     step_record["step_llm_repair_budget"] = (
                         pipeline._max_step_llm_repair_attempts
@@ -8469,7 +8469,7 @@ def run_execute_phase(
                                 )
                             continue
 
-                    if _llm_repair_budget_available():
+                    if _llm_repair_budget_available("post_mutation_concept"):
                         post_mutation_ticket = typed_repair_ticket(post_mutation_errors)
                         current_post_mutation_repair_authority = (
                             RepairPromptAuthority.create(
@@ -8634,7 +8634,9 @@ def run_execute_phase(
                             )
                             return step_record
 
-                    if not _logical_llm_repair_budget_available():
+                    if not _logical_llm_repair_budget_available(
+                        "post_mutation_concept"
+                    ):
                         step_record["step_llm_repair_budget_exhausted"] = True
                         step_record["step_llm_repair_budget"] = (
                             pipeline._max_step_llm_repair_attempts
