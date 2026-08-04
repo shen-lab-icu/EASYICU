@@ -7497,21 +7497,9 @@ def run_execute_phase(
         # had to hand-write it and repeatedly could not -- h2's causal step spent
         # BOTH LLM repairs on this one message with five provider calls unspent.
         #
-        # Injecting HERE, before the concept audit, is what keeps the digests
-        # honest: `concept_approved_code_sha256` hashes this same `code` string
-        # and `executed_code_sha256` hashes the file written from it, so both
-        # cover the assembled script and their identity holds by construction.
-        code = _host_plausibility_receipt_injected(
-            code,
-            scope=plausibility_authority.scope,
-            already_satisfied=not _flag_only_plausibility_obligation_findings(
-                None,
-                script_text=code,
-                step=step,
-                scope=plausibility_authority.scope,
-            ),
-        )
-
+        # The injection itself lives at the audit loop head (see below), not
+        # here: a repair that rewrites the script drops an appended host block,
+        # and injecting only at initial settling let exactly that happen.
         concept_audit = ConceptAuditCoordinator(
             authority=ConceptAuditAuthority(
                 context=context,
@@ -8280,6 +8268,40 @@ def run_execute_phase(
         final_concept_gate_approved_code_digest: Optional[str] = None
         while True:
             code = reorder_forward_references(code)
+            # The flag-only plausibility receipt is mechanical and host-owned,
+            # and it is the largest pre-execution blocker on record: 37 findings
+            # over 32 steps in 8 of the 9 tasks. It is re-established HERE, at
+            # the loop head, because every candidate the audit will judge --
+            # the first one AND every repaired rewrite -- passes through this
+            # point.
+            #
+            # It used to be injected once, where `code` was first settled.
+            # MEASURED on a live run (verify30, m2 05_fit_prediction_model):
+            # that worked for the initial script -- concept-approved, executed,
+            # and it clears the gate offline with 0 findings -- and then TWO
+            # `post_mutation_concept` full rewrites regenerated the script from
+            # the prompt, dropping the appended host block. The step was
+            # blocked citing a quarantined draft carrying no receipt, while the
+            # code that actually ran carried one. The agent was being asked to
+            # hand-write something the host had already written and the repair
+            # had thrown away.
+            #
+            # Re-applying is safe by construction: a script that already
+            # satisfies the gate reports `already_satisfied` and comes back
+            # byte-identical, so a repaired script gets the receipt once and an
+            # untouched one is not double-rendered. Placing it before
+            # `ensure_candidate` and `candidate_code_digest` keeps the
+            # checkpoint and both digests covering the assembled script.
+            code = _host_plausibility_receipt_injected(
+                code,
+                scope=plausibility_authority.scope,
+                already_satisfied=not _flag_only_plausibility_obligation_findings(
+                    None,
+                    script_text=code,
+                    step=step,
+                    scope=plausibility_authority.scope,
+                ),
+            )
             checkpoint_authority.ensure_candidate(
                 code,
                 reason="host_code_normalization_or_deterministic_mutation",
