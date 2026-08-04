@@ -1633,12 +1633,26 @@ def _effect_figure_source_authorized(
     is structurally linked to the latest successful direct parent through an
     exact typed effect-result input. Numeric summaries and non-figure effect
     products remain governed by the ordinary effect-method authorization.
+
+    Rendering is recognised by what the step declares, not by what it is
+    called.  The conditions below already say it exactly: every declared output
+    is ``figure:``/``log:``, and every input is a typed ``statistic:``/``table:``
+    bound by evidence id and sha256 to a successful effect parent -- a step
+    built that way has no cohort to re-analyse.  Requiring the *name* to match a
+    list of figure spellings on top of that refused legitimate render children:
+    ``forest_plot``, the standard name for this figure and one the Planner is
+    told it may use, was absent from the list.  What survives is the property
+    that veto was reaching for -- a render child may not claim to be the
+    analysis -- read from ``_EFFECT_CONTRACT_METHODS``, the same vocabulary
+    :func:`effect_output_authorized` uses to decide who owns an effect result,
+    rather than from a second private list that can drift away from it.
     """
 
     step_id = str(step.step_id or "")
     output_products = [typed_product(raw) for raw in (step.expected_outputs or [])]
     if (
-        _normalised_method_head(str(step.method or "")) not in _FIGURE_METHODS
+        _normalised_method_head(str(step.method or ""))
+        in (_EFFECT_CONTRACT_METHODS | _ROBUSTNESS_EFFECT_CONTRACT_METHODS)
         or not output_products
         or any(product is None for product in output_products)
         or not any(product[0] == "figure" for product in output_products if product)
