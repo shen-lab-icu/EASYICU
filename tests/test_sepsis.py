@@ -7,9 +7,116 @@ those values as **hours since ICU admission** — the post
 ``|abx_t - samp_t| <= 24`` when the times are numeric.
 """
 
+from types import SimpleNamespace
+
 import pandas as pd
 
+from easyicu.concept import ConceptResolver
+from easyicu.concept.callbacks import (
+    ConceptCallbackContext,
+    _callback_susp_inf,
+)
 from easyicu.scores.sepsis import compute_sepsis3_onset, sep3, susp_inf
+from easyicu.table import ICUTable
+
+
+def _eicu_context() -> ConceptCallbackContext:
+    return ConceptCallbackContext(
+        concept_name="susp_inf",
+        target=None,
+        interval=pd.Timedelta(hours=1),
+        resolver=None,
+        data_source=SimpleNamespace(config=SimpleNamespace(name="eicu")),
+        patient_ids=None,
+        kwargs={"si_mode": "auto"},
+    )
+
+
+def _eicu_icd_abx_tables(abx_times: list[float]) -> dict[str, ICUTable]:
+    return {
+        "infection_icd": ICUTable(
+            pd.DataFrame(
+                {
+                    "patientunitstayid": [141203, 141203],
+                    "diagnosisoffset": [1.0, 19.0],
+                    "infection_icd": [True, True],
+                }
+            ),
+            id_columns=["patientunitstayid"],
+            index_column="diagnosisoffset",
+            value_column="infection_icd",
+        ),
+        "abx": ICUTable(
+            pd.DataFrame(
+                {
+                    "patientunitstayid": [141203] * len(abx_times),
+                    "charttime": abx_times,
+                    "abx": [True] * len(abx_times),
+                }
+            ),
+            id_columns=["patientunitstayid"],
+            index_column="charttime",
+            value_column="abx",
+        ),
+    }
+
+
+def test_eicu_icd_abx_uses_antibiotic_time_axis_without_sampling() -> None:
+    """The infection diagnosis selects the stay; ABX alone owns SI timing."""
+    abx_times = [-3.0, 1.0, 2.0, 18.0, 21.0, 30.0, 39.0]
+
+    result = _callback_susp_inf(
+        _eicu_icd_abx_tables(abx_times),
+        _eicu_context(),
+    )
+
+    assert result.index_column == "charttime"
+    assert list(result.data.columns) == [
+        "patientunitstayid",
+        "charttime",
+        "susp_inf",
+    ]
+    assert result.data["charttime"].tolist() == abx_times
+    assert result.data["susp_inf"].tolist() == [True] * len(abx_times)
+
+
+def test_eicu_icd_abx_is_not_relocated_to_sampling_times_when_merged() -> None:
+    """A sepsis_shared merge must retain ABX times, not broadcast onto samp."""
+    abx_times = [340.0, 352.0, 401.0]
+    samp_times = [2.0, 124.0, 133.0]
+    tables = _eicu_icd_abx_tables(abx_times)
+    suspicion = _callback_susp_inf(tables, _eicu_context())
+    sampling = ICUTable(
+        pd.DataFrame(
+            {
+                "patientunitstayid": [141203] * len(samp_times),
+                "charttime": samp_times,
+                "samp": [True] * len(samp_times),
+            }
+        ),
+        id_columns=["patientunitstayid"],
+        index_column="charttime",
+        value_column="samp",
+    )
+    resolver = ConceptResolver({})
+    data_source = SimpleNamespace(config=SimpleNamespace(name="eicu"))
+
+    merged = resolver._to_r_format_merged_enhanced(
+        {
+            "susp_inf": suspicion,
+            "infection_icd": tables["infection_icd"],
+            "samp": sampling,
+        },
+        ["susp_inf", "infection_icd", "samp"],
+        pd.Timedelta(hours=1),
+        data_source=data_source,
+    )
+
+    positive_times = merged.loc[merged["susp_inf"].eq(True), "charttime"]
+    assert positive_times.tolist() == abx_times
+    sample_rows = merged[merged["charttime"].isin(samp_times)]
+    assert sample_rows["samp"].eq(True).all()
+    assert sample_rows["susp_inf"].isna().all()
 
 
 def test_susp_inf_numeric_hour_offsets_match_within_abx_window():

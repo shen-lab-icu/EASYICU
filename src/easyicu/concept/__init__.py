@@ -1872,6 +1872,7 @@ class ConceptResolver:
                     interval,
                     data_source=data_source,
                     materialize_missing_concepts=not defer_empty_columns_to_arrow,
+                    consume_sources=True,
                 )
 
             merged = self._ensure_requested_concept_columns(
@@ -6653,7 +6654,10 @@ class ConceptResolver:
         if merged_df is None or merged_df.empty:
             return None
 
-        result = merged_df
+        # Add columns without mutating the producer-owned wide frame.  A
+        # shallow copy keeps the dense value blocks shared until a new column
+        # is assigned.
+        result = merged_df.copy(deep=False)
         id_col = result.columns[0]
         if 'charttime' not in result.columns:
             return None
@@ -6685,51 +6689,104 @@ class ConceptResolver:
             remaining_frames.append(frame)
 
         if remaining_frames:
-            # 🚀 Hash-based vectorized merge: avoid pd.merge entirely for 98%+ of rows
-            # Build combined int64 key for O(1) hash lookup. Most remaining keys overlap
-            # with batch (13.2M batch → 13.4M final = only ~1.5% extra rows).
-            # This replaces N sequential merges (16.4s) + 1 big merge (4.2s) = 20.6s
-            # with hash-build (~0.5s) + N get_indexer (~1.5s) = ~2s total.
-            id_vals = result[id_col].values.astype(np.int64)
-            time_vals = result[merge_keys[1]].values.astype(np.int64)
-            time_min = int(time_vals.min()) if len(time_vals) > 0 else 0
-            stride = int(time_vals.max()) - time_min + 2
-            batch_key = id_vals * stride + (time_vals - time_min)
-            # Hash table for O(1) key → row_index lookup
-            batch_idx_map = pd.Index(batch_key)
+            # Exact key matching is mandatory here. ``charttime`` is an
+            # ICU-relative floating-point hour and valid sources can have
+            # different within-hour phases (for example -0.3833 and 0.0).
+            # The former fast path cast times to int64 before hashing, which
+            # truncated those values into the same integer hour and silently
+            # attached measurements to another concept's timestamp.  It also
+            # made the key index non-unique whenever two fractional times fell
+            # in one hour.  A MultiIndex preserves the exact (id, charttime)
+            # pair while retaining vectorized lookup.
+            batch_idx_map = pd.MultiIndex.from_frame(
+                result.loc[:, merge_keys],
+                names=merge_keys,
+            )
+            if not batch_idx_map.is_unique:
+                return None
 
-            extra_frames = []
-            remaining_names = []
+            prepared_frames = []
             for frame in remaining_frames:
                 name = [c for c in frame.columns if c not in merge_keys][0]
-                remaining_names.append(name)
-                fid = frame[id_col].values.astype(np.int64)
-                ftime = frame[merge_keys[1]].values.astype(np.int64)
-                fkey = fid * stride + (ftime - time_min)
-
-                indexer = batch_idx_map.get_indexer(fkey)
+                if name in result.columns:
+                    return None
+                source = frame[name]
+                # This low-allocation path supports the numeric/boolean
+                # concepts it was designed for.  Text/category semantics need
+                # the normal merge fallback rather than a lossy numeric cast.
+                if not (
+                    pd.api.types.is_numeric_dtype(source.dtype)
+                    or pd.api.types.is_bool_dtype(source.dtype)
+                ):
+                    return None
+                frame_idx = pd.MultiIndex.from_frame(
+                    frame.loc[:, merge_keys],
+                    names=merge_keys,
+                )
+                if not frame_idx.is_unique:
+                    return None
+                indexer = batch_idx_map.get_indexer(frame_idx)
                 matched = indexer >= 0
+                prepared_frames.append((name, frame, indexer, matched))
 
-                # Assign matched values directly (no merge needed)
-                col_data = np.full(len(result), np.nan)
-                col_data[indexer[matched]] = pd.to_numeric(
-                    frame[name].iloc[np.where(matched)[0]], errors='coerce'
-                ).values
-                result[name] = col_data
+            extra_frames = []
+            for name, frame, indexer, matched in prepared_frames:
+                source = frame[name]
+                if pd.api.types.is_bool_dtype(source.dtype):
+                    aligned = pd.Series(
+                        pd.NA,
+                        index=pd.RangeIndex(len(result)),
+                        dtype="boolean",
+                    )
+                elif pd.api.types.is_integer_dtype(source.dtype):
+                    bits = max(8, int(getattr(source.dtype, "itemsize", 8)) * 8)
+                    prefix = (
+                        "UInt"
+                        if pd.api.types.is_unsigned_integer_dtype(source.dtype)
+                        else "Int"
+                    )
+                    aligned = pd.Series(
+                        pd.NA,
+                        index=pd.RangeIndex(len(result)),
+                        dtype=f"{prefix}{bits}",
+                    )
+                else:
+                    try:
+                        aligned = pd.Series(
+                            np.nan,
+                            index=pd.RangeIndex(len(result)),
+                            dtype=source.dtype,
+                        )
+                    except (TypeError, ValueError):
+                        aligned = pd.Series(
+                            np.nan,
+                            index=pd.RangeIndex(len(result)),
+                            dtype="float64",
+                        )
+                matched_source_positions = np.flatnonzero(matched)
+                aligned.iloc[indexer[matched]] = source.iloc[
+                    matched_source_positions
+                ].to_numpy(copy=False)
+                result[name] = aligned.array
 
-                # Collect unmatched rows for append
                 if not matched.all():
-                    extra_frames.append(frame.iloc[np.where(~matched)[0]])
+                    extra_frames.append(
+                        frame.iloc[np.flatnonzero(~matched)].reset_index(drop=True)
+                    )
 
-            # Handle extra rows (keys not in batch) — typically < 2% of data
+            # Unmatched keys are normally a small minority.  Merge only those
+            # exact-key fragments, then append them once to the large frame.
             if extra_frames:
-                extras = pd.concat(extra_frames, ignore_index=True)
-                # Merge extra rows together (small: ~200K rows)
-                extra_names = [c for c in extras.columns if c not in merge_keys]
-                if len(extra_names) > 1:
-                    # Multiple extra columns — need to consolidate duplicates
-                    extras = extras.groupby(merge_keys, sort=False).first().reset_index()
-                result = pd.concat([result, extras], ignore_index=True)
+                extras = extra_frames[0]
+                for extra in extra_frames[1:]:
+                    extras = extras.merge(
+                        extra,
+                        on=merge_keys,
+                        how="outer",
+                        sort=False,
+                        validate="one_to_one",
+                    )
+                result = pd.concat([result, extras], ignore_index=True, sort=False)
 
         final_cols = [id_col, 'charttime']
         final_cols.extend([name for name in concept_names if name in result.columns])
@@ -8482,6 +8539,7 @@ class ConceptResolver:
         interval: Optional[pd.Timedelta] = None,
         data_source: Optional['ICUDataSource'] = None,  # 🔧 FIX 2025-01-31: 添加数据源参数
         materialize_missing_concepts: bool = True,
+        consume_sources: bool = False,
     ) -> pd.DataFrame:
         """
         将多个概念表以ricu风格合并，实现完整的时间网格对齐和窗口展开
@@ -8497,6 +8555,9 @@ class ConceptResolver:
             concept_names: 概念名称列表（保持顺序）
             interval: 时间间隔，默认1小时
             data_source: 数据源，用于确定默认ID列
+            consume_sources: 内部顶层提取路径在所有概念均加载完毕后可转移
+                输入帧所有权并清除不再需要的 resolver/data-source 缓存。默认
+                ``False``，因此直接调用该兼容方法不会改变传入映射。
             
         Returns:
             ricu风格的宽格式DataFrame
@@ -8573,6 +8634,24 @@ class ConceptResolver:
         
         if not concept_data:
             return pd.DataFrame(columns=list(concept_names))
+
+        if consume_sources:
+            # All source reads and recursive callbacks have completed before
+            # this merge starts.  Retaining resolver/data-source caches and
+            # the ICUTable mapping until after the final wide concat kept
+            # several aliases to every large concept frame alive at the exact
+            # eICU respiratory peak.  ``concept_data`` now owns the frames
+            # required below, so the other references can be released safely.
+            with self._cache_lock:
+                self._concept_cache.clear()
+                self._concept_data_cache.clear()
+                self._raw_concept_cache.clear()
+                self._table_cache.clear()
+                self._drop_cache_accounting()
+            if data_source is not None:
+                data_source.clear_cache()
+            if isinstance(tables, MutableMapping):
+                tables.clear()
         
         # 检测ID列和时间列
         id_col = None
@@ -8622,6 +8701,7 @@ class ConceptResolver:
             id_col=id_col,
             time_col=time_col,
             interval_hours=interval_hours,
+            consume_input=consume_sources,
         )
         result = self._ensure_requested_concept_columns(
             result,

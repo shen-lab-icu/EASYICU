@@ -232,9 +232,13 @@ def test_module_extraction_streams_patient_batches_directly_to_parquet(
 
     manifest = json.loads((tmp_path / "_manifest.json").read_text())
     assert manifest["errors"] == []
-    assert calls == [[1, 2], [3, 4], [5]]
+    assert calls == [[1, 4], [2, 5], [3]]
+    assert manifest["patient_partition_strategy"] == (
+        "source_order_interleaved_v1"
+    )
+    assert manifest["initial_planned_partition_count"] == 3
     exported = pd.read_parquet(manifest["saved"]["test_module"]["path"])
-    assert exported["stay_id"].tolist() == [1, 2, 3, 4, 5]
+    assert exported["stay_id"].tolist() == [1, 4, 2, 5, 3]
     assert not (tmp_path / ".test_module.partial.parquet").exists()
 
 
@@ -335,8 +339,60 @@ def test_streamed_module_preserves_first_schema_without_pandas_reindex(
     assert pd.isna(exported["optional_signal"].iloc[2])
 
 
-def test_stream_batch_release_flushes_arrow_pool():
+def test_streamed_module_keeps_later_charttime_when_first_batch_has_none(
+    monkeypatch, tmp_path
+) -> None:
+    def fake_load_concepts(**kwargs):
+        ids = list(kwargs["patient_ids"]["stay_id"])
+        if ids[0] == 1:
+            # This reproduces eICU sepsis_shared when the first stay batch has
+            # no timestamped sampling event at all.
+            return pd.DataFrame(
+                {
+                    "stay_id": ids,
+                    "susp_inf": [False] * len(ids),
+                }
+            )
+        return pd.DataFrame(
+            {
+                "stay_id": ids,
+                "charttime": [5.0] * len(ids),
+                "susp_inf": [True] * len(ids),
+            }
+        )
+
+    monkeypatch.setattr(easyicu, "load_concepts", fake_load_concepts)
+
+    api._run_module_extraction(
+        "sepsis_shared",
+        ["susp_inf"],
+        "eicu",
+        str(tmp_path),
+        {"stay_id": [1, 2, 3]},
+        2,
+        str(tmp_path),
+        stream_output_batches=True,
+    )
+
+    manifest = json.loads((tmp_path / "_manifest.json").read_text())
+    assert manifest["errors"] == []
+    exported = pd.read_parquet(manifest["saved"]["sepsis_shared"]["path"])
+    assert list(exported.columns) == ["stay_id", "charttime", "susp_inf"]
+    assert exported["charttime"].dtype == "float64"
+    assert exported["charttime"].iloc[:2].isna().all()
+    assert exported["charttime"].iloc[2] == 5.0
+
+
+def test_stream_batch_release_flushes_duckdb_and_arrow_pool(monkeypatch):
+    from easyicu import datasource
+
     released = []
+    closed = []
+    monkeypatch.setattr(
+        datasource,
+        "_close_duckdb_connections",
+        lambda: closed.append(True),
+    )
 
     class Pool:
         def release_unused(self):
@@ -352,6 +408,7 @@ def test_stream_batch_release_flushes_arrow_pool():
         trim_native_allocator=False,
     )
 
+    assert closed == [True]
     assert released == [True]
 
 
@@ -425,7 +482,14 @@ def test_streamed_special_export_uses_published_dependency_parquets(tmp_path):
     output.mkdir()
     time = pd.to_datetime(["2026-01-01T00:00:00", "2026-01-01T01:00:00"])
     pd.DataFrame(
-        {"stay_id": [1, 1], "charttime": time, "susp_inf": [False, True]}
+        {
+            "stay_id": [1, 1, 1],
+            "charttime": [time[0], time[1], pd.NaT],
+            "susp_inf": pd.Series([False, True, pd.NA], dtype="boolean"),
+            # infection_icd is an explicitly stay-level support field. Its
+            # null-time row must not be mistaken for an untimed SI event.
+            "infection_icd": pd.Series([True, True, True], dtype="boolean"),
+        }
     ).to_parquet(source / "sepsis_shared.parquet", index=False)
     pd.DataFrame({"stay_id": [1, 1], "charttime": time, "sofa": [0.0, 3.0]}).to_parquet(
         source / "sofa1_score.parquet", index=False
@@ -452,15 +516,15 @@ def test_streamed_special_export_uses_published_dependency_parquets(tmp_path):
     assert (output / "sep3_sofa2.parquet").is_file()
 
 
-def test_streamed_special_export_broadcasts_stay_level_suspicion(tmp_path):
+def test_streamed_special_export_rejects_positive_null_time_suspicion(tmp_path):
     source = tmp_path / "published"
     output = tmp_path / "special"
     source.mkdir()
     output.mkdir()
     time = pd.to_datetime(["2026-01-01T00:00:00", "2026-01-01T01:00:00"])
-    pd.DataFrame({"stay_id": [1], "susp_inf": [True]}).to_parquet(
-        source / "sepsis_shared.parquet", index=False
-    )
+    pd.DataFrame(
+        {"stay_id": [1], "charttime": [None], "susp_inf": [True]}
+    ).to_parquet(source / "sepsis_shared.parquet", index=False)
     pd.DataFrame({"stay_id": [1, 1], "charttime": time, "sofa": [0.0, 3.0]}).to_parquet(
         source / "sofa1_score.parquet", index=False
     )
@@ -468,22 +532,23 @@ def test_streamed_special_export_broadcasts_stay_level_suspicion(tmp_path):
         {"stay_id": [1, 1], "charttime": time, "sofa2": [0.0, 3.0]}
     ).to_parquet(source / "sofa2_score.parquet", index=False)
 
-    api._stream_special_extraction_batches(
-        ["sepsis3_sofa1", "sepsis3_sofa2"],
-        "eicu",
-        str(tmp_path),
-        {"stay_id": [1]},
-        1,
-        str(output),
-        use_sofa2=True,
-        published_output_dir=str(source),
-    )
+    with pytest.raises(
+        ValueError,
+        match="positive susp_inf rows with null charttime",
+    ):
+        api._stream_special_extraction_batches(
+            ["sepsis3_sofa1", "sepsis3_sofa2"],
+            "eicu",
+            str(tmp_path),
+            {"stay_id": [1]},
+            1,
+            str(output),
+            use_sofa2=True,
+            published_output_dir=str(source),
+        )
 
-    manifest = json.loads((output / "_manifest.json").read_text())
-    assert manifest["errors"] == []
-    assert set(manifest["saved"]) == {"sep3_sofa1", "sep3_sofa2"}
-    assert pd.read_parquet(output / "sep3_sofa1.parquet")["sep3_sofa1"].tolist() == [1]
-    assert pd.read_parquet(output / "sep3_sofa2.parquet")["sep3_sofa2"].tolist() == [1]
+    assert not (output / "sep3_sofa1.parquet").exists()
+    assert not (output / "sep3_sofa2.parquet").exists()
 
 
 def test_streamed_special_export_accepts_declared_empty_infection_dependency(

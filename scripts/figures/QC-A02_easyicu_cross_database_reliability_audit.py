@@ -36,6 +36,106 @@ ID_COLUMNS = {
 }
 INDEX_COLUMNS = ID_COLUMNS | {"charttime"}
 NATIVE_SCHEMA_VERSION = "easyicu_native_export_v2"
+CURRENT_QC_SOURCE_RUN_ID = "full6_native_v2_rowgrain_a9f8464e_20260803"
+CURRENT_QC_SOURCE_RUN_METADATA_SHA256 = (
+    "72a0469451f22bc7c7954fbc1f46ec2b3b6925cc04efe7e91ddf1c5bd5a3c4c2"
+)
+
+
+# Direct source traces for the review-only shifts retained by the sealed
+# 2026-08-03 six-database package.  These records deliberately do not suppress
+# the anomaly flags: they distinguish a verified source/recording difference
+# from an untraced conversion defect while preserving the signal for
+# database-stratified downstream sensitivity analyses.
+DISTRIBUTION_ADJUDICATIONS: dict[
+    tuple[str, str, str, str, str, str], dict[str, str]
+] = {
+    (
+        CURRENT_QC_SOURCE_RUN_ID,
+        CURRENT_QC_SOURCE_RUN_METADATA_SHA256,
+        "chemistry",
+        "bili_dir",
+        "aumc vs miiv",
+        "median_scale_shift",
+    ): {
+        "adjudication_status": "source_trace_complete",
+        "adjudicated_origin": "source_measurement_distribution_and_sparsity",
+        "adjudication_evidence": (
+            "AUMC item 6812 has 375 numeric records with source median 0.62 "
+            "umol and declared conversion x0.058467; this gives 0.0362495 "
+            "mg/dL, exactly the 375-record export median."
+        ),
+        "required_action": (
+            "Do not rescale or re-extract; retain the sparse-source flag and "
+            "use database-stratified or availability-sensitive analyses."
+        ),
+    },
+    (
+        CURRENT_QC_SOURCE_RUN_ID,
+        CURRENT_QC_SOURCE_RUN_METADATA_SHA256,
+        "chemistry",
+        "tri",
+        "eicu vs mimic",
+        "median_scale_shift",
+    ): {
+        "adjudication_status": "source_trace_complete",
+        "adjudicated_origin": "source_assay_and_reporting_heterogeneity",
+        "adjudication_evidence": (
+            "Raw eICU Troponin-I rows declare ng/mL (192,317 numeric rows; "
+            "overall median about 0.18), while raw MIMIC-III item 51002 "
+            "declares ng/ml (5,526 rows; median 2.4); episode-bounded export "
+            "medians are 0.2 and 2.8 without an added unit transform."
+        ),
+        "required_action": (
+            "Do not force a scale correction; treat Troponin-I as "
+            "database/assay heterogeneous and prespecify stratified sensitivity."
+        ),
+    },
+    (
+        CURRENT_QC_SOURCE_RUN_ID,
+        CURRENT_QC_SOURCE_RUN_METADATA_SHA256,
+        "hematology",
+        "bnd",
+        "mimic vs hirid",
+        "median_scale_shift",
+    ): {
+        "adjudication_status": "source_trace_complete",
+        "adjudicated_origin": "source_measurement_distribution_heterogeneity",
+        "adjudication_evidence": (
+            "The HiRID reference names variable 24000557 'Band form "
+            "neutrophils/100 leukocytes in Blood' with unit %; its 40,560 raw "
+            "values and current export both have median 20.5. MIMIC-III item "
+            "51144 is also reported as % but has a substantially lower raw "
+            "distribution."
+        ),
+        "required_action": (
+            "Keep the canonical percent unit; report cross-database measurement "
+            "heterogeneity and avoid pooled interpretation without sensitivity."
+        ),
+    },
+    (
+        CURRENT_QC_SOURCE_RUN_ID,
+        CURRENT_QC_SOURCE_RUN_METADATA_SHA256,
+        "vasopressors",
+        "epi_dur",
+        "aumc vs mimic",
+        "median_scale_shift",
+    ): {
+        "adjudication_status": "source_trace_complete",
+        "adjudicated_origin": "source_recording_and_treatment_duration_heterogeneity",
+        "adjudication_evidence": (
+            "AUMC item 6818 yields 2,715 order groups with floor-hour median "
+            "1 h (export n=1,885, median 1 h). MIMIC-III CareVue/MetaVision "
+            "epinephrine groups yield 3,615 non-negative durations with pooled "
+            "median 9 h (export n=3,138, median 10 h); all paths use the "
+            "declared floor-hour duration contract."
+        ),
+        "required_action": (
+            "Do not rescale; use duration descriptively and account for "
+            "database-specific infusion-record construction in pooled models."
+        ),
+    },
+}
 
 
 RESOLUTION_UPDATES: dict[str, dict[str, str]] = {
@@ -378,6 +478,29 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _source_run_lineage(
+    run_metadata_path: Path,
+    raw_metadata: bytes | None = None,
+) -> dict[str, str]:
+    """Return the exact source-run identity shared by QC-A01 and QC-A02."""
+
+    if not run_metadata_path.is_file():
+        raise FileNotFoundError(f"Missing source run metadata: {run_metadata_path}")
+    source_bytes = (
+        raw_metadata if raw_metadata is not None else run_metadata_path.read_bytes()
+    )
+    metadata = json.loads(source_bytes)
+    run_id = metadata.get("run_id") if isinstance(metadata, dict) else None
+    if not isinstance(run_id, str) or not run_id.strip():
+        raise ValueError(
+            f"Source run metadata has no non-empty run_id: {run_metadata_path}"
+        )
+    return {
+        "source_run_id": run_id.strip(),
+        "source_run_metadata_sha256": hashlib.sha256(source_bytes).hexdigest(),
+    }
+
+
 def _load_root_manifests(export_root: Path) -> dict[str, dict[str, Any]]:
     manifests: dict[str, dict[str, Any]] = {}
     for database in DATABASES:
@@ -387,6 +510,45 @@ def _load_root_manifests(export_root: Path) -> dict[str, dict[str, Any]]:
             continue
         manifests[database] = json.loads(path.read_text(encoding="utf-8"))
     return manifests
+
+
+def _verify_source_manifest_hashes(
+    export_root: Path,
+    run_metadata: dict[str, Any],
+) -> dict[str, str]:
+    """Fail closed unless the six audited manifests match the run receipt."""
+
+    expected = run_metadata.get("source_manifest_sha256")
+    if not isinstance(expected, dict):
+        raise ValueError(
+            "run_metadata.source_manifest_sha256 must bind all six root manifests"
+        )
+    expected_databases = set(DATABASES)
+    declared_databases = {str(value) for value in expected}
+    if declared_databases != expected_databases:
+        missing = sorted(expected_databases - declared_databases)
+        unexpected = sorted(declared_databases - expected_databases)
+        raise ValueError(
+            "run_metadata.source_manifest_sha256 database mismatch: "
+            f"missing={missing}; unexpected={unexpected}"
+        )
+
+    actual: dict[str, str] = {}
+    mismatches: list[str] = []
+    for database in DATABASES:
+        manifest_path = export_root / database / "_manifest.json"
+        if not manifest_path.is_file():
+            raise FileNotFoundError(f"Missing source manifest: {manifest_path}")
+        actual_sha256 = _sha256(manifest_path)
+        actual[database] = actual_sha256
+        declared_sha256 = expected.get(database)
+        if not isinstance(declared_sha256, str) or declared_sha256 != actual_sha256:
+            mismatches.append(
+                f"{database}: declared={declared_sha256!r}, actual={actual_sha256}"
+            )
+    if mismatches:
+        raise ValueError("Source manifest SHA-256 mismatch: " + "; ".join(mismatches))
+    return actual
 
 
 def _expected_runtime_commit(
@@ -526,6 +688,340 @@ def _distribution_flags(audit: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=columns)
 
 
+def _adjudicate_distribution_flags(
+    flags: pd.DataFrame,
+    *,
+    source_run_id: str | None,
+    source_run_metadata_sha256: str | None,
+) -> pd.DataFrame:
+    """Attach source traces only to the exact sealed run and anomaly type."""
+
+    result = flags.copy()
+    result["adjudication_status"] = "unadjudicated"
+    result["adjudication_source_run_id"] = pd.NA
+    result["adjudication_source_run_metadata_sha256"] = pd.NA
+    result["adjudicated_origin"] = pd.NA
+    result["adjudication_evidence"] = pd.NA
+    result["required_action"] = (
+        "Trace the source field, unit and transformation before interpretation."
+    )
+    for index, row in result.iterrows():
+        key = (
+            str(source_run_id),
+            str(source_run_metadata_sha256),
+            str(row.get("module")),
+            str(row.get("variable")),
+            str(row.get("database")),
+            str(row.get("flag")),
+        )
+        adjudication = DISTRIBUTION_ADJUDICATIONS.get(key)
+        if adjudication is None:
+            continue
+        result.at[index, "adjudication_source_run_id"] = source_run_id
+        result.at[index, "adjudication_source_run_metadata_sha256"] = (
+            source_run_metadata_sha256
+        )
+        for field, value in adjudication.items():
+            result.at[index, field] = value
+    return result
+
+
+def _string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str)]
+
+
+def _concept_metadata_complete(entry: dict[str, Any]) -> bool:
+    """Require one unique metadata binding for every selected source concept."""
+
+    selected = _string_list(entry.get("concept_ids"))
+    metadata_columns = _string_list(entry.get("column_metadata_columns"))
+    return (
+        bool(selected)
+        and len(selected) == len(set(selected))
+        and set(selected) == set(metadata_columns)
+        and len(metadata_columns) == len(set(metadata_columns))
+    )
+
+
+def _structural_placeholder_checks(
+    *,
+    module: str,
+    entry: dict[str, Any],
+    expected_concepts: list[str],
+    parquet_names: list[str],
+    parquet_types: dict[str, str],
+    actual_row_count: int | None,
+    manifest_schema_matches_parquet: bool,
+) -> dict[str, bool]:
+    """Validate that structural absence is a real typed zero-row contract."""
+
+    expected_names = ["stay_id"]
+    if module != "demographics":
+        expected_names.append("charttime")
+    expected_names.extend(expected_concepts)
+    status = entry.get("concept_status")
+    status_complete = (
+        bool(expected_concepts)
+        and isinstance(status, dict)
+        and set(status) == set(expected_concepts)
+        and all(
+            isinstance(status.get(concept), dict)
+            and status[concept].get("availability")
+            == "structurally_unavailable_placeholder"
+            and status[concept].get("non_null") == 0
+            for concept in expected_concepts
+        )
+    )
+    typed_schema = (
+        parquet_names == expected_names
+        and parquet_types.get("stay_id") == "int64"
+        and (module == "demographics" or parquet_types.get("charttime") == "double")
+        and all(
+            concept in parquet_types and parquet_types[concept] != "null"
+            for concept in expected_concepts
+        )
+        and manifest_schema_matches_parquet
+    )
+    selection_empty = (
+        not _string_list(entry.get("concept_ids"))
+        and not _string_list(entry.get("column_metadata_columns"))
+        and entry.get("concepts") == 0
+    )
+    checks = {
+        "structural_declared": entry.get("availability") == "structurally_unavailable",
+        "structural_declared_zero_rows": entry.get("rows") == 0,
+        "structural_actual_zero_rows": actual_row_count == 0,
+        "structural_schema_typed": typed_schema,
+        "structural_concept_status_complete": status_complete,
+        "structural_selection_empty": selection_empty,
+        "structural_physical_concepts_complete": _string_list(
+            entry.get("physical_concept_ids")
+        )
+        == expected_concepts,
+    }
+    checks["structural_placeholder_valid"] = all(checks.values())
+    return checks
+
+
+def _row_grain_contract_checks(
+    *,
+    module: str,
+    entry: dict[str, Any],
+    parquet_path: Path,
+    actual_row_count: int | None,
+) -> dict[str, Any]:
+    """Verify the content-bound native-v2 primary-key receipt.
+
+    Native publication performs the physical consolidation.  QC independently
+    binds that audit to the exact parquet bytes and rejects a missing, stale or
+    internally inconsistent receipt rather than treating column presence as a
+    primary-key check.
+    """
+
+    expected_primary_key = (
+        ["stay_id"] if module == "demographics" else ["stay_id", "charttime"]
+    )
+    expected_row_grain = (
+        "one_row_per_icu_stay"
+        if module == "demographics"
+        else "one_row_per_icu_stay_relative_hour"
+    )
+    audit = entry.get("row_grain_audit")
+    audit = audit if isinstance(audit, dict) else {}
+    source_rows = audit.get("source_rows")
+    published_rows = audit.get("published_rows")
+    duplicate_excess_before = audit.get("duplicate_excess_rows_before")
+    rows_consolidated = audit.get("rows_consolidated")
+    recorded_sha256 = entry.get("parquet_sha256")
+    actual_sha256 = _sha256(parquet_path) if parquet_path.is_file() else None
+    recorded_bytes = entry.get("parquet_bytes")
+    actual_bytes = parquet_path.stat().st_size if parquet_path.is_file() else None
+    checks: dict[str, Any] = {
+        "manifest_primary_key_matches_contract": (
+            _string_list(entry.get("primary_key")) == expected_primary_key
+        ),
+        "manifest_row_grain_matches_contract": (
+            entry.get("row_grain") == expected_row_grain
+        ),
+        "manifest_parquet_sha256": recorded_sha256,
+        "actual_parquet_sha256": actual_sha256,
+        "parquet_sha256_matches": bool(
+            isinstance(recorded_sha256, str)
+            and len(recorded_sha256) == 64
+            and recorded_sha256 == actual_sha256
+        ),
+        "manifest_parquet_bytes": recorded_bytes,
+        "actual_parquet_bytes": actual_bytes,
+        "parquet_bytes_matches": bool(
+            isinstance(recorded_bytes, int)
+            and recorded_bytes > 0
+            and recorded_bytes == actual_bytes
+        ),
+        "row_grain_audit_present": bool(audit),
+        "row_grain_audit_primary_key_matches": (
+            _string_list(audit.get("primary_key")) == expected_primary_key
+        ),
+        "row_grain_audit_row_grain_matches": (
+            audit.get("row_grain") == expected_row_grain
+        ),
+        "row_grain_audit_rows_match_parquet": (
+            audit.get("published_rows") == actual_row_count
+            and entry.get("rows") == actual_row_count
+        ),
+        "row_grain_audit_unique_after": (
+            audit.get("duplicate_excess_rows_after") == 0
+        ),
+        "row_grain_audit_consolidation_accounting_valid": (
+            all(
+                isinstance(value, int)
+                for value in (
+                    source_rows,
+                    published_rows,
+                    duplicate_excess_before,
+                    rows_consolidated,
+                )
+            )
+            and source_rows >= published_rows >= 0
+            and duplicate_excess_before == rows_consolidated
+            and source_rows - published_rows == rows_consolidated
+        ),
+        "row_grain_audit_duplicate_excess_rows_before": audit.get(
+            "duplicate_excess_rows_before"
+        ),
+        "row_grain_audit_rows_consolidated": audit.get("rows_consolidated"),
+        "row_grain_audit_null_charttime_rows_after": audit.get(
+            "null_charttime_rows_after"
+        ),
+    }
+    if module == "demographics":
+        checks["row_grain_audit_null_time_contract"] = (
+            audit.get("null_key_equality") == "not_applicable"
+        )
+    else:
+        null_after = audit.get("null_charttime_rows_after")
+        checks["row_grain_audit_null_time_contract"] = (
+            audit.get("null_key_equality") == "nulls_equal"
+            and isinstance(null_after, int)
+            and null_after >= 0
+            and actual_row_count is not None
+            and null_after <= actual_row_count
+        )
+    required_check_names = [
+        "manifest_primary_key_matches_contract",
+        "manifest_row_grain_matches_contract",
+        "parquet_sha256_matches",
+        "parquet_bytes_matches",
+        "row_grain_audit_present",
+        "row_grain_audit_primary_key_matches",
+        "row_grain_audit_row_grain_matches",
+        "row_grain_audit_rows_match_parquet",
+        "row_grain_audit_unique_after",
+        "row_grain_audit_consolidation_accounting_valid",
+        "row_grain_audit_null_time_contract",
+    ]
+    checks["row_grain_contract_valid"] = all(
+        bool(checks[name]) for name in required_check_names
+    )
+    return checks
+
+
+def _metadata_gap_mask(manifests: pd.DataFrame) -> pd.Series:
+    complete_metadata = (
+        manifests["concept_metadata_complete"].fillna(False).astype(bool)
+    )
+    valid_structural = (
+        manifests["structural_placeholder_valid"].fillna(False).astype(bool)
+    )
+    return ~(complete_metadata | valid_structural)
+
+
+def _manifest_metadata_coverage(manifests: pd.DataFrame) -> dict[str, int]:
+    """Separate selected-concept metadata from explicit structural absence.
+
+    A zero-row structural placeholder is intentionally excluded from the
+    selected concept index and therefore has no primary column-metadata
+    binding.  It closes the contract only after its manifest status, declared
+    and physical row counts, typed schema and per-concept statuses all pass.
+    Reporting the two states separately prevents the valid 108 + 6 = 114
+    contract from being mistaken for six undocumented metadata gaps.
+    """
+
+    has_metadata = manifests["concept_meta_count"].fillna(0).astype(int) > 0
+    complete_metadata = (
+        manifests["concept_metadata_complete"].fillna(False).astype(bool)
+    )
+    structural = manifests["availability"].eq("structurally_unavailable")
+    valid_structural = (
+        manifests["structural_placeholder_valid"].fillna(False).astype(bool)
+    )
+    covered = complete_metadata | valid_structural
+    gap_count = int((~covered).sum())
+    return {
+        "manifest_rows_with_concept_meta": int(has_metadata.sum()),
+        "manifest_rows_with_complete_concept_meta": int(complete_metadata.sum()),
+        "manifest_structurally_unavailable_rows": int(structural.sum()),
+        "manifest_valid_structural_placeholder_rows": int(valid_structural.sum()),
+        "manifest_invalid_structural_placeholder_rows": int(
+            (structural & ~valid_structural).sum()
+        ),
+        "manifest_rows_with_concept_meta_or_structural_status": int(covered.sum()),
+        "manifest_metadata_contract_gap_rows": gap_count,
+        "manifest_rows_missing_concept_meta_without_valid_structural_status": gap_count,
+        # Backward-compatible key retained for existing report consumers.
+        "manifest_rows_missing_concept_meta_without_structural_status": gap_count,
+    }
+
+
+def _raise_for_metadata_gaps(manifests: pd.DataFrame) -> None:
+    gaps = manifests.loc[
+        _metadata_gap_mask(manifests),
+        [
+            "database",
+            "module",
+            "availability",
+            "concept_metadata_complete",
+            "structural_placeholder_valid",
+        ],
+    ]
+    if gaps.empty:
+        return
+    records = gaps.to_dict(orient="records")
+    raise ValueError(
+        "Manifest metadata contract gaps detected; audit failed closed: "
+        + json.dumps(records, ensure_ascii=False, sort_keys=True)
+    )
+
+
+def _raise_for_row_grain_gaps(manifests: pd.DataFrame) -> None:
+    gaps = manifests.loc[
+        ~manifests["row_grain_contract_valid"].fillna(False).astype(bool),
+        [
+            "database",
+            "module",
+            "manifest_primary_key_matches_contract",
+            "manifest_row_grain_matches_contract",
+            "parquet_sha256_matches",
+            "parquet_bytes_matches",
+            "row_grain_audit_present",
+            "row_grain_audit_unique_after",
+            "row_grain_audit_consolidation_accounting_valid",
+            "row_grain_audit_null_time_contract",
+        ],
+    ]
+    if gaps.empty:
+        return
+    raise ValueError(
+        "Manifest row-grain contract gaps detected; audit failed closed: "
+        + json.dumps(
+            gaps.to_dict(orient="records"),
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    )
+
+
 def _build_report_artifact(
     *,
     output_dir: Path,
@@ -558,18 +1054,14 @@ def _build_report_artifact(
                     "coverage_class": coverage_label,
                     "concept_count": int(selector(group["databases_available"]).sum()),
                     "total_in_kind": int(len(group)),
-                    "all_six_count": int(
-                        (group["databases_available"] == 6).sum()
-                    ),
+                    "all_six_count": int((group["databases_available"] == 6).sum()),
                     "partial_count": int(
                         (
                             (group["databases_available"] > 0)
                             & (group["databases_available"] < 6)
                         ).sum()
                     ),
-                    "none_count": int(
-                        (group["databases_available"] == 0).sum()
-                    ),
+                    "none_count": int((group["databases_available"] == 0).sum()),
                 }
             )
 
@@ -585,9 +1077,7 @@ def _build_report_artifact(
                 "column_order": "一致" if row["same_concept_order"] else "不一致",
                 "dtype_mismatch_fields": int(row["type_mismatch_field_count"]),
                 "missing_schema_slots": int(row["missing_schema_slots"]),
-                "all_six_parquets": (
-                    "是" if row["all_six_parquets_present"] else "否"
-                ),
+                "all_six_parquets": ("是" if row["all_six_parquets_present"] else "否"),
             }
         )
 
@@ -722,7 +1212,11 @@ def _build_report_artifact(
                 "sourceId": "schema_audit",
                 "description": "物理 Parquet 中六库概念列集合完全一致的模块数。",
                 "metrics": [
-                    {"label": "列集合一致模块", "field": "same_column_set", "format": "number"},
+                    {
+                        "label": "列集合一致模块",
+                        "field": "same_column_set",
+                        "format": "number",
+                    },
                     {"label": "总模块", "field": "module_total", "format": "number"},
                 ],
             },
@@ -732,7 +1226,11 @@ def _build_report_artifact(
                 "sourceId": "schema_audit",
                 "description": "物理 Parquet 中六库概念列顺序完全一致的模块数。",
                 "metrics": [
-                    {"label": "列顺序一致模块", "field": "same_column_order", "format": "number"},
+                    {
+                        "label": "列顺序一致模块",
+                        "field": "same_column_order",
+                        "format": "number",
+                    },
                     {"label": "总模块", "field": "module_total", "format": "number"},
                 ],
             },
@@ -742,8 +1240,16 @@ def _build_report_artifact(
                 "sourceId": "schema_audit",
                 "description": "没有任何跨库 Arrow 类型差异的模块数。",
                 "metrics": [
-                    {"label": "类型完全一致模块", "field": "no_dtype_mismatch", "format": "number"},
-                    {"label": "缺失 schema 槽位", "field": "missing_schema_slots", "format": "number"},
+                    {
+                        "label": "类型完全一致模块",
+                        "field": "no_dtype_mismatch",
+                        "format": "number",
+                    },
+                    {
+                        "label": "缺失 schema 槽位",
+                        "field": "missing_schema_slots",
+                        "format": "number",
+                    },
                 ],
             },
             {
@@ -752,8 +1258,16 @@ def _build_report_artifact(
                 "sourceId": "availability_audit",
                 "description": "在六个数据库均有至少一个非空/有限值的概念面板数。",
                 "metrics": [
-                    {"label": "六库均非空概念", "field": "concept_all_six", "format": "number"},
-                    {"label": "总概念面板", "field": "concept_total", "format": "number"},
+                    {
+                        "label": "六库均非空概念",
+                        "field": "concept_all_six",
+                        "format": "number",
+                    },
+                    {
+                        "label": "总概念面板",
+                        "field": "concept_total",
+                        "format": "number",
+                    },
                 ],
             },
         ],
@@ -796,10 +1310,26 @@ def _build_report_artifact(
                         "label": "覆盖等级",
                     },
                     "tooltip": [
-                        {"field": "total_in_kind", "type": "quantitative", "label": "该类型总概念"},
-                        {"field": "all_six_count", "type": "quantitative", "label": "六库均可用"},
-                        {"field": "partial_count", "type": "quantitative", "label": "部分数据库可用"},
-                        {"field": "none_count", "type": "quantitative", "label": "六库均不可用"},
+                        {
+                            "field": "total_in_kind",
+                            "type": "quantitative",
+                            "label": "该类型总概念",
+                        },
+                        {
+                            "field": "all_six_count",
+                            "type": "quantitative",
+                            "label": "六库均可用",
+                        },
+                        {
+                            "field": "partial_count",
+                            "type": "quantitative",
+                            "label": "部分数据库可用",
+                        },
+                        {
+                            "field": "none_count",
+                            "type": "quantitative",
+                            "label": "六库均不可用",
+                        },
                     ],
                 },
                 "combinationRationale": "颜色编码覆盖等级，堆叠高度保持每类概念总数。",
@@ -832,9 +1362,21 @@ def _build_report_artifact(
                     {"field": "module", "label": "模块", "type": "text"},
                     {"field": "column_set", "label": "列集合", "type": "text"},
                     {"field": "column_order", "label": "列顺序", "type": "text"},
-                    {"field": "dtype_mismatch_fields", "label": "类型不一致字段", "type": "number"},
-                    {"field": "missing_schema_slots", "label": "缺失槽位", "type": "number"},
-                    {"field": "all_six_parquets", "label": "六库均有文件", "type": "text"},
+                    {
+                        "field": "dtype_mismatch_fields",
+                        "label": "类型不一致字段",
+                        "type": "number",
+                    },
+                    {
+                        "field": "missing_schema_slots",
+                        "label": "缺失槽位",
+                        "type": "number",
+                    },
+                    {
+                        "field": "all_six_parquets",
+                        "label": "六库均有文件",
+                        "type": "text",
+                    },
                 ],
             },
             {
@@ -1035,12 +1577,16 @@ def main() -> None:
     args = parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    run_metadata = json.loads(args.run_metadata.read_text(encoding="utf-8"))
+    raw_run_metadata = args.run_metadata.read_bytes()
+    run_metadata = json.loads(raw_run_metadata)
+    lineage = _source_run_lineage(args.run_metadata, raw_run_metadata)
+    source_manifest_sha256 = _verify_source_manifest_hashes(
+        args.export_root,
+        run_metadata,
+    )
     module_concepts = _derive_module_concepts(args.export_root, run_metadata)
     if len(module_concepts) != 19:
-        raise ValueError(
-            f"Expected 19 module contracts, found {len(module_concepts)}"
-        )
+        raise ValueError(f"Expected 19 module contracts, found {len(module_concepts)}")
     root_manifests = _load_root_manifests(args.export_root)
     audit = pd.read_csv(args.figure_audit)
     audit["available"] = audit["non_null_or_finite"].fillna(0).astype(int) > 0
@@ -1060,6 +1606,11 @@ def main() -> None:
             parquet = args.export_root / database / f"{module}.parquet"
             manifest_path = args.export_root / database / "_manifest.json"
             schema = pq.read_schema(parquet) if parquet.exists() else None
+            actual_row_count = (
+                int(pq.ParquetFile(parquet).metadata.num_rows)
+                if parquet.is_file()
+                else None
+            )
             names = schema.names if schema is not None else []
             physical_schema_signatures[database] = (
                 tuple((field.name, str(field.type)) for field in schema)
@@ -1072,9 +1623,7 @@ def main() -> None:
                 else {}
             )
             concept_order = [name for name in names if name not in INDEX_COLUMNS]
-            schemas[database] = {
-                name: types[name] for name in concept_order
-            }
+            schemas[database] = {name: types[name] for name in concept_order}
             orders[database] = concept_order
             id_columns[database] = [name for name in names if name in ID_COLUMNS]
             charttime_presence[database] = "charttime" in names
@@ -1106,6 +1655,23 @@ def main() -> None:
                 and recorded_sidecar_sha
                 and _sha256(sidecar_path) == recorded_sidecar_sha
             )
+            manifest_schema_matches_parquet = recorded_schema == types
+            concept_metadata_complete = _concept_metadata_complete(entry)
+            structural_checks = _structural_placeholder_checks(
+                module=module,
+                entry=entry,
+                expected_concepts=expected,
+                parquet_names=names,
+                parquet_types=types,
+                actual_row_count=actual_row_count,
+                manifest_schema_matches_parquet=manifest_schema_matches_parquet,
+            )
+            row_grain_checks = _row_grain_contract_checks(
+                module=module,
+                entry=entry,
+                parquet_path=parquet,
+                actual_row_count=actual_row_count,
+            )
             saved_path = str(parquet)
             manifest_rows.append(
                 {
@@ -1118,22 +1684,27 @@ def main() -> None:
                     "native_v2": manifest.get("schema_version")
                     == NATIVE_SCHEMA_VERSION,
                     "availability": entry.get("availability"),
+                    "manifest_declared_row_count": entry.get("rows"),
+                    "actual_parquet_row_count": actual_row_count,
+                    "selected_concept_count": len(entry.get("concept_ids") or []),
                     "manifest_concept_count": len(
                         entry.get("physical_concept_ids") or []
                     ),
                     "concept_meta_count": len(
                         entry.get("column_metadata_columns") or []
                     ),
+                    "concept_metadata_complete": concept_metadata_complete,
+                    **structural_checks,
+                    **row_grain_checks,
                     "merge_key_count": int("stay_id" in names)
                     + int("charttime" in names),
-                    "manifest_schema_matches_parquet": recorded_schema == types,
+                    "manifest_schema_matches_parquet": manifest_schema_matches_parquet,
                     "runtime_commit": runtime.get("easyicu_git_commit"),
                     "expected_runtime_commit": expected_runtime_commit,
                     "runtime_commit_matches_run": bool(
                         runtime.get("easyicu_git_commit")
                         and expected_runtime_commit
-                        and runtime.get("easyicu_git_commit")
-                        == expected_runtime_commit
+                        and runtime.get("easyicu_git_commit") == expected_runtime_commit
                     ),
                     "runtime_git_dirty": runtime.get("easyicu_git_dirty"),
                     "sidecar_file": sidecar_name,
@@ -1148,7 +1719,9 @@ def main() -> None:
                 (audit["module"] == module) & (audit["database"] == database)
             ].set_index("variable")
             for position, concept in enumerate(expected):
-                row = audit_subset.loc[concept] if concept in audit_subset.index else None
+                row = (
+                    audit_subset.loc[concept] if concept in audit_subset.index else None
+                )
                 field_rows.append(
                     {
                         "module": module,
@@ -1164,9 +1737,7 @@ def main() -> None:
                             int(row["row_count"]) if row is not None else pd.NA
                         ),
                         "non_null_count": (
-                            int(row["non_null_or_finite"])
-                            if row is not None
-                            else pd.NA
+                            int(row["non_null_or_finite"]) if row is not None else pd.NA
                         ),
                         "available": (
                             bool(row["available"]) if row is not None else False
@@ -1212,8 +1783,7 @@ def main() -> None:
                     id_columns[database] == ["stay_id"] for database in DATABASES
                 ),
                 "canonical_charttime_all_six": all(
-                    charttime_presence[database]
-                    == (module != "demographics")
+                    charttime_presence[database] == (module != "demographics")
                     for database in DATABASES
                 ),
                 "native_id_columns": json.dumps(id_columns, ensure_ascii=False),
@@ -1257,19 +1827,28 @@ def main() -> None:
     availability.to_csv(args.output_dir / "concept_availability.csv", index=False)
     findings = _resolved_findings()
     findings.to_csv(args.output_dir / "verified_issue_register.csv", index=False)
-    distribution_flags = _distribution_flags(audit)
+    distribution_flags = _adjudicate_distribution_flags(
+        _distribution_flags(audit),
+        source_run_id=lineage["source_run_id"],
+        source_run_metadata_sha256=lineage["source_run_metadata_sha256"],
+    )
     distribution_flags.to_csv(
         args.output_dir / "distribution_anomaly_flags.csv",
         index=False,
     )
 
+    metadata_coverage = _manifest_metadata_coverage(manifests)
+
     summary = {
         "run_id": run_metadata.get("run_id"),
+        **lineage,
         "audited_easyicu_commit": run_metadata.get("easyicu_commit"),
         "audited_easyicu_commits": {
             database: _expected_runtime_commit(run_metadata, database)
             for database in DATABASES
         },
+        "source_manifest_sha256": source_manifest_sha256,
+        "source_manifest_sha256_verified_rows": len(source_manifest_sha256),
         "databases": list(DATABASES),
         "module_count": len(module_concepts),
         "concept_panel_count": int(len(availability)),
@@ -1293,12 +1872,8 @@ def main() -> None:
         "concepts_unavailable_all_six": int(
             (availability["databases_available"] == 0).sum()
         ),
-        "manifest_rows_with_concept_meta": int(
-            (manifests["concept_meta_count"] > 0).sum()
-        ),
-        "manifest_rows_with_merge_keys": int(
-            (manifests["merge_key_count"] > 0).sum()
-        ),
+        **metadata_coverage,
+        "manifest_rows_with_merge_keys": int((manifests["merge_key_count"] > 0).sum()),
         "manifest_saved_paths_currently_resolve": int(
             manifests["saved_path_exists"].sum()
         ),
@@ -1307,15 +1882,29 @@ def main() -> None:
         "manifest_schema_matches_parquet_rows": int(
             manifests["manifest_schema_matches_parquet"].sum()
         ),
-        "sidecar_sha256_verified_rows": int(
-            manifests["sidecar_sha256_matches"].sum()
+        "manifest_row_grain_contract_verified_rows": int(
+            manifests["row_grain_contract_valid"].sum()
         ),
+        "manifest_row_grain_contract_gap_rows": int(
+            (~manifests["row_grain_contract_valid"]).sum()
+        ),
+        "parquet_sha256_verified_rows": int(
+            manifests["parquet_sha256_matches"].sum()
+        ),
+        "parquet_bytes_verified_rows": int(
+            manifests["parquet_bytes_matches"].sum()
+        ),
+        "manifest_null_charttime_rows_after": int(
+            pd.to_numeric(
+                manifests.get("row_grain_audit_null_charttime_rows_after"),
+                errors="coerce",
+            ).fillna(0).sum()
+            if "row_grain_audit_null_charttime_rows_after" in manifests
+            else 0
+        ),
+        "sidecar_sha256_verified_rows": int(manifests["sidecar_sha256_matches"].sum()),
         "runtime_commits": sorted(
-            {
-                str(value)
-                for value in manifests["runtime_commit"].dropna()
-                if str(value)
-            }
+            {str(value) for value in manifests["runtime_commit"].dropna() if str(value)}
         ),
         "runtime_commit_matches_run_rows": int(
             manifests["runtime_commit_matches_run"].sum()
@@ -1328,6 +1917,12 @@ def main() -> None:
         "distribution_anomaly_flag_count": int(len(distribution_flags)),
         "distribution_high_flag_count": int(
             (distribution_flags["severity"] == "high").sum()
+        ),
+        "distribution_adjudicated_flag_count": int(
+            (distribution_flags["adjudication_status"] == "source_trace_complete").sum()
+        ),
+        "distribution_unadjudicated_flag_count": int(
+            (distribution_flags["adjudication_status"] == "unadjudicated").sum()
         ),
         "verified_findings_by_severity": (
             findings["severity"].value_counts().to_dict()
@@ -1345,6 +1940,8 @@ def main() -> None:
         ),
     )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
+    _raise_for_row_grain_gaps(manifests)
+    _raise_for_metadata_gaps(manifests)
 
 
 if __name__ == "__main__":

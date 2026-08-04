@@ -22,6 +22,10 @@ from typing import Any, Dict, Sequence
 
 from easyicu.api import extract_database
 from easyicu.research_agent.intake.export_package import open_export_package
+from easyicu.runtime.memory_manager import (
+    EffectiveMemoryInfo,
+    get_effective_memory_info,
+)
 
 DEFAULT_DATABASE_ORDER = ("miiv", "mimic", "eicu", "aumc", "hirid", "sic")
 DEFAULT_DATA_PATHS = {
@@ -85,39 +89,44 @@ def _adaptive_oneshot_budget_mb(
     """
 
     if available_memory_mb is None:
-        try:
-            import psutil
-
-            available_memory_mb = psutil.virtual_memory().available / (1024**2)
-        except Exception:
-            # Fail conservatively when system memory cannot be inspected.
-            available_memory_mb = 0.0
+        available_memory_mb = get_effective_memory_info().effective_available_mb
     available = max(0.0, float(available_memory_mb))
     quantum_mb = 512
     budget = int(available / 3.0 / quantum_mb) * quantum_mb
     return max(quantum_mb, min(8 * 1024, budget))
 
 
+def _runtime_memory_tier(available_memory_mb: float) -> str:
+    """Return the bounded resource tier selected from usable memory now."""
+
+    available = max(0.0, float(available_memory_mb))
+    if available >= 64 * 1024:
+        return "server_ge64gib"
+    if available >= 32 * 1024:
+        return "server_32_64gib"
+    if available >= 24 * 1024:
+        return "server_24_32gib"
+    return "portable_lt24gib"
+
+
 def _one_shot_runtime_limits(
     available_memory_mb: float | None = None,
     cpu_count: int | None = None,
 ) -> Dict[str, str]:
-    """Scale an explicitly requested one-shot run to the current host.
+    """Select bounded runtime limits from current effective available memory.
 
-    The streamed/default path stays at the cross-platform 1-thread safety
-    baseline. ``--one-shot`` is an explicit request to process a whole module
-    at once, so a large server should not be silently throttled to laptop
-    resources. Keep the existing conservative profile below 24 GiB available,
-    then scale in bounded tiers up to 8 workers and 8 GiB.
+    Both streamed and explicitly requested one-shot exports use the same
+    compute tier.  Streamed mode still controls its peak with outer patient
+    batches; increasing workers here does not turn eICU into a one-shot run.
+    A 14-GiB cgroup full-cohort eICU respiratory stress run completed at two
+    workers with a 13.5-GiB peak.  Use that measured dual-worker tier once at
+    least 13 GiB is available; keep one worker below it (including the common
+    8-GiB-available laptop case), then scale in bounded server tiers up to
+    8 workers and 8 GiB.
     """
 
     if available_memory_mb is None:
-        try:
-            import psutil
-
-            available_memory_mb = psutil.virtual_memory().available / (1024**2)
-        except Exception:
-            available_memory_mb = 0.0
+        available_memory_mb = get_effective_memory_info().effective_available_mb
     if cpu_count is None:
         cpu_count = os.cpu_count() or 1
 
@@ -127,7 +136,7 @@ def _one_shot_runtime_limits(
         workers, memory_gb, cache_mb = min(8, cpus), 8, 8 * 1024
     elif available >= 32 * 1024:
         workers, memory_gb, cache_mb = min(4, cpus), 4, 6 * 1024
-    elif available >= 24 * 1024:
+    elif available >= 13 * 1024:
         workers, memory_gb, cache_mb = min(2, cpus), 2, 2 * 1024
     else:
         workers, memory_gb, cache_mb = 1, 1, 256
@@ -142,7 +151,7 @@ def _one_shot_runtime_limits(
 
 def _configure_external_runtime(
     root: Path, *, one_shot: bool
-) -> tuple[Dict[str, str | None], str | None]:
+) -> tuple[Dict[str, str | None], str | None, Dict[str, Any]]:
     """Force every temporary/spill mechanism onto the external run root.
 
     ``one_shot`` changes only the extraction policy.  Temporary DuckDB state
@@ -163,6 +172,7 @@ def _configure_external_runtime(
         "EASYICU_PARALLEL_MAX_WORKERS",
         "EASYICU_CACHE_BUDGET_MB",
         "EASYICU_ONESHOT_BUDGET_MB",
+        "EASYICU_OVERRIDE_MEMORY_GB",
     )
     prior = {key: os.environ.get(key) for key in runtime_keys}
     prior_tempdir = tempfile.tempdir
@@ -170,36 +180,43 @@ def _configure_external_runtime(
     os.environ["TMP"] = str(runtime_tmp)
     os.environ["TEMP"] = str(runtime_tmp)
     os.environ["EASYICU_DUCKDB_TEMP_DIR"] = str(runtime_spill)
-    # Keep the default streamed path at the portable safety baseline. An
-    # explicit one-shot run may scale within bounded tiers on a large server.
-    runtime_limits = (
-        _one_shot_runtime_limits()
-        if one_shot
-        else {
-            "duckdb_threads": "1",
-            "duckdb_memory_limit": "1GB",
-            "parallel_max_workers": "1",
-            "cache_budget_mb": "256",
-        }
+    memory_info: EffectiveMemoryInfo = get_effective_memory_info()
+    logical_cpu_count = max(1, int(os.cpu_count() or 1))
+    runtime_limits = _one_shot_runtime_limits(
+        memory_info.effective_available_mb,
+        logical_cpu_count,
     )
     os.environ["EASYICU_DUCKDB_THREADS"] = runtime_limits["duckdb_threads"]
-    os.environ["EASYICU_DUCKDB_MEMORY_LIMIT"] = runtime_limits[
-        "duckdb_memory_limit"
-    ]
-    os.environ["EASYICU_PARALLEL_MAX_WORKERS"] = runtime_limits[
-        "parallel_max_workers"
-    ]
+    os.environ["EASYICU_DUCKDB_MEMORY_LIMIT"] = runtime_limits["duckdb_memory_limit"]
+    os.environ["EASYICU_PARALLEL_MAX_WORKERS"] = runtime_limits["parallel_max_workers"]
     os.environ["EASYICU_CACHE_BUDGET_MB"] = runtime_limits["cache_budget_mb"]
+    parallel_config_memory_gb = max(
+        0.0,
+        memory_info.effective_available_mb / 1024.0,
+    )
+    os.environ["EASYICU_OVERRIDE_MEMORY_GB"] = f"{parallel_config_memory_gb:.6f}"
     if one_shot:
         # Do not let the export launcher silently turn an explicitly requested
         # all-patient module into auto-batches because of its safety profile.
         os.environ.pop("EASYICU_ONESHOT_BUDGET_MB", None)
     else:
         os.environ["EASYICU_ONESHOT_BUDGET_MB"] = str(
-            _adaptive_oneshot_budget_mb()
+            _adaptive_oneshot_budget_mb(memory_info.effective_available_mb)
         )
     tempfile.tempdir = str(runtime_tmp)
-    return prior, prior_tempdir
+    runtime_detection: Dict[str, Any] = memory_info.to_manifest_dict()
+    runtime_detection.update(
+        {
+            "selection_basis": "effective_available_memory",
+            "logical_cpu_count": logical_cpu_count,
+            "selection_tier": _runtime_memory_tier(memory_info.effective_available_mb),
+            "parallel_config_override_memory_gb": round(
+                parallel_config_memory_gb,
+                6,
+            ),
+        }
+    )
+    return prior, prior_tempdir, runtime_detection
 
 
 def _restore_runtime(prior: Dict[str, str | None], prior_tempdir: str | None) -> None:
@@ -263,23 +280,16 @@ def _data_paths(overrides: Sequence[str]) -> Dict[str, str]:
     return paths
 
 
-def run(args: argparse.Namespace) -> Dict[str, Any]:
-    os.umask(0o077)
-    output_root = Path(args.output_root).expanduser()
-    if output_root.exists() or output_root.is_symlink():
-        raise ValueError(f"output root must be new and non-symlink: {output_root}")
-    paths = _data_paths(args.data_path)
-    databases = list(args.databases)
-    for database in databases:
-        if not Path(paths[database]).is_dir():
-            raise FileNotFoundError(
-                f"source data directory missing for {database}: {paths[database]}"
-            )
+def _run_configured_export(
+    args: argparse.Namespace,
+    *,
+    output_root: Path,
+    paths: Dict[str, str],
+    databases: list[str],
+    runtime_detection: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Execute an export after its temporary runtime environment is active."""
 
-    output_root.mkdir(mode=0o700, parents=True)
-    runtime_prior, runtime_tempdir = _configure_external_runtime(
-        output_root, one_shot=args.one_shot
-    )
     run_manifest_path = output_root / "run_manifest.json"
     run_manifest: Dict[str, Any] = {
         "schema_version": "easyicu_grouped_native_reexport_run_v1",
@@ -291,17 +301,14 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
             if args.one_shot
             else "memory_adaptive_streamed_patient_batches"
         ),
+        "runtime_detection": runtime_detection,
         "runtime_limits": {
             "duckdb_threads": int(os.environ["EASYICU_DUCKDB_THREADS"]),
             "duckdb_memory_limit": os.environ["EASYICU_DUCKDB_MEMORY_LIMIT"],
-            "parallel_max_workers": int(
-                os.environ["EASYICU_PARALLEL_MAX_WORKERS"]
-            ),
+            "parallel_max_workers": int(os.environ["EASYICU_PARALLEL_MAX_WORKERS"]),
             "cache_budget_mb": int(os.environ["EASYICU_CACHE_BUDGET_MB"]),
             "nested_workset_budget_mb": (
-                None
-                if args.one_shot
-                else int(os.environ["EASYICU_ONESHOT_BUDGET_MB"])
+                None if args.one_shot else int(os.environ["EASYICU_ONESHOT_BUDGET_MB"])
             ),
         },
         "sources": {},
@@ -330,6 +337,9 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
                     "elapsed_sec": round(time.monotonic() - started, 1),
                     "num_patients": result["num_patients"],
                     "effective_batch_size": result.get("batch_size"),
+                    "stream_retry_history": list(
+                        result.get("stream_retry_history", [])
+                    ),
                     "native_manifest_sha256": _sha256(source_output / "_manifest.json"),
                     "column_metadata_sha256": package.column_metadata_sha256,
                     "typed_columns": len(package.concept_index),
@@ -355,10 +365,42 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
 
     run_manifest["status"] = "verified"
     _write_private_json(run_manifest_path, run_manifest)
-    _restore_runtime(runtime_prior, runtime_tempdir)
-    _remove_private_directory(output_root / ".runtime_tmp")
-    _remove_private_directory(output_root / ".runtime_spill")
     return run_manifest
+
+
+def run(args: argparse.Namespace) -> Dict[str, Any]:
+    os.umask(0o077)
+    output_root = Path(args.output_root).expanduser()
+    if output_root.exists() or output_root.is_symlink():
+        raise ValueError(f"output root must be new and non-symlink: {output_root}")
+    paths = _data_paths(args.data_path)
+    databases = list(args.databases)
+    for database in databases:
+        if not Path(paths[database]).is_dir():
+            raise FileNotFoundError(
+                f"source data directory missing for {database}: {paths[database]}"
+            )
+
+    output_root.mkdir(mode=0o700, parents=True)
+    runtime_prior, runtime_tempdir, runtime_detection = _configure_external_runtime(
+        output_root, one_shot=args.one_shot
+    )
+    completed = False
+    try:
+        run_manifest = _run_configured_export(
+            args,
+            output_root=output_root,
+            paths=paths,
+            databases=databases,
+            runtime_detection=runtime_detection,
+        )
+        completed = run_manifest["status"] == "verified"
+        return run_manifest
+    finally:
+        _restore_runtime(runtime_prior, runtime_tempdir)
+        if completed:
+            _remove_private_directory(output_root / ".runtime_tmp")
+            _remove_private_directory(output_root / ".runtime_spill")
 
 
 def main(argv: Sequence[str] | None = None) -> int:

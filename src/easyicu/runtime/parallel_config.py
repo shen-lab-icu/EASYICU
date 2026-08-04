@@ -66,38 +66,29 @@ class ParallelConfig:
             return "limited"
 
 
-def get_system_memory() -> tuple:
-    """获取系统内存信息
-    
+def get_system_memory(*, cgroup_root=None) -> tuple:
+    """获取当前进程可实际使用的内存信息
+
     Returns:
         (total_memory_gb, available_memory_gb)
+
+    ``psutil`` 在 Linux 容器或 systemd ``MemoryMax`` 中通常仍返回
+    整台服务器的内存。这会让 14--16 GB 受限进程误选
+    64 workers/8 buckets，虽然外层批大小已经正确识别 cgroup。
+    并行策略必须与批策略共用同一个有效内存包络。
+    macOS/Windows 上该 helper 自动回退到主机内存。
     """
     try:
-        import psutil
-        mem = psutil.virtual_memory()
-        total_gb = mem.total / (1024 ** 3)
-        available_gb = mem.available / (1024 ** 3)
-        return total_gb, available_gb
-    except ImportError:
-        # psutil 未安装，使用系统命令
-        try:
-            with open('/proc/meminfo', 'r') as f:
-                lines = f.readlines()
-                mem_info = {}
-                for line in lines:
-                    parts = line.split(':')
-                    if len(parts) == 2:
-                        key = parts[0].strip()
-                        value = parts[1].strip().split()[0]  # 取第一个数字
-                        mem_info[key] = int(value)
-                
-                total_kb = mem_info.get('MemTotal', 16 * 1024 * 1024)
-                available_kb = mem_info.get('MemAvailable', 
-                                           mem_info.get('MemFree', 8 * 1024 * 1024))
-                return total_kb / (1024 ** 2), available_kb / (1024 ** 2)
-        except Exception:
-            # 默认假设 16GB 内存，8GB 可用
-            return 16.0, 8.0
+        from .memory_manager import get_effective_memory_info
+
+        info = get_effective_memory_info(cgroup_root=cgroup_root)
+        return (
+            info.effective_total_mb / 1024.0,
+            info.effective_available_mb / 1024.0,
+        )
+    except Exception:
+        # Keep the historical conservative fallback for minimal installations.
+        return 16.0, 8.0
 
 
 def get_cpu_count() -> int:
