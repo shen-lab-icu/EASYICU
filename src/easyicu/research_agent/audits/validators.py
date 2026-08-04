@@ -1028,6 +1028,24 @@ class LLMConceptAuditor:
             "host-owned fail-closed boundary: it raises on missing, invalid, or "
             "discordant measured/count pairs. Do not demand a second status "
             "guard or inspection of its successful receipt. "
+            # The host's own system prompt (rule 1) tells the agent that a total
+            # score MAY be modelled as a numeric covariate provided the choice is
+            # stated explicitly. Without the sentence below this auditor refused
+            # that exact compliance: a real run declared the coding on its own
+            # balance-table rows and was still blocked for "ordinal scores
+            # treated as continuous", so the two host layers published opposite
+            # contracts and the step died on the one the agent obeyed.
+            "The system rule permits an ordinal score to be modelled as a "
+            "numeric covariate when that choice is stated explicitly. So a "
+            "rank-preserving numeric representation used as an ADJUSTMENT "
+            "covariate, and labelled as such by the script's own output (for "
+            "example a scale or coding field carried on the covariate's row), "
+            "has met that requirement: do not report it as an "
+            "ordinal-treated-as-continuous defect on that basis alone. Report "
+            "instead an ordinal entered numerically with no such declaration "
+            "anywhere in the script, an ordinal serving as the primary exposure "
+            "or estimand without a declared coding, or an ordinal averaged "
+            "rather than summarised rank-preservingly. "
             "A value returned by a direct call imported exactly as "
             "`strict_numeric_input` from that same host module has already "
             "failed closed on every non-missing value that is unconvertible, "
