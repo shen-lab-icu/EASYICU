@@ -7303,6 +7303,10 @@ def _compile_signature_derived_contracts() -> None:
         ):
             continue
         _HOST_HELPER_CALL_CONTRACTS[key] = {
+            # A derived contract knows one thing: the set of parameter names.
+            # It deliberately carries no required-keyword or call-shape rule,
+            # and the flag says so where the rules are applied.
+            "derived_from_signature": True,
             "max_positional": len(positional),
             "positional_parameter": positional[0].name if positional else "",
             # Only the unknown-keyword half is derived. Which of a helper's
@@ -7555,12 +7559,27 @@ def _host_helper_call_signature_findings(
         keyword_names = [keyword.arg for keyword in node.keywords]
         violations: list[str] = []
         detail_additions: dict[str, object] = {}
-        if any(isinstance(argument, ast.Starred) for argument in node.args):
-            violations.append("starred_positional_arguments_unverifiable")
+        # A hand-written contract also encodes which keywords a call MUST pass,
+        # so an argument the checker cannot read could hide a missing one and is
+        # refused. A DERIVED contract makes no such demand -- its only rule is
+        # that no literal keyword is unknown to the callee -- so an unreadable
+        # argument hides nothing it checks, and refusing it blocks correct code.
+        #
+        # It blocked the host's own code. On 2026-08-04 adding
+        # ``run_adjusted_association_from_env`` to the derived registry turned
+        # this rule on against the sealed scaffold in
+        # ``adjusted_association_executor._prologue``, which the host writes
+        # itself, calls ``**declared_model``, and comments "The call is host
+        # property too". m1 died at 05_primary_adjusted_association_model with
+        # ``deterministic_standard_blocked`` and no repair attempted.
+        derived_contract = bool(contract.get("derived_from_signature"))
+        if not derived_contract:
+            if any(isinstance(argument, ast.Starred) for argument in node.args):
+                violations.append("starred_positional_arguments_unverifiable")
+            if any(name is None for name in keyword_names):
+                violations.append("expanded_keyword_arguments_unverifiable")
         if len(node.args) > max_positional:
             violations.append("keyword_only_parameters_passed_positionally")
-        if any(name is None for name in keyword_names):
-            violations.append("expanded_keyword_arguments_unverifiable")
         explicit_keywords = [name for name in keyword_names if name is not None]
         if len(explicit_keywords) != len(set(explicit_keywords)):
             violations.append("duplicate_keyword_arguments")

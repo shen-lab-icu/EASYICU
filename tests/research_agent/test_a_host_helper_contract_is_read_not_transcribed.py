@@ -230,3 +230,90 @@ def test_the_recorded_corpus_shows_this_failure_class():
         pytest.skip("no recorded step log could be read")
     assert logs > 500, logs
     assert hits > 0, "the failure class has disappeared from the corpus"
+
+
+_THE_HOSTS_OWN_SEALED_SCAFFOLD = """
+from easyicu.research_agent.execution.runners.adjusted_association_executor import (
+    run_adjusted_association_from_env,
+)
+
+summary = run_adjusted_association_from_env(
+    frame=frame,
+    cohort_path=cohort_path,
+    typed_cohort_input=typed_cohort_input,
+    emit_step_summary=False,
+    **declared_model,
+)
+"""
+
+
+def test_the_hosts_own_sealed_scaffold_is_not_refused():
+    """The regression this file's own change caused, on 2026-08-04.
+
+    Adding ``run_adjusted_association_from_env`` to the derived registry turned
+    the ``expanded_keyword_arguments_unverifiable`` rule on against the call the
+    HOST writes itself -- ``adjusted_association_executor`` builds this exact
+    text and comments "The call is host property too". m1 died at
+    ``05_primary_adjusted_association_model`` with
+    ``deterministic_standard_blocked``, on the one path where no Coder repair is
+    attempted, for using the host's own scaffold.
+
+    The body below is copied from that generator; the next test proves the
+    copy still resembles it, because a drifted copy would quietly stop
+    testing anything.
+    """
+
+    findings = _findings(_THE_HOSTS_OWN_SEALED_SCAFFOLD)
+
+    assert findings == [], findings
+
+
+def test_the_copied_scaffold_still_matches_the_generator_it_stands_for():
+    """A fixture copied from production has to be checked against production.
+
+    Not the whole text -- the generator interpolates a plan-specific model
+    dict -- but the two properties that make the copy representative: it calls
+    this helper, and it passes a keyword expansion.
+    """
+
+    import inspect
+
+    from easyicu.research_agent.execution.runners.adjusted_association_executor import (
+        adjusted_association_executor_scaffold,
+    )
+
+    source = inspect.getsource(adjusted_association_executor_scaffold)
+    assert "run_adjusted_association_from_env(" in source
+    assert "**declared_model," in source
+
+
+def test_a_literal_unknown_keyword_is_still_caught_beside_an_expansion():
+    """Exempting the expansion must not exempt what IS readable."""
+
+    findings = _findings(
+        _THE_HOSTS_OWN_SEALED_SCAFFOLD.replace(
+            "    **declared_model,", "    dpi=300,\n    **declared_model,"
+        )
+    )
+
+    assert findings, "a readable unknown keyword slipped through"
+    assert "dpi" in findings[0].detail["unknown_keywords"], findings[0].detail
+
+
+def test_a_hand_written_contract_still_refuses_what_it_cannot_read():
+    """The rule stays where it means something.
+
+    A hand-written contract also encodes REQUIRED keywords, so an expansion
+    could hide a missing one. Only the derived contracts are exempt.
+    """
+
+    findings = _findings(
+        """
+from easyicu.research_agent.methods.descriptive_inputs import closed_categorical_counts
+
+result = closed_categorical_counts(series, **options)
+"""
+    )
+
+    assert findings, "an unreadable call to a curated contract was allowed"
+    assert "expanded_keyword_arguments_unverifiable" in findings[0].detail["violations"]
