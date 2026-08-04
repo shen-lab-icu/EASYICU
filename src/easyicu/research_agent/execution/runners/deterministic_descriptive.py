@@ -121,6 +121,43 @@ def absolute_risk_context_code(
     )
 
 
+#: The products this runner is competent to emit, identical to the set its
+#: ownership predicate admits.  The Planner picks one of these NAMES; the
+#: science is the same table either way.
+_SUPPORTED_PRODUCTS = (
+    "absolute_risk_context",
+    "absolute_risk",
+    "exposure_prevalence_and_absolute_risk",
+    "exposure_outcome_summary",
+)
+
+
+def _declared_product(step: Mapping[str, Any]) -> str:
+    """Return the product name the plan promised, not this runner's habit.
+
+    The runner wrote ``exposure_outcome_summary`` unconditionally while the
+    capability registry advertises it to the Planner as ``absolute_risk_context``
+    -- so a plan that promised the advertised name got a step that registered a
+    different one, and ``declared_product_contract`` refused it with
+    ``declared_product_missing``. That went unseen for as long as this owner
+    never claimed a step (0 of 89); e2's first real claim died on it.
+
+    Only the four names this runner's ownership predicate admits are honoured,
+    so a plan cannot rename the product into something this runner does not
+    compute. With nothing declared the historical name is kept.
+    """
+
+    for value in step.get("expected_outputs") or []:
+        kind, separator, name = str(value or "").strip().lower().partition(":")
+        # The kind matters as much as the name. This runner writes ONE csv, and
+        # a plan naming ``figure:absolute_risk_context`` is asking a renderer
+        # for a picture -- 1 of the 92 recorded declarations does exactly that,
+        # and honouring it would register a table under a figure's name.
+        if separator and kind == "table" and name in _SUPPORTED_PRODUCTS:
+            return name
+    return "exposure_outcome_summary"
+
+
 def _read_json(path: Path) -> Dict[str, Any]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -595,7 +632,8 @@ def run_absolute_risk_context() -> Dict[str, Any]:
             )
 
     table = pd.DataFrame(rows)
-    table_path = out_dir / "exposure_outcome_summary.csv"
+    product = _declared_product(step)
+    table_path = out_dir / f"{product}.csv"
     table.to_csv(table_path, index=False)
     summary = {
         "step_id": step_id,
@@ -615,7 +653,7 @@ def run_absolute_risk_context() -> Dict[str, Any]:
         "source_state_columns": source_columns,
         "n_summary_rows": int(len(table)),
         "adjusted_effect": None,
-        "output_files": {"exposure_outcome_summary": table_path.name},
+        "output_files": {product: table_path.name},
         "notes": [
             "Exposure columns came from the current plan step's structured inputs.",
             "Continuous exposures use median and IQR; no post-hoc bins were created.",
