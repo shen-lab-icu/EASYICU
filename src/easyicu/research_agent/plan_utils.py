@@ -30,7 +30,7 @@ import json
 import math
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence, Set, Tuple
 
 from pydantic import ValidationError
 
@@ -372,10 +372,12 @@ def _cohort_definition_contract_findings(
     ]
 
 
-def _endpoint_contract_findings(
+def endpoint_contract_findings(
     plan: AnalysisPlan,
+    *,
+    severity: Literal["info", "warning", "error"] = "warning",
 ) -> List[ValidationFinding]:
-    """Reject a plan whose family needs a declared endpoint and has none.
+    """Report a plan whose family needs a declared endpoint and has none.
 
     The sibling of :func:`_cohort_definition_contract_findings`, for the other
     half of a study's identity. The cohort answers *who*; the endpoint answers
@@ -412,18 +414,16 @@ def _endpoint_contract_findings(
     # of 12 with a death at step 0 every time the Planner missed twice, which is
     # a regression dressed as a gate.
     #
-    # Nothing guesses silently at warning severity, which is what fail-closed
-    # actually requires here: the retry in `pipeline` gives the Planner a second
-    # chance with the declaration in its prompt, the step record simply omits
-    # the endpoint key when nothing was declared, and the concept auditor is
-    # told "NONE declared" outright and instructed not to supply a rule from the
-    # research question. The absence is stated to every consumer instead of
-    # being filled in differently by each. Raising this to error belongs with
-    # evidence that the Planner reliably declares it.
+    # Warning is the plan-phase diagnostic: it keeps the initial miss retryable
+    # instead of aborting before the Planner gets a directed second chance. The
+    # execution preflight invokes this same rule with severity="error" after
+    # that retry. If the declaration is still absent, no scientific step runs.
+    # At neither stage may a consumer infer the endpoint from question prose,
+    # column names, dtypes, or step prose.
     return [
         ValidationFinding(
             validator="endpoint_contract",
-            severity="warning",
+            severity=severity,
             message=(
                 f"The plan declares analysis_type='{plan.analysis_type}', whose "
                 f"registry entry requires a typed endpoint of kind "
