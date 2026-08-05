@@ -18,6 +18,11 @@ Replanning contract:
 - Preserve planner-owned `input_consumption_contracts`. A rendering-only
   consumer with `mode="all_rows"` must not collapse a multi-row typed table to
   one row; role-specific selection requires the existing explicit role roster.
+- Keep rendering contracts internally consistent. If a remaining figure step
+  requests standardized display patterns, distinguish a labelled local display
+  normalization from the upstream analytical preprocessing or model scaling it
+  must not refit. Do not simultaneously request the display transform and ban
+  that same rendering-only operation.
 - If the probe or completed steps reveal missingness artefacts, component
   completeness failures, outcome mismatches, or impossible cross-database assumptions,
   insert targeted audit or protocol steps rather than ignoring the issue.

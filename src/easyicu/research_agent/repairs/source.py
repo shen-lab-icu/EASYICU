@@ -46,6 +46,7 @@ from ..scalar_utils import (
     _first_present_scalar,
     _flatten_scalar_dict,
 )
+from .availability_fraction import patch_availability_fraction_component_denominator
 from .attrition import patch_attrition_rule_id_canonicalization
 from .categorical import patch_categorical_declared_order_check
 from .figure_distribution import (
@@ -2662,6 +2663,17 @@ def deterministic_concept_audit_repair(
     )
     repaired = code
     repair_names: List[str] = []
+
+    repaired_availability, availability_repair_name = (
+        patch_availability_fraction_component_denominator(
+            repaired,
+            audit_messages=audit_messages,
+            repair_findings=repair_findings,
+        )
+    )
+    if availability_repair_name is not None and repaired_availability != repaired:
+        repaired = repaired_availability
+        repair_names.append(availability_repair_name)
 
     repaired, preflight_repair_names = patch_preflight_repairs(
         repaired,
