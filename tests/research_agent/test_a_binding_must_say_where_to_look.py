@@ -5,11 +5,11 @@ also compiles a schema receipt -- columns, dtypes, row count -- so generated
 code knows where the values are.  For a serialization it cannot read, it
 compiles nothing, and the consumer is left to guess.
 
-MEASURED over every recorded resolved input, 2026-08-03 (1,071 bindings across
-the whole canonical-9 corpus):
+MEASURED over the recorded resolved inputs on 2026-08-03 (1,071 bindings across
+the then-current canonical-9 corpus):
 
     992  resolve to physical tables       -> full column/dtype/row receipt
-     76  are self-describing JSON scalars -> parsed directly, no coordinates
+     76  are self-describing JSON values  -> parsed directly
       3  are NEITHER
 
 All three of the third group are one pickle bound as
@@ -29,6 +29,12 @@ else.  Each of its three consumers invented its own guess and died::
 ``08_held_out_calibration_figure`` and ``11_robustness_replay_figure`` then died
 as dependency collateral.  One unreadable binding cost five of thirteen steps --
 the largest single failure cluster in that task.
+
+Later runs added structured JSON artifacts. Their suffix makes the bytes
+parseable, but consumers still need a host-sealed value-free ``json_structure``
+receipt to locate nested paths without guessing. That receipt is compiled by
+the production binder; this predicate remains solely the serialization-level
+readability boundary.
 
 The rule is keyed on the SERIALIZATION, deliberately.
 ``RUNTIME_TYPED_INPUT_EVIDENCE_KINDS`` maps ``artifact``, ``log``, ``manifest``
@@ -153,11 +159,12 @@ def _recorded_non_table_bindings():
             )
 
 
-def test_the_rule_refuses_exactly_the_bindings_that_killed_their_step() -> None:
-    """Replayed over the corpus: every kept binding worked, every refused one died.
+def test_the_rule_keeps_parseable_bindings_and_refuses_recorded_opaque_failure() -> None:
+    """Replay the serialization boundary over an append-only run corpus.
 
-    A rule this narrow is only trustworthy if the corpus still contains both
-    sides, so this skips rather than passing vacuously.
+    New parseable products may be appended over time, so the working set is not
+    frozen to three historical statistic names. The exact opaque failure stays
+    locked by the focused production-binder test below.
     """
 
     if not _CORPUS.exists():
@@ -174,17 +181,18 @@ def test_the_rule_refuses_exactly_the_bindings_that_killed_their_step() -> None:
     if not kept and not refused:
         pytest.skip("no recorded non-table typed binding is on disk")
 
-    # The working side: self-describing scalars, every one of them.
+    # The working side grows as fresh runs add parseable JSON products.
     assert kept, "the corpus must still contain the bindings this rule keeps"
-    assert set(kept) == {
+    assert {
         "statistic:complete_case_n",
         "statistic:primary_or",
         "statistic:robustness_summary",
-    }
+    } <= set(kept)
 
-    # The dead side: one product, one serialization, and nothing else.
+    # The historical opaque failure remains refused. Future opaque products may
+    # add further entries without making this append-only corpus test stale.
     assert refused, "the defect must still be present in the corpus to be meaningful"
-    assert set(refused) == {("trained_prediction_model", ".pkl")}
+    assert ("trained_prediction_model", ".pkl") in set(refused)
 
 
 def test_the_production_binder_refuses_the_pickle_and_says_why() -> None:

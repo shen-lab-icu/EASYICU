@@ -30,6 +30,10 @@ from ..contracts.artifact_consumption import (
     ArtifactConsumptionError,
     verify_artifact_consumption,
 )
+from ..contracts.typed_schema import (
+    merge_host_json_contract,
+    typed_json_structure_receipt,
+)
 from ..contracts.cohort_receipt import cohort_receipt_authorized_columns
 from ..authority.evidence_store import sha256_of_file
 from ..authority.development_projection import (
@@ -1135,6 +1139,22 @@ def _resolved_typed_input_binding(
         host_contract = merge_host_table_contract(producer_contract, schema_receipt)
         if projection is not None:
             host_contract.update(projection.row_identity_contract)
+    elif verified_path.suffix.lower() == ".json":
+        structure_receipt = typed_json_structure_receipt(
+            artifact_path=verified_path,
+            expected_sha256=binding["sha256"],
+        )
+        if structure_receipt is None:
+            # Unusually large or structurally unsafe JSON remains directly
+            # parseable by suffix, but no structural coordinates are promoted.
+            host_contract = dict(producer_contract or {})
+            host_contract.pop("json_structure", None)
+            host_contract["schema_version"] = "easyicu.host_typed_product.v1"
+        else:
+            host_contract = merge_host_json_contract(
+                producer_contract,
+                structure_receipt,
+            )
     elif not _binding_is_readable_without_a_schema_receipt(
         verified_path, producer_contract
     ):
@@ -1145,10 +1165,12 @@ def _resolved_typed_input_binding(
         # Anything else reaches the consumer as a path and a digest, and the
         # generated code has no choice but to guess what is inside.
         #
-        # MEASURED over every recorded resolved input (1,071 bindings,
-        # 2026-08-03): 992 resolve to physical tables and carry a full column /
-        # dtype / row-count receipt; 76 are self-describing JSON scalars; THREE
-        # are neither.  All three are the same pickle bound as
+        # MEASURED over every recorded resolved input on 2026-08-03 (1,071
+        # bindings): 992 resolved to physical tables and carried a full column /
+        # dtype / row-count receipt; 76 were self-describing JSON values; THREE
+        # were neither. Structured JSON now receives a host-sealed, value-free
+        # path/key receipt in the branch above. All three opaque files were the
+        # same pickle bound as
         # ``artifact:trained_prediction_model``, and all three killed the step
         # that consumed them -- each in a different way, because each generated
         # script invented its own guess about the coordinates:
@@ -1187,9 +1209,9 @@ def _resolved_typed_input_binding(
             )
         return None
     else:
-        # Readable: either the consumer parses the file directly (the recorded
-        # statistic path, 76 of 76 bindings) or the producer declared its own
-        # coordinates. An empty contract here is honest, not missing.
+        # Readable: either the consumer parses the serialization directly or the
+        # producer declared its own coordinates. An empty contract here is
+        # honest, not missing; structured JSON was handled above.
         host_contract = dict(producer_contract or {})
         host_contract["schema_version"] = "easyicu.host_typed_product.v1"
     host_contract.update(
