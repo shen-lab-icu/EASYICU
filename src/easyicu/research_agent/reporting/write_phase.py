@@ -47,6 +47,7 @@ from .manuscript_post import (
     _remove_tbd_sentences,
     _repair_common_writer_citation_omissions,
     _repair_common_writer_placeholders,
+    repair_miscited_numeric_citations,
 )
 from .readiness import _is_cosmetic_visual_error, execution_gate_status
 from .writer_evidence import (
@@ -942,6 +943,24 @@ def run_write_phase(
                     f"{len(citation_repairs)} citation(s) appended."
                 ),
                 detail={"citation_repairs": citation_repairs},
+            )
+        )
+    scaffold, miscitation_repairs = repair_miscited_numeric_citations(
+        scaffold,
+        evidence=evidence,
+    )
+    if miscitation_repairs:
+        findings.append(
+            ValidationFinding(
+                validator="manuscript_numeric_auditor",
+                severity="warning",
+                message=(
+                    "Appended the owning step's citation to "
+                    f"{len(miscitation_repairs)} number(s) cited to a step that "
+                    "registered no such value; the writer's own citation was "
+                    "kept."
+                ),
+                detail={"miscitation_repairs": miscitation_repairs},
             )
         )
     if (

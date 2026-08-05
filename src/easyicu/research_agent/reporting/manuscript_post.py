@@ -1467,6 +1467,101 @@ def _extend_through_trailing_citations(text: str, context_end: int) -> int:
         cursor = match.end()
 
 
+def repair_miscited_numeric_citations(
+    scaffold: str,
+    *,
+    evidence: EvidenceStore,
+) -> tuple[str, List[Dict[str, str]]]:
+    """Add the owning step's citation to a number cited to the wrong step.
+
+    MEASURED, and it is the whole remaining distance on both manuscripts the
+    pipeline has produced. e1 sepsis (10/10 steps) and e3 KDIGO (11/11) each
+    end with exactly two unbound numbers, all four the cohort size 94,458, all
+    four a sentence citing a step that registered no such value::
+
+        The operational denominator comprised 94,458 ICU stays represented in
+        the supplied cohort definition {evidence:00_probe}.
+
+    Replacing that one citation with an owning step takes e1 to 0 markers /
+    13 bound and e3 to 0 markers / 11 bound. One citation per manuscript is
+    the entire gap between "written" and "numerically verified".
+
+    ``writer.txt`` already states the rule, with this very number as its worked
+    example: a sentence printing values from different steps must cite EVERY
+    step that owns one of them, and citing only one blocks the manuscript. The
+    writer had the rule and did not follow it, and it gets no repair pass of
+    its own, so the sentence is final the moment it is written.
+
+    This repair is deliberately ADDITIVE. The writer's own citation stays --
+    it is what the prose is about -- and the owner of the number is appended
+    beside it, which is exactly the two-id form the rule asks for. Nothing is
+    replaced and no citation is ever removed, so a genuine attribution error
+    remains visible in the text rather than being quietly rewritten.
+
+    The owner chosen is the earliest-ordered registered owner of that value:
+    provenance flows forward, so the earliest step to register the number is
+    the closest to where it came from. When no owner resolves to a citable
+    evidence name, nothing is added and the gate still refuses.
+    """
+
+    lineage = _evidence_lineage(evidence)
+    if not lineage:
+        return scaffold, []
+    resolvable = set(evidence.resolvable_names())
+    skip_spans = _spans_to_skip(scaffold)
+    repairs: List[Dict[str, str]] = []
+    insertions: List[tuple[int, str]] = []
+    for match in _NUMERIC_IN_PROSE_RE.finditer(scaffold):
+        start, end = match.start("value"), match.end("value")
+        if _position_is_inside(start, skip_spans):
+            continue
+        value = match.group("value")
+        lookup_value = _lookup_literal_for_numeric_match(
+            scaffold, match_end=end, value=value
+        )
+        if _is_bibliographic_year_context(scaffold, start=start, end=end, value=value):
+            continue
+        context = _numeric_sentence_context(scaffold, start=start, end=end)
+        candidates = _candidate_claims_for_value(
+            evidence, lookup_value, authoritative_claims=None
+        )
+        claim, _ambiguous = _select_numeric_claim(
+            candidates=candidates,
+            context=context,
+            previous_step_id=None,
+            lineage=lineage,
+        )
+        # Only a number that actually fails to bind is repaired. Keying on the
+        # miscitation alone fired on 6 sentences in e3 where 2 were blocked:
+        # the other 4 bound perfectly well and would have collected a citation
+        # they did not need. A repair pass that edits text it was not asked to
+        # fix is one that cannot be reviewed by its own diff.
+        if claim is not None:
+            continue
+        detail = _miscitation_detail(candidates, context=context, lineage=lineage)
+        if detail is None:
+            continue
+        owner = next(
+            (item for item in sorted(detail["owned_by"]) if item in resolvable),
+            None,
+        )
+        if owner is None:
+            continue
+        token = "{evidence:" + owner + "}"
+        if token in context:
+            continue
+        insertions.append((end, " " + token))
+        repairs.append(
+            {"value": value, "cited": ",".join(detail["cited"]), "added": owner}
+        )
+    if not insertions:
+        return scaffold, []
+    repaired = scaffold
+    for position, token in sorted(insertions, key=lambda item: -item[0]):
+        repaired = repaired[:position] + token + repaired[position:]
+    return repaired, repairs
+
+
 def bind_numeric_values(
     manuscript: str,
     *,
