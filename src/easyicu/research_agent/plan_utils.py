@@ -579,6 +579,7 @@ _CLUSTERING_ANALYSIS_METHODS = frozenset(
         "k_means_clustering",
         "phenotyping",
         "phenotype_clustering",
+        "phenotype_clustering_and_structure",
         "unsupervised_clustering",
         "latent_class",
         "latent_class_analysis",

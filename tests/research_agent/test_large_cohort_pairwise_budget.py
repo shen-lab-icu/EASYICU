@@ -136,6 +136,85 @@ score = silhouette_score(
     )
 
 
+def test_large_cohort_accepts_explicit_bounded_deterministic_subset() -> None:
+    code = f"""\
+import numpy as np
+from sklearn.metrics import silhouette_score
+SILHOUETTE_ROWS = {PAIRWISE_EVALUATION_MAX_SAMPLE_SIZE}
+SILHOUETTE_SEED = 1729
+
+def sampled_silhouette(feature_matrix, cluster_labels, seed):
+    n_rows = len(cluster_labels)
+    sample_size = min(int(SILHOUETTE_ROWS), n_rows)
+    if sample_size < n_rows:
+        rng = np.random.default_rng(int(seed))
+        indices = rng.choice(n_rows, size=sample_size, replace=False)
+        sampled_features = feature_matrix[indices]
+        sampled_labels = cluster_labels[indices]
+    else:
+        sampled_features = feature_matrix
+        sampled_labels = cluster_labels
+    return silhouette_score(sampled_features, sampled_labels), sample_size
+
+score, evaluation_n = sampled_silhouette(
+    feature_matrix,
+    cluster_labels,
+    seed=SILHOUETTE_SEED,
+)
+"""
+
+    assert not _budget_violations(
+        code,
+        n_stays=PAIRWISE_EVALUATION_FULL_COHORT_MAX_ROWS + 50_000,
+    )
+
+
+def test_large_cohort_rejects_unseeded_explicit_subset() -> None:
+    code = f"""\
+import numpy as np
+from sklearn.metrics import silhouette_score
+sample_size = min({PAIRWISE_EVALUATION_MAX_SAMPLE_SIZE}, len(cluster_labels))
+rng = np.random.default_rng()
+indices = rng.choice(len(cluster_labels), size=sample_size, replace=False)
+score = silhouette_score(feature_matrix[indices], cluster_labels[indices])
+"""
+
+    violations = _budget_violations(
+        code,
+        n_stays=PAIRWISE_EVALUATION_FULL_COHORT_MAX_ROWS + 1,
+    )
+
+    assert len(violations) == 1
+    assert "random_state" in violations[0]["matched_patterns"]
+
+
+def test_large_cohort_rejects_subset_overwritten_with_full_cohort() -> None:
+    code = f"""\
+import numpy as np
+from sklearn.metrics import silhouette_score
+sample_size = min({PAIRWISE_EVALUATION_MAX_SAMPLE_SIZE}, len(cluster_labels))
+
+def sampled_silhouette(feature_matrix, cluster_labels):
+    rng = np.random.default_rng(1729)
+    indices = rng.choice(len(cluster_labels), size=sample_size, replace=False)
+    sampled_features = feature_matrix[indices]
+    sampled_labels = cluster_labels[indices]
+    sampled_features = feature_matrix
+    sampled_labels = cluster_labels
+    return silhouette_score(sampled_features, sampled_labels)
+
+score = sampled_silhouette(feature_matrix, cluster_labels)
+"""
+
+    violations = _budget_violations(
+        code,
+        n_stays=PAIRWISE_EVALUATION_FULL_COHORT_MAX_ROWS + 1,
+    )
+
+    assert len(violations) == 1
+    assert "sample_size" in violations[0]["matched_patterns"]
+
+
 def test_large_cohort_rejects_sample_larger_than_bound() -> None:
     code = f"""\
 from sklearn.metrics import silhouette_score

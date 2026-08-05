@@ -100,6 +100,16 @@ def test_clustering_contract_requires_exact_method_head_and_closed_product():
     )
 
 
+def test_clustering_contract_accepts_planner_structure_owner_method():
+    assert _clustering_contract_applies(
+        method="phenotype_clustering_and_structure",
+        expected_outputs=[
+            "dataset:cluster_assignments",
+            "table:phenotype_structure",
+        ],
+    )
+
+
 def test_invalid_explicit_cluster_selection_cannot_be_laundered_by_stability():
     invalid_manifests = (
         # Malformed: required selection fields/candidates are absent.

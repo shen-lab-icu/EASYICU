@@ -536,6 +536,157 @@ def _static_integer_upper_bound(
     return None
 
 
+def _simple_assignments(scope: ast.AST) -> Dict[str, List[ast.AST]]:
+    values: Dict[str, List[ast.AST]] = {}
+    for node in ast.walk(scope):
+        if not isinstance(node, ast.Assign):
+            continue
+        for target in node.targets:
+            if isinstance(target, ast.Name):
+                values.setdefault(target.id, []).append(node.value)
+    return values
+
+
+def _fixed_parameter_at_every_call(
+    tree: ast.AST,
+    function: ast.FunctionDef,
+    parameter: str,
+    assignments: Dict[str, ast.AST],
+) -> bool:
+    parameters = [argument.arg for argument in function.args.args]
+    if parameter not in parameters:
+        return False
+    position = parameters.index(parameter)
+    actuals: List[ast.AST] = []
+    for candidate in (node for node in ast.walk(tree) if isinstance(node, ast.Call)):
+        if _callable_path(candidate.func, {}).rsplit(".", 1)[-1] != function.name:
+            continue
+        actual = next(
+            (item.value for item in candidate.keywords if item.arg == parameter),
+            candidate.args[position] if position < len(candidate.args) else None,
+        )
+        if actual is None:
+            return False
+        actuals.append(actual)
+    return bool(actuals) and all(
+        _static_integer_upper_bound(actual, assignments=assignments) is not None
+        for actual in actuals
+    )
+
+
+def _manual_bounded_silhouette_contract(
+    call: ast.Call,
+    *,
+    tree: ast.AST,
+    function: Optional[ast.FunctionDef],
+    assignments: Dict[str, ast.AST],
+) -> bool:
+    """Accept the explicit bounded-subsample shape observed in generated code."""
+
+    if function is None or len(call.args) < 2 or not all(
+        isinstance(item, ast.Name) for item in call.args[:2]
+    ):
+        return False
+    call_inputs = [item.id for item in call.args[:2] if isinstance(item, ast.Name)]
+    local = _simple_assignments(function)
+    parameters = {argument.arg for argument in function.args.args}
+
+    for branch in (item for item in function.body if isinstance(item, ast.If)):
+        test = branch.test
+        if not (
+            isinstance(test, ast.Compare)
+            and isinstance(test.left, ast.Name)
+            and len(test.ops) == len(test.comparators) == 1
+            and isinstance(test.ops[0], ast.Lt)
+            and isinstance(test.comparators[0], ast.Name)
+            and branch.orelse
+        ):
+            continue
+        sample_name = test.left.id
+        population_name = test.comparators[0].id
+        sample_bound = next(
+            (
+                _static_integer_upper_bound(value, assignments=assignments)
+                for value in local.get(sample_name, [])
+                if isinstance(value, ast.Call)
+                and isinstance(value.func, ast.Name)
+                and value.func.id == "min"
+                and any(
+                    isinstance(argument, ast.Name)
+                    and argument.id == population_name
+                    for argument in value.args
+                )
+            ),
+            None,
+        )
+        if sample_bound is None or sample_bound > PAIRWISE_EVALUATION_MAX_SAMPLE_SIZE:
+            continue
+
+        body = _simple_assignments(ast.Module(body=branch.body, type_ignores=[]))
+        otherwise = _simple_assignments(ast.Module(body=branch.orelse, type_ignores=[]))
+        index_names = []
+        for input_name in call_inputs:
+            values = body.get(input_name, [])
+            if len(local.get(input_name, [])) != 2 or input_name not in otherwise:
+                break
+            index_names.append(
+                {
+                    value.slice.id
+                    for value in values
+                    if isinstance(value, ast.Subscript)
+                    and isinstance(value.slice, ast.Name)
+                }
+            )
+        else:
+            common_indices = set.intersection(*index_names)
+            for index_name in common_indices:
+                for choice in body.get(index_name, []):
+                    if not isinstance(choice, ast.Call):
+                        continue
+                    keywords = {
+                        item.arg: item.value for item in choice.keywords if item.arg
+                    }
+                    if (
+                        _callable_path(choice.func, {}).rsplit(".", 1)[-1] != "choice"
+                        or _static_integer_upper_bound(
+                            keywords.get("size"), assignments=assignments
+                        )
+                        is None
+                        or not isinstance(keywords.get("replace"), ast.Constant)
+                        or keywords["replace"].value is not False
+                        or not isinstance(choice.func, ast.Attribute)
+                        or not isinstance(choice.func.value, ast.Name)
+                    ):
+                        continue
+                    for rng in local.get(choice.func.value.id, []):
+                        if not (
+                            isinstance(rng, ast.Call)
+                            and _callable_path(rng.func, {}).rsplit(".", 1)[-1]
+                            == "default_rng"
+                            and len(rng.args) == 1
+                        ):
+                            continue
+                        seed = rng.args[0]
+                        if (
+                            isinstance(seed, ast.Call)
+                            and isinstance(seed.func, ast.Name)
+                            and seed.func.id == "int"
+                            and len(seed.args) == 1
+                        ):
+                            seed = seed.args[0]
+                        if _static_integer_upper_bound(seed, assignments=assignments) is not None:
+                            return True
+                        if (
+                            isinstance(seed, ast.Name)
+                            and seed.id in parameters
+                            and _fixed_parameter_at_every_call(
+                                tree, function, seed.id, assignments
+                            )
+                        ):
+                            return True
+    return False
+
+
 def _large_cohort_silhouette_violations(
     code: str,
     *,
@@ -553,7 +704,11 @@ def _large_cohort_silhouette_violations(
     assignments: Dict[str, ast.AST] = {}
     imported_names = {"silhouette_score"}
     fixed_seed_names: set[str] = set()
+    enclosing_functions: Dict[int, ast.FunctionDef] = {}
     for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef):
+            for descendant in ast.walk(node):
+                enclosing_functions.setdefault(id(descendant), node)
         if isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr)):
             if isinstance(node, ast.Assign):
                 targets = node.targets
@@ -620,6 +775,16 @@ def _large_cohort_silhouette_violations(
             )
             is not None
         )
+        manual_bounded_contract = _manual_bounded_silhouette_contract(
+            call,
+            tree=tree,
+            function=enclosing_functions.get(id(call)),
+            assignments=assignments,
+        )
+        if manual_bounded_contract:
+            sample_bound = PAIRWISE_EVALUATION_MAX_SAMPLE_SIZE
+            deterministic_random_state = True
+            missing_contracts = []
         if not deterministic_random_state:
             missing_contracts.append("random_state")
         if not missing_contracts:
