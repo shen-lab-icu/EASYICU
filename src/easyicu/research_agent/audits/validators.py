@@ -7676,6 +7676,7 @@ class FigureSourceDataValidator:
         "row_type",
         "group_type",
         "estimate_type",
+        "estimate_unit",
         "effect_scale",
         "model_id",
         "source_model_id",
