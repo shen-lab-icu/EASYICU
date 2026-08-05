@@ -306,6 +306,58 @@ def _software_resources(
     return resources
 
 
+#: Above this many columns the list stops being cheap to carry in every
+#: prompt.  It is then replaced by a count and a pointer -- never by a partial
+#: list, which would read as the whole schema and be wrong in the one way that
+#: matters.
+_MAX_PROJECTED_COLUMNS = 40
+
+
+def _declared_column_projection(
+    binding: Mapping[str, object],
+) -> dict[str, object]:
+    """Name the bound product's actual columns beside its digest.
+
+    MEASURED (e3, ``04_stage_stratified_outcome_figure``): the step consumed
+    ``table:absolute_risk_context``, whose bound contract declares a grouped
+    summary -- one row per group, with the stratum carried as a VALUE in
+    ``group_value`` and ``group_type`` naming what was grouped.  The generated
+    script assumed instead that the stratum was a column named after the
+    clinical variable and killed itself::
+
+        RuntimeError: Cannot render a stage-stratified outcome figure: the
+        bound typed product lacks the required stage coordinate or fields
+        ['aki_stage_max'].
+
+    Five of the six fields it wanted were present.  The real column list was
+    one lookup away in ``EASYICU_RESOLVED_INPUTS_JSON`` -- which this very
+    descriptor pointed at without ever saying what was in it.  The step was
+    9 of 10 in an otherwise complete run.
+
+    So say what is in it.  A column list is a fact about the bound artifact,
+    not a hint, and it costs one lookup the agent has repeatedly not made.
+    """
+
+    contract = binding.get("product_contract")
+    if not isinstance(contract, Mapping):
+        return {}
+    declared = contract.get("columns")
+    if not isinstance(declared, Sequence) or isinstance(declared, (str, bytes)):
+        return {}
+    columns = [str(item) for item in declared if str(item).strip()]
+    if not columns:
+        return {}
+    if len(columns) > _MAX_PROJECTED_COLUMNS:
+        return {
+            "column_count": len(columns),
+            "columns_note": (
+                "too many to list here; read them from "
+                "EASYICU_RESOLVED_INPUTS_JSON before naming any column"
+            ),
+        }
+    return {"columns": columns}
+
+
 def _data_resources(
     resolved_input_bindings: Mapping[str, Mapping[str, object]],
 ) -> list[ResourceDescriptor]:
@@ -334,6 +386,7 @@ def _data_resources(
                         "evidence_id": evidence_id,
                         "sha256": _binding_sha256(binding),
                         "access": "EASYICU_RESOLVED_INPUTS_JSON",
+                        **_declared_column_projection(binding),
                     }
                 ).decode("utf-8"),
             )
