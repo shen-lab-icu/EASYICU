@@ -5222,12 +5222,46 @@ def _materialize_direct_bound_source_frames(
         source_keyword.value.end_col_offset,
     )
     insert_at = line_starts[contract_statement.lineno - 1]
+    summary_source_values: List[ast.AST] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Dict):
+            continue
+        literal_keys = {
+            key.value
+            for key in node.keys
+            if isinstance(key, ast.Constant) and isinstance(key.value, str)
+        }
+        if not literal_keys.intersection(
+            {"figure_files", "figure_contract", "output_files"}
+        ):
+            continue
+        for key, value in zip(node.keys, node.values, strict=True):
+            if isinstance(key, ast.Constant) and key.value in {
+                "source_data",
+                "source_data_files",
+            }:
+                summary_source_values.append(value)
+    if len(summary_source_values) > 1:
+        return code
+    replacements = [
+        (source_start, source_end, marker),
+        (insert_at, insert_at, projection),
+    ]
+    if summary_source_values:
+        summary_value = summary_source_values[0]
+        replacements.append(
+            (
+                absolute_offset(summary_value.lineno, summary_value.col_offset),
+                absolute_offset(
+                    summary_value.end_lineno,
+                    summary_value.end_col_offset,
+                ),
+                marker,
+            )
+        )
     repaired = code
     for start, end, replacement in sorted(
-        [
-            (source_start, source_end, marker),
-            (insert_at, insert_at, projection),
-        ],
+        replacements,
         key=lambda item: item[0],
         reverse=True,
     ):
@@ -5300,6 +5334,49 @@ def _patch_direct_bound_figure_source_projection(
     duplicate_products: Set[str] = set()
     unkeyed_loaded_frames: List[str] = []
 
+    source_table_path_names: Set[str] = set()
+    source_table_name_variables: Set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target = node.targets[0]
+            value = node.value
+            if (
+                isinstance(target, ast.Name)
+                and "source_table" in target.id
+                and isinstance(value, ast.Attribute)
+                and value.attr == "name"
+                and isinstance(value.value, ast.Name)
+            ):
+                source_table_name_variables.add(target.id)
+                source_table_path_names.add(value.value.id)
+        if not isinstance(node, ast.Dict):
+            continue
+        for key, value in zip(node.keys, node.values, strict=True):
+            if not (isinstance(key, ast.Constant) and key.value == "source_table"):
+                continue
+            if (
+                isinstance(value, ast.Attribute)
+                and value.attr == "name"
+                and isinstance(value.value, ast.Name)
+            ):
+                source_table_path_names.add(value.value.id)
+            elif isinstance(value, ast.Name):
+                source_table_name_variables.add(value.id)
+
+    if source_table_name_variables:
+        for node in ast.walk(tree):
+            if not (
+                isinstance(node, ast.Assign)
+                and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and node.targets[0].id in source_table_name_variables
+                and isinstance(node.value, ast.Attribute)
+                and node.value.attr == "name"
+                and isinstance(node.value.value, ast.Name)
+            ):
+                continue
+            source_table_path_names.add(node.value.value.id)
+
     def _register_loaded_table(*, input_key: str, frame_name: str) -> None:
         if not input_key.startswith("table:"):
             return
@@ -5314,6 +5391,19 @@ def _patch_direct_bound_figure_source_projection(
             continue
         target = node.targets[0]
         value = node.value
+        if (
+            isinstance(target, ast.Name)
+            and isinstance(value, ast.Call)
+            and isinstance(value.func, ast.Attribute)
+            and value.func.attr in {"read_csv", "read_parquet"}
+            and isinstance(value.func.value, ast.Name)
+            and value.func.value.id == "pd"
+            and value.args
+            and isinstance(value.args[0], ast.Name)
+            and value.args[0].id in source_table_path_names
+        ):
+            unkeyed_loaded_frames.append(target.id)
+            continue
         if (
             isinstance(target, ast.Name)
             and isinstance(value, ast.Call)
@@ -5386,6 +5476,7 @@ def _patch_direct_bound_figure_source_projection(
         )
     if duplicate_products:
         return code
+    unkeyed_loaded_frames = list(dict.fromkeys(unkeyed_loaded_frames))
     missing_products = [Path(name).stem for name in plain_missing_names]
     unresolved_products = [
         product for product in missing_products if product not in loaded_tables
@@ -5398,7 +5489,7 @@ def _patch_direct_bound_figure_source_projection(
         return code
     source_assignment = _figure_contract_source_assignment(
         tree,
-        source_value_type=(ast.Constant, ast.Attribute, ast.Name),
+        source_value_type=(ast.Constant, ast.Attribute, ast.List, ast.Name),
     )
     if source_assignment is None:
         return code
@@ -5671,19 +5762,36 @@ def deterministic_contract_repair(
         ):
             source_coverage_findings.append(finding)
     direct_source_repair_name = "direct_bound_figure_source_projection_v1"
-    if (
-        len(source_coverage_findings) == 1
-        and previous_repair != direct_source_repair_name
-    ):
-        finding = source_coverage_findings[0]
-        detail = (
-            finding.get("detail")
-            if isinstance(finding, dict)
-            else getattr(finding, "detail", {})
+    direct_source_names: List[str] = []
+    if len(source_coverage_findings) == 1:
+        coverage_finding = source_coverage_findings[0]
+        coverage_detail = (
+            coverage_finding.get("detail")
+            if isinstance(coverage_finding, dict)
+            else getattr(coverage_finding, "detail", {})
         )
+        direct_source_names.extend(coverage_detail.get("missing_bound_tables") or [])
+    for finding in findings:
+        validator = getattr(finding, "validator", None)
+        detail = getattr(finding, "detail", None)
+        if isinstance(finding, dict):
+            validator = finding.get("validator")
+            detail = finding.get("detail")
+        if validator != "figure_source_data" or not isinstance(detail, dict):
+            continue
+        mismatch = detail.get("best_mismatch")
+        if not (
+            isinstance(mismatch, dict)
+            and mismatch.get("reason") == "no_verifiable_values"
+            and isinstance(mismatch.get("upstream_table"), str)
+        ):
+            continue
+        direct_source_names.append(str(mismatch["upstream_table"]))
+    direct_source_names = list(dict.fromkeys(direct_source_names))
+    if direct_source_names and previous_repair != direct_source_repair_name:
         repaired = _patch_direct_bound_figure_source_projection(
             code,
-            missing_table_names=list(detail.get("missing_bound_tables") or []),
+            missing_table_names=direct_source_names,
         )
         if repaired != code:
             return direct_source_repair_name, repaired
