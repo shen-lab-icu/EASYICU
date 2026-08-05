@@ -62,7 +62,7 @@ def test_execution_phase_uses_typed_binding_objects_with_identity() -> None:
     # 23 private helpers plus two public rules: which producers the host
     # writes receipts for, and how the host-staged ambient trajectory is
     # named in the step's own resolved-inputs record.
-    assert len(typed_binding.__all__) == 26
+    assert len(typed_binding.__all__) == 27
     assert {
         "host_owns_input_binding_receipts",
         "host_authorized_ambient_trajectory_entry",
