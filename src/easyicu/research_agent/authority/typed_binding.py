@@ -81,11 +81,14 @@ __all__ = [
     "_write_resolved_inputs_manifest",
     "host_authorized_ambient_trajectory_entry",
     "host_owns_input_binding_receipts",
+    "study_endpoint_declaration_entry",
 ]
 
 HOST_AUTHORIZED_AMBIENT_INPUTS_SCHEMA_VERSION = (
     "easyicu.host_authorized_ambient_inputs/1"
 )
+
+STUDY_ENDPOINT_DECLARATION_SCHEMA_VERSION = "easyicu.study_endpoint_declaration/1"
 
 _RESUME_TYPED_INPUT_BINDING_FINGERPRINT_SCHEMA_VERSION = (
     "easyicu.resume_typed_input_bindings/2"
@@ -1502,6 +1505,68 @@ def host_authorized_ambient_trajectory_entry(
     return entry
 
 
+def study_endpoint_declaration_entry(endpoint: Any) -> Optional[Dict[str, Any]]:
+    """Publish the plan's typed endpoint in the step's own machine-readable record.
+
+    The endpoint is the other half of what the cohort declaration says: the
+    cohort names who is counted, the endpoint names what happened to them and
+    when follow-up ended.  ``EndpointSpec`` has carried ``time_column``,
+    ``time_origin`` and ``censoring_rule`` for some time, with a validator that
+    refuses to infer any of them, and the typed context already verifies the
+    columns it names against the sealed cohort.
+
+    MEASURED over 291 recorded runs: nothing ever declared one.  What the
+    generated code got instead was the follow-up rule as prose in one step's
+    ``icu_rule_refs`` -- written in 3 of 13 survival plans, absent from the
+    other 10 -- so it reached for whatever time column it could find.  Across
+    the 11 runs with recovered source that produced SEVEN distinct combinations
+    of ``{los_icu, los_hosp, death_time, discharge_time, END_HOURS}``.  The
+    concept auditor then blocked steps for contradicting a "planner-required ICU
+    discharge time ``los_icu``" that appears in no plan for that task -- the
+    plans that stated anything stated hospital discharge.  Neither side was
+    reading a declaration, because there was none to read.
+
+    Published here rather than in the Coder prompt because the prompt is where
+    the losing copy already lived: the generated script opens
+    ``resolved_inputs``, hash-verifies it, and trusts it over prose.  The Coder
+    prompt is also 152 bytes from its hard budget on the widest step, so a
+    paragraph there would evict typed context to restate what a record can hold.
+    """
+
+    if endpoint is None:
+        return None
+    kind = str(getattr(endpoint, "kind", "") or "").strip()
+    name = str(getattr(endpoint, "name", "") or "").strip()
+    if not kind or not name:
+        return None
+    entry: Dict[str, Any] = {
+        "name": name,
+        "kind": kind,
+        "authorization": (
+            "The study's endpoint as DECLARED by the locked plan, not as "
+            "inferred. Implement exactly these fields: they are the study "
+            "definition, and a step that substitutes a different time column, "
+            "origin, censoring rule or level set is analysing a different study "
+            "than the one under review. If a field this step needs is absent "
+            "here, stop and report that rather than choosing one."
+        ),
+    }
+    for field in (
+        "absence_semantics",
+        "event_column",
+        "time_column",
+        "time_origin",
+        "censoring_rule",
+    ):
+        value = getattr(endpoint, field, None)
+        if value is not None and str(value).strip():
+            entry[field] = str(value)
+    levels = getattr(endpoint, "levels", None)
+    if levels is not None:
+        entry["levels"] = list(levels)
+    return entry
+
+
 def _write_resolved_inputs_manifest(
     *,
     run_dir: Path,
@@ -1512,6 +1577,7 @@ def _write_resolved_inputs_manifest(
     raw_input_contracts: Optional[Mapping[str, Any]] = None,
     host_verified_cohort_execution_receipt: Optional[Mapping[str, Any]] = None,
     host_authorized_ambient_trajectory: Optional[Mapping[str, Any]] = None,
+    study_endpoint: Optional[Mapping[str, Any]] = None,
 ) -> Path:
     """Persist the step's authority capsule outside its writable overlay."""
 
@@ -1629,6 +1695,27 @@ def _write_resolved_inputs_manifest(
         payload["host_authorized_ambient_inputs"] = {
             "schema_version": HOST_AUTHORIZED_AMBIENT_INPUTS_SCHEMA_VERSION,
             "trajectory": ambient,
+        }
+    if study_endpoint is not None:
+        declaration = dict(study_endpoint)
+        # The two fields that make this a declaration rather than a label. A
+        # record naming an endpoint whose kind is unknown would put the reader
+        # straight back into inferring one from the column name.
+        for required in ("name", "kind"):
+            if not str(declaration.get(required, "") or "").strip():
+                raise ValueError(f"study endpoint declaration must carry {required}")
+        # A time axis without its origin is the defect this record exists to
+        # close: a duration and a timestamp are indistinguishable by dtype, and
+        # a step that guesses wrong reports follow-up from the wrong zero.
+        if declaration.get("time_column") and not str(
+            declaration.get("time_origin", "") or ""
+        ).strip():
+            raise ValueError(
+                "a study endpoint declaring time_column must declare time_origin"
+            )
+        payload["study_endpoint"] = {
+            "schema_version": STUDY_ENDPOINT_DECLARATION_SCHEMA_VERSION,
+            **declaration,
         }
     if context_path is not None:
         resolved_context = Path(context_path).resolve()

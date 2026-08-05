@@ -57,6 +57,7 @@ from .icu_rules import (
     overadjustment_caution,
     treatment_mediator_caution,
 )
+from .planning.analysis_types import required_endpoint_kind_for_family
 from .planning.cohort_contract import cohort_definition_has_explicit_selection
 from .contracts.ordered_stratified import (
     is_ordered_stratified_analysis_step,
@@ -367,6 +368,82 @@ def _cohort_definition_contract_findings(
                 "select every sealed input row."
             ),
             detail={"cohort": "empty", "expects_cohort": True},
+        )
+    ]
+
+
+def _endpoint_contract_findings(
+    plan: AnalysisPlan,
+) -> List[ValidationFinding]:
+    """Reject a plan whose family needs a declared endpoint and has none.
+
+    The sibling of :func:`_cohort_definition_contract_findings`, for the other
+    half of a study's identity. The cohort answers *who*; the endpoint answers
+    *what happened to them and when* -- and only the cohort half was ever typed.
+
+    MEASURED over 291 recorded runs: the endpoint was undeclared in all of them.
+    What the survival family got instead was the follow-up rule as prose in one
+    step's ``icu_rule_refs``, present in 3 of 13 h1 plans and absent from the
+    other 10; the generated code then reached for whatever time column it found,
+    producing seven distinct combinations across 11 runs with recovered source.
+    The concept auditor blocked steps for contradicting a "planner-required ICU
+    discharge time ``los_icu``" that appears in no plan -- the plans that said
+    anything said hospital discharge. Neither side was reading a declaration,
+    because there was none to read.
+
+    The requirement comes from the family's own registry entry, which is a
+    declaration the planner already stamped, not a second keyword pass over the
+    question prose. ``EndpointSpec`` then enforces its own field closure per
+    kind, so this function checks only that a declaration exists and is of the
+    required kind.
+    """
+
+    required_kind = required_endpoint_kind_for_family(plan.analysis_type)
+    if required_kind is None:
+        return []
+    endpoint = getattr(plan, "endpoint", None)
+    declared_kind = getattr(endpoint, "kind", None)
+    if declared_kind == required_kind:
+        return []
+    # MEASURED before choosing this severity: all 11 recorded runs carrying an
+    # error-severity plan-stage finding stopped with `completed_step_count: 1`
+    # and `failed_steps: []` -- an abort between the first and second step, not
+    # a step failure. An error here would therefore replace h1's death at step 4
+    # of 12 with a death at step 0 every time the Planner missed twice, which is
+    # a regression dressed as a gate.
+    #
+    # Nothing guesses silently at warning severity, which is what fail-closed
+    # actually requires here: the retry in `pipeline` gives the Planner a second
+    # chance with the declaration in its prompt, the step record simply omits
+    # the endpoint key when nothing was declared, and the concept auditor is
+    # told "NONE declared" outright and instructed not to supply a rule from the
+    # research question. The absence is stated to every consumer instead of
+    # being filled in differently by each. Raising this to error belongs with
+    # evidence that the Planner reliably declares it.
+    return [
+        ValidationFinding(
+            validator="endpoint_contract",
+            severity="warning",
+            message=(
+                f"The plan declares analysis_type='{plan.analysis_type}', whose "
+                f"registry entry requires a typed endpoint of kind "
+                f"'{required_kind}', but plan.endpoint "
+                + (
+                    "is absent"
+                    if endpoint is None
+                    else f"declares kind '{declared_kind}'"
+                )
+                + ". Follow-up time, its origin, and what censors it cannot be "
+                "recovered from a column name, a dtype, or step prose -- a step "
+                "that guesses produces a different study each run. Declare "
+                "plan.endpoint with kind, levels, event_column, time_column, "
+                "time_origin and censoring_rule."
+            ),
+            detail={
+                "analysis_type": plan.analysis_type,
+                "required_endpoint_kind": required_kind,
+                "declared_endpoint_kind": declared_kind,
+            },
         )
     ]
 

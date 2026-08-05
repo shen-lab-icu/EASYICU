@@ -939,6 +939,24 @@ def _build_planner_user_prompt(
         "    ],\n"
         '    "exclusion": []\n'
         "  },\n"
+        # The endpoint is shown as the cohort's sibling because it is the other
+        # half of the same declaration: the cohort says who is counted, the
+        # endpoint says what happened to them and when. Only the cohort half was
+        # ever typed. MEASURED over 291 recorded runs: `endpoint` was null in
+        # every one, so the follow-up rule survived only as prose in one step's
+        # `icu_rule_refs` -- written in 3 of 13 survival plans and absent from
+        # the other 10 -- and the generated code reached for whatever time column
+        # it could find, seven distinct combinations across 11 runs.
+        '  "endpoint": {\n'
+        '    "name": "<endpoint column>",\n'
+        '    "kind": "binary|continuous|count|ordinal|time_to_event|repeated_measures",\n'
+        '    "absence_semantics": "absent_row_is_no_event|absent_row_is_unmeasured|no_absent_rows",\n'
+        '    "levels": [0, 1],\n'
+        '    "event_column": "<event code column>",\n'
+        '    "time_column": "<follow-up time column>",\n'
+        '    "time_origin": "<what t=0 means>",\n'
+        '    "censoring_rule": "<exactly what ends follow-up>"\n'
+        "  },\n"
         '  "steps": [\n'
         # The cohort-definition step is shown first because it IS first in
         # every recorded plan, and because prose alone did not convey the
@@ -1066,6 +1084,17 @@ def _build_planner_user_prompt(
         "  ],\n"
         '  "rationale": "<one paragraph>"\n'
         "}\n\n"
+        # Kept to what the Planner cannot get from the key names above. The
+        # longer explanation of why the censoring rule decides which study this
+        # is lives in the `endpoint_contract` finding, which is rendered on the
+        # retry -- exactly when it is needed, at zero fixed cost to every task.
+        "ENDPOINT: required for `survival` (kind 'time_to_event'). `levels` is "
+        "the closed `event_column` code set: censored plus one per event type. "
+        "Name real cohort columns. Omit the axis/censoring fields for a kind "
+        "without them. In `censoring_rule` name the administrative horizon and "
+        "every competing reason follow-up ends, each with its column: ICU and "
+        "hospital discharge are different denominators, and each reason left "
+        "unstated is guessed separately by every step.\n\n"
         "RESEARCH CONTEXT:\n"
         + _format_context(
             planner_context,
@@ -1327,6 +1356,10 @@ def _planner_retry_response_projection(raw: str) -> str:
     projection = {
         "analysis_type": payload.get("analysis_type"),
         "cohort": payload.get("cohort"),
+        # Echoed for the same reason as `cohort`: a plan rejected for anything
+        # else must not silently lose a declaration it already got right, and a
+        # plan rejected FOR its endpoint has to see what it actually sent.
+        "endpoint": payload.get("endpoint"),
         "steps": projected_steps,
         "robustness_specs": robustness_specs,
     }

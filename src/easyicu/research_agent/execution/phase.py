@@ -266,6 +266,7 @@ from ..authority.typed_binding import (
     _write_host_input_binding_receipts,
     _write_resolved_inputs_manifest,
     host_authorized_ambient_trajectory_entry,
+    study_endpoint_declaration_entry,
     host_owns_input_binding_receipts,
 )
 from ..gates.contract import (  # execute-layer collaborators use the canonical gate API
@@ -6013,6 +6014,12 @@ def run_execute_phase(
                     )
                 )
             ),
+            # From the locked plan, which is where the endpoint is declared.
+            # Every step of one study shares one endpoint, so this is the same
+            # record in each step's capsule rather than a per-step choice.
+            study_endpoint=study_endpoint_declaration_entry(
+                getattr(plan_result.plan, "endpoint", None)
+            ),
         )
         coder_authority = attach_step_coder_input_authority(
             enabled=pipeline._enable_coder_resources,
@@ -7527,6 +7534,9 @@ def run_execute_phase(
                     lambda: pipeline._llm_signature(llm_concept_audit_client)
                 ),
                 enable_llm_audit=pipeline._enable_llm_concept_audit,
+                study_endpoint=study_endpoint_declaration_entry(
+                    getattr(plan_result.plan, "endpoint", None)
+                ),
             ),
             runtime=ConceptAuditRuntime(
                 usage_auditor=usage_auditor,

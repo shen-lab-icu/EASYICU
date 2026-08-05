@@ -30,6 +30,35 @@ class AnalysisTypeSpec:
     trigger_terms: Sequence[str]
     candidate_steps: Sequence[str]
     guardrails: Sequence[str]
+    # Which ``EndpointSpec.kind`` a plan in this family must declare, or None
+    # when the family imposes no requirement yet.
+    #
+    # MEASURED over 291 recorded runs: ``research_context.endpoint`` was null in
+    # every single one. ``EndpointSpec`` has existed, with ``time_column``,
+    # ``time_origin`` and ``censoring_rule`` fields and a validator that refuses
+    # to infer any of them, and ``ResearchContextV2`` already verifies its
+    # declared columns against the sealed cohort -- but no caller ever passed
+    # one, so the type and its receipt were both dead.
+    #
+    # What filled the vacuum: the planner wrote the follow-up rule as prose in
+    # ``icu_rule_refs``, differently each run (3 of 13 h1 plans wrote one at
+    # all), and the generated code reached for whatever time column it could
+    # find. Across 11 h1 runs with recovered source that produced SEVEN distinct
+    # combinations of {los_icu, los_hosp, death_time, discharge_time, END_HOURS}.
+    # The concept auditor then judged the code against its own reading of the
+    # question and blocked the step for contradicting a "planner-required" or
+    # "contract-required" rule that appears in no host artifact: `los_icu` is
+    # absent from every h1 analysis plan, while the plan's own prose said
+    # hospital discharge. 12 of the 29 scientific blocks on the five
+    # never-passing tasks are this one missing declaration.
+    #
+    # Keyed on the family rather than on a question phrase on purpose. The
+    # trigger-term scan below is what ROUTES a question to a family; once the
+    # family is stamped on the plan it is a declaration, and a second keyword
+    # pass over the same prose to re-derive what the family already implies is
+    # how the routing layer grew to 1,395 lines. The requirement is compiled
+    # once, here.
+    required_endpoint_kind: Optional[str] = None
 
 
 _REGISTRY: Dict[str, AnalysisTypeSpec] = {
@@ -161,6 +190,10 @@ _REGISTRY: Dict[str, AnalysisTypeSpec] = {
             "Cox or other time-to-event model",
             "sensitivity checks for censoring and competing risks",
         ),
+        # This family's own description already says "explicit time zero,
+        # censoring, and event definitions"; requiring the typed endpoint is
+        # what makes that sentence checkable instead of aspirational.
+        required_endpoint_kind="time_to_event",
         guardrails=(
             "Do not reduce a time-to-event question to a fixed binary outcome unless the user explicitly asks for that simplification.",
             "Make the event definition, censoring mechanism, and follow-up horizon explicit.",
@@ -618,6 +651,21 @@ def list_analysis_types() -> List[AnalysisTypeSpec]:
 
 def get_analysis_type(key: str) -> AnalysisTypeSpec:
     return _REGISTRY[key]
+
+
+def required_endpoint_kind_for_family(value: Optional[str]) -> Optional[str]:
+    """The ``EndpointSpec.kind`` a plan in this family must declare.
+
+    Reads the family's own registry entry. An unknown or unstamped family
+    carries no requirement: a plan whose family could not be resolved is a
+    different defect, and answering this question for it would be a guess.
+    """
+
+    key = canonical_analysis_family(value)
+    if key is None:
+        return None
+    spec = _REGISTRY.get(key)
+    return None if spec is None else spec.required_endpoint_kind
 
 
 def _question_text(context: ResearchContext) -> str:
@@ -1387,6 +1435,7 @@ __all__ = [
     "is_concept_set_family",
     "list_analysis_types",
     "get_analysis_type",
+    "required_endpoint_kind_for_family",
     "infer_analysis_type",
     "strong_trajectory_clustering_framing",
     "planner_analysis_type_guide",

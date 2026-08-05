@@ -875,6 +875,44 @@ def _concept_audit_script_excerpt(
     )
 
 
+def _concept_audit_endpoint_block(
+    study_endpoint: Optional[Mapping[str, Any]],
+) -> str:
+    """The declared endpoint, or an explicit statement that none was declared.
+
+    Says which case it is either way. Rendering nothing when nothing is declared
+    would let the auditor keep supplying the missing rule from the research
+    question -- silently, and differently each run, which is how one task got
+    blocked twice for opposite censoring choices. An absent declaration is a
+    fact about the plan and is reported as one.
+    """
+
+    if not study_endpoint:
+        return (
+            "Declared study endpoint: NONE. The plan declared no typed endpoint, "
+            "so no follow-up time, time origin, censoring rule or level set is "
+            "authoritative for this run. Do not supply one from the research "
+            "question and do not report the script for contradicting a rule that "
+            "is not declared anywhere; a missing declaration is the plan's "
+            "defect, not this script's.\n"
+        )
+    payload = {
+        key: value
+        for key, value in study_endpoint.items()
+        if key not in {"authorization", "schema_version"}
+    }
+    return (
+        "Declared study endpoint (from the locked plan -- AUTHORITATIVE):\n"
+        + json.dumps(payload, ensure_ascii=False, default=str, sort_keys=True)
+        + "\nThis declaration, not the research question and not your own reading "
+        "of it, defines the endpoint, the follow-up clock, its origin, what "
+        "censors follow-up, and the closed level set. A script implementing "
+        "exactly these fields is correct even if you would have designed the "
+        "study differently; report a mismatch only against a field printed "
+        "above, and name that field.\n"
+    )
+
+
 class LLMConceptAuditor:
     """Optional LLM-based semantic review after deterministic checks.
 
@@ -897,8 +935,14 @@ class LLMConceptAuditor:
         script_text: str,
         step: Optional[AnalysisStep] = None,
         provider_budget: Optional[StepProviderCallBudget] = None,
+        study_endpoint: Optional[Mapping[str, Any]] = None,
     ) -> List[ValidationFinding]:
-        prompt = self._prompt(context=context, script_text=script_text, step=step)
+        prompt = self._prompt(
+            context=context,
+            script_text=script_text,
+            step=step,
+            study_endpoint=study_endpoint,
+        )
         try:
             raw = complete_with_provider_budget(
                 budget=provider_budget,
@@ -962,6 +1006,7 @@ class LLMConceptAuditor:
         context: ResearchContext,
         script_text: str,
         step: Optional[AnalysisStep],
+        study_endpoint: Optional[Mapping[str, Any]] = None,
     ) -> str:
         # A wide ICU context can exceed the prompt budget.  Never take the
         # first columns blindly: preserve plan-declared inputs and their
@@ -1220,7 +1265,18 @@ class LLMConceptAuditor:
                 default=str,
             )
             + "\n"
-            f"Target outcome: {context.target_outcome}\n"
+            # MEASURED: without this block, this auditor blocked survival steps
+            # for using "los_hosp instead of the contract-required ICU discharge
+            # censoring represented by los_icu" -- a requirement that appears in
+            # no artifact of that run. `los_icu` is absent from every one of that
+            # task's 13 analysis plans, and the plans that stated a follow-up
+            # rule at all stated hospital discharge. Two runs of the same task
+            # were blocked for opposite choices. With nothing declared, the
+            # auditor was comparing the script against its own reading of the
+            # research question -- which is exactly the guess the endpoint
+            # declaration exists to remove, on both sides of the comparison.
+            + _concept_audit_endpoint_block(study_endpoint)
+            + f"Target outcome: {context.target_outcome}\n"
             "Named time windows:\n"
             + json.dumps(
                 [window.model_dump(mode="json") for window in context.time_windows],

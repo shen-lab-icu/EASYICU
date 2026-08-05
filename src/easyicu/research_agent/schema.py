@@ -2445,6 +2445,16 @@ class AnalysisPlan(BaseModel):
             "include concept_id, time_window, aggregation, operator and value."
         ),
     )
+    endpoint: Optional[EndpointSpec] = Field(
+        default=None,
+        description=(
+            "Typed endpoint declaration for this study: what the endpoint IS, "
+            "and for a time axis, which column carries follow-up time, what "
+            "t=0 means, and what censors it. Required for families whose "
+            "registry entry declares a required_endpoint_kind. Never inferred "
+            "from a column-name suffix or dtype."
+        ),
+    )
     robustness_specs: List[RobustnessSpec] = Field(
         default_factory=list,
         description=(

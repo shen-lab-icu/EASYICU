@@ -281,6 +281,11 @@ class ConceptAuditAuthority:
     auditor_implementation_sha256: str
     auditor_identity: Callable[[], str]
     enable_llm_audit: bool
+    # The study's declared endpoint, from the locked plan. Part of the step's
+    # scientific identity: without it the auditor judged the script against its
+    # own reading of the research question and blocked steps for contradicting a
+    # "planner-required" censoring column that appears in no plan.
+    study_endpoint: Optional[Mapping[str, Any]] = None
 
     def __post_init__(self) -> None:
         self.plausibility_scope.require_step(self.step.step_id)
@@ -531,6 +536,7 @@ class ConceptAuditCoordinator:
                         context=authority.context,
                         script_text=script_text,
                         step=step,
+                        study_endpoint=authority.study_endpoint,
                     )
                     audit_key = runtime.cache.key(
                         context=authority.context,
@@ -610,6 +616,7 @@ class ConceptAuditCoordinator:
                             script_text=script_text,
                             step=step,
                             provider_budget=runtime.provider_budget,
+                            study_endpoint=authority.study_endpoint,
                         )
                         runtime.sync_provider_budget()
                         runtime.cache.put(audit_key, llm_findings)
