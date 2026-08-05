@@ -272,6 +272,14 @@ Code contract:
   long-bound run has none by construction. Bin charttime into the windows
   the step declares, aggregate value_num within each bin per stay and
   concept, and record the windows you used in the manifest.
+  MANDATORY when your step declares `manifest:trajectory_representation_schema`
+  among its expected_outputs: that JSON file's key names are a fixed host
+  contract, not free-form description. It MUST contain exactly these keys,
+  spelled exactly like this: `id_column`, `observation_family`,
+  `observation_columns`, `profile_columns`, `representation_columns`,
+  `frozen_population_n`, `representation_sha256`, plus `trailing_na_policy`.
+  A near-miss name such as `ordered_observation_columns` reads as "the field
+  is missing" and refuses the whole step after it has already run.
   MANDATORY when a timing/onset/incident question is being gated: if
   TRAJECTORY_PARQUET is set and contains the concept(s) the endpoint needs,
   you MUST construct the onset / incident endpoint FROM THE TRAJECTORY
