@@ -114,6 +114,52 @@ def test_a_run_without_a_trajectory_gets_no_entry() -> None:
     assert host_authorized_ambient_trajectory_entry(None) is None
 
 
+def test_the_scoped_projection_is_refused_rather_than_published_empty() -> None:
+    """MEASURED: the first version of this entry shipped `"concepts": []`.
+
+    It was built from the step-scoped projection, which narrows the concept
+    list to the ones the step's declared variables select.  A LONG-bound run
+    declares no trajectory variables at all, so that intersection is empty by
+    construction -- and the entry published an empty list under a sentence
+    promising it was the table's complete vocabulary.  With the host's
+    authority, it told the agent the table held nothing.
+    """
+
+    class _Scoped(_BoundTrajectory):
+        projection_scope = "scoped"
+        materialized_concepts: list = []
+
+    with pytest.raises(ValueError, match="unscoped context"):
+        host_authorized_ambient_trajectory_entry(_Scoped())
+
+    class _FullButEmpty(_BoundTrajectory):
+        materialized_concepts: list = []
+
+    # No vocabulary to publish means no entry, never an entry that claims
+    # completeness over nothing.
+    assert host_authorized_ambient_trajectory_entry(_FullButEmpty()) is None
+
+
+def test_the_write_point_uses_the_unscoped_context() -> None:
+    """The scoped projection is in scope at the write point and is wrong here."""
+
+    tree = ast.parse(PHASE.read_text())
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "host_authorized_ambient_trajectory_entry"
+        ):
+            continue
+        rendered = ast.dump(node)
+        assert "coder_context" not in rendered, (
+            "the ambient trajectory entry must be built from the unscoped "
+            "context; the scoped projection empties its concept list"
+        )
+        return
+    raise AssertionError("the ambient trajectory entry is never built")
+
+
 def test_a_partially_bound_trajectory_is_refused_rather_than_guessed() -> None:
     class _MissingRole(_BoundTrajectory):
         time_column = ""
