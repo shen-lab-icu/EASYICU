@@ -266,6 +266,7 @@ from ..authority.typed_binding import (
     _write_host_input_binding_receipts,
     _write_resolved_inputs_manifest,
     host_authorized_ambient_trajectory_entry,
+    rank_scale_columns_entry,
     study_endpoint_declaration_entry,
     host_owns_input_binding_receipts,
 )
@@ -6020,6 +6021,11 @@ def run_execute_phase(
             study_endpoint=study_endpoint_declaration_entry(
                 getattr(plan_result.plan, "endpoint", None)
             ),
+            # Which of this step's bound columns are ranks rather than interval
+            # measurements. From the unscoped context: the roles are a property
+            # of the columns, and the step-scoped projection would drop the ones
+            # this step reads through an artifact rather than declaring by name.
+            rank_scale_columns=rank_scale_columns_entry(context),
         )
         coder_authority = attach_step_coder_input_authority(
             enabled=pipeline._enable_coder_resources,

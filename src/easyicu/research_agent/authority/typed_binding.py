@@ -81,6 +81,7 @@ __all__ = [
     "_write_resolved_inputs_manifest",
     "host_authorized_ambient_trajectory_entry",
     "host_owns_input_binding_receipts",
+    "rank_scale_columns_entry",
     "study_endpoint_declaration_entry",
 ]
 
@@ -89,6 +90,8 @@ HOST_AUTHORIZED_AMBIENT_INPUTS_SCHEMA_VERSION = (
 )
 
 STUDY_ENDPOINT_DECLARATION_SCHEMA_VERSION = "easyicu.study_endpoint_declaration/1"
+
+RANK_SCALE_COLUMNS_SCHEMA_VERSION = "easyicu.rank_scale_columns/1"
 
 _RESUME_TYPED_INPUT_BINDING_FINGERPRINT_SCHEMA_VERSION = (
     "easyicu.resume_typed_input_bindings/2"
@@ -1505,6 +1508,97 @@ def host_authorized_ambient_trajectory_entry(
     return entry
 
 
+#: Roles whose values are ranks, not measurements on an interval scale.
+#: Read from the context's own ``VariableRole`` vocabulary rather than from a
+#: list of score names: the dictionary already assigns the role, and a name list
+#: here would be a second, divergent opinion about what GCS is.
+_RANK_SCALE_VARIABLE_ROLES = frozenset({"ordinal_score"})
+
+
+def rank_scale_columns_entry(context: Any) -> Optional[Dict[str, Any]]:
+    """Publish which bound columns are ranks, and what their domain is.
+
+    MEASURED on the five never-passing tasks: 6 of 29 scientific blocking
+    findings are an ordinal score used as an interval measurement -- GCS as a
+    continuous propensity-score covariate and in standardized mean differences,
+    SOFA components passed to a summary that reports arithmetic means, per-hour
+    medians of ordinal levels emitted as fractional SOFA, and availability
+    counted from non-missingness with no level-domain check at all.
+
+    The concept layer already knows all of it. ``gcs_max`` arrives with
+    ``role="ordinal_score"``, ``valid_range=[3.0, 15.0]`` and the pitfall "GCS is
+    ordinal; do not take its mean. Report worst (min) or representative
+    (last/first) GCS."
+
+    The record the generated script opens knows none of it. ``product_contract``
+    is built from the artifact file alone, so it publishes closed value sets for
+    string categoricals (``adm``, ``sex``) and lists every ordinal in
+    ``numeric_columns`` beside lactate -- ``if name in numeric_set: continue`` is
+    the line an ordinal falls through. A script reading that record sees a
+    float32 and averages it.
+
+    Published as its own context-derived entry rather than merged into
+    ``product_contract``: that profile is a digest-verified receipt for the bytes
+    of one file, and a fact that came from the context does not belong inside it.
+    """
+
+    variables = getattr(context, "variables", None) or ()
+    columns: Dict[str, Any] = {}
+    for variable in variables:
+        role = getattr(getattr(variable, "role", None), "value", None) or getattr(
+            variable, "role", None
+        )
+        if str(role) not in _RANK_SCALE_VARIABLE_ROLES:
+            continue
+        name = str(getattr(variable, "name", "") or "").strip()
+        if not name:
+            continue
+        entry: Dict[str, Any] = {"role": str(role)}
+        # The declared plausible domain and the domain actually present are
+        # different facts and both matter: the first says which values are legal
+        # levels, the second says which of them this cohort contains. A check
+        # written against only the second passes a cohort that happens to be
+        # clean and misses the invalid level the audit asked about.
+        valid_range = getattr(variable, "valid_range", None)
+        if valid_range:
+            entry["valid_range"] = [float(value) for value in valid_range]
+        observed = getattr(variable, "observed_domain", None)
+        if isinstance(observed, Mapping):
+            levels = observed.get("levels")
+            if isinstance(levels, list) and levels:
+                entry["observed_levels"] = list(levels)
+            for key in ("min", "max", "n_unique"):
+                if observed.get(key) is not None:
+                    entry[f"observed_{key}"] = observed[key]
+        aggregation = getattr(variable, "aggregation_default", None)
+        # ``.value`` before ``str``: an enum stringifies to "AggregationRule.
+        # MAX_LAST", which is a Python identifier and not the vocabulary the rest
+        # of the record uses. A reader matching it against the aggregation names
+        # it knows would find no match and fall back to choosing one.
+        aggregation = getattr(aggregation, "value", aggregation)
+        if aggregation is not None and str(aggregation).strip():
+            entry["aggregation_default"] = str(aggregation)
+        columns[name] = entry
+    if not columns:
+        return None
+    return {
+        "columns": columns,
+        "authorization": (
+            "These bound columns carry RANKS, not interval measurements, as "
+            "declared by the concept layer -- they appear among the numeric "
+            "columns of the artifact profile because their storage dtype is "
+            "numeric, which is a fact about storage and not about the scale. "
+            "Summarise them rank-preservingly (median, quantile, worst, "
+            "first/last, or a declared level distribution); an arithmetic mean "
+            "or any statistic that can land between two levels is not a value "
+            "of this scale. A value outside the declared domain is an invalid "
+            "level and must stop the step, not be counted as available. Using "
+            "one as a numeric model covariate is permitted only if the script's "
+            "own output states that coding."
+        ),
+    }
+
+
 def study_endpoint_declaration_entry(endpoint: Any) -> Optional[Dict[str, Any]]:
     """Publish the plan's typed endpoint in the step's own machine-readable record.
 
@@ -1578,6 +1672,7 @@ def _write_resolved_inputs_manifest(
     host_verified_cohort_execution_receipt: Optional[Mapping[str, Any]] = None,
     host_authorized_ambient_trajectory: Optional[Mapping[str, Any]] = None,
     study_endpoint: Optional[Mapping[str, Any]] = None,
+    rank_scale_columns: Optional[Mapping[str, Any]] = None,
 ) -> Path:
     """Persist the step's authority capsule outside its writable overlay."""
 
@@ -1716,6 +1811,21 @@ def _write_resolved_inputs_manifest(
         payload["study_endpoint"] = {
             "schema_version": STUDY_ENDPOINT_DECLARATION_SCHEMA_VERSION,
             **declaration,
+        }
+    if rank_scale_columns is not None:
+        ranks = dict(rank_scale_columns)
+        declared_columns = ranks.get("columns")
+        # An entry naming no column would publish "nothing here is a rank" with
+        # the host's authority -- the same shape as the ambient-trajectory entry
+        # that shipped `"concepts": []` under a promise of completeness. Refuse
+        # it; the builder returns None when there is nothing to declare.
+        if not isinstance(declared_columns, Mapping) or not declared_columns:
+            raise ValueError(
+                "a rank-scale declaration must name at least one column"
+            )
+        payload["rank_scale_columns"] = {
+            "schema_version": RANK_SCALE_COLUMNS_SCHEMA_VERSION,
+            **ranks,
         }
     if context_path is not None:
         resolved_context = Path(context_path).resolve()
