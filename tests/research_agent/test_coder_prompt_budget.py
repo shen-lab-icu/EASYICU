@@ -932,6 +932,30 @@ def test_compact_rendering_guide_is_structural_not_intent_routed(ra):
     assert "save matching PNG, SVG, PDF, and TIFF" in guide
 
 
+def test_clustering_generation_guide_names_replayable_selection_summary(ra):
+    step = ra.AnalysisStep(
+        step_id="fit_candidate_clusters",
+        intent="Fit the declared candidate clustering solutions.",
+        inputs=["dataset:cluster_features"],
+        expected_outputs=[
+            "statistic:cluster_count",
+            "manifest:cluster_selection",
+            "table:cluster_characteristics",
+        ],
+        method="kmeans_clustering",
+    )
+
+    guide = coder_guide_for_step(load_prompt_pack()["coder"], step)
+
+    assert '"cluster_selection"' in guide
+    assert '"selection_rule"' in guide
+    assert '"selected_n_clusters"' in guide
+    assert '"candidates"' in guide
+    assert '"cluster_stability"' in guide
+    assert '"n_resamples"' in guide
+    assert '"mean_adjusted_rand_index"' in guide
+
+
 @pytest.mark.parametrize(
     ("method", "outputs"),
     [
