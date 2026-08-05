@@ -851,6 +851,23 @@ def trajectory_plan_contract_applies(
         return False
     if long_trajectory_bound:
         return True
+    return trajectory_context_is_bound(context)
+
+
+def trajectory_context_is_bound(context: ResearchContext) -> bool:
+    """Return whether the context carries a typed fixed-window trajectory.
+
+    This is the single context-side applicability boundary shared by prompts
+    and result gates.  A trajectory may be materialized as a typed long input
+    or represented by fixed-window wide variables; ordinary stay-level
+    clustering has neither and must not inherit the trajectory role contract.
+    """
+
+    materialized_trajectory = getattr(
+        getattr(context, "materialized_inputs", None), "trajectory", None
+    )
+    if materialized_trajectory is not None:
+        return True
     return any(
         variable.fixed_window_trajectory is not None
         for variable in (context.variables or [])
@@ -1849,8 +1866,12 @@ def trajectory_role_code_contract(
     *,
     context: ResearchContext,
     step: AnalysisStep,
+    applies: bool = True,
 ) -> str:
     """Return role-local schemas for an agent-decomposed trajectory DAG."""
+
+    if not applies:
+        return ""
 
     # The SCHEMA is still selected from typed products, never task prose. What
     # the context supplies here is not a schema choice but a VOCABULARY: the
@@ -1962,11 +1983,14 @@ def trajectory_role_code_contract(
             "separate stability owner must also preserve the selected method "
             "family, exact representation_columns, selected_n_clusters (or the "
             "full cluster_selection object), id_column, and candidate assignment "
-            "labels. Copy id_column into the cluster-selection manifest and candidate "
-            "model metadata so a downstream stability owner never has to guess it. "
-            "Give every candidate model record a stable model_id and copy the chosen "
-            "record's id into cluster_selection.selected_model_id. Also copy the exact "
-            "clustering_method/model_family into the cluster-selection manifest. "
+            "labels. cluster_selection.json is a closed selection-only manifest: "
+            "write only criterion, selection_rule, direction, selected_n_clusters, "
+            "candidates, and rationale. Do not add role, id_column, "
+            "clustering_method, model_family, fit_method, or selected_model_id to "
+            "that manifest. Give every candidate model record a stable model_id; "
+            "the exact identifier, method, and selected-model metadata belong in "
+            "the candidate solution schema and candidate model metadata so a "
+            "downstream stability owner never has to guess them. "
             "Consume trajectory_representation_schema.json and write "
             "candidate_cluster_solution_schema.json with "
             "schema_version='easyicu.candidate_cluster_solution_schema/2', its exact id_column and "
@@ -2103,6 +2127,7 @@ __all__ = [
     "TrajectoryRoleRequirement",
     "role_declaration_requirement",
     "trajectory_plan_contract_applies",
+    "trajectory_context_is_bound",
     "trajectory_plan_dag_findings",
     "trajectory_planner_contract_guide",
     "trajectory_role_code_contract",

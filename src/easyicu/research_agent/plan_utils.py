@@ -4245,6 +4245,7 @@ def _step_contract_findings(
     completed_step_records: Optional[Sequence[Dict[str, Any]]] = None,
     resolved_input_bindings: Optional[Mapping[str, Mapping[str, Any]]] = None,
     out_dir: Optional[Path] = None,
+    trajectory_role_contract_applies: bool = True,
 ) -> List[ValidationFinding]:
     if not isinstance(step_summary, dict) or not step_summary:
         return [
@@ -4320,6 +4321,7 @@ def _step_contract_findings(
                 resolved_input_bindings=resolved_input_bindings,
             ),
             out_dir=out_dir,
+            trajectory_role_contract_applies=trajectory_role_contract_applies,
         )
     )
     from .figures.distribution_availability import (
