@@ -1173,6 +1173,63 @@ def _sentence_cites_within_its_own_prose(context: str) -> bool:
     return bool(_cited_evidence_ids(text[cursor:]))
 
 
+def _miscitation_detail(
+    candidates: Sequence[tuple[NumericClaim, float]],
+    *,
+    context: str,
+    lineage: Optional[Mapping[str, frozenset[str]]],
+) -> Optional[Dict[str, List[str]]]:
+    """Name the miscitation when a sentence cites a step that owns no such value.
+
+    Three different failures currently leave the same mark on a manuscript:
+    nobody registered this number, several registered claims tie for it, and
+    the sentence cited a step that did not register it. Only the last is a
+    writer error, and only the last can name its fix -- yet all three surfaced
+    as "Manuscript numeric claims disagree with registered step_summary
+    values", which names no sentence, no citation and no owner.
+
+    MEASURED (e1 sepsis 10/10 and e3 KDIGO 11/11, both manuscripts written and
+    both blocked by their own numeric audit): every remaining marker was the
+    cohort size 94,458. The sentence
+
+        The operational denominator comprised 94,458 ICU stays represented in
+        the supplied cohort definition {evidence:00_probe}.
+
+    cites its own source, that source resolves, and restricting the 45
+    candidates to its lineage leaves zero -- ``00_probe``'s two evidence files
+    contain no 94458 at all. The binder was right to refuse. The writer
+    attributed the cohort denominator to a step that has nothing to do with it,
+    and writer.txt already carries the rule with this very number as its worked
+    example, so the gap is not instruction: the writer gets no repair, and the
+    failure never told anyone which step it should have cited instead.
+
+    Returns the cited ids and the ids that DO own the value, or ``None`` when
+    this is not a miscitation.
+    """
+
+    if not candidates or not lineage:
+        return None
+    # No separate empty-`cited` guard: an empty set resolves to an empty
+    # `resolvable` on the next line and returns there. A mutation deleting the
+    # extra check changed nothing, which is what a redundant line looks like.
+    cited = _cited_evidence_ids(context)
+    resolvable = sorted(item for item in cited if item in lineage)
+    if not resolvable:
+        # An unresolved placeholder is its own failure and never scoped
+        # anything, so it cannot have caused this refusal.
+        return None
+    if _restrict_to_cited_evidence(candidates, cited=cited, lineage=lineage):
+        return None
+    owners = sorted(
+        {
+            str(claim.step_id or claim.evidence_id or "")
+            for claim, _ in candidates
+            if (claim.step_id or claim.evidence_id)
+        }
+    )
+    return {"cited": resolvable, "owned_by": owners}
+
+
 def _restrict_to_cited_evidence(
     candidates: Sequence[tuple[NumericClaim, float]],
     *,
@@ -1465,6 +1522,7 @@ def bind_numeric_values(
     skip_spans = _spans_to_skip(manuscript)
     binding_map: Dict[str, NumericClaim] = {}
     untraced: List[str] = []
+    miscited: List[Dict[str, Any]] = []
     used_ids: Dict[str, str] = {}  # claim identity -> footnote_id
     display_values: Dict[str, str] = {}
     previous_step_id: Optional[str] = None
@@ -1516,8 +1574,19 @@ def bind_numeric_values(
         )
         if claim is None:
             untraced.append(value)
+            miscitation = _miscitation_detail(
+                candidates, context=context, lineage=lineage
+            )
+            if miscitation is not None:
+                miscited.append({"value": value, **miscitation})
             if mode is EvidenceEnforcementMode.SOFT:
-                if ambiguous:
+                if miscitation is not None:
+                    out_parts.append(
+                        f" <!-- MISCITED:{value}"
+                        f":cited=[{','.join(miscitation['cited'])}]"
+                        f":owned_by=[{','.join(miscitation['owned_by'])}] -->"
+                    )
+                elif ambiguous:
                     candidate_ids = ",".join(
                         _claim_identity(candidate) for candidate, _ in candidates
                     )
@@ -1568,8 +1637,17 @@ def bind_numeric_values(
         raise EvidenceEnforcementError(
             f"Manuscript contains {len(untraced)} numeric value(s) not "
             f"traceable to any registered claim (STRICT mode). "
-            f"Examples: {untraced[:5]}",
-            detail={"untraced": untraced},
+            f"Examples: {untraced[:5]}"
+            + (
+                # The one refusal that names its own fix. Reported beside the
+                # value list so the reader is not left to guess which sentence
+                # cited what.
+                f" Miscited: {miscited[:3]}"
+                if miscited
+                else ""
+            ),
+            detail={"untraced": untraced, "miscited": miscited} if miscited
+            else {"untraced": untraced},
         )
 
     return bound, binding_map, untraced
