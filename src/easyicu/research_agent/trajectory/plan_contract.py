@@ -1745,15 +1745,19 @@ def trajectory_planner_contract_guide(
                 # can declare. h3 never passed step 01 in any recorded run. One
                 # recorded plan happened to declare the manifest and one did not;
                 # neither was ever told to.
-                "This run's trajectory is bound as the typed LONG input, not as "
-                "wide columns: one row per stay per time per concept, with the "
-                "observation time on each row. There are no "
-                "`<family>_h<start>_<end>` columns to list, so do NOT plan around "
-                "them. The representation owner reads that bound trajectory, "
-                "chooses at least two fixed windows from one concept family "
-                "itself, and MUST declare `manifest:trajectory_window_manifest` "
-                "among its own expected_outputs -- it is the window source, so "
-                "there is no upstream producer to consume one from. "
+                "This run's trajectory is bound as the LONG representation, not "
+                "as wide columns: one row per stay per time per concept, with "
+                "the observation time on each row. There are no "
+                "`<family>_h<start>_<end>` columns to list, so do NOT plan "
+                "around them. The host hands that table to the step's CODE at "
+                "runtime, the same way it hands over the cohort -- it is NOT a "
+                "listable step input and has no name in the executable roster, "
+                "so do NOT put it in `inputs` and do not invent a name for it. "
+                "Plan the representation owner to derive at least two fixed "
+                "windows from one concept family out of that table, and it MUST "
+                "declare `manifest:trajectory_window_manifest` among its own "
+                "expected_outputs -- it is the window source, so there is no "
+                "upstream producer to consume one from. "
             )
         )
         + "The manifest records ordered "
