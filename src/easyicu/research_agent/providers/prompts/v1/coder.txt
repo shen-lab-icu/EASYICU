@@ -265,6 +265,13 @@ Code contract:
   incident-after-exposure endpoint (e.g. first "aki" event whose charttime
   exceeds the first "peep" charttime, among stays AKI-free at baseline), or
   a landmark / time-varying exposure design.
+  MANDATORY when your step declares `manifest:trajectory_window_manifest`
+  among its expected_outputs: the fixed windows come FROM this table, not
+  from cohort column names. Do not scan the analysis cohort for
+  `<family>_h<start>_<end>` columns and do not fail when none exist -- a
+  long-bound run has none by construction. Bin charttime into the windows
+  the step declares, aggregate value_num within each bin per stay and
+  concept, and record the windows you used in the manifest.
   MANDATORY when a timing/onset/incident question is being gated: if
   TRAJECTORY_PARQUET is set and contains the concept(s) the endpoint needs,
   you MUST construct the onset / incident endpoint FROM THE TRAJECTORY
