@@ -1725,11 +1725,38 @@ def trajectory_planner_contract_guide(
         "fit/assignment artifacts; it must not repeat selection tables, cluster "
         "sizes, profiles, outcomes, or figures. Connect separate owners through "
         "explicit typed producer/consumer edges. "
-        "If representation reads raw fixed-window columns directly, list them in "
-        "its inputs. If it instead reads an upstream aligned panel, the panel "
-        "producer must list the raw fixed-window columns in its inputs, produce "
-        "both the panel and `manifest:trajectory_window_manifest`, and the "
-        "representation owner must consume both. The manifest records ordered "
+        + (
+            # The wide tier only. A long-bound run has no `<family>_h<start>_<end>`
+            # column to list, so telling it to list them describes work it cannot
+            # do -- and the contract then refuses it for not having done it.
+            (
+                "If representation reads raw fixed-window columns directly, list "
+                "them in its inputs. If it instead reads an upstream aligned "
+                "panel, the panel producer must list the raw fixed-window columns "
+                "in its inputs, produce both the panel and "
+                "`manifest:trajectory_window_manifest`, and the representation "
+                "owner must consume both. "
+            )
+            if not long_trajectory_bound
+            else (
+                # MEASURED: rendered for a long-bound run this guide mentioned the
+                # long tier ZERO times -- no charttime, no value_num, no stay_id --
+                # while the contract refused the plan for windows only a wide run
+                # can declare. h3 never passed step 01 in any recorded run. One
+                # recorded plan happened to declare the manifest and one did not;
+                # neither was ever told to.
+                "This run's trajectory is bound as the typed LONG input, not as "
+                "wide columns: one row per stay per time per concept, with the "
+                "observation time on each row. There are no "
+                "`<family>_h<start>_<end>` columns to list, so do NOT plan around "
+                "them. The representation owner reads that bound trajectory, "
+                "chooses at least two fixed windows from one concept family "
+                "itself, and MUST declare `manifest:trajectory_window_manifest` "
+                "among its own expected_outputs -- it is the window source, so "
+                "there is no upstream producer to consume one from. "
+            )
+        )
+        + "The manifest records ordered "
         "source columns with family and window boundaries; it is provenance, not "
         "permission for the framework to choose a horizon, method, k, threshold, "
         "or missing-data policy.\n"
