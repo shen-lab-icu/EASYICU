@@ -41,6 +41,7 @@ from easyicu.research_agent.repairs.reasons import (
     repair_prompt_binding_sha256,
 )
 from easyicu.research_agent.schema import (
+    ClusterSelectionManifest,
     MissingnessProfile,
     PlannedModelRequirement,
     TemporalConstraint,
@@ -947,10 +948,20 @@ def test_clustering_generation_guide_names_replayable_selection_summary(ra):
 
     guide = coder_guide_for_step(load_prompt_pack()["coder"], step)
 
+    manifest_schema = json.dumps(
+        ClusterSelectionManifest.model_json_schema(),
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    assert manifest_schema in guide
     assert '"cluster_selection"' in guide
     assert '"selection_rule"' in guide
     assert '"selected_n_clusters"' in guide
     assert '"candidates"' in guide
+    assert '"minimum","maximum","elbow","multi_criteria"' in guide
+    assert "Pair `minimum` only with `minimize`" in guide
+    assert "the same closed object both to `cluster_selection.json`" in guide
     assert '"cluster_stability"' in guide
     assert '"n_resamples"' in guide
     assert '"mean_adjusted_rand_index"' in guide

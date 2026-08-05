@@ -24,6 +24,7 @@ from ..plan_utils import (
 from ..schema import (
     PLANNED_MODEL_REQUIREMENTS_STEP_METHOD,
     AnalysisStep,
+    ClusterSelectionManifest,
     ConceptDescriptor,
     ResearchContext,
 )
@@ -164,6 +165,36 @@ _COMPACT_SERIALIZATION_GUIDANCE = """OUTPUT SERIALIZATION CONTRACT:
 - JSON values must be Python primitives. Convert NumPy scalars to int/float/bool, arrays to lists, and pandas/NumPy missing or non-finite values to None; always pass a `default=` converter to `json.dump`.
 - Every CSV cell must be one scalar. Emit separate columns for median, quartiles, counts, and percentages; emit one row per categorical level.
 - Never assign the result of an inplace pandas operation, and prefer stable `.agg`/`.transform` over mixed-shape `groupby.apply`."""
+
+
+def _cluster_selection_manifest_guidance(*, declared_manifest: bool) -> str:
+    """Render the Coder contract from the validator-owned public schema."""
+
+    schema = json.dumps(
+        ClusterSelectionManifest.model_json_schema(),
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    artifact_contract = (
+        " Because this step declares `manifest:cluster_selection`, write the "
+        "same closed object both to `cluster_selection.json` and to the top-level "
+        "`step_summary.json` key `cluster_selection`; put method, model, role, "
+        "identifier, and other methodology metadata in a separate declared "
+        "artifact rather than adding keys to this manifest."
+        if declared_manifest
+        else ""
+    )
+    return (
+        "AUTHORITATIVE CLUSTER-SELECTION MANIFEST CONTRACT "
+        "(generated from ClusterSelectionManifest; copy literal values exactly):\n"
+        f"{schema}\n"
+        "Candidate `n_clusters` values must be unique and the selected value must "
+        "be one of them. Pair `minimum` only with `minimize` and `maximum` only "
+        "with `maximize`; `elbow` or `multi_criteria` requires a non-empty "
+        "rationale. The manifest is closed and rejects extra keys."
+        + artifact_contract
+    )
 
 _COMPACT_RENDER_ONLY_GUIDANCE = """RENDER-ONLY PUBLICATION FIGURE CONTRACT:
 - Use only the exact digest-bound typed inputs in `EASYICU_RESOLVED_INPUTS_JSON`. Read that environment value as a JSON-file path, verify each declared evidence id/path/digest and product schema, and never scan the run/evidence directory, reuse an earlier figure, rank historical records, or choose columns by dtype/position.
@@ -451,9 +482,10 @@ def coder_guide_for_step(
     is_cohort_change = cohort_change_contract_applies(step)
     is_robustness = _robustness_contract_applies(step)
     is_reporting = _reporting_contract_applies(step)
+    is_clustering = clustering_contract_applies(step)
     is_trajectory = bool(
         trajectory_step_roles(step)
-        or clustering_contract_applies(step)
+        or is_clustering
         or step.trajectory_stability_spec is not None
     )
 
@@ -586,6 +618,12 @@ def coder_guide_for_step(
         parts.append(_COMPACT_MECHANICAL_GUIDANCE)
     if "serialization" not in _exclude_sections:
         parts.append(_COMPACT_SERIALIZATION_GUIDANCE)
+    if is_clustering:
+        parts.append(
+            _cluster_selection_manifest_guidance(
+                declared_manifest="cluster_selection" in output_names,
+            )
+        )
     if step.table_one_spec is not None:
         parts.append(_TABLE_ONE_SDK_GUIDANCE)
     if compact_adjusted_clinical:
