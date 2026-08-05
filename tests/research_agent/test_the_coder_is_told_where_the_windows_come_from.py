@@ -162,3 +162,38 @@ def test_the_coder_is_told_the_concept_vocabulary_is_in_the_table():
     # And it must say that the missing authorization is not a reason to stop.
     assert "not a\n  reason to block" in text or "not a reason to block" in text
     assert "instead of emitting an empty representation" in text
+
+
+def test_the_per_step_contract_does_not_name_a_key_that_does_not_exist():
+    """The near-miss key came from the host's own wording.
+
+    verify39's script wrote ``ordered_observation_columns``; the host requires
+    ``observation_columns``. The per-step Coder contract said, verbatim,
+    "observation_family, ordered observation_columns, ..." -- read as one
+    identifier that is the wrong one. Ordering is a property of the list, not
+    part of its name.
+    """
+
+    import inspect
+
+    from easyicu.research_agent.trajectory import plan_contract
+
+    source = inspect.getsource(plan_contract.trajectory_role_code_contract)
+    assert "ordered observation_columns" not in source
+    assert "observation_columns (in model order)" in source
+
+
+def test_concept_names_must_be_read_not_constructed():
+    """verify42: it queried `sofa_resp`; the table holds `sofa2_resp`.
+
+    All eight concepts were present and none unavailable -- sofa2, sofa2_resp,
+    sofa2_coag, sofa2_liver, sofa2_cardio, sofa2_cns, sofa2_renal, lact. The
+    script built family names from the research question's prose ("SOFA
+    components and lactate") instead of from the column, and every SOFA name it
+    used was one character off.
+    """
+
+    text = _text()
+
+    assert "VERBATIM from the column" in text
+    assert "never construct a concept name from the" in text

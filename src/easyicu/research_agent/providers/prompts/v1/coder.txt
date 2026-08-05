@@ -278,7 +278,11 @@ Code contract:
   reason to block: the trajectory was bound with its concepts already
   materialized. Match the families your step needs against the values that
   are actually present, use those, and record any you could not find as
-  unavailable instead of emitting an empty representation.
+  unavailable instead of emitting an empty representation. Take those
+  values VERBATIM from the column; never construct a concept name from the
+  research question's wording. A question about "SOFA components and
+  lactate" does not mean the table holds `sofa_resp` or `lactate` -- read
+  what is there and use exactly that.
   MANDATORY when your step declares `manifest:trajectory_representation_schema`
   among its expected_outputs: that JSON file's key names are a fixed host
   contract, not free-form description. It MUST contain exactly these keys,
