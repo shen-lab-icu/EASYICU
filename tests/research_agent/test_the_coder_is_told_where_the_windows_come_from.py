@@ -65,3 +65,71 @@ def test_the_optional_framing_still_covers_the_other_uses():
     assert "OPTIONAL trajectory" in text
     assert "threshold-crossing onset" in text
     assert "MANDATORY when a timing/onset/incident question is being gated" in text
+
+
+def test_the_coder_is_given_the_exact_schema_key_names():
+    """verify39: one key name cost the whole step, after it had already run.
+
+    h3 03_construct_fixed_anchor_trajectories executed, read the long
+    trajectory, built hourly windows and wrote a rich schema -- and was refused
+    with a single issue: ``observation_columns is missing``. It had written
+    ``ordered_observation_columns``.
+
+    The required key set is stated in the PLANNER guide (plan_contract.py,
+    "id_column, observation_family, ordered observation_columns, ...") and
+    appeared ZERO times in every prompt the Coder sees -- and the Coder is the
+    one that writes the file. The planner phrasing "ordered observation_columns"
+    is itself the likely source of the near-miss.
+    """
+
+    text = _text()
+
+    assert "manifest:trajectory_representation_schema" in text
+    for key in (
+        "id_column",
+        "observation_family",
+        "observation_columns",
+        "profile_columns",
+        "representation_columns",
+        "frozen_population_n",
+        "representation_sha256",
+        "trailing_na_policy",
+    ):
+        # BACKTICKED, not substring. A plain `key in text` passes when the list
+        # says `ordered_observation_columns` -- the very near-miss this exists
+        # to prevent -- because the required name is a substring of the wrong
+        # one. That mutation survived the first version of this test, which is
+        # the third time this branch has been bitten by substring-vs-name.
+        assert f"`{key}`" in text, key
+    # And it warns about the exact near-miss that was observed.
+    assert "ordered_observation_columns" in text
+
+
+def test_the_disclosed_keys_are_the_ones_the_host_actually_requires():
+    """A prompt that lists the wrong keys is worse than one that lists none."""
+
+    import inspect
+
+    from easyicu.research_agent.trajectory import plan_contract
+
+    source = inspect.getsource(plan_contract)
+    start = source.index("trajectory_representation_schema_incomplete")
+    block = source[max(0, start - 1400) : start]
+    required = {
+        key
+        for key in (
+            "id_column",
+            "observation_family",
+            "observation_columns",
+            "profile_columns",
+            "representation_columns",
+            "frozen_population_n",
+            "representation_sha256",
+        )
+        if f'"{key}"' in block
+    }
+    assert len(required) >= 6, required
+
+    text = _text()
+    for key in required:
+        assert f"`{key}`" in text, key
