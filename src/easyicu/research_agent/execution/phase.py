@@ -6003,8 +6003,11 @@ def run_execute_phase(
             ),
             host_authorized_ambient_trajectory=(
                 host_authorized_ambient_trajectory_entry(
+                    # The unscoped context: this entry describes the staged
+                    # table, and `coder_context` is the step-scoped projection
+                    # whose concept list a long-bound run empties out.
                     getattr(
-                        getattr(coder_context, "materialized_inputs", None),
+                        getattr(context, "materialized_inputs", None),
                         "trajectory",
                         None,
                     )

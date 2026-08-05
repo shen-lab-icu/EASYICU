@@ -1448,11 +1448,31 @@ def host_authorized_ambient_trajectory_entry(
         return None
     if any(value not in columns for value in resolved_roles.values()):
         raise ValueError("trajectory role columns must exist in the bound table")
+    # `concepts` is published as "the whole vocabulary present in the table",
+    # which is a property of the TABLE, not of one step.  The per-step scoped
+    # projection narrows this list to the concepts the step's declared
+    # variables select -- and a LONG-bound run declares no trajectory
+    # variables at all, so that intersection is empty by construction.
+    #
+    # MEASURED: handed the scoped projection, this builder published
+    # `"concepts": []` under a sentence promising completeness. A record that
+    # asserts it is complete and lists nothing is worse than no record: it
+    # tells the agent, with the host's authority, that the table is empty.
+    # Refuse the scoped projection instead of narrowing the claim.
+    scope = str(getattr(trajectory, "projection_scope", "full") or "full")
+    if scope != "full":
+        raise ValueError(
+            "the ambient trajectory entry publishes the table's complete "
+            "vocabulary and must be built from the unscoped context, not "
+            f"from a {scope!r} projection"
+        )
     concepts = [
         str(item)
         for item in (getattr(trajectory, "materialized_concepts", None) or ())
         if str(item).strip()
     ]
+    if not concepts:
+        return None
     window = getattr(trajectory, "window", None)
     entry: Dict[str, Any] = {
         "access": "TRAJECTORY_PARQUET",
