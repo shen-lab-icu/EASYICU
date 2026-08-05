@@ -506,6 +506,18 @@ def _static_integer_upper_bound(
     if (
         isinstance(node, ast.Call)
         and isinstance(node.func, ast.Name)
+        and node.func.id == "int"
+        and len(node.args) == 1
+        and not node.keywords
+    ):
+        return _static_integer_upper_bound(
+            node.args[0],
+            assignments=assignments,
+            seen=seen,
+        )
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
         and node.func.id == "min"
     ):
         bounds = [
@@ -598,19 +610,15 @@ def _large_cohort_silhouette_violations(
             missing_contracts.append("sample_size")
         random_state = keywords.get("random_state")
         deterministic_random_state = (
-            isinstance(random_state, ast.Constant)
-            and isinstance(random_state.value, int)
-            and not isinstance(random_state.value, bool)
-        ) or (
             isinstance(random_state, ast.Name)
-            and (
-                random_state.id in fixed_seed_names
-                or _static_integer_upper_bound(
-                    random_state,
-                    assignments=assignments,
-                )
-                is not None
+            and random_state.id in fixed_seed_names
+        ) or (
+            random_state is not None
+            and _static_integer_upper_bound(
+                random_state,
+                assignments=assignments,
             )
+            is not None
         )
         if not deterministic_random_state:
             missing_contracts.append("random_state")

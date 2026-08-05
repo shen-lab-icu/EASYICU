@@ -117,6 +117,25 @@ for seed in (17, 29, 41):
     )
 
 
+def test_large_cohort_accepts_integer_wrapped_bounded_contract() -> None:
+    code = f"""\
+from sklearn.metrics import silhouette_score
+SILHOUETTE_ROWS = min({PAIRWISE_EVALUATION_MAX_SAMPLE_SIZE}, len(feature_matrix))
+SILHOUETTE_SEED = 1729
+score = silhouette_score(
+    feature_matrix,
+    cluster_labels,
+    sample_size=int(SILHOUETTE_ROWS),
+    random_state=int(SILHOUETTE_SEED),
+)
+"""
+
+    assert not _budget_violations(
+        code,
+        n_stays=PAIRWISE_EVALUATION_FULL_COHORT_MAX_ROWS + 1,
+    )
+
+
 def test_large_cohort_rejects_sample_larger_than_bound() -> None:
     code = f"""\
 from sklearn.metrics import silhouette_score
