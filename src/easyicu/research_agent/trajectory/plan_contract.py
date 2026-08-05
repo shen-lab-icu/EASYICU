@@ -1852,7 +1852,27 @@ def trajectory_role_code_contract(
 ) -> str:
     """Return role-local schemas for an agent-decomposed trajectory DAG."""
 
-    del context  # Schema is selected from typed products, never task prose.
+    # The SCHEMA is still selected from typed products, never task prose. What
+    # the context supplies here is not a schema choice but a VOCABULARY: the
+    # exact concept ids materialized in the bound trajectory.
+    #
+    # verify42 is why. The bound table held sofa2, sofa2_resp, sofa2_coag,
+    # sofa2_liver, sofa2_cardio, sofa2_cns, sofa2_renal and lact -- all eight
+    # present, none unavailable -- and the script queried sofa_resp, sofa_coag,
+    # sofa_liver: every name one character off, built from the question's phrase
+    # "SOFA components and lactate". Telling it to read the column helped
+    # (verify43 began using sofa2) but left it still assembling names. Naming
+    # them removes the guess.
+    materialized_concepts: Tuple[str, ...] = ()
+    trajectory_input = getattr(
+        getattr(context, "materialized_inputs", None), "trajectory", None
+    )
+    if trajectory_input is not None:
+        materialized_concepts = tuple(
+            str(item)
+            for item in (getattr(trajectory_input, "materialized_concepts", None) or ())
+            if str(item).strip()
+        )
     products = _step_products(step)
     declarations = {product for _kind, product in products}
     sections: List[str] = []
@@ -1868,6 +1888,17 @@ def trajectory_role_code_contract(
             "source column its exact name, window_start_hours, and "
             "window_end_hours. Derive these fields from the declared source "
             "inputs. Do not silently omit an internal available bin."
+        )
+    if materialized_concepts and (
+        window_manifests or "trajectory_membership" in declarations
+    ):
+        sections.append(
+            "BOUND TRAJECTORY VOCABULARY: the long trajectory input materializes "
+            "exactly these concept ids, and its `concept` column contains these "
+            f"values verbatim: {', '.join(sorted(materialized_concepts))}. Select "
+            "the families your role needs from THIS list by exact string; do not "
+            "derive a concept id from the research question's wording, and do not "
+            "report a family as absent without checking this list first."
         )
     if "trajectory_membership" in declarations:
         sections.append(
