@@ -47,7 +47,11 @@ def typed_parent_schema_context_block(
             )
             + "\nColumn order/names and json_structure paths/keys are physical "
             "schema facts, not scientific role assignments. JSON paths use JSON "
-            "Pointer syntax; the empty path is the document root. "
+            "Pointer syntax; the empty path is the document root. Each `paths` "
+            "mapping key is the JSON Pointer to load from the document; its mapping "
+            "value is that location's type/shape descriptor and is not itself a "
+            "pointer. Object `keys` also enumerate scalar children even when those "
+            "leaves have no separate `paths` entry. "
             "object_item_keys list keys observed across an object array, while "
             "object_item_keys_consistent states whether every item has that key "
             "set. No JSON data values are promoted into this receipt. "

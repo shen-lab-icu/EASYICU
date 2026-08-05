@@ -1211,6 +1211,72 @@ def test_json_structure_receipt_names_nested_object_array_coordinates(
     )
 
 
+def test_json_structure_receipt_does_not_spend_path_budget_on_scalar_leaves(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "feature_missingness_sensitivity.json"
+    features = [f"feature_{index}" for index in range(12)]
+    scalar_audit = {f"column_{index}": 0 for index in range(36)}
+    source.write_text(
+        json.dumps(
+            {
+                "name": "feature_missingness_sensitivity",
+                "cohort_n": 94_458,
+                "feature_panel": {
+                    "all_features": features,
+                    "primary_representation": {
+                        "included_features": features,
+                        "value_columns": [f"{value}_first" for value in features],
+                    },
+                    "secondary_representation": {
+                        "included_features": features[:10],
+                        "value_columns": [
+                            f"{value}_first" for value in features[:10]
+                        ],
+                    },
+                },
+                "feature_audit": {
+                    feature: {
+                        "value_column": f"{feature}_first",
+                        "n_full": 94_458,
+                        "n_value_available": 47_229,
+                        "primary_representation": {
+                            "included": True,
+                            "imputation": "median",
+                        },
+                        "secondary_representation": {
+                            "included": index < 10,
+                            "exclusion_rule": "missingness_gt_50pct",
+                        },
+                    }
+                    for index, feature in enumerate(features)
+                },
+                "raw_nonfinite_nonmissing_n": scalar_audit,
+                "newly_invalid_numeric_coercions_n": scalar_audit,
+            }
+        ),
+        encoding="utf-8",
+    )
+    expected_sha256 = sha256_of_file(source)
+
+    receipt = typed_schema_contracts.typed_json_structure_receipt(
+        artifact_path=source,
+        expected_sha256=expected_sha256,
+    )
+
+    assert receipt is not None
+    paths = receipt["paths"]
+    assert len(paths) < 128
+    assert paths["/feature_panel/secondary_representation/included_features"] == {
+        "type": "array",
+        "length": 10,
+        "item_types": ["string"],
+    }
+    assert paths["/raw_nonfinite_nonmissing_n"]["keys"] == list(scalar_audit)
+    assert "/cohort_n" not in paths
+    assert "/raw_nonfinite_nonmissing_n/column_0" not in paths
+
+
 def test_json_artifact_binding_publishes_structure_without_value_authority(
     tmp_path: Path,
 ) -> None:
@@ -1265,6 +1331,8 @@ def test_json_artifact_binding_publishes_structure_without_value_authority(
     assert '"/components"' in block
     assert '"source_column"' in block
     assert "JSON Pointer" in block
+    assert "mapping key is the JSON Pointer" in block
+    assert "descriptor and is not itself a pointer" in block
     assert "lact_first" not in block
 
 
@@ -1402,9 +1470,7 @@ def test_non_tabular_json_artifact_gets_value_free_v1_structure(
         "type": "object",
         "keys": ["status"],
     }
-    assert contract["json_structure"]["paths"]["/status"] == {
-        "type": "string"
-    }
+    assert "/status" not in contract["json_structure"]["paths"]
     assert "ok" not in json.dumps(contract["json_structure"])
 
 

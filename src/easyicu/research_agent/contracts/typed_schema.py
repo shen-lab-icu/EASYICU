@@ -224,7 +224,11 @@ def typed_json_structure_receipt(
     """Seal bounded structural coordinates for exact JSON bytes.
 
     Values are intentionally excluded. Paths and keys describe only where a
-    consumer can find values in the digest-bound serialization.
+    consumer can find values in the digest-bound serialization. Object ``keys``
+    already enumerate scalar children, so only the root and nested containers
+    consume path-budget entries; repeating every scalar leaf would add no
+    coordinate and can hide useful nested containers behind the bounded path
+    limit.
     """
 
     artifact_path = Path(artifact_path)
@@ -284,6 +288,8 @@ def typed_json_structure_receipt(
         if depth >= _MAX_TYPED_JSON_DEPTH or not isinstance(value, Mapping):
             return
         for key, child in value.items():
+            if not isinstance(child, (Mapping, list)):
+                continue
             visit(child, _json_pointer_child(path, str(key)), depth + 1)
 
     try:
