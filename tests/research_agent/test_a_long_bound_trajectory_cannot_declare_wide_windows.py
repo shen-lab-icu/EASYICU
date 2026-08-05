@@ -255,7 +255,15 @@ def test_the_guide_tells_a_long_bound_planner_what_it_can_actually_do():
     )
     assert long_guide
     # It names the tier the run actually has...
-    assert "bound as the typed LONG input" in long_guide
+    assert "bound as the LONG representation" in long_guide
+    # ...and says plainly that it is NOT a listable input. verify36's planner,
+    # told only to "read that bound trajectory", invented the name
+    # `trajectory_long` and was refused: CohortSchemaError, "not an exact
+    # executable sealed cohort column". The table is ambient -- the host hands
+    # it to the step's code as TRAJECTORY_PARQUET, exactly like the cohort, and
+    # coder.txt already documents that. There is no input name to give.
+    assert "NOT a listable step input" in long_guide
+    assert "do not invent a name for it" in long_guide
     # ...tells it to declare the manifest it is the source of...
     assert "MUST declare `manifest:trajectory_window_manifest`" in long_guide
     # ...and stops describing columns the run does not have.
@@ -303,4 +311,4 @@ def test_a_wide_run_is_still_told_the_wide_contract():
 
     assert wide_guide
     assert "raw fixed-window columns" in wide_guide
-    assert "bound as the typed LONG input" not in wide_guide
+    assert "bound as the LONG representation" not in wide_guide
