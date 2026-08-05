@@ -157,3 +157,56 @@ def test_the_waiver_is_conditioned_on_the_tier_not_granted_to_everyone():
             if isinstance(node, ast.Name)
         }
         assert "long_trajectory_bound" in names, ast.dump(guard.value.values[0])
+
+
+def test_the_recorded_plan_now_clears_the_whole_trajectory_contract():
+    """h3's real plan, end to end: every wide-topology assumption removed.
+
+    The refusals came in a chain, each presuming the representation either reads
+    wide window columns or imports a panel someone else built:
+      * it must consume a window manifest from that panel's producer;
+      * that manifest must resolve to one upstream producer;
+      * it must select two fixed windows from one declared family.
+    A long-bound representation reads the bound long trajectory and EMITS the
+    manifest itself, so it is the window source -- there is no upstream to
+    resolve and no lineage to import.
+    """
+
+    recorded = _recorded_h3()
+    if recorded is None:
+        pytest.skip("no recorded h3 plan is mounted")
+    plan, context = recorded
+
+    assert _reasons(plan, context, long_bound=True) == []
+
+
+def test_a_wide_run_still_needs_its_manifest_lineage():
+    """The waiver is keyed to the tier; wide runs keep every rule."""
+
+    import ast
+    import inspect
+
+    from easyicu.research_agent.trajectory import plan_contract
+
+    tree = ast.parse(inspect.getsource(plan_contract))
+    guards = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name)
+            and target.id == "representation_emits_the_manifest"
+            for target in node.targets
+        )
+    ]
+    assert guards, "the long-tier window-source waiver is gone"
+    for guard in guards:
+        assert isinstance(guard.value, ast.BoolOp) and isinstance(
+            guard.value.op, ast.And
+        )
+        names = {
+            node.id
+            for node in ast.walk(guard.value.values[0])
+            if isinstance(node, ast.Name)
+        }
+        assert "long_trajectory_bound" in names
