@@ -3967,6 +3967,18 @@ def _repair_specialization(
             "do not rename, stringify, or fabricate an upstream source merely to "
             "evade trace validation. Preserve plotted values, denominators, source "
             "row indices, source table names, and the FigureContract unchanged.\n"
+            "  ONE PANEL PER FILE when panels read different upstream columns. "
+            "A single parent feeding several panels that each draw a DIFFERENT "
+            "upstream column cannot be stacked into one long `value` column: "
+            "that column then alternates between the parent's columns row by "
+            "row, so no single upstream vector matches it and every column "
+            "arrives unverified -- including the ones that would have verified "
+            "on their own. Split the bundle so each exported table is "
+            "row-aligned against exactly one upstream column, and keep the "
+            "upstream column's own name. If the figure plots a rescaled or "
+            "standardized version of a value, export the upstream raw value "
+            "row-aligned; the rescaling is a rendering choice reproducible from "
+            "it and does not belong in the bundle as a second value column.\n"
         )
 
     if RepairRoute.STRUCTURAL_ACCOUNTING in repair_routes:
