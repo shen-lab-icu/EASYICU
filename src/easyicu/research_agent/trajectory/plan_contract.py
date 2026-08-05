@@ -1212,13 +1212,33 @@ def evaluate_trajectory_plan_dag(
                     if len(producers) == 1
                 }
             )
-            if not manifest_inputs:
+            # This branch presumes one of two topologies: the representation
+            # reads wide window columns directly, or it reads a panel someone
+            # else built and therefore must consume that producer's manifest.
+            # A LONG-bound run has a third: the representation reads the bound
+            # long trajectory (stay_id / charttime / concept / value_num) and
+            # emits the window manifest ITSELF, because it is the step that
+            # chooses the windows. Requiring it to consume a manifest from an
+            # upstream producer asks it to import provenance it is the source
+            # of -- the same wide-topology assumption as the window-family rule
+            # below, one rule over.
+            representation_emits_the_manifest = long_trajectory_bound and any(
+                _is_window_manifest_product(product)
+                for product in _step_products(representation_step)
+            )
+            if representation_emits_the_manifest:
+                # It IS the window source: it reads the bound long trajectory
+                # and declares the windows it chose. There is no upstream
+                # producer to resolve, and no panel lineage to import.
+                pass
+            elif not manifest_inputs:
                 findings.append(
                     _finding(
                         "trajectory_window_manifest_missing",
                         "A representation built from an upstream panel must consume "
                         "a typed trajectory-window manifest from that panel's producer.",
                         step_id=representation_owner,
+                        long_trajectory_bound=long_trajectory_bound,
                     )
                 )
             elif len(manifest_producers) != 1:
