@@ -256,9 +256,18 @@ Code contract:
   write the precise invalid-row reason to `step_summary.json`, leave
   `figure_files` empty, and emit no partial accounting figure.
 - OPTIONAL trajectory: if os.environ.get("TRAJECTORY_PARQUET") is set, it
-  is a LONG per-timepoint table with columns
+  is a LONG per-timepoint table, usually
   (stay_id, charttime, concept, value_num, value_str) — charttime is
-  hours from ICU admission, value_num the numeric view. Use it (joined to
+  hours from ICU admission, value_num the numeric view. Do not guess those
+  names: EASYICU_RESOLVED_INPUTS_JSON carries
+  `host_authorized_ambient_inputs.trajectory` with the path, sha256, the role
+  of each column, the time unit/origin, and `concepts`, the exact and complete
+  vocabulary in the table. Read roles and concepts there; select concepts by
+  exact string from that list. That entry is the host's authorization: a
+  verified host-staged input, NOT an undeclared file. Its absence from
+  `inputs` is by design (it has no name in the executable roster) and is not
+  a reason to refuse to read it, to substitute an empty frame, or to fall
+  back to cohort columns. Use it (joined to
   the cohort on stay_id) when the wide cohort's per-stay summaries cannot
   express what the step needs: a threshold-crossing onset (e.g. first
   charttime where concept=="map" and value_num<65 = hypotension onset), an

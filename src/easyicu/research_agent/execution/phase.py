@@ -265,6 +265,7 @@ from ..authority.typed_binding import (
     _typed_parent_schema_context_block,
     _write_host_input_binding_receipts,
     _write_resolved_inputs_manifest,
+    host_authorized_ambient_trajectory_entry,
     host_owns_input_binding_receipts,
 )
 from ..gates.contract import (  # execute-layer collaborators use the canonical gate API
@@ -5999,6 +6000,15 @@ def run_execute_phase(
                 primary_cohort_execution_receipt
                 if step_execution_cohort_path == universe_path
                 else None
+            ),
+            host_authorized_ambient_trajectory=(
+                host_authorized_ambient_trajectory_entry(
+                    getattr(
+                        getattr(coder_context, "materialized_inputs", None),
+                        "trajectory",
+                        None,
+                    )
+                )
             ),
         )
         coder_authority = attach_step_coder_input_authority(

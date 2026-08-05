@@ -79,8 +79,13 @@ __all__ = [
     "_typed_parent_schema_context_block",
     "_write_host_input_binding_receipts",
     "_write_resolved_inputs_manifest",
+    "host_authorized_ambient_trajectory_entry",
     "host_owns_input_binding_receipts",
 ]
+
+HOST_AUTHORIZED_AMBIENT_INPUTS_SCHEMA_VERSION = (
+    "easyicu.host_authorized_ambient_inputs/1"
+)
 
 _RESUME_TYPED_INPUT_BINDING_FINGERPRINT_SCHEMA_VERSION = (
     "easyicu.resume_typed_input_bindings/2"
@@ -1385,6 +1390,98 @@ def _validated_primary_cohort_execution_receipt(
     return payload
 
 
+def host_authorized_ambient_trajectory_entry(
+    trajectory: Any,
+) -> Optional[Dict[str, Any]]:
+    """Describe the ambient long trajectory in the step's own typed record.
+
+    The host stages this table, verifies it to a SHA-256, and hands its path
+    to every step through ``TRAJECTORY_PARQUET``.  It is deliberately NOT a
+    Planner-declared input: it has no name in the executable roster, and the
+    plan contract refuses a plan that lists one.  Until now that decision was
+    published to the agent only as prompt prose, while the one machine-readable
+    record the generated script opens and verifies -- ``resolved_inputs`` --
+    named the cohort and nothing else.
+
+    MEASURED: a step that declared ``manifest:trajectory_window_manifest``, and
+    whose prompt therefore carried the MANDATORY paragraph saying its windows
+    come from this table, wrote a correct loader for it and then discarded the
+    result::
+
+        # This step has only the typed analysis-cohort input.  Use the
+        # explicitly registered fixed-window columns and do not process the
+        # undeclared, potentially very large trajectory table.
+        trajectory = pd.DataFrame()
+
+    It then died on the empty frame.  The premise in that comment is what has
+    to go: the code trusted its typed record over the prose, and the record
+    agreed with it.  Naming the table here -- with the same relative path,
+    digest and role columns the cohort entry carries -- makes "undeclared"
+    false rather than arguing with it.
+
+    Returns ``None`` when no trajectory is bound, so a wide-column run and a
+    non-trajectory run produce a byte-identical manifest.
+    """
+
+    if trajectory is None:
+        return None
+    relative_path = str(getattr(trajectory, "trajectory_file", "") or "").strip()
+    digest = str(getattr(trajectory, "trajectory_sha256", "") or "").strip()
+    if not relative_path or not digest:
+        return None
+    columns = [
+        str(item)
+        for item in (getattr(trajectory, "trajectory_columns", None) or ())
+        if str(item).strip()
+    ]
+    roles = {
+        "identity_column": getattr(trajectory, "identity_column", None),
+        "time_column": getattr(trajectory, "time_column", None),
+        "concept_column": getattr(trajectory, "concept_column", None),
+        "numeric_value_column": getattr(trajectory, "numeric_value_column", None),
+        "text_value_column": getattr(trajectory, "text_value_column", None),
+    }
+    resolved_roles = {
+        key: str(value) for key, value in roles.items() if str(value or "").strip()
+    }
+    if not columns or len(resolved_roles) != len(roles):
+        return None
+    if any(value not in columns for value in resolved_roles.values()):
+        raise ValueError("trajectory role columns must exist in the bound table")
+    concepts = [
+        str(item)
+        for item in (getattr(trajectory, "materialized_concepts", None) or ())
+        if str(item).strip()
+    ]
+    window = getattr(trajectory, "window", None)
+    entry: Dict[str, Any] = {
+        "access": "TRAJECTORY_PARQUET",
+        "relative_path": relative_path,
+        "sha256": digest,
+        "columns": columns,
+        "concepts": concepts,
+        "authorization": (
+            "Host-staged and host-verified. Reading this table in this step is "
+            "authorized: it is not an undeclared file. It is deliberately not a "
+            "Planner-declared input and must never be added to `inputs`. Select "
+            "concepts by exact string from `concepts`; that list is the whole "
+            "vocabulary present in the table."
+        ),
+    }
+    entry.update(resolved_roles)
+    for field, key in (
+        ("trajectory_rows", "row_count"),
+        ("time_unit", "time_unit"),
+        ("time_origin", "time_origin"),
+    ):
+        value = getattr(trajectory, field, None)
+        if value is not None and str(value).strip():
+            entry[key] = value
+    if isinstance(window, Mapping) and window:
+        entry["window"] = dict(window)
+    return entry
+
+
 def _write_resolved_inputs_manifest(
     *,
     run_dir: Path,
@@ -1394,6 +1491,7 @@ def _write_resolved_inputs_manifest(
     context_path: Optional[Path] = None,
     raw_input_contracts: Optional[Mapping[str, Any]] = None,
     host_verified_cohort_execution_receipt: Optional[Mapping[str, Any]] = None,
+    host_authorized_ambient_trajectory: Optional[Mapping[str, Any]] = None,
 ) -> Path:
     """Persist the step's authority capsule outside its writable overlay."""
 
@@ -1491,6 +1589,27 @@ def _write_resolved_inputs_manifest(
         payload["raw_input_contracts"] = raw_payload
     if validated_cohort_receipt is not None:
         payload["host_verified_cohort_execution_receipt"] = validated_cohort_receipt
+    if host_authorized_ambient_trajectory is not None:
+        ambient = dict(host_authorized_ambient_trajectory)
+        ambient_relative = str(ambient.get("relative_path", "") or "")
+        ambient_path = (Path(run_dir).resolve() / ambient_relative).resolve()
+        try:
+            ambient_path.relative_to(Path(run_dir).resolve())
+        except ValueError as exc:
+            raise ValueError(
+                "ambient trajectory path must be contained by run_dir"
+            ) from exc
+        if not ambient_path.is_file():
+            raise ValueError("ambient trajectory path must name an existing file")
+        ambient_digest = str(ambient.get("sha256", "") or "")
+        if len(ambient_digest) != 64 or any(
+            character not in "0123456789abcdef" for character in ambient_digest
+        ):
+            raise ValueError("ambient trajectory sha256 is invalid")
+        payload["host_authorized_ambient_inputs"] = {
+            "schema_version": HOST_AUTHORIZED_AMBIENT_INPUTS_SCHEMA_VERSION,
+            "trajectory": ambient,
+        }
     if context_path is not None:
         resolved_context = Path(context_path).resolve()
         run_root = Path(run_dir).resolve()

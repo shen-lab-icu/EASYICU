@@ -59,9 +59,14 @@ def _top_level_function_calls(tree: ast.Module) -> dict[str, set[str]]:
 
 
 def test_execution_phase_uses_typed_binding_objects_with_identity() -> None:
-    # 23 private helpers plus ``host_owns_input_binding_receipts``, the public
-    # rule for which producers the host writes receipts for.
-    assert len(typed_binding.__all__) == 24
+    # 23 private helpers plus two public rules: which producers the host
+    # writes receipts for, and how the host-staged ambient trajectory is
+    # named in the step's own resolved-inputs record.
+    assert len(typed_binding.__all__) == 25
+    assert {
+        "host_owns_input_binding_receipts",
+        "host_authorized_ambient_trajectory_entry",
+    } <= set(typed_binding.__all__)
     for name in _PHASE_TYPED_BINDING_NAMES:
         assert getattr(execution_phase, name) is getattr(typed_binding, name)
     assert _PHASE_TYPED_BINDING_NAMES < set(typed_binding.__all__)
