@@ -36,6 +36,7 @@ was triggered and whether it converged.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any, Callable, List, Optional, Sequence, TypeVar
 
@@ -48,6 +49,31 @@ T = TypeVar("T")
 _DEFAULT_FEEDBACK_PREAMBLE = (
     "Your previous response could not be parsed into the required structured "
     "output. The validator reported:"
+)
+
+
+#: Shown instead when the response WAS well-formed JSON and the rejection was
+#: about what it said, not how it was written.
+#:
+#: MEASURED: a canonical-9 task (m2 mortality prediction) lost its whole run to
+#: ``5 planner attempt(s) failed in 5 distinct ways``, and 27 such exhaustions
+#: are recorded across the corpus. One of m2's rejections was "analysis plan may
+#: declare at most one step with planned_analysis_role='primary'" -- a perfectly
+#: valid JSON document describing an invalid study. It was told its response
+#: "could not be parsed", and then, in the most salient position, not to use
+#: trailing commas or comments. The retry already carries every distinct earlier
+#: rejection forward; what it did not do was say which kind of thing was wrong.
+_VALIDATION_FEEDBACK_PREAMBLE = (
+    "Your previous response was well-formed JSON, but it did not satisfy the "
+    "required contract. Nothing is wrong with the formatting. The validator "
+    "rejected what the response said:"
+)
+
+
+_VALIDATION_FEEDBACK_INSTRUCTIONS = (
+    "Return a corrected JSON object in the same format. The formatting was "
+    "already accepted -- change the content so it satisfies every rule above, "
+    "and do not reformat, restate or abbreviate parts that were not rejected."
 )
 
 
@@ -435,11 +461,36 @@ def call_llm_with_structured_retry(
             # immutable base prompt. Accumulating every full JSON attempt grows
             # structured retries quadratically. Large self-contained outputs
             # can opt out and regenerate from the base plus validator feedback.
+            # Which kind of rejection this is, decided by the response itself
+            # rather than by an exception class name that varies with the
+            # parser: if it loads as JSON, the formatting was never the
+            # problem and telling it otherwise sends the retry at the wrong
+            # thing.
+            well_formed_json = False
+            if raw and raw.strip():
+                try:
+                    json.loads(raw)
+                except Exception:  # noqa: BLE001 -- any parse failure means "not JSON"
+                    well_formed_json = False
+                else:
+                    well_formed_json = True
+            # Local, never a reassignment of the caller's parameters: attempt
+            # 2 can be malformed where attempt 1 was not, and an overwritten
+            # parameter would keep telling it the formatting was fine.
+            using_default_feedback = (
+                feedback_preamble is _DEFAULT_FEEDBACK_PREAMBLE
+                and feedback_instructions is _DEFAULT_FEEDBACK_INSTRUCTIONS
+            )
+            attempt_preamble = feedback_preamble
+            attempt_instructions = feedback_instructions
+            if well_formed_json and using_default_feedback:
+                attempt_preamble = _VALIDATION_FEEDBACK_PREAMBLE
+                attempt_instructions = _VALIDATION_FEEDBACK_INSTRUCTIONS
             feedback_parts = [
-                feedback_preamble,
+                attempt_preamble,
                 f"  {exc.__class__.__name__}: {rendered_failure}",
                 "",
-                feedback_instructions,
+                attempt_instructions,
             ]
             # Only the newest rejection used to be shown, so each attempt
             # satisfied the last complaint and re-broke an earlier one: three
