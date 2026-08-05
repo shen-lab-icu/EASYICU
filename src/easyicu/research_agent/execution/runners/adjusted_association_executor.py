@@ -103,6 +103,21 @@ ADJUSTED_ASSOCIATION_ESTIMATES_COLUMNS = (
     "outcome",
     "covariates",
     "estimator_kind",
+    # Which row the study designated primary. `MODEL_CONTRACT_FIELDS` has
+    # carried this all along and this executor writes it into the step summary's
+    # model contract; the TABLE did not carry it, and the figure step that
+    # consumes `table:adjusted_association_estimates` declares its role-column
+    # contract on the table, not on the contract.
+    #
+    # MEASURED (e2 lactate, 9 of 11 steps): step
+    # 06_lactate_mortality_association_figure was refused with
+    # `artifact_consumption_contract_invalid: role column 'analysis_role' is
+    # absent from the verified schema`. Step 05 produced the table through this
+    # executor and reported ok; the value sat in the requirement object the
+    # executor was already holding, and it writes that same value into the
+    # sibling table a hundred lines below. `analysis_set` is a different field
+    # -- which population -- not a spelling of this one, so nothing covered.
+    "analysis_role",
     "analysis_set",
     "n",
     "n_events",
@@ -839,6 +854,7 @@ def run_adjusted_association_from_env(
         "outcome": outcome,
         "covariates": ";".join(adjustment),
         "estimator_kind": estimator_kind,
+        "analysis_role": analysis_role,
         "analysis_set": analysis_set,
         "n": int(result.n),
         "n_events": n_events,
