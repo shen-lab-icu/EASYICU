@@ -307,26 +307,44 @@ def test_the_injection_runs_on_every_candidate_the_audit_will_judge():
     injections = _injection_assignments(tree)
     assert injections, "the host never injects the receipt"
 
-    # Find the audit loop by what it does, not by line number: the `while`
-    # whose body normalises `code` for the round.
+    # CORRECTED TWICE. v1 located the loop by ``reorder_forward_references``
+    # and v2 by ``findings_for_code`` -- BOTH loops call both, so both versions
+    # passed while the injection sat in the post-execution loop and the gate
+    # that blocks on it runs pre-execution. verify37's h3 step 02 is the proof:
+    # scope of 7 columns, reason plausibility_check_not_attributable, zero trace
+    # of the receipt, and 1 finding -> 0 when injected offline.
+    #
+    # The property that actually matters is ORDER, not membership: the receipt
+    # must exist before the FIRST time any gate is asked about the code.
+    gate_lines = sorted(
+        node.lineno
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "findings_for_code"
+    )
+    assert gate_lines, "the deterministic gate is no longer asked about the code"
+    assert min(node.lineno for node in injections) < min(gate_lines), (
+        "the receipt is injected after the first gate reads the code; a step "
+        "refused there never reaches any later injection"
+    )
+
+    # And it must still be inside a loop, so a repaired rewrite cannot drop it.
     loops = [
         node
         for node in ast.walk(tree)
         if isinstance(node, (ast.While, ast.For))
         and any(
             isinstance(inner, ast.Call)
-            and isinstance(inner.func, ast.Name)
-            and inner.func.id == "reorder_forward_references"
+            and isinstance(inner.func, ast.Attribute)
+            and inner.func.attr == "findings_for_code"
             for inner in ast.walk(node)
         )
     ]
-    assert loops, "the per-round code normalisation loop is gone"
-
-    def _within(loop: ast.AST, node: ast.AST) -> bool:
-        return any(inner is node for inner in ast.walk(loop))
-
     assert any(
-        _within(loop, injection) for loop in loops for injection in injections
+        any(inner is injection for inner in ast.walk(loop))
+        for loop in loops
+        for injection in injections
     ), "the receipt is injected outside the loop; a repaired rewrite loses it"
 
 

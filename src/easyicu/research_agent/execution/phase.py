@@ -7571,6 +7571,32 @@ def run_execute_phase(
             # proof and force an otherwise unnecessary LLM repair.
             if not quarantine_state.draft_active:
                 code = reorder_forward_references(code)
+                # The receipt belongs HERE, before the gate that reads it.
+                #
+                # It was first placed at the post-execution loop, then moved to
+                # that loop's head so a repaired rewrite could not drop it. Both
+                # were the wrong loop: `flag_only_plausibility_obligation` is a
+                # PRE-execution gate, run by `findings_for_code` two lines down,
+                # so a step refused here never reached the later loop at all.
+                # verify37's h3 step 02 is the proof -- scope of 7 columns,
+                # reason `plausibility_check_not_attributable`, and zero trace of
+                # the receipt in its quarantined draft; replayed offline that
+                # draft goes 1 finding -> 0 once injected.
+                #
+                # Guarded by the same condition as the normalization above, and
+                # for the same reason stated in its comment: a quarantined draft
+                # is digest-bound authority, and editing it would break the exact
+                # SHA proof and force an otherwise unnecessary repair.
+                code = _host_plausibility_receipt_injected(
+                    code,
+                    scope=plausibility_authority.scope,
+                    already_satisfied=not _flag_only_plausibility_obligation_findings(
+                        None,
+                        script_text=code,
+                        step=step,
+                        scope=plausibility_authority.scope,
+                    ),
+                )
             usage_findings = concept_audit.findings_for_code(
                 code,
                 include_llm=False,
