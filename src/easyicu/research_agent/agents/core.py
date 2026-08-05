@@ -52,6 +52,7 @@ from ..planning.primary_result_contract import (
 )
 from ..trajectory.contract import trajectory_phenotyping_code_contract
 from ..trajectory.plan_contract import (
+    trajectory_context_is_bound,
     trajectory_planner_contract_guide,
     trajectory_role_code_contract,
 )
@@ -3249,7 +3250,11 @@ class CoderAgent:
                 context=context,
                 step=step,
             )
-            + trajectory_role_code_contract(context=context, step=step)
+            + trajectory_role_code_contract(
+                context=context,
+                step=step,
+                applies=trajectory_context_is_bound(context),
+            )
             + "\n\n"
             "OUTPUT FORMAT — VERY IMPORTANT:\n"
             "Return *only* a complete, runnable Python script. A "
@@ -3503,7 +3508,11 @@ class CoderAgent:
             + _primary_analysis_cohort_output_contract(step)
             + _cohort_predicate_partition_safety_contract(step)
             + trajectory_phenotyping_code_contract(context=context, step=step)
-            + trajectory_role_code_contract(context=context, step=step)
+            + trajectory_role_code_contract(
+                context=context,
+                step=step,
+                applies=trajectory_context_is_bound(context),
+            )
             + mechanical_guardrails
         )
         from ..research_context.outbound import (

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import inspect
 import json
 from pathlib import Path
 
 from easyicu.research_agent.contracts.declared_product import (
     declared_product_contract_findings,
 )
+from easyicu.research_agent.gates import contract as contract_gate
 from easyicu.research_agent.gates.method_compatibility import (
     detect_forbidden_pattern_usage,
 )
@@ -208,15 +210,76 @@ def test_candidate_code_contract_consumes_one_upstream_coordinate_layer():
 
     assert "scaled_representation_column" in contract
     assert "do not reapply cohort, anchor, or observed-window eligibility" in contract
-    assert "Copy id_column into the cluster-selection manifest" in contract
-    assert "cluster_selection.selected_model_id" in contract
-    assert "clustering_method/model_family" in contract
+    assert "cluster_selection.json is a closed selection-only manifest" in contract
+    assert "Do not add role, id_column, clustering_method, model_family" in contract
+    assert "Copy id_column into the cluster-selection manifest" not in contract
     assert "candidate_cluster_solution_schema.json" in contract
     assert "easyicu.candidate_cluster_solution_schema/2" in contract
     assert "observed_data_em_diagonal_gaussian_mixture" in contract
     assert "median/zero imputation" in contract
     assert "do not run bootstrap" in contract
     assert "do not write cluster profiles" in contract
+
+
+def test_general_clustering_does_not_receive_fixed_trajectory_code_contract():
+    step = AnalysisStep(
+        step_id="cluster_discovery",
+        intent="Select and characterize first-24-hour stay-level clusters.",
+        method="unsupervised_clustering",
+        expected_outputs=[
+            "manifest:cluster_selection",
+            "artifact:cluster_assignments",
+            "table:cluster_characteristics",
+        ],
+    )
+
+    assert (
+        trajectory_role_code_contract(
+            context=_context(),
+            step=step,
+            applies=False,
+        )
+        == ""
+    )
+
+
+def test_general_clustering_is_not_judged_by_fixed_trajectory_result_contract():
+    step = AnalysisStep(
+        step_id="cluster_discovery",
+        intent="Select and characterize first-24-hour stay-level clusters.",
+        method="unsupervised_clustering",
+        expected_outputs=[
+            "manifest:cluster_selection",
+            "artifact:cluster_assignments",
+            "table:cluster_characteristics",
+        ],
+    )
+
+    findings = declared_product_contract_findings(
+        step=step,
+        step_summary={
+            "status": "ok",
+            "output_files": [
+                "cluster_selection.json",
+                "cluster_assignments.csv",
+                "cluster_characteristics.csv",
+            ],
+        },
+        effect_method_authorized=False,
+        trajectory_role_contract_applies=False,
+    )
+
+    assert not any(
+        finding.validator in {"trajectory_role_scope", "trajectory_role_result"}
+        for finding in findings
+    )
+
+
+def test_shared_step_gate_passes_one_compiled_trajectory_applicability_decision():
+    source = inspect.getsource(contract_gate._step_deterministic_contract_findings)
+
+    assert "trajectory_plan_contract_applies(" in source
+    assert "trajectory_role_contract_applies=" in source
 
 
 def test_representation_role_rejects_unversioned_prose_schema(tmp_path: Path):
