@@ -41,7 +41,22 @@ from easyicu.research_agent.schema import CohortDescriptor, ResearchContext
 #: Measured at the commit that shrank the cohort-step directive back down.
 #: The recorded failure needed 80,071 bytes for h1's whole prompt, so the room
 #: left for a typed context is what this number really controls.
-FIXED_PROMPT_BYTE_BUDGET = 50_000
+#:
+#: RAISED 2026-08-05, 50,000 -> 50,600, for the typed endpoint declaration: 428
+#: bytes of required JSON keys (the Planner cannot fill a form whose keys it was
+#: never shown -- three tasks died that way) plus 462 bytes of directive.  The
+#: room recomputed against all nine recorded typed contexts, rendered through
+#: the real ladder: worst case ``h2_vasopressor_causal`` at 82,348 of 120,000
+#: with 37,652 spare, and all nine still on the ``full`` catalog rung.  Every
+#: byte was measured against this fixed probe first; measuring only the
+#: with-context total is the mistake this file exists to catch, and it recurred
+#: here -- the with-context headroom read 38 KB while the fixed part was over.
+FIXED_PROMPT_BYTE_BUDGET = 50_600
+
+#: The nine recorded contexts at the raise, worst first. Concrete, so a later
+#: raise has to beat a real number rather than a round one.
+_MEASURED_WORST_TOTAL_BYTES = 82_348
+_MEASURED_WORST_TASK = "h2_vasopressor_causal"
 
 #: h1's recorded prompt total. Kept as the concrete case the budget serves.
 _H1_RECORDED_TOTAL_BYTES = 80_071
