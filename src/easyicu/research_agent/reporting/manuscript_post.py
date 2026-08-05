@@ -1142,6 +1142,37 @@ def _evidence_lineage(evidence: EvidenceStore) -> Dict[str, frozenset[str]]:
     return resolved
 
 
+#: One citation in either form, used to walk the run that precedes a
+#: sentence's own words.
+_LEADING_CITATION_RE = re.compile(
+    r"\s*(?:\{evidence:[^}\n]+\}|\[[^\]\n]*\]\(evidence/[^)\n]*\))"
+)
+
+
+def _sentence_cites_within_its_own_prose(context: str) -> bool:
+    """Whether this sentence cites anything after its own words begin.
+
+    The sentence window keeps the citation run on both sides of the prose,
+    because the writer emits citations before a sentence as readily as after
+    and position alone does not settle ownership.  For NARROWING that is right:
+    an extra citation only costs recall.  For REFUSING it is not: a citation
+    that merely terminates the previous sentence is not this sentence naming a
+    source, and treating it as one blocks a number the sentence never
+    misattributed.
+
+    So strip the leading run and ask whether any citation remains.
+    """
+
+    text = context or ""
+    cursor = 0
+    while True:
+        match = _LEADING_CITATION_RE.match(text, cursor)
+        if match is None or match.end() <= cursor:
+            break
+        cursor = match.end()
+    return bool(_cited_evidence_ids(text[cursor:]))
+
+
 def _restrict_to_cited_evidence(
     candidates: Sequence[tuple[NumericClaim, float]],
     *,
@@ -1198,8 +1229,33 @@ def _select_numeric_claim(
             # The sentence names its source and no candidate belongs to it.
             # Binding the value anyway would attach a foreign step's number to
             # this claim, so it stays untraced.
-            return None, True
-        candidates = scoped
+            #
+            # Unless it named nothing. The window deliberately keeps the run of
+            # citations on BOTH sides, because the writer puts them before a
+            # sentence as readily as after and position alone does not identify
+            # ownership. The comment defending that called an extra citation a
+            # recall cost that "cannot by itself produce a wrong bind" -- true,
+            # and beside the point: at this gate a lost bind is not a cost, it
+            # is a blocked manuscript.
+            #
+            # MEASURED (e3 KDIGO, 11/11 steps, manuscript written): the Results
+            # sentence carrying the primary estimate is, in the pre-binding
+            # text, exactly
+            #
+            #   {evidence:03_stage_stratified_mortality_distribution} In the
+            #   adjusted primary analysis, ... (odds ratio, 6.48; 95% CI,
+            #   6.02-6.97).
+            #
+            # -- no citation of its own, only the previous sentence's trailing
+            # one. All three of its numbers scoped to step 03's lineage, which
+            # owns none of them, and went out ambiguous. The manuscript was
+            # blocked on a premise that was false: this sentence never named a
+            # source. So refuse only when the sentence actually cited something
+            # itself; a purely inherited citation may narrow, never veto.
+            if _sentence_cites_within_its_own_prose(context):
+                return None, True
+        else:
+            candidates = scoped
 
     if len(candidates) == 1:
         return candidates[0][0], False
