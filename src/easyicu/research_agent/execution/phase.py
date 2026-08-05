@@ -359,6 +359,7 @@ from ..plan_utils import (
     _cohort_definition_contract_findings,
     _cohort_definition_is_empty,
     _cohort_definition_prose,
+    endpoint_contract_findings,
     _normalised_expected_output_names,
     _normalised_structured_output_names,
     _output_declares_figure,
@@ -4870,6 +4871,7 @@ def run_execute_phase(
 
     trajectory_plan_blocked = False
     typed_plan_dag_blocked = False
+    endpoint_contract_blocked = False
     probe_step_id = "00_probe"
     # The plan-time gates below validate the PLAN, not the probe, so they
     # must not live inside the probe branch. canary36 is why: its probe was
@@ -4948,6 +4950,7 @@ def run_execute_phase(
     )
     owner_declaration_preflight = owner_declaration_plan_findings(plan=plan)
     product_promise_preflight = product_promise_plan_findings(plan=plan)
+    endpoint_preflight = endpoint_contract_findings(plan, severity="error")
     trajectory_directive = None
     typed_plan_directive = None
     declared_input_directive = None
@@ -5043,6 +5046,23 @@ def run_execute_phase(
     product_promise_directive = product_promise_replan_directive(
         product_promise_preflight
     )
+    endpoint_directive = None
+    if endpoint_preflight:
+        endpoint_directive = (
+            "Repair the plan's typed study endpoint without changing the "
+            "research question, cohort, estimand, or analysis family. Declare "
+            "the endpoint fields named by the contract finding; do not infer "
+            "follow-up, time origin, censoring, or event levels from column "
+            "names, dtypes, or step prose. Contract findings: "
+            + json.dumps(
+                [
+                    {"message": finding.message, "detail": finding.detail}
+                    for finding in endpoint_preflight
+                ],
+                ensure_ascii=False,
+                default=str,
+            )
+        )
     plan = _maybe_replan(
         current_plan=plan,
         reason=(
@@ -5076,6 +5096,7 @@ def run_execute_phase(
         directive="\n\n".join(
             directive
             for directive in (
+                endpoint_directive,
                 typed_plan_directive,
                 primary_cohort_directive,
                 trajectory_directive,
@@ -5088,6 +5109,7 @@ def run_execute_phase(
         or None,
         force=bool(
             typed_plan_preflight
+            or endpoint_preflight
             or primary_cohort_preflight
             or trajectory_preflight
             or declared_input_preflight
@@ -5105,6 +5127,27 @@ def run_execute_phase(
         # here with a named, repairable finding.
         *declared_raw_input_plan_findings(plan=plan, context=context),
     ]
+    final_endpoint_findings = [
+        finding.model_copy(
+            update={
+                "detail": {
+                    **dict(finding.detail or {}),
+                    "stage": "execute_final",
+                    "reason": "endpoint_retry_exhausted",
+                }
+            }
+        )
+        for finding in endpoint_contract_findings(plan, severity="error")
+    ]
+    if final_endpoint_findings:
+        endpoint_contract_blocked = True
+        findings.extend(final_endpoint_findings)
+        _flush_partial_manifest(
+            {
+                "endpoint_contract_blocked": True,
+                "endpoint_contract_error_count": len(final_endpoint_findings),
+            }
+        )
     if final_typed_plan_findings:
         typed_plan_dag_blocked = True
         findings.extend(final_typed_plan_findings)
@@ -11992,15 +12035,19 @@ def run_execute_phase(
         and run_input_authority_state.development_sample is None
     )
     plan_block_reason = (
-        "trajectory_plan_contract_blocked"
-        if trajectory_plan_blocked
+        "endpoint_contract_blocked"
+        if endpoint_contract_blocked
         else (
-            "typed_plan_dag_blocked"
-            if typed_plan_dag_blocked
+            "trajectory_plan_contract_blocked"
+            if trajectory_plan_blocked
             else (
-                "development_sample_unauthorized"
-                if development_sample_blocked
-                else None
+                "typed_plan_dag_blocked"
+                if typed_plan_dag_blocked
+                else (
+                    "development_sample_unauthorized"
+                    if development_sample_blocked
+                    else None
+                )
             )
         )
     )
@@ -12411,7 +12458,8 @@ def run_execute_phase(
         )
 
     if (
-        not trajectory_plan_blocked
+        not endpoint_contract_blocked
+        and not trajectory_plan_blocked
         and not typed_plan_dag_blocked
         and trajectory_plan_contract_applies(
             plan=plan,

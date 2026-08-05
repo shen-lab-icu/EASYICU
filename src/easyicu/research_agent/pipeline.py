@@ -326,7 +326,7 @@ from .plan_utils import (
     _cap_plan_preserving_figure_steps,
     _clustering_contract_applies,
     _cohort_definition_contract_findings,
-    _endpoint_contract_findings,
+    endpoint_contract_findings,
     _cohort_definition_is_empty,
     _ensure_audit_panel_step_in_plan,
     _ensure_publication_figure_step_in_plan,
@@ -3159,7 +3159,7 @@ class ResearchAgentPipeline:
             # undeclared, and one planner miss should not cost the run. Adopt
             # the retry only if it actually declares the required kind, so a
             # good plan is never discarded when the retry does not improve it.
-            if not used_mock_llm and _endpoint_contract_findings(plan):
+            if not used_mock_llm and endpoint_contract_findings(plan):
                 endpoint_retry = None
                 try:
                     endpoint_retry = planner.run(
@@ -3174,7 +3174,7 @@ class ResearchAgentPipeline:
                 if (
                     endpoint_retry is not None
                     and endpoint_retry.steps
-                    and not _endpoint_contract_findings(endpoint_retry)
+                    and not endpoint_contract_findings(endpoint_retry)
                 ):
                     plan = endpoint_retry
                     findings.append(
@@ -3263,7 +3263,7 @@ class ResearchAgentPipeline:
         # The endpoint half of the same declaration, checked for every plan
         # rather than only inside the cohort branch above: a family can require
         # a typed endpoint whether or not it also defines an analysis cohort.
-        findings.extend(_endpoint_contract_findings(plan))
+        findings.extend(endpoint_contract_findings(plan))
         if study_design_brief is not None:
             if (
                 plan.analysis_type
