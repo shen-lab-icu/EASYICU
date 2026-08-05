@@ -5027,6 +5027,21 @@ def _step_contract_repair_guidance(
             "statistic, resampling stability, or silhouette when appropriate)."
         )
         guidance.append(
+            "Use one of these exact top-level step_summary JSON shapes, populated "
+            "with the values this script actually evaluated. Non-binding selection "
+            "example: `\"cluster_selection\": {\"criterion\": "
+            "\"silhouette_score\", \"selection_rule\": \"maximum\", "
+            "\"direction\": \"maximize\", \"selected_n_clusters\": 2, "
+            "\"candidates\": [{\"n_clusters\": 2, \"criterion_value\": 0.31}, "
+            "{\"n_clusters\": 3, \"criterion_value\": 0.27}], \"rationale\": "
+            "\"selected the evaluated maximum\"}`. Stability alternative: "
+            "`\"cluster_stability\": {\"selected_n_clusters\": 2, "
+            "\"n_resamples\": 3, \"mean_adjusted_rand_index\": 0.93}`. "
+            "Replace every example value with the truthful selected k, criterion "
+            "values, repeat count, and stability metric; do not leave only sibling "
+            "scalars such as `selected_silhouette` or `selected_stability_ari`."
+        )
+        guidance.append(
             "Keep clustering self-contained: create labels, cluster characteristics, "
             "method/selection metadata, and the clustering figure inside this "
             "script. Add descriptive outcomes only when the plan declares them; "
@@ -5037,11 +5052,29 @@ def _step_contract_repair_guidance(
             "the declared cluster-selection manifest so manuscript evidence aliases bind."
         )
     if "figure:" in expected:
+        declared_figure_stems = [
+            str(item).split(":", 1)[1].strip()
+            for item in (step.expected_outputs or [])
+            if str(item).strip().lower().startswith("figure:")
+            and str(item).split(":", 1)[1].strip()
+        ]
         guidance.append(
             "This step declares a figure output. Save a real figure file such as PNG/SVG/"
             "PDF/TIFF and record its path in step_summary.json using a key such as "
             "`figure_path`, `figure_file`, or `figure_files`."
         )
+        for stem in declared_figure_stems:
+            quoted_stem = json.dumps(stem, ensure_ascii=False)
+            guidance.append(
+                f"For declared `figure:{stem}`, call the host helper directly as "
+                "`saved = save_publication_figure(fig=fig, out_dir=out_dir, "
+                f"stem={quoted_stem}, contract=contract)`. It writes the canonical "
+                f"same-stem companion `{stem}.figure_contract.json`; record "
+                "`saved[\"contract\"]` in step_summary.json. Do not manually write, "
+                f"rename, or advertise the underscore alias "
+                f"`{stem}_figure_contract.json`; it must not replace the canonical "
+                "dot-suffix companion."
+            )
         guidance.append(
             "In every top-level FigureContract, `source_data` must be one local CSV "
             "basename string or a flat list of local CSV basename strings from the "

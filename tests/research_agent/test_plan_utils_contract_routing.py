@@ -145,6 +145,56 @@ def test_cluster_stability_must_bind_the_reported_cluster_count():
     assert _errors(_clustering_step(), valid_summary) == []
 
 
+def test_clustering_contract_repair_guidance_names_the_accepted_summary_shapes():
+    guidance = _step_contract_repair_guidance(
+        step=_clustering_step(),
+        step_summary={
+            "status": "ok",
+            "cluster_count": 2,
+            "selected_silhouette": 0.31,
+            "selected_stability_ari": 0.93,
+        },
+        code="",
+    )
+
+    assert '"cluster_selection"' in guidance
+    assert '"selection_rule"' in guidance
+    assert '"selected_n_clusters"' in guidance
+    assert '"candidates"' in guidance
+    assert '"cluster_stability"' in guidance
+    assert '"n_resamples"' in guidance
+    assert '"mean_adjusted_rand_index"' in guidance
+
+
+def test_mixed_clustering_figure_repair_guidance_uses_declared_figure_stem():
+    step = _step(
+        method="kmeans_clustering",
+        outputs=[
+            "statistic:cluster_count",
+            "manifest:cluster_selection",
+            "table:cluster_characteristics",
+            "figure:clustering_visualization",
+        ],
+        step_id="06_fit_candidate_clusters",
+        intent="Fit candidate clusters and render the declared visualization.",
+    )
+
+    guidance = _step_contract_repair_guidance(
+        step=step,
+        step_summary={
+            "cluster_count": 2,
+            "figure_contract": "clustering_visualization_figure_contract.json",
+        },
+        code="fig.savefig(out_dir / 'clustering_visualization.png')",
+    )
+
+    assert "save_publication_figure" in guidance
+    assert 'stem="clustering_visualization"' in guidance
+    assert "clustering_visualization.figure_contract.json" in guidance
+    assert "clustering_visualization_figure_contract.json" in guidance
+    assert "must not" in guidance
+
+
 def test_invalid_sibling_cluster_manifest_blocks_fallback_laundering():
     findings = _step_contract_findings(
         step=_clustering_step(),

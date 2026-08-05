@@ -961,9 +961,18 @@ PREDICTION / CLUSTERING APIs:
   ("onehot", OneHotEncoder(handle_unknown="ignore", sparse_output=False))])`.
 - For clustering tasks, use numeric physiologic features, impute
   medians, scale before KMeans/AgglomerativeClustering, and write
-  `n_clusters`/`cluster_count` plus `silhouette_score` when at least
-  two non-empty clusters exist. If clustering is not feasible, write
-  a null silhouette with a precise skipped reason and exit normally.
+  `n_clusters`/`cluster_count` plus method-appropriate selection evidence
+  when at least two non-empty clusters exist. At the top level of
+  step_summary.json, record either a replayable `"cluster_selection"`
+  mapping with exact fields `"criterion"`, `"selection_rule"`,
+  `"direction"`, `"selected_n_clusters"`, and `"candidates"` (at least
+  two objects with `"n_clusters"` and finite `"criterion_value"`), or a
+  substantive `"cluster_stability"` mapping with exact fields
+  `"selected_n_clusters"`, `"n_resamples"` (at least 2), and a finite
+  metric such as `"mean_adjusted_rand_index"`. Standalone scalars such as
+  `silhouette_score`, `selected_silhouette`, or `selected_stability_ari`
+  do not replace one of those nested evidence mappings. If clustering is
+  not feasible, write a precise skipped reason and exit normally.
 
 ROBUSTNESS:
 - If the step is cross-database validation but only `COHORT_PARQUET`
