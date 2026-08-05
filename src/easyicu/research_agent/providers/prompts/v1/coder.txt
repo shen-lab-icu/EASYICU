@@ -272,6 +272,13 @@ Code contract:
   long-bound run has none by construction. Bin charttime into the windows
   the step declares, aggregate value_num within each bin per stay and
   concept, and record the windows you used in the manifest.
+  The concept vocabulary of that table is the DISTINCT VALUES OF ITS
+  `concept` COLUMN -- read them from the table. There is no separate
+  planner-authorized concept mapping to wait for, and its absence is not a
+  reason to block: the trajectory was bound with its concepts already
+  materialized. Match the families your step needs against the values that
+  are actually present, use those, and record any you could not find as
+  unavailable instead of emitting an empty representation.
   MANDATORY when your step declares `manifest:trajectory_representation_schema`
   among its expected_outputs: that JSON file's key names are a fixed host
   contract, not free-form description. It MUST contain exactly these keys,

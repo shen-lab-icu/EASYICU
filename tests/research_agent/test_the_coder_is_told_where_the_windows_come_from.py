@@ -133,3 +133,32 @@ def test_the_disclosed_keys_are_the_ones_the_host_actually_requires():
     text = _text()
     for key in required:
         assert f"`{key}`" in text, key
+
+
+def test_the_coder_is_told_the_concept_vocabulary_is_in_the_table():
+    """verify41: the step blocked ITSELF waiting for an authorization.
+
+    h3 02_build_fixed_anchor_trajectory_representation ran, wrote a schema with
+    every required key correctly named (c2a1919 working), and then emitted
+
+        observation_columns=[], profile_columns=[], representation_columns=[]
+
+    with its own stated reason:
+
+        block_reason: "Planner-authorized trajectory concept mapping is
+        incomplete for: sofa2_resp, sofa2_coag, sofa2_liver, lactate"
+        planner_authorized_concept_mapping_count: 0
+
+    Three of those four names are literally present in the bound table's
+    `concept` column (`sofa2_resp`, `sofa2_coag`, `sofa2_liver`; the fourth is
+    spelled `lact`). The agent was refusing to read the vocabulary it had been
+    handed, waiting on an authorization nothing produces.
+    """
+
+    text = _text()
+
+    assert "DISTINCT VALUES OF ITS" in text
+    assert "`concept` COLUMN" in text
+    # And it must say that the missing authorization is not a reason to stop.
+    assert "not a\n  reason to block" in text or "not a reason to block" in text
+    assert "instead of emitting an empty representation" in text
