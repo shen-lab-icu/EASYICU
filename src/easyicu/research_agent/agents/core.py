@@ -275,7 +275,10 @@ def _format_context(
         variable_names=detailed_variable_names,
     )
     if include_method_constraints:
-        from ..gates.method_compatibility import render_variable_constraints
+        from ..gates.method_compatibility import (
+            render_computational_budget_constraints,
+            render_variable_constraints,
+        )
 
         constraint_context = ctx
         if method_constraint_variable_names is not None:
@@ -289,12 +292,16 @@ def _format_context(
                     ]
                 }
             )
-        constraints = render_variable_constraints(
-            constraint_context,
-            compact=compact_method_constraints,
-        )
-        if constraints:
-            rendered += "\n\n" + constraints
+        constraint_blocks = [
+            render_variable_constraints(
+                constraint_context,
+                compact=compact_method_constraints,
+            ),
+            render_computational_budget_constraints(constraint_context),
+        ]
+        for constraints in constraint_blocks:
+            if constraints:
+                rendered += "\n\n" + constraints
     return rendered
 
 

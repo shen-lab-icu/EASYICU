@@ -197,6 +197,15 @@ _RIGHT_SKEWED_LAB_NAMES = frozenset(
 )
 
 
+# Pairwise metrics such as silhouette have quadratic time/memory behaviour.
+# Full-data fitting and label assignment remain scientifically desirable; only
+# the diagnostic pairwise evaluation is sampled once the execution cohort is
+# large.  These case-neutral constants are deliberately owned beside the
+# prompt and AST enforcement below so the two surfaces cannot drift.
+PAIRWISE_EVALUATION_FULL_COHORT_MAX_ROWS = 10_000
+PAIRWISE_EVALUATION_MAX_SAMPLE_SIZE = 5_000
+
+
 # ---------------------------------------------------------------------------
 # Per-variable kind classification
 # ---------------------------------------------------------------------------
@@ -376,6 +385,28 @@ def render_variable_constraints(
     return "\n".join(lines)
 
 
+def render_computational_budget_constraints(context: ResearchContext) -> str:
+    """Publish deterministic bounds for quadratic metrics on large cohorts."""
+
+    n_stays = int(context.cohort.n_stays)
+    if n_stays <= PAIRWISE_EVALUATION_FULL_COHORT_MAX_ROWS:
+        return ""
+    return "\n".join(
+        [
+            "LARGE-COHORT COMPUTATIONAL BUDGET (host-owned; must be honoured):",
+            f"- The execution cohort has {n_stays} stays. Preserve full-data model "
+            "fitting and final label assignment.",
+            "- Pairwise silhouette evaluation is quadratic: every "
+            "`sklearn.metrics.silhouette_score` call must set "
+            f"`sample_size <= {PAIRWISE_EVALUATION_MAX_SAMPLE_SIZE}` and an explicit "
+            "deterministic `random_state`. This applies inside candidate and seed "
+            "loops as well as to the final selected model.",
+            "- Record the silhouette evaluation sample size and seed in the step "
+            "summary or metric artifact so the approximation is replayable.",
+        ]
+    )
+
+
 # ---------------------------------------------------------------------------
 # Post-codegen pre-execution enforcement (Patch C)
 # ---------------------------------------------------------------------------
@@ -444,6 +475,163 @@ def _helper_call_contract_violations(code: str) -> List[Dict[str, object]]:
                 "rationale": (
                     "The sparse-event columns are keyword-only so their clinical "
                     "roles cannot be silently swapped."
+                ),
+            }
+        )
+    return violations
+
+
+def _static_integer_upper_bound(
+    node: ast.AST,
+    *,
+    assignments: Dict[str, ast.AST],
+    seen: Optional[set[str]] = None,
+) -> Optional[int]:
+    """Resolve a provable integer upper bound for a simple AST expression."""
+
+    if isinstance(node, ast.Constant) and isinstance(node.value, int) and not isinstance(
+        node.value, bool
+    ):
+        return int(node.value)
+    if isinstance(node, ast.Name):
+        active_seen = set() if seen is None else set(seen)
+        if node.id in active_seen or node.id not in assignments:
+            return None
+        active_seen.add(node.id)
+        return _static_integer_upper_bound(
+            assignments[node.id],
+            assignments=assignments,
+            seen=active_seen,
+        )
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "min"
+    ):
+        bounds = [
+            bound
+            for argument in node.args
+            if (
+                bound := _static_integer_upper_bound(
+                    argument,
+                    assignments=assignments,
+                    seen=seen,
+                )
+            )
+            is not None
+        ]
+        return min(bounds) if bounds else None
+    return None
+
+
+def _large_cohort_silhouette_violations(
+    code: str,
+    *,
+    n_stays: int,
+) -> List[Dict[str, object]]:
+    """Reject unbounded quadratic silhouette calls for a large cohort."""
+
+    if n_stays <= PAIRWISE_EVALUATION_FULL_COHORT_MAX_ROWS:
+        return []
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return []
+
+    assignments: Dict[str, ast.AST] = {}
+    imported_names = {"silhouette_score"}
+    fixed_seed_names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr)):
+            if isinstance(node, ast.Assign):
+                targets = node.targets
+                value = node.value
+            else:
+                targets = [node.target]
+                value = node.value
+            if value is not None:
+                for target in targets:
+                    if isinstance(target, ast.Name):
+                        assignments[target.id] = value
+        elif isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                if alias.name == "silhouette_score":
+                    imported_names.add(alias.asname or alias.name)
+        elif (
+            isinstance(node, ast.For)
+            and isinstance(node.target, ast.Name)
+            and isinstance(node.iter, (ast.List, ast.Set, ast.Tuple))
+            and node.iter.elts
+            and all(
+                isinstance(item, ast.Constant)
+                and isinstance(item.value, int)
+                and not isinstance(item.value, bool)
+                for item in node.iter.elts
+            )
+        ):
+            fixed_seed_names.add(node.target.id)
+
+    violations: List[Dict[str, object]] = []
+    for call in (node for node in ast.walk(tree) if isinstance(node, ast.Call)):
+        callable_path = _callable_path(call.func, {})
+        terminal_name = callable_path.rsplit(".", 1)[-1]
+        if terminal_name not in {name.casefold() for name in imported_names}:
+            continue
+        keywords = {
+            keyword.arg: keyword.value
+            for keyword in call.keywords
+            if keyword.arg is not None
+        }
+        sample_bound = (
+            _static_integer_upper_bound(
+                keywords["sample_size"],
+                assignments=assignments,
+            )
+            if "sample_size" in keywords
+            else None
+        )
+        missing_contracts: List[str] = []
+        if (
+            sample_bound is None
+            or sample_bound > PAIRWISE_EVALUATION_MAX_SAMPLE_SIZE
+        ):
+            missing_contracts.append("sample_size")
+        random_state = keywords.get("random_state")
+        deterministic_random_state = (
+            isinstance(random_state, ast.Constant)
+            and isinstance(random_state.value, int)
+            and not isinstance(random_state.value, bool)
+        ) or (
+            isinstance(random_state, ast.Name)
+            and (
+                random_state.id in fixed_seed_names
+                or _static_integer_upper_bound(
+                    random_state,
+                    assignments=assignments,
+                )
+                is not None
+            )
+        )
+        if not deterministic_random_state:
+            missing_contracts.append("random_state")
+        if not missing_contracts:
+            continue
+        violations.append(
+            {
+                "reason_code": "large_cohort_silhouette_unbounded",
+                "variable": "silhouette_score",
+                "kind": "computational_budget",
+                "matched_patterns": missing_contracts,
+                "preferred": (
+                    f"sample_size <= {PAIRWISE_EVALUATION_MAX_SAMPLE_SIZE}",
+                    "random_state=<declared deterministic seed>",
+                    "record sample size and seed",
+                ),
+                "rationale": (
+                    f"The execution cohort has {n_stays} stays; full-pairwise "
+                    "silhouette is quadratic and can exhaust the step wall clock. "
+                    "Keep model fitting and label assignment on all rows, but "
+                    "evaluate silhouette on a deterministic bounded sample."
                 ),
             }
         )
@@ -694,6 +882,12 @@ def detect_forbidden_pattern_usage(
         return []
     code_lower = code.lower()
     violations: List[Dict[str, object]] = _helper_call_contract_violations(code)
+    violations.extend(
+        _large_cohort_silhouette_violations(
+            code,
+            n_stays=int(context.cohort.n_stays),
+        )
+    )
     structural_hits = _ast_forbidden_pattern_hits(
         code,
         variables=context.variables,
@@ -858,8 +1052,11 @@ def format_violation_message(violations: List[Dict[str, object]]) -> str:
 
 __all__ = [
     "FORBIDDEN_METHOD_BY_KIND",
+    "PAIRWISE_EVALUATION_FULL_COHORT_MAX_ROWS",
+    "PAIRWISE_EVALUATION_MAX_SAMPLE_SIZE",
     "detect_forbidden_pattern_usage",
     "format_violation_message",
+    "render_computational_budget_constraints",
     "render_variable_constraints",
     "variable_kind_constraints",
 ]
