@@ -32,8 +32,14 @@ from easyicu.research_agent.trajectory.plan_contract import (
 _CORPUS = pathlib.Path("/Volumes/外置硬盘/easyicu_data/canonical9_runs")
 
 
-def _recorded_h3():
-    """h3's real recorded plan and context -- the artifacts that were refused."""
+def _recorded_h3(*, declaring_the_manifest: bool = True):
+    """h3's real recorded plan and context -- the artifacts that were refused.
+
+    Selection is EXPLICIT, not "the newest": recorded h3 plans differ in whether
+    the representation step declares the window manifest, because until this
+    branch the planner was never told to. The waiver tests need one that does;
+    picking by recency silently swapped the fixture and turned them red.
+    """
 
     for plan_path in sorted(
         _CORPUS.glob("batch_*/h3_*/aware/run_*/analysis_plan.json"), reverse=True
@@ -45,12 +51,17 @@ def _recorded_h3():
         # The bound tier is recorded beside the context, not inside the model.
         raw.pop("materialized_inputs", None)
         try:
-            return (
-                AnalysisPlan.model_validate(json.loads(plan_path.read_text())),
-                ResearchContext.model_validate(raw),
-            )
+            plan = AnalysisPlan.model_validate(json.loads(plan_path.read_text()))
+            context = ResearchContext.model_validate(raw)
         except Exception:  # noqa: BLE001 - an older schema is not the subject
             continue
+        declares = any(
+            "window_manifest" in str(product).lower()
+            for step in plan.steps
+            for product in (step.expected_outputs or [])
+        )
+        if declares is declaring_the_manifest:
+            return plan, context
     return None
 
 
@@ -210,3 +221,86 @@ def test_a_wide_run_still_needs_its_manifest_lineage():
             if isinstance(node, ast.Name)
         }
         assert "long_trajectory_bound" in names
+
+
+def test_the_guide_tells_a_long_bound_planner_what_it_can_actually_do():
+    """The guide described work a long-bound run cannot perform.
+
+    MEASURED: rendered with ``long_trajectory_bound=True`` it mentioned the long
+    tier ZERO times -- no charttime, no value_num, no stay_id -- and instructed
+    the planner to "list the raw fixed-window columns in its inputs". Those
+    columns do not exist in a long-bound run (h3's cohort: 0 of 70). The
+    contract then refused the plan for not declaring windows it was never told
+    how to declare.
+
+    Confirmed live: verify35's planner produced a representation step whose
+    outputs carry no ``manifest:trajectory_window_manifest``, so the tier
+    waivers correctly did not apply and both rules fired again.
+    """
+
+    from easyicu.research_agent.schema import ConceptDescriptor
+    from easyicu.research_agent.trajectory.plan_contract import (
+        trajectory_planner_contract_guide,
+    )
+
+    recorded = _recorded_h3()
+    if recorded is None:
+        pytest.skip("no recorded h3 context is mounted")
+    _plan, context = recorded
+
+    long_guide = trajectory_planner_contract_guide(
+        context=context,
+        analysis_type="trajectory_clustering",
+        long_trajectory_bound=True,
+    )
+    assert long_guide
+    # It names the tier the run actually has...
+    assert "bound as the typed LONG input" in long_guide
+    # ...tells it to declare the manifest it is the source of...
+    assert "MUST declare `manifest:trajectory_window_manifest`" in long_guide
+    # ...and stops describing columns the run does not have.
+    assert "raw fixed-window columns" not in long_guide
+
+
+def test_a_wide_run_is_still_told_the_wide_contract():
+    """The wide instructions must survive verbatim for the runs they fit."""
+
+    from easyicu.research_agent.schema import (
+        ConceptDescriptor,
+        FixedWindowTrajectoryMetadata,
+    )
+    from easyicu.research_agent.trajectory.plan_contract import (
+        trajectory_planner_contract_guide,
+    )
+
+    recorded = _recorded_h3()
+    if recorded is None:
+        pytest.skip("no recorded h3 context is mounted")
+    _plan, context = recorded
+
+    wide = context.model_copy(
+        update={
+            "variables": [
+                ConceptDescriptor(
+                    name="score_h0_12",
+                    dtype="float64",
+                    fixed_window_trajectory=FixedWindowTrajectoryMetadata(
+                        family="score",
+                        window_start_hours=0.0,
+                        window_end_hours=12.0,
+                        window_width_hours=12.0,
+                        representation_kind="discrete_window_state",
+                    ),
+                )
+            ]
+        }
+    )
+    wide_guide = trajectory_planner_contract_guide(
+        context=wide,
+        analysis_type="trajectory_clustering",
+        long_trajectory_bound=False,
+    )
+
+    assert wide_guide
+    assert "raw fixed-window columns" in wide_guide
+    assert "bound as the typed LONG input" not in wide_guide
