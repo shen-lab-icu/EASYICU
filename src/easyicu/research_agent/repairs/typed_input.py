@@ -586,7 +586,7 @@ def patch_resolved_input_relative_path_root(
 ) -> str:
     """Join host-issued run-relative input paths to ``EASYICU_RUN_DIR``."""
 
-    coordinates: list[tuple[int, int, int, int]] = []
+    coordinates: list[tuple[tuple[int, int, int, int], str]] = []
     matching_findings = 0
     for finding in repair_findings:
         detail = finding.detail or {}
@@ -610,7 +610,12 @@ def patch_resolved_input_relative_path_root(
                 for value in values
             ):
                 return code
-            coordinates.append(tuple(int(value) for value in values))
+            kind = occurrence.get("kind", "environment_key")
+            if kind not in {"environment_key", "root_parameter"}:
+                return code
+            coordinates.append(
+                (tuple(int(value) for value in values), str(kind))
+            )
     if (
         matching_findings != 1
         or not coordinates
@@ -634,6 +639,18 @@ def patch_resolved_input_relative_path_root(
         and node.end_lineno is not None
         and node.end_col_offset is not None
     }
+    names = {
+        (
+            int(node.lineno),
+            int(node.col_offset),
+            int(node.end_lineno),
+            int(node.end_col_offset),
+        ): node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Name)
+        and node.end_lineno is not None
+        and node.end_col_offset is not None
+    }
     lines = code.splitlines(keepends=True)
     line_starts: list[int] = []
     offset = 0
@@ -646,20 +663,31 @@ def patch_resolved_input_relative_path_root(
         char_col = len(line.encode("utf-8")[:utf8_col].decode("utf-8"))
         return line_starts[lineno - 1] + char_col
 
-    replacements: list[tuple[int, int]] = []
-    for coordinate in coordinates:
-        node = constants.get(coordinate)
-        if node is None:
+    replacements: list[tuple[int, int, str]] = []
+    for coordinate, kind in coordinates:
+        node = (
+            constants.get(coordinate)
+            if kind == "environment_key"
+            else names.get(coordinate)
+        )
+        if node is None or (
+            kind == "root_parameter"
+            and not isinstance(node.ctx, ast.Load)
+        ):
             return code
         replacements.append(
             (
                 absolute_offset(coordinate[0], coordinate[1]),
                 absolute_offset(coordinate[2], coordinate[3]),
+                (
+                    repr("EASYICU_RUN_DIR")
+                    if kind == "environment_key"
+                    else 'os.environ["EASYICU_RUN_DIR"]'
+                ),
             )
         )
     repaired = code
-    replacement = repr("EASYICU_RUN_DIR")
-    for start, end in sorted(replacements, reverse=True):
+    for start, end, replacement in sorted(replacements, reverse=True):
         repaired = repaired[:start] + replacement + repaired[end:]
     try:
         ast.parse(repaired)
