@@ -59,6 +59,7 @@ from .lossy_coercion import (
 )
 from .merge_collision import patch_pandas_merge_dynamic_column_collision
 from .matplotlib_source import patch_matplotlib_patch_source_rows
+from .cluster_summary import patch_cluster_count_summary_alias
 from .model_contract import patch_penalized_convergence_contract
 from .name_alias import patch_undefined_mapping_near_match_alias
 from .nonfinite_audit import (
@@ -5730,6 +5731,12 @@ def deterministic_contract_repair(
     previous_repair: Optional[str] = None,
 ) -> Optional[tuple[str, str]]:
     """Patch objective contract/audit failures before asking the LLM to repair."""
+
+    cluster_count_repair_name = "cluster_count_summary_alias_v1"
+    if previous_repair != cluster_count_repair_name:
+        repaired = patch_cluster_count_summary_alias(code, findings)
+        if repaired != code:
+            return cluster_count_repair_name, repaired
 
     unresolved_receipt_repair_name = "unresolved_input_binding_receipts_v1"
     if previous_repair != unresolved_receipt_repair_name:

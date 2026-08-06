@@ -9330,6 +9330,9 @@ def test_step_contract_repair_guidance_requires_figure_recording(ra):
 
     assert "figure output" in guidance
     assert "figure_path" in guidance
+    assert "never reconstruct source data from Matplotlib" in guidance
+    assert "panel title, reader-facing claim, role" in guidance
+    assert "actual plotted analytic rows" in guidance
 
 
 def test_step_contract_repair_guidance_for_clustering_contract(ra):
