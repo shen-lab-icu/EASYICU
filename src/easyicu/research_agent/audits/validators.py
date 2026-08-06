@@ -875,6 +875,42 @@ def _concept_audit_script_excerpt(
     )
 
 
+def _concept_audit_step_roster_block(
+    plan_step_roster: Optional[Sequence[Mapping[str, Any]]],
+) -> str:
+    """The plan's other steps, so "nobody did this" can be distinguished.
+
+    Deliberately id/role/method only. The other steps' rule prose would be the
+    largest block in this prompt and would invite auditing them; what the
+    auditor needs is not their content but the fact that they exist and own
+    work, so a requirement discharged elsewhere stops looking undischarged.
+    """
+
+    if not plan_step_roster:
+        return ""
+    lines = []
+    for entry in plan_step_roster:
+        step_id = str(entry.get("step_id") or "").strip()
+        if not step_id:
+            continue
+        role = str(entry.get("planned_analysis_role") or "").strip()
+        method = str(entry.get("method") or "").strip()
+        lines.append(f"- {step_id} [{role or 'unspecified'}] {method}".rstrip())
+    if not lines:
+        return ""
+    return (
+        "Other steps in this locked plan (id, planned role, method):\n"
+        + "\n".join(lines)
+        + "\nYou are auditing ONLY the step named above. A requirement the plan "
+        "assigns to a different step in this roster is that step's obligation, "
+        "not a defect in this script: report it only if THIS step's own declared "
+        "contract carries it. In particular a cohort, eligibility, exclusion or "
+        "attrition rule is discharged by the step that owns the cohort contract, "
+        "and by the time this step runs that step has already run and its output "
+        "is an input here. Do not require this script to re-apply it.\n"
+    )
+
+
 def _concept_audit_endpoint_block(
     study_endpoint: Optional[Mapping[str, Any]],
 ) -> str:
@@ -936,12 +972,14 @@ class LLMConceptAuditor:
         step: Optional[AnalysisStep] = None,
         provider_budget: Optional[StepProviderCallBudget] = None,
         study_endpoint: Optional[Mapping[str, Any]] = None,
+        plan_step_roster: Optional[Sequence[Mapping[str, Any]]] = None,
     ) -> List[ValidationFinding]:
         prompt = self._prompt(
             context=context,
             script_text=script_text,
             step=step,
             study_endpoint=study_endpoint,
+            plan_step_roster=plan_step_roster,
         )
         try:
             raw = complete_with_provider_budget(
@@ -1007,6 +1045,7 @@ class LLMConceptAuditor:
         script_text: str,
         step: Optional[AnalysisStep],
         study_endpoint: Optional[Mapping[str, Any]] = None,
+        plan_step_roster: Optional[Sequence[Mapping[str, Any]]] = None,
     ) -> str:
         # A wide ICU context can exceed the prompt budget.  Never take the
         # first columns blindly: preserve plan-declared inputs and their
@@ -1270,7 +1309,19 @@ class LLMConceptAuditor:
             "findings, with messages under 60 words and at most 20 variables each.\n\n"
             f"Step: {step.step_id if step else '(unknown)'}\n"
             f"Step intent: {step.intent if step else '(unknown)'}\n"
-            "Planner-declared step contract:\n"
+            # MEASURED (h1, sweep47_A): step 04_primary_landmark_survival_analysis
+            # was blocked `repair_failed` for "Prevalent exposure is only audited,
+            # not excluded before the 24-hour follow-up landmark" -- and the plan
+            # assigns that exclusion to 01_define_analysis_cohort, whose own
+            # icu_rule_refs read "Exclude prevalent events before the 24-hour
+            # landmark as a cohort-definition step". Step 01 had already run.
+            #
+            # This auditor sees ONE step's contract and no roster, so a
+            # study-level obligation discharged elsewhere is indistinguishable
+            # from one nobody discharged. It was making a whole-plan judgement
+            # from a step-local view, and the step it faulted was not the owner.
+            + _concept_audit_step_roster_block(plan_step_roster)
+            + "Planner-declared step contract:\n"
             + json.dumps(
                 step_contract,
                 ensure_ascii=False,

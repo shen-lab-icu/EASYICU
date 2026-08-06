@@ -7543,6 +7543,20 @@ def run_execute_phase(
                 study_endpoint=study_endpoint_declaration_entry(
                     getattr(plan_result.plan, "endpoint", None)
                 ),
+                # Every step of the locked plan, so a requirement the plan
+                # assigned to another step stops looking like this script's
+                # omission. Id/role/method only: the other steps' rule prose
+                # would be the largest block in that prompt and would invite
+                # auditing them instead of this one.
+                plan_step_roster=tuple(
+                    {
+                        "step_id": other.step_id,
+                        "planned_analysis_role": other.planned_analysis_role,
+                        "method": other.method,
+                    }
+                    for other in (plan_result.plan.steps or ())
+                    if other.step_id != step.step_id
+                ),
             ),
             runtime=ConceptAuditRuntime(
                 usage_auditor=usage_auditor,
