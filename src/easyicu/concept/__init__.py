@@ -4668,7 +4668,8 @@ class ConceptResolver:
             # All possible eICU time offset columns
             eicu_time_cols = [
                 'labresultoffset', 'observationoffset', 'nursingchartoffset', 
-                'respiratorycharting_offset', 'intakeoutput_offset', 'respchartoffset',
+                'respiratorycharting_offset', 'intakeoutput_offset',
+                'intakeoutputoffset', 'respchartoffset',
                 'infusionoffset', 'drugstartoffset', 'drugstopoffset', 'drugorderoffset',
                 'culturetakenoffset', 'cultureoffset',
                 # 🔥 添加 respiratorycare 表的时间列
@@ -8788,6 +8789,25 @@ class ConceptResolver:
         for name in list(concept_data.keys()):
             df = concept_data[name]
             if df is None or df.empty:
+                continue
+            # The table's declared index is authoritative.  Multi-source
+            # concepts can retain an auxiliary column whose name happens to
+            # equal the time key selected from an earlier concept.  For
+            # example, eICU ``rrt`` declares ``charttime`` after coalescing
+            # treatment/intake-output sources but can also retain a boolean
+            # ``intakeoutputoffset`` helper column.  Treating that helper as
+            # the merge time collapses every RRT event to hour zero.
+            declared_time = declared_time_columns.get(name)
+            if (
+                declared_time
+                and declared_time != time_col
+                and declared_time in df.columns
+            ):
+                if time_col in df.columns:
+                    df = df.drop(columns=[time_col])
+                concept_data[name] = df.rename(
+                    columns={declared_time: time_col}
+                )
                 continue
             if time_col in df.columns:
                 continue
