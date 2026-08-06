@@ -568,6 +568,9 @@ class RepairCoordinator:
         patch_call: Callable[[], str],
         full_rewrite_call: Callable[[str], str],
         patch_preflight: Optional[Callable[[], None]] = None,
+        patch_candidate_rejection_reason: Optional[
+            Callable[[str], Optional[str]]
+        ] = None,
         full_rewrite_preflight: Optional[Callable[[str], None]] = None,
         logical_repair_attempt_id: Optional[int] = None,
         persist_result: Optional[Callable[[str, str], object]] = None,
@@ -589,6 +592,7 @@ class RepairCoordinator:
                 patch_call=patch_call,
                 full_rewrite_call=full_rewrite_call,
                 patch_preflight=patch_preflight,
+                patch_candidate_rejection_reason=patch_candidate_rejection_reason,
                 full_rewrite_preflight=full_rewrite_preflight,
             )
             finalized_code = self._finalize_script(result.code)
@@ -648,6 +652,7 @@ class RepairCoordinator:
         patch_call: Callable[[], str],
         full_rewrite_call: Callable[[str], str],
         patch_preflight: Optional[Callable[[], None]],
+        patch_candidate_rejection_reason: Optional[Callable[[str], Optional[str]]],
         full_rewrite_preflight: Optional[Callable[[str], None]],
     ) -> RepairTransportResult:
         calls_before = self._provider_budget.used if self._provider_budget else 0
@@ -687,7 +692,21 @@ class RepairCoordinator:
             raw_patch = self._call("patch", patch_call)
             try:
                 repaired = apply_code_patch(code, raw_patch)
-                mode = "minimal_patch"
+                fallback_reason = (
+                    patch_candidate_rejection_reason(repaired)
+                    if patch_candidate_rejection_reason is not None
+                    else None
+                )
+                if fallback_reason:
+                    if full_rewrite_preflight is not None:
+                        full_rewrite_preflight(fallback_reason)
+                    raw = self._call(
+                        "full_rewrite",
+                        lambda: full_rewrite_call(fallback_reason),
+                    )
+                    repaired, mode = self._parse_full_rewrite(code=code, raw=raw)
+                else:
+                    mode = "minimal_patch"
             except CodePatchError as patch_error:
                 # Patch transport sees only selected code blocks. A provider
                 # response that ignores PATCH_FORMAT therefore has no authority

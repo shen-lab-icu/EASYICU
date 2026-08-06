@@ -395,6 +395,40 @@ def test_coder_repair_requests_full_rewrite_only_after_patch_failure(ra):
     assert "FULL-REWRITE FALLBACK" in llm.calls[1][0][-1].content
 
 
+def test_coder_repair_rewrites_when_patch_introduces_mechanical_error(ra):
+    patch = json.dumps(
+        {
+            "format": "easyicu.code_patch/1",
+            "edits": [
+                {
+                    "old": "from sklearn.impute import SimpleImputer\n",
+                    "new": "",
+                    "expected_count": 1,
+                }
+            ],
+        }
+    )
+    full_rewrite = "import os\nvalue = object()\n"
+    llm = _SequenceLLM([patch, full_rewrite])
+    budget = StepProviderCallBudget(2, step_id="render")
+
+    repaired = CoderAgent(llm).repair(
+        context=_context(ra),
+        step=_figure_step(ra),
+        code=(
+            "from sklearn.impute import SimpleImputer\n"
+            "value = SimpleImputer(strategy='median')\n"
+        ),
+        run_log="ERROR: remove the unauthorized preprocessing operation",
+        provider_budget=budget,
+    )
+
+    assert repaired == full_rewrite.rstrip()
+    assert len(llm.calls) == 2
+    assert budget.categories == ("repair_patch", "repair_full_rewrite")
+    assert "mechanical preflight" in llm.calls[1][0][-1].content
+
+
 def test_coder_repair_budget_exhaustion_prevents_full_rewrite(ra):
     llm = _SequenceLLM(["not json", "import os\nvalue = 3\n"])
     budget = StepProviderCallBudget(1, step_id="render")

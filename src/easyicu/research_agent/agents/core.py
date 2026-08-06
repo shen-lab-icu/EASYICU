@@ -76,6 +76,7 @@ from ..providers.prompt_budget import (
     DEFAULT_MAX_PROMPT_TOKENS,
 )
 from ..providers.factory import authorized_complete
+from ..gates.preflight import audit_mechanical_code_contracts
 from ..repairs.patch import (
     PATCH_FORMAT,
     budgeted_repair_code_excerpt,
@@ -3620,6 +3621,32 @@ class CoderAgent:
                 persisted_ref = persist_candidate(candidate)
             return persisted_ref
 
+        def _patch_candidate_rejection_reason(candidate: str) -> Optional[str]:
+            candidate_for_audit = (
+                restore_outbound_safe_script(step, candidate)
+                if external_repair_transport
+                else candidate
+            )
+            errors = [
+                finding
+                for finding in audit_mechanical_code_contracts(
+                    candidate_for_audit,
+                    step,
+                )
+                if finding.severity == "error"
+            ]
+            if not errors:
+                return None
+            details = " | ".join(
+                f"{finding.message} detail={json.dumps(finding.detail or {}, ensure_ascii=False, sort_keys=True)}"
+                for finding in errors[:4]
+            )
+            return (
+                "minimal patch failed deterministic mechanical preflight; "
+                "fix the original diagnosis without leaving an unexecutable "
+                f"script: {details}"
+            )[:2_500]
+
         repair_result = RepairCoordinator(
             provider_budget=provider_budget,
             provider_category=provider_category,
@@ -3643,6 +3670,7 @@ class CoderAgent:
                 max_tokens=min(2048, _CODER_MAX_TOKENS),
                 temperature=0.0,
             ),
+            patch_candidate_rejection_reason=_patch_candidate_rejection_reason,
             full_rewrite_call=_full_rewrite,
             logical_repair_attempt_id=logical_repair_attempt_id,
             persist_result=(_persist_result if persist_candidate is not None else None),
