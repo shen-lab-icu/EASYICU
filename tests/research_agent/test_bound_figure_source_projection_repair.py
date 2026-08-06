@@ -492,6 +492,186 @@ def main():
     ]
 
 
+def test_direct_bound_figure_repair_projects_manual_reader_named_as_source_table(
+    tmp_path: Path,
+) -> None:
+    parent_path = tmp_path / "phenotype_profiles.csv"
+    pd.DataFrame(
+        {
+            "cluster_label": [0, 1],
+            "variable": ["heart_rate", "heart_rate"],
+            "median": [82.0, 96.0],
+            "n": [90, 10],
+        }
+    ).to_csv(parent_path, index=False)
+    cohort_path = tmp_path / "cohort.csv"
+    pd.DataFrame({"stay_id": [1, 2]}).to_csv(cohort_path, index=False)
+    code = f"""
+from pathlib import Path
+import pandas as pd
+
+OUT_DIR = Path({str(tmp_path)!r})
+
+def make_figure_contract(**kwargs):
+    return kwargs
+
+def save_publication_figure(*, fig, out_dir, stem, contract):
+    return None
+
+def main():
+    cohort_path = Path({str(cohort_path)!r})
+    input_path = Path({str(parent_path)!r})
+    cohort = pd.read_csv(cohort_path)
+    profiles = pd.read_csv(input_path)
+    source_table_name = input_path.name
+    derived = profiles.assign(standardized_median=[-1.0, 1.0])
+    profile_name = "cluster_profile_source_data.csv"
+    availability_name = "cluster_availability_source_data.csv"
+    derived.to_csv(OUT_DIR / profile_name, index=False)
+    derived.to_csv(OUT_DIR / availability_name, index=False)
+    contract = make_figure_contract(
+        figure_id="figure:cluster_profile",
+        source_data=[profile_name, availability_name],
+    )
+    save_publication_figure(
+        fig=None,
+        out_dir=OUT_DIR,
+        stem="cluster_profile",
+        contract=contract,
+    )
+    step_summary = {{
+        "figure_files": ["cluster_profile.png"],
+        "source_data": [profile_name, availability_name],
+        "source_table": source_table_name,
+        "cohort_rows": len(cohort),
+    }}
+    return contract, step_summary
+"""
+    finding = {
+        **_FINDING,
+        "detail": {
+            **_FINDING["detail"],
+            "missing_bound_tables": ["phenotype_profiles.csv"],
+        },
+    }
+
+    repair = deterministic_contract_repair(code=code, findings=[finding])
+
+    assert repair is not None
+    repair_id, repaired = repair
+    assert repair_id == "direct_bound_figure_source_projection_v1"
+    namespace: dict[str, object] = {}
+    exec(repaired, namespace)
+    contract, summary = namespace["main"]()
+    assert (
+        contract["source_data"]
+        == summary["source_data"]
+        == ["bound_000_phenotype_profiles_source_data.csv"]
+    )
+    projection = pd.read_csv(tmp_path / contract["source_data"][0])
+    assert projection.to_dict(orient="records") == [
+        {
+            "cluster_label": 0,
+            "variable": "heart_rate",
+            "median": 82.0,
+            "n": 90,
+            "source_row_index": 0,
+            "source_table": "phenotype_profiles.csv",
+        },
+        {
+            "cluster_label": 1,
+            "variable": "heart_rate",
+            "median": 96.0,
+            "n": 10,
+            "source_row_index": 1,
+            "source_table": "phenotype_profiles.csv",
+        },
+    ]
+
+
+def test_direct_bound_figure_repair_uses_unverifiable_source_parent_receipt(
+    tmp_path: Path,
+) -> None:
+    parent_path = tmp_path / "phenotype_profiles.csv"
+    pd.DataFrame(
+        {
+            "cluster_label": [0, 1],
+            "median": [82.0, 96.0],
+            "n_nonmissing": [85, 9],
+            "n": [90, 10],
+        }
+    ).to_csv(parent_path, index=False)
+    code = f"""
+from pathlib import Path
+import pandas as pd
+
+OUT_DIR = Path({str(tmp_path)!r})
+
+def make_figure_contract(**kwargs):
+    return kwargs
+
+def save_publication_figure(*, fig, out_dir, stem, contract):
+    return None
+
+def main():
+    input_path = Path({str(parent_path)!r})
+    if input_path.suffix == ".csv":
+        profiles = pd.read_csv(input_path)
+    else:
+        profiles = pd.read_parquet(input_path)
+    source_table_name = input_path.name
+    availability = profiles.assign(
+        availability_fraction=profiles["n_nonmissing"] / profiles["n"]
+    )
+    source_name = "cluster_availability_source_data.csv"
+    availability.to_csv(OUT_DIR / source_name, index=False)
+    contract = make_figure_contract(
+        figure_id="figure:cluster_profile",
+        source_data=[source_name],
+    )
+    save_publication_figure(
+        fig=None,
+        out_dir=OUT_DIR,
+        stem="cluster_profile",
+        contract=contract,
+    )
+    step_summary = {{
+        "figure_files": ["cluster_profile.png"],
+        "source_data": [source_name],
+        "source_table": source_table_name,
+    }}
+    return contract, step_summary
+"""
+    finding = {
+        "validator": "figure_source_data",
+        "severity": "error",
+        "detail": {
+            "best_mismatch": {
+                "reason": "no_verifiable_values",
+                "upstream_table": "phenotype_profiles.csv",
+                "unverified_source_value_columns": ["availability_fraction"],
+            }
+        },
+    }
+
+    repair = deterministic_contract_repair(code=code, findings=[finding])
+
+    assert repair is not None
+    repair_id, repaired = repair
+    assert repair_id == "direct_bound_figure_source_projection_v1"
+    namespace: dict[str, object] = {}
+    exec(repaired, namespace)
+    contract, summary = namespace["main"]()
+    assert (
+        contract["source_data"]
+        == summary["source_data"]
+        == ["bound_000_phenotype_profiles_source_data.csv"]
+    )
+    projection = pd.read_csv(tmp_path / contract["source_data"][0])
+    assert "availability_fraction" not in projection.columns
+    assert projection["median"].tolist() == [82.0, 96.0]
+
+
 def test_direct_bound_figure_repair_materializes_prior_dataframe_dict_shape(
     tmp_path: Path,
 ) -> None:

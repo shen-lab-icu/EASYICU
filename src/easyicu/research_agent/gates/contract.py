@@ -80,6 +80,7 @@ from ..contracts.robustness_execution import (
 from ..robustness.panel import RobustnessSpec
 from ..authority.runtime_artifacts import current_successful_step_records
 from ..schema import AnalysisPlan, AnalysisStep, ResearchContext
+from ..trajectory.plan_contract import trajectory_plan_contract_applies
 
 
 def _primary_cohort_integrity_authority_paths(
@@ -727,6 +728,10 @@ def _step_deterministic_contract_findings(
         completed_step_records=completed_step_records,
         resolved_input_bindings=resolved_input_bindings,
         out_dir=out_dir,
+        trajectory_role_contract_applies=trajectory_plan_contract_applies(
+            plan=plan,
+            context=context,
+        ),
     )
     findings += _cohort_definition_sensitivity_contract_findings(
         step=step,

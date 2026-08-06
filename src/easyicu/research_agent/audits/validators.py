@@ -1263,6 +1263,25 @@ class LLMConceptAuditor:
             "without reconciling them to counts and denominators, or select an "
             "alternate per-stay summary in place of the authoritative exposure; "
             "those behaviors can change the displayed scientific result. "
+            "Do not assume that a generically named `n` field is the total "
+            "denominator when the typed upstream product does not declare that "
+            "meaning. If non-negative integer `n_nonmissing` and `missing_n` "
+            "components are present, `n_nonmissing / (n_nonmissing + missing_n)` "
+            "reconciles availability by construction; require a positive finite "
+            "component sum, but do not demand that it equal an otherwise "
+            "undefined `n`. "
+            "Read an instruction to display standardized feature patterns "
+            "together with an instruction not to recompute scaling as follows: "
+            "the script must not refit or replace upstream analytical "
+            "preprocessing, clustering, profiles, or model inputs, but it may "
+            "apply and label a local rendering-only normalization to values read "
+            "from the completed parent product. Do not call that display "
+            "transform a recomputation of upstream scientific scaling when raw "
+            "parent values remain the bound source-data authority and the "
+            "transformed values are not reused as a scientific artifact. Still "
+            "flag an undeclared transform, mutation of the authoritative parent "
+            "table, refitting of upstream analysis, or downstream reuse of the "
+            "rendering transform. "
             "If a generic outcome column such as 'death' is explicitly bound in "
             "the variable metadata to ICU mortality, hospital mortality or a "
             "fixed follow-up horizon, do not raise an error unless the script "
@@ -7740,6 +7759,7 @@ class FigureSourceDataValidator:
         "row_type",
         "group_type",
         "estimate_type",
+        "estimate_unit",
         "effect_scale",
         "model_id",
         "source_model_id",

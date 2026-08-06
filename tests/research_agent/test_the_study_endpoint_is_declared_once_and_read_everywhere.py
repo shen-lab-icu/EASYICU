@@ -46,7 +46,7 @@ from easyicu.research_agent.authority.typed_binding import (
     _write_resolved_inputs_manifest,
     study_endpoint_declaration_entry,
 )
-from easyicu.research_agent.plan_utils import _endpoint_contract_findings
+from easyicu.research_agent.plan_utils import endpoint_contract_findings
 from easyicu.research_agent.planning.analysis_types import (
     list_analysis_types,
     required_endpoint_kind_for_family,
@@ -131,7 +131,7 @@ def test_every_declared_requirement_names_a_real_endpoint_kind() -> None:
 
 
 def test_a_survival_plan_without_an_endpoint_is_reported() -> None:
-    findings = _endpoint_contract_findings(_plan())
+    findings = endpoint_contract_findings(_plan())
     assert [(f.validator, f.severity) for f in findings] == [
         ("endpoint_contract", "warning")
     ]
@@ -141,19 +141,28 @@ def test_a_survival_plan_without_an_endpoint_is_reported() -> None:
 
 
 def test_the_missing_declaration_does_not_abort_the_run() -> None:
-    """Severity is a measurement, not a preference.
+    """The plan-phase finding remains retryable rather than aborting early.
 
     All 11 recorded runs carrying an error-severity plan-stage finding stopped
     with ``completed_step_count: 1`` and ``failed_steps: []`` -- aborted between
     the first and second step. An error here would replace h1's death at step 4
     of 12 with a death at step 0 whenever the Planner missed twice.
 
-    Fail-closed is met by the three consumers instead: the Planner gets a retry,
-    the step record omits the key rather than inventing one, and the auditor is
-    told NONE was declared and told not to substitute its own rule.
+    The execute-phase gate gets the final say after the directed retry; this
+    advisory finding must not pre-empt that repair opportunity.
     """
 
-    assert all(f.severity != "error" for f in _endpoint_contract_findings(_plan()))
+    assert all(f.severity != "error" for f in endpoint_contract_findings(_plan()))
+
+
+def test_the_same_contract_can_be_enforced_after_retries_are_exhausted() -> None:
+    """One rule, two lifecycle severities; no duplicated endpoint policy."""
+
+    findings = endpoint_contract_findings(_plan(), severity="error")
+
+    assert [(finding.validator, finding.severity) for finding in findings] == [
+        ("endpoint_contract", "error")
+    ]
 
 
 def test_the_refusal_names_the_fields_that_would_satisfy_it() -> None:
@@ -162,7 +171,7 @@ def test_the_refusal_names_the_fields_that_would_satisfy_it() -> None:
     Every field the planner must send has to appear in the message it receives.
     """
 
-    message = _endpoint_contract_findings(_plan())[0].message
+    message = endpoint_contract_findings(_plan())[0].message
     for field in (
         "kind",
         "levels",
@@ -177,7 +186,7 @@ def test_the_refusal_names_the_fields_that_would_satisfy_it() -> None:
 def test_a_declared_endpoint_of_the_required_kind_is_accepted() -> None:
     """Satisfiability, stated as a test: the gate has to have an exit."""
 
-    assert _endpoint_contract_findings(_plan(endpoint=_endpoint())) == []
+    assert endpoint_contract_findings(_plan(endpoint=_endpoint())) == []
 
 
 def test_a_declared_endpoint_of_the_wrong_kind_is_refused_and_says_which() -> None:
@@ -189,7 +198,7 @@ def test_a_declared_endpoint_of_the_wrong_kind_is_refused_and_says_which() -> No
             levels=[0, 1],
         )
     )
-    findings = _endpoint_contract_findings(plan)
+    findings = endpoint_contract_findings(plan)
     assert len(findings) == 1
     assert (findings[0].detail or {})["declared_endpoint_kind"] == "binary"
     assert "'binary'" in findings[0].message
@@ -208,7 +217,7 @@ def test_families_with_no_declared_requirement_are_untouched(family: str) -> Non
     a check that also blocked them would trade a fix for a regression.
     """
 
-    assert _endpoint_contract_findings(_plan(analysis_type=family)) == []
+    assert endpoint_contract_findings(_plan(analysis_type=family)) == []
 
 
 # --------------------------------------------------------------------------
@@ -486,3 +495,112 @@ def test_the_authorization_prose_is_not_repeated_to_the_auditor() -> None:
     block = _concept_audit_endpoint_block(entry)
     assert entry["authorization"] not in block
     assert "schema_version" not in block
+
+
+# --------------------------------------------------------------------------
+# 6. Retry at the execution boundary, then fail closed before scientific work.
+# --------------------------------------------------------------------------
+
+
+def test_a_replan_candidate_without_the_required_endpoint_is_rejected() -> None:
+    from easyicu.research_agent.planning.replan_gate import (
+        replan_candidate_contract_findings,
+    )
+    from easyicu.research_agent.schema import CohortDescriptor, ResearchContext
+
+    context = ResearchContext(
+        research_question="Estimate time to death.",
+        cohort=CohortDescriptor(
+            cohort_name="c",
+            database="synthetic",
+            n_patients=10,
+            n_stays=10,
+        ),
+        variables=[],
+        target_outcome="death",
+    )
+
+    findings = replan_candidate_contract_findings(plan=_plan(), context=context)
+
+    assert any(
+        finding.validator == "endpoint_contract" and finding.severity == "error"
+        for finding in findings
+    )
+
+
+def test_missing_endpoint_is_blocked_after_planner_and_replanner_miss(
+    ra,
+    synthetic_cohort,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Exercise the real plan -> retry -> execute-preflight -> manifest path."""
+
+    from easyicu.research_agent.agents.core import PlannerAgent
+    from easyicu.research_agent.providers.mocks import PatternScriptedMockLLMClient
+    from easyicu.research_agent.schema import AnalysisStep
+
+    step = AnalysisStep(
+        step_id="02_primary_survival",
+        planned_analysis_role="primary",
+        intent="Estimate time to death.",
+        inputs=[],
+        expected_outputs=["table:survival_estimate"],
+        method="survival_model",
+    )
+    missing_endpoint_plan = _plan(steps=[step])
+    llm = PatternScriptedMockLLMClient(
+        [
+            (
+                "ICU-AWARE RESEARCH PLAN",
+                [missing_endpoint_plan.model_dump_json(indent=2)] * 6,
+            ),
+            (
+                "PROBE SUMMARY:",
+                [missing_endpoint_plan.model_dump_json(indent=2)] * 6,
+            ),
+        ],
+        contextual_default=True,
+    )
+    original_planner_run = PlannerAgent.run
+
+    def run_without_article_suite(self, context, **kwargs):
+        kwargs["enforce_article_contract"] = False
+        return original_planner_run(self, context, **kwargs)
+
+    monkeypatch.setattr(PlannerAgent, "run", run_without_article_suite)
+    pipeline = ra.ResearchAgentPipeline(workdir=tmp_path, llm=llm)
+
+    result = pipeline.run(
+        question="Estimate time to death.",
+        cohort=synthetic_cohort,
+        cohort_name="endpoint_contract_fail_closed",
+        database="synthetic",
+        target_outcome="death",
+    )
+    manifest = json.loads(Path(result.manifest_path).read_text(encoding="utf-8"))
+    prompts = [
+        "\n".join(str(message.content or "") for message in messages)
+        for messages, _kwargs in llm.calls
+    ]
+
+    assert any(
+        "PROBE SUMMARY:" in prompt and "Repair the plan's typed study endpoint" in prompt
+        for prompt in prompts
+    )
+    assert any(
+        finding.get("validator") == "endpoint_contract"
+        and finding.get("severity") == "error"
+        and (finding.get("detail") or {}).get("stage") == "execute_final"
+        for finding in manifest["findings"]
+    )
+    assert manifest["readiness"]["analysis_validated"] is False
+    assert manifest["readiness"]["manuscript_ready"] is False
+    assert not any(
+        record.get("step_id") == step.step_id
+        for record in manifest.get("per_step_records", [])
+    )
+    audit_text = (Path(result.manifest_path).parent / "audit_log.jsonl").read_text(
+        encoding="utf-8"
+    )
+    assert "endpoint_contract_blocked" in audit_text

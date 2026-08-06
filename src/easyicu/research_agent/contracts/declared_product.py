@@ -3469,6 +3469,7 @@ def declared_product_contract_findings(
     effect_method_authorized: bool,
     effect_figure_source_authorized: bool = False,
     out_dir: Path | None = None,
+    trajectory_role_contract_applies: bool = True,
 ) -> list[ValidationFinding]:
     """Validate declared-product realization and scientific output scope."""
 
@@ -3483,19 +3484,20 @@ def declared_product_contract_findings(
     }
     registered, figure_paths = _registered_products(step_summary, out_dir=out_dir)
     findings: list[ValidationFinding] = []
-    findings.extend(
-        trajectory_role_scope_summary_findings(
-            step=step,
-            step_summary=step_summary,
+    if trajectory_role_contract_applies:
+        findings.extend(
+            trajectory_role_scope_summary_findings(
+                step=step,
+                step_summary=step_summary,
+            )
         )
-    )
-    findings.extend(
-        trajectory_role_result_findings(
-            step=step,
-            step_summary=step_summary,
-            out_dir=out_dir,
+        findings.extend(
+            trajectory_role_result_findings(
+                step=step,
+                step_summary=step_summary,
+                out_dir=out_dir,
+            )
         )
-    )
     findings.extend(
         _assignment_model_completion_findings(
             step=step,

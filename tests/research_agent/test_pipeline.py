@@ -9475,6 +9475,67 @@ def test_semantic_aliases_include_clustering_aliases(ra, tmp_path: Path):
     assert "cluster_mortality" in aliases
 
 
+def test_clustering_bundle_assigns_each_semantic_alias_to_one_artifact(
+    ra,
+    tmp_path: Path,
+):
+    from easyicu.research_agent.pipeline import _semantic_aliases_for
+
+    step = ra.AnalysisStep(
+        step_id="04_primary_clustering",
+        intent="Fit and characterize candidate clusters.",
+        method="unsupervised_clustering",
+        expected_outputs=[
+            "statistic:cluster_count",
+            "manifest:cluster_selection",
+            "table:cluster_characteristics",
+            "log:clustering_algorithm_details",
+            "manifest:clustering_methodology",
+        ],
+    )
+    paths = [
+        tmp_path / "step_summary.json",
+        tmp_path / "cluster_characteristics.csv",
+        tmp_path / "clustering_algorithm_details.json",
+        tmp_path / "clustering_methodology.json",
+    ]
+    for path in paths:
+        path.write_text("{}", encoding="utf-8")
+
+    owners: dict[str, list[str]] = {}
+    for path in paths:
+        for alias in _semantic_aliases_for(step, path):
+            owners.setdefault(alias, []).append(path.name)
+
+    assert {alias: names for alias, names in owners.items() if len(names) > 1} == {}
+    assert owners["cluster_summary"] == ["cluster_characteristics.csv"]
+    assert owners["clustering_methodology"] == ["clustering_methodology.json"]
+    assert owners["clustering_algorithm_details"] == [
+        "clustering_algorithm_details.json"
+    ]
+
+
+def test_clustering_algorithm_details_keeps_methodology_fallback_alias(
+    ra,
+    tmp_path: Path,
+):
+    from easyicu.research_agent.pipeline import _semantic_aliases_for
+
+    step = ra.AnalysisStep(
+        step_id="04_primary_clustering",
+        intent="Fit candidate clusters.",
+        method="unsupervised_clustering",
+        expected_outputs=["log:clustering_algorithm_details"],
+    )
+    details = tmp_path / "clustering_algorithm_details.json"
+    details.write_text("{}", encoding="utf-8")
+
+    aliases = _semantic_aliases_for(step, details)
+
+    assert "clustering_algorithm_details" in aliases
+    assert "clustering_methodology" in aliases
+
+
 def test_semantic_aliases_bind_kdigo_sensitivity_to_primary_association(
     ra, tmp_path: Path
 ):

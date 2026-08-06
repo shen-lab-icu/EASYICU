@@ -326,7 +326,7 @@ from .plan_utils import (
     _cap_plan_preserving_figure_steps,
     _clustering_contract_applies,
     _cohort_definition_contract_findings,
-    _endpoint_contract_findings,
+    endpoint_contract_findings,
     _cohort_definition_is_empty,
     _ensure_audit_panel_step_in_plan,
     _ensure_publication_figure_step_in_plan,
@@ -3159,7 +3159,7 @@ class ResearchAgentPipeline:
             # undeclared, and one planner miss should not cost the run. Adopt
             # the retry only if it actually declares the required kind, so a
             # good plan is never discarded when the retry does not improve it.
-            if not used_mock_llm and _endpoint_contract_findings(plan):
+            if not used_mock_llm and endpoint_contract_findings(plan):
                 endpoint_retry = None
                 try:
                     endpoint_retry = planner.run(
@@ -3174,7 +3174,7 @@ class ResearchAgentPipeline:
                 if (
                     endpoint_retry is not None
                     and endpoint_retry.steps
-                    and not _endpoint_contract_findings(endpoint_retry)
+                    and not endpoint_contract_findings(endpoint_retry)
                 ):
                     plan = endpoint_retry
                     findings.append(
@@ -3263,7 +3263,7 @@ class ResearchAgentPipeline:
         # The endpoint half of the same declaration, checked for every plan
         # rather than only inside the cohort branch above: a family can require
         # a typed endpoint whether or not it also defines an analysis cohort.
-        findings.extend(_endpoint_contract_findings(plan))
+        findings.extend(endpoint_contract_findings(plan))
         if study_design_brief is not None:
             if (
                 plan.analysis_type
@@ -11163,14 +11163,8 @@ _SEMANTIC_ALIAS_MAP: Dict[tuple, tuple] = {
         "table_one",
     ),
     ("", "cluster_mortality.csv"): ("cluster_mortality", "outcome_rate"),
-    ("", "clustering_algorithm_details.json"): (
-        "clustering_algorithm_details",
-        "clustering_methodology",
-    ),
-    ("", "clustering_methodology.json"): (
-        "clustering_methodology",
-        "cluster_summary",
-    ),
+    ("", "clustering_algorithm_details.json"): ("clustering_algorithm_details",),
+    ("", "clustering_methodology.json"): ("clustering_methodology",),
     # Figures.
     ("", "mortality_by_sofa2_stratum.png"): (
         "mortality_by_sofa2_stratum",
@@ -11249,16 +11243,21 @@ def _semantic_aliases_for(step: AnalysisStep, artefact: Path) -> List[str]:
             intent=intent,
             expected_outputs=step.expected_outputs or [],
         ):
-            out.extend(
-                [
-                    "cluster_summary",
-                    "cluster_characteristics",
-                    "cluster_mortality",
-                    "clustering_performance",
-                    "clustering_methodology",
-                    "table_one",
-                ]
-            )
+            out.append("clustering_performance")
+            if not (artefact.parent / "cluster_characteristics.csv").exists():
+                out.extend(
+                    ["cluster_summary", "cluster_characteristics", "table_one"]
+                )
+            if not (artefact.parent / "cluster_mortality.csv").exists():
+                out.append("cluster_mortality")
+            if not any(
+                (artefact.parent / name).exists()
+                for name in (
+                    "clustering_methodology.json",
+                    "clustering_algorithm_details.json",
+                )
+            ):
+                out.append("clustering_methodology")
         if (
             "robustness" in expected
             or "robustness" in intent
@@ -11288,6 +11287,11 @@ def _semantic_aliases_for(step: AnalysisStep, artefact: Path) -> List[str]:
         if step_substr and step_substr not in (step.step_id or "").lower():
             continue
         out.extend(aliases)
+    if (
+        artefact.name == "clustering_algorithm_details.json"
+        and not (artefact.parent / "clustering_methodology.json").exists()
+    ):
+        out.append("clustering_methodology")
     return out
 
 
