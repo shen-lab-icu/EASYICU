@@ -649,6 +649,18 @@ def _statically_deterministic_integer(
             )
             for branch in (node.body, node.orelse)
         )
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        return all(
+            _statically_deterministic_integer(
+                operand,
+                tree=tree,
+                function=function,
+                assignments=assignments,
+                fixed_seed_names=fixed_seed_names,
+                seen=seen,
+            )
+            for operand in (node.left, node.right)
+        )
     return False
 
 
@@ -807,13 +819,32 @@ def _large_cohort_silhouette_violations(
         elif (
             isinstance(node, ast.For)
             and isinstance(node.target, ast.Name)
-            and isinstance(node.iter, (ast.List, ast.Set, ast.Tuple))
-            and node.iter.elts
-            and all(
-                isinstance(item, ast.Constant)
-                and isinstance(item.value, int)
-                and not isinstance(item.value, bool)
-                for item in node.iter.elts
+            and (
+                (
+                    isinstance(node.iter, (ast.List, ast.Set, ast.Tuple))
+                    and node.iter.elts
+                    and all(
+                        isinstance(item, ast.Constant)
+                        and isinstance(item.value, int)
+                        and not isinstance(item.value, bool)
+                        for item in node.iter.elts
+                    )
+                )
+                or (
+                    isinstance(node.iter, ast.Call)
+                    and isinstance(node.iter.func, ast.Name)
+                    and node.iter.func.id == "range"
+                    and 1 <= len(node.iter.args) <= 3
+                    and not node.iter.keywords
+                    and all(
+                        _static_integer_upper_bound(
+                            argument,
+                            assignments=assignments,
+                        )
+                        is not None
+                        for argument in node.iter.args
+                    )
+                )
             )
         ):
             fixed_seed_names.add(node.target.id)
