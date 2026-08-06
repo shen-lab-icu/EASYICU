@@ -77,6 +77,7 @@ EXPECTED_GUIDED_ROUTES = [
 ]
 
 EXPECTED_COPILOT_ROUTES = [
+    ("POST", "/api/copilot/study-intent", "post_copilot_study_intent"),
     ("POST", "/api/copilot/sessions", "post_copilot_session"),
     ("POST", "/api/copilot/message", "post_copilot_message"),
     ("POST", "/api/copilot/action", "post_copilot_action"),
