@@ -28,12 +28,47 @@ def _module_scope_nodes(tree: ast.Module):
         stack.extend(reversed(list(ast.iter_child_nodes(node))))
 
 
+def _target_binds_name(target: ast.AST, name: str) -> bool:
+    if isinstance(target, ast.Name):
+        return target.id == name
+    if isinstance(target, (ast.List, ast.Tuple)):
+        return any(_target_binds_name(item, name) for item in target.elts)
+    return False
+
+
+def _inside_for_target_shadow(
+    node: ast.AST,
+    *,
+    name: str,
+    parents: dict[int, ast.AST],
+) -> bool:
+    """Return whether a loop target locally rebinds ``name`` around ``node``."""
+
+    current = node
+    while (parent := parents.get(id(current))) is not None:
+        if (
+            isinstance(parent, (ast.For, ast.AsyncFor))
+            and _target_binds_name(parent.target, name)
+            and current in parent.body
+        ):
+            return True
+        current = parent
+    return False
+
+
 def direct_resolved_input_key_findings(
     tree: ast.Module,
 ) -> list[ValidationFinding]:
     """Reject module-scope ``binding.input_key`` reads from resolved inputs."""
 
     nodes = list(_module_scope_nodes(tree))
+    node_ids = {id(node) for node in nodes}
+    parents = {
+        id(child): node
+        for node in nodes
+        for child in ast.iter_child_nodes(node)
+        if id(child) in node_ids
+    }
     keys_by_name: dict[str, set[str]] = {}
     for node in nodes:
         if (
@@ -111,6 +146,11 @@ def direct_resolved_input_key_findings(
             )
             if (
                 not (direct_subscript or direct_get)
+                or _inside_for_target_shadow(
+                    node,
+                    name=binding_name,
+                    parents=parents,
+                )
                 or node.end_lineno is None
                 or node.end_col_offset is None
             ):
