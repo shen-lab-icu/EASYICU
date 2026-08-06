@@ -233,6 +233,15 @@
   let guidedInitialRender = false;
   let guidedComposerDraft = '';
   let studyParams;   // dynamic params extracted from clarify answers + free text
+  // The user's own words, kept verbatim. `frameFor()` only ever proposes a
+  // rewording — it must never silently become the question we submit, persist
+  // or bind evidence to. `acceptedFrame` records an explicit user acceptance.
+  let userQuestion = '';
+  let acceptedFrame = false;
+  // Typed study-contract proposal read from `userQuestion` by the intent owner
+  // (screens-guided-intent.js). Null until it answers; null also means "we do
+  // not know", never "nothing to configure".
+  let studyContract = null;
 
   const DEFAULT_MODS = ['Demographics', 'Vital signs', 'Lab — Chemistry', 'SOFA-2 scores', 'Sepsis-3 (SOFA-2)', 'Outcome'];
   const GUIDED_EXTRACT_WINDOW_HOURS = 24 * 30;
@@ -283,6 +292,7 @@
     guidedKnownProjectsOpen = false;
     guidedPipelineOpen = false;
     studyParams = { outcome: 'In-hospital mortality', window: 'full available window', exposure: 'lactate', scope: 'all 19 modules', caught: null };
+    userQuestion = ''; acceptedFrame = false; studyContract = null;
     studyStatus = {}; studyVal = {};
     gen++;
     STUDY.forEach(([id]) => { studyStatus[id] = 'pending'; });
@@ -428,6 +438,73 @@
     if (b === 'predict') return `“Among Sepsis-3 patients, do ${studyParams.window} bedside features predict ${studyParams.outcome.toLowerCase()}, and does adding ${studyParams.exposure} improve it?”`;
     return BRANCH[b].frame;
   }
+  /* Remember the user's own words. Called wherever free text first arrives. */
+  function rememberUserQuestion(text) {
+    const raw = String(text == null ? '' : text).trim();
+    // Chip labels and control tokens are UI affordances, not the research
+    // question — they must not overwrite what the user actually typed.
+    if (!raw || raw.startsWith('@')) return;
+    if (!userQuestion) { userQuestion = raw; refreshStudyContract(); }
+  }
+  /* Ask the intent owner to read the question into a typed contract. Stale
+     answers are dropped via `gen`; a failed read leaves `studyContract` null,
+     which the card renders as "unknown", never as an empty study. */
+  function refreshStudyContract() {
+    studyContract = null;
+    if (!userQuestion || !window.EU_STUDY_INTENT || !window.EU_STUDY_INTENT.extract) return;
+    const myGen = gen;
+    const asked = userQuestion;
+    window.EU_STUDY_INTENT.extract(asked).then(contract => {
+      if (myGen !== gen || asked !== userQuestion) return;
+      studyContract = contract;
+      renderThread(); renderAside();
+    }).catch(() => {});
+  }
+  /* A later correction AMENDS the question of record. It appends rather than
+     replaces: "my outcome is AKI, not death" on its own loses the exposure the
+     user gave in their first sentence, so both are kept and re-read together.
+     Returns true when the question of record actually changed. */
+  function replaceUserQuestion(text) {
+    const raw = String(text == null ? '' : text).trim();
+    if (!raw || raw.startsWith('@') || raw.length < 8) return false;
+    if (raw === userQuestion || (userQuestion && userQuestion.endsWith(raw))) return false;
+    userQuestion = userQuestion ? `${userQuestion} ${raw}` : raw;
+    acceptedFrame = false;
+    extractEntities(raw);
+    refreshStudyContract();
+    return true;
+  }
+  /* The question we are entitled to submit / persist / bind evidence to.
+     Defaults to the user's own wording; a template framing is only used when
+     the user explicitly accepted it, or when they never gave us any words. */
+  function submittedQuestion() {
+    if (userQuestion && !acceptedFrame) return userQuestion;
+    if (acceptedFrame) return stripQuotes(frameFor(branch)) || userQuestion;
+    return userQuestion || stripQuotes(frameFor(branch)) || (BRANCH[branch] ? BRANCH[branch].chip : '');
+  }
+  function stripQuotes(value) {
+    return String(value == null ? '' : value).replace(/^[“"']+|[”"']+$/g, '').trim();
+  }
+  function tg(en, zh) { return window.t ? window.t(en, zh) : en; }
+  /* Slots the template framing filled from its own defaults because nothing in
+     the user's words matched. Naming them is the difference between "here is a
+     tighter framing of your question" and an undisclosed substitution. */
+  function unreadSlots() {
+    const caught = String(studyParams.caught || '');
+    const slots = [];
+    if (branch !== 'predict') return slots;
+    if (!/lactate|SOFA|MAP|creatinine|heart rate|WBC/i.test(caught)) {
+      slots.push([tg('exposure', '暴露'), studyParams.exposure]);
+    }
+    if (!/28-day|ICU mortality/i.test(caught)) {
+      slots.push([tg('outcome', '结局'), studyParams.outcome]);
+    }
+    if (!/first \d+h/i.test(caught)) {
+      slots.push([tg('time window', '时间窗'), studyParams.window]);
+    }
+    slots.push([tg('population', '人群'), 'Sepsis-3']);
+    return slots;
+  }
   /* turn a clarify answer into a real param change (not just a label) */
   function applyClarify(b, detail) {
     const d = detail.toLowerCase();
@@ -567,7 +644,23 @@
   }
 
   /* ============== timed sub-flows ============== */
+  /* Seeded demo animation ONLY. The row states and the `durs` timings here are
+     invented: rows tick on a 380-600ms timer while `durs` claims seconds. In
+     real mode that would assert work the app has not done yet (the caller's
+     real work runs inside `done`), so real mode gets an honest indeterminate
+     state and the work starts immediately instead. */
+  function markTasksIndeterminate(sel) {
+    document.querySelectorAll(sel + ' .gd-task').forEach(r => {
+      r.className = 'gd-task running';
+      r.setAttribute('data-progress-source', 'live-indeterminate');
+      const tk = r.querySelector('.tk');
+      if (tk) tk.innerHTML = '<span class="spin sm accent" style="width:11px;height:11px;"></span>';
+      // No per-row duration: we do not know it, and inventing one is the bug.
+      const d = r.querySelector('.tdur'); if (d) { d.textContent = ''; d.style.color = ''; }
+    });
+  }
   function streamTasks(sel, durs, done, opts) {
+    if (realMode()) { markTasksIndeterminate(sel); done(); return; }
     let i = 0;
     let repaired = false;
     const failAt = opts && opts.failAt != null ? opts.failAt : -1;
@@ -807,7 +900,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       <div class="gd-card" style="max-width:600px;margin-left:39px;">
         <div class="gc-head"><div class="gc-ico">${icon('db', 15)}</div><div class="grow"><div class="gc-t">Detecting schema</div><div class="gc-sub mono">${esc(path)}</div></div></div>
         <div class="gc-body">
-          <div class="gd-prog" id="gdDetect">${tasks.map(t => `<div class="gd-task queued"><span class="tk">${icon('clock', 9)}</span><span class="grow">${t}</span><span class="tdur"></span></div>`).join('')}</div>
+          <div class="gd-prog" id="gdDetect">${tasks.map(t => `<div class="gd-task queued" data-progress-source="${realMode() ? 'live' : 'scripted'}"><span class="tk">${icon('clock', 9)}</span><span class="grow">${t}</span><span class="tdur"></span></div>`).join('')}</div>
           <div class="indet mt-12"></div>
         </div>
       </div>`;
@@ -852,7 +945,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       const unavailableToken = guidedRunChannel.start({
         surface: 'guided-legacy',
         study_id: branch || 'guided',
-        question: branch && BRANCH[branch] ? (frameFor(branch) || BRANCH[branch].chip) : '',
+        question: submittedQuestion(),
         source_path: src && src.path,
       });
       failLivePipeline(
@@ -885,7 +978,9 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
 
   function runLivePipeline(src) {
     const capturedBranch = branch;
-    const capturedQuestion = frameFor(capturedBranch) || BRANCH[capturedBranch].chip;
+    // The run binds evidence to this string, so it must be the user's own
+    // question unless they explicitly accepted a proposed rewording.
+    const capturedQuestion = submittedQuestion();
     let runToken = guidedRunChannel.start({
       surface: 'guided-legacy',
       study_id: capturedBranch || 'guided',
@@ -1063,15 +1158,42 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
 
   const CARD = {
     question() {
-      const b = BRANCH[branch];
+      const unread = unreadSlots();
+      // The user's own words are the question. The template below is a
+      // proposal; it only becomes the submitted question via @useFrame.
+      const mine = userQuestion
+        ? `<div class="eyebrow" style="margin:0 0 6px;">${tg('Your question', '你的问题')}</div>
+           <p style="font-size:12.5px;color:var(--ink);margin:0 0 12px;line-height:1.5;">${esc(userQuestion)}</p>`
+        : '';
+      const proposalLabel = acceptedFrame
+        ? tg('Wording you accepted', '你已采用的措辞')
+        : tg('Suggested wording (template — not yet applied)', '建议措辞(模板 · 尚未采用)');
+      // Preferred: the typed contract read from the user's own words. It names
+      // what it could not read instead of defaulting, so it replaces the
+      // template-gap warning entirely when present.
+      const contractHtml = (studyContract && window.EU_STUDY_INTENT && window.EU_STUDY_INTENT.cardHtml)
+        ? window.EU_STUDY_INTENT.cardHtml(studyContract, { icon })
+        : '';
+      const gap = contractHtml ? '' : (!acceptedFrame && userQuestion && unread.length)
+        ? `<div class="note warn mt-12" style="padding:9px 11px;"><div class="ico">${icon('alert', 13)}</div><div class="body"><div class="d" style="font-size:11px;margin:0;">
+             ${tg('I could not read these from your words, so the suggestion below uses defaults:', '下面这些我没能从你的话里读出来,建议措辞用的是默认值:')}
+             <strong>${unread.map(([k, v]) => `${esc(k)} = ${esc(v)}`).join(' · ')}</strong>.
+             ${tg('Continuing keeps your own wording.', '继续将保留你自己的表述。')}
+           </div></div></div>`
+        : '';
       return cardShell('question', 'spark', 'Study plan', 'forming', `
+        ${mine}
+        ${contractHtml}
+        <div class="eyebrow" style="margin:${contractHtml ? '14px' : '0'} 0 6px;">${esc(proposalLabel)}</div>
         <p style="font-size:12.5px;color:var(--ink-2);font-style:italic;margin:0 0 12px;line-height:1.5;">${frameFor(branch)}</p>
         <div class="col gap-6" style="font-size:12.25px;">
           ${planFor(branch).map(([k, v]) => `<div class="setup-row"><span class="k">${k}</span><span class="vv">${v}</span></div>`).join('')}
         </div>
+        ${gap}
         <div class="m-cite" style="margin-top:11px;">${icon('shield', 11)} evidence-bound · I won’t assert effect sizes</div>`,
-        `<button class="btn primary sm" data-go="toData">Looks right — continue ${icon('arrow', 13)}</button>
-         <button class="btn sm" data-go="welcome">Reframe</button>`);
+        `<button class="btn primary sm" data-go="toData">${userQuestion && !acceptedFrame ? tg('Continue with my wording', '用我的表述继续') : tg('Looks right — continue', '没问题,继续')} ${icon('arrow', 13)}</button>
+         ${userQuestion && !acceptedFrame ? `<button class="btn sm" data-go="@useFrame">${tg('Use the suggested wording', '改用建议措辞')}</button>` : ''}
+         <button class="btn sm" data-go="welcome">${tg('Reframe', '重新表述')}</button>`);
     },
     data() {
       return cardShell('data', 'folder', 'Connect your data', 'a local folder', `
@@ -1162,7 +1284,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       const tasks = ['Normalize source', 'Resolve cohort', 'Map concepts', 'Coverage audit', 'Package frames'];
       return cardShell('extract', 'extract', 'Extracting', dataMode === 'demo' ? 'demo · local-only' : 'local · no uploads', `
         <div class="gd-prog" id="gdExProg">
-          ${tasks.map(t => `<div class="gd-task queued"><span class="tk">${icon('clock', 9)}</span><span class="grow">${t}</span><span class="tdur"></span></div>`).join('')}
+          ${tasks.map(t => `<div class="gd-task queued" data-progress-source="${realMode() ? 'live' : 'scripted'}"><span class="tk">${icon('clock', 9)}</span><span class="grow">${t}</span><span class="tdur"></span></div>`).join('')}
         </div>
         <div class="indet mt-12"></div>`, '');
     },
@@ -1221,13 +1343,13 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         // row) — not the generic all-green task list that hid which check failed.
         const progRows = live && gateBlocked
           ? guidedGateCheckRows(gateState)
-          : tasks.map(([tk, d]) => `<div class="gd-task done"><span class="tk">${icon('check', 10, 3)}</span><span class="grow">${tk}</span><span class="tdur">${d}</span></div>`).join('');
+          : tasks.map(([tk, d]) => `<div class="gd-task done" data-progress-source="${realMode() ? 'live' : 'scripted'}"><span class="tk">${icon('check', 10, 3)}</span><span class="grow">${tk}</span><span class="tdur">${d}</span></div>`).join('');
         return cardShell('analysis', 'agent', 'Research Agent · run', subTxt, `
           <div class="gd-prog">${progRows}</div>
           <div class="run-strip mt-12" style="padding:8px 10px;"><span class="pill ${pillCls}"><span class="dot"></span>${pillTxt}</span><div class="grow runbar"><div class="runbar-fill" style="width:${barPct}%"></div></div></div>`, '');
       }
       return cardShell('analysis', 'agent', 'Research Agent · run', dataMode !== 'demo' ? 'registry-backed · local preflight' : 'demo pipeline · no tokens', `
-        <div class="gd-prog" id="gdRunProg">${tasks.map(([t]) => `<div class="gd-task queued"><span class="tk">${icon('clock', 9)}</span><span class="tt-cmd">py</span><span class="grow">${t}</span><span class="tdur"></span></div>`).join('')}</div>
+        <div class="gd-prog" id="gdRunProg">${tasks.map(([t]) => `<div class="gd-task queued" data-progress-source="${realMode() ? 'live' : 'scripted'}"><span class="tk">${icon('clock', 9)}</span><span class="tt-cmd">py</span><span class="grow">${t}</span><span class="tdur"></span></div>`).join('')}</div>
         <div class="run-strip mt-12" style="padding:8px 10px;"><span class="pill warn" id="gdRunPill"><span class="dot"></span>Running</span><div class="grow runbar"><div class="runbar-fill" id="gdRunProg-bar" style="width:0%;transition:width .12s linear;"></div></div></div>`, '');
     },
     draft() {
@@ -2026,7 +2148,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     const src = activeExportSource() || {};
     const windowLabel = window.EU_GUIDED_EXTRACT ? window.EU_GUIDED_EXTRACT.windowLabel(guidedDesign, t) : '';
     return {
-      question: (guidedAgent && guidedAgent.question) || (branch && BRANCH[branch] ? (frameFor(branch) || BRANCH[branch].chip) : ''),
+      question: (guidedAgent && guidedAgent.question) || submittedQuestion(),
       source: {
         path: (guidedExtract && guidedExtract.result && (guidedExtract.result.out_dir || guidedExtract.result.path)) || src.path || '',
         label: src.label || src.database || (dataMode === 'demo' ? 'Demo data' : 'Local EasyICU export'),
@@ -3487,6 +3609,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     // branch selection at welcome
     if (currentId === 'welcome') {
       if (/\b(run|whole|everything|just do|autopilot|for me)\b/.test(t)) return () => autopilot(text);
+      rememberUserQuestion(text);
       branch = pickBranch(text);
       extractEntities(text);
       // if they already pinned the endpoint (or it's not the predict branch), skip the clarify
@@ -4761,14 +4884,14 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
             )],
       chips: () => [['Why frame it this way?', '@why'], ['Use my own wording', '@noop']],
       markStep: 'question', markStatus: 'active',
-      val: { question: () => BRANCH[branch].chip },
+      val: { question: () => userQuestion || BRANCH[branch].chip },
     },
     toData: {
       step: 'data', card: true,
       bot: [bi(`How should data enter the workspace?`, `数据要怎样进入工作区？`)],
       chips: () => [['What’s the difference?', '@why']],
       markStep: 'data',
-      val: { question: () => BRANCH[branch].chip },
+      val: { question: () => userQuestion || BRANCH[branch].chip },
     },
     realConfirm: {
       step: 'data',
@@ -4778,7 +4901,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       )],
       chips: () => [['Continue with local data', 'connect'], ['Use demo instead', '@usedemo']],
       markStep: 'data',
-      val: { question: () => BRANCH[branch].chip },
+      val: { question: () => userQuestion || BRANCH[branch].chip },
     },
     connect: {
       step: 'data',
@@ -5015,6 +5138,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           } else {
           go('welcome');
           setTimeout(() => {
+            rememberUserQuestion(b.lastUser || '');
             if (b.branchHint && BRANCH[b.branchHint]) {
               branch = b.branchHint;
               extractEntities(b.lastUser || '');
@@ -5104,7 +5228,32 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           if (tok === '@autopilot') { autopilot(label); return; }
           if (tok === '@why') { toggleWhy(expandedStep, true); return; }
           if (tok === '@open') { openWorkspace(); return; }
-          if (tok === '@noop') { pushUser(label); pushBot(`Go ahead — type your own wording in the box and I’ll work from it.`, `可以，直接在输入框里写你的表述，我会基于你的文字继续。`); renderThread(); return; }
+          if (tok === '@useFrame') {
+            pushUser(label);
+            acceptedFrame = true;
+            pushBot(
+              `Switched to the suggested wording. It is now the question I submit and bind evidence to — say “reframe” to go back to your own words.`,
+              `已改用建议措辞。它现在就是我提交并用于证据绑定的问题 —— 说“重新表述”可以换回你自己的说法。`,
+            );
+            renderThread(); renderAside(); renderChips();
+            return;
+          }
+          // "Use my own wording" must actually restore the user's own words,
+          // not just say it will. Anything already accepted is released here.
+          if (tok === '@noop') {
+            pushUser(label);
+            acceptedFrame = false;
+            pushBot(
+              userQuestion
+                ? `Back to your own wording — I’ll submit and bind evidence to: “${esc(userQuestion)}”. Type a new sentence any time to replace it.`
+                : `Go ahead — type your own wording in the box and I’ll work from it.`,
+              userQuestion
+                ? `已换回你自己的表述 —— 我会提交并用于证据绑定的是:“${esc(userQuestion)}”。随时可以再输入一句替换它。`
+                : `可以，直接在输入框里写你的表述，我会基于你的文字继续。`,
+            );
+            renderThread(); renderAside(); renderChips();
+            return;
+          }
           if (tok === '@typemine') { pushUser(label); pushBot(`Of course — type your research question in the box below and I’ll frame it with you.`, `当然可以。请在下面输入你的研究问题，我会帮你整理成可执行框架。`); renderThread(); const inp = document.getElementById('gdInput'); if (inp) inp.focus(); return; }
           if (tok === '@openAgent') { pushUser(label); location.hash = '#agent'; return; }
           if (tok === '@reviewBlocked') { expandedStep = 'analysis'; renderThread(); jumpToStep('analysis'); return; }
@@ -5724,6 +5873,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
   /* handle free text (from composer or hint chips) */
   function handleText(v) {
     if (busy) return;
+    rememberUserQuestion(v);
     const conceptCode = findLocalConceptQuery(v);
     if (conceptCode) {
       answerConceptQuestion(v, conceptCode);
@@ -5765,6 +5915,19 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     const next = map[currentId];
     if (next) { go(next, v); return; }
     pushUser(v);
+    // Free text we could not route is still the user correcting their own
+    // study. Before the run is bound, it REPLACES the question of record —
+    // echoing "I'll treat that as X" and then discarding it is how an AKI
+    // question silently stayed a mortality question.
+    const bindable = !liveAgentRun && runPhase !== 'done' && STEP_INDEX[expandedStep] <= STEP_INDEX.concepts;
+    if (bindable && replaceUserQuestion(v)) {
+      pushBot(
+        `Updated the question of record to “<em>${esc(userQuestion)}</em>”. That is what I will submit and bind evidence to. I could not map it onto a preset branch, so the suggested wording below may still be off — tap <strong>Reframe</strong> if it is.`,
+        `已把记录在案的研究问题更新为“<em>${esc(userQuestion)}</em>”。我提交并用于证据绑定的就是这一句。我没能把它映射到预设分支，所以下面的建议措辞可能仍不准确 —— 不对就点 <strong>重新表述</strong>。`,
+      );
+      renderThread(); renderAside(); renderChips();
+      return;
+    }
     if (dataMode === 'demo') {
       // Demo pipeline: the shortcut coaching only makes sense inside the seeded demo.
       pushBot(

@@ -276,7 +276,7 @@
   let exFormat = 'parquet';     // parquet | csv | excel
   let exMerge = 'separate';
   let exExportDir = null;
-  let exReal = 'connect';   // connect | scanning | scanresult | converting | convfail | ready
+  let exReal = 'connect';   // connect | scanning | scanresult | converting | ready
   let exPath = '';   // the local folder the user points at; never prefilled
   let exManualSourceOpen = false;
   let exExpandedMod = 'demographics';
@@ -810,36 +810,7 @@
         </div>
       </div>`;
   }
-  function convFailState() {
-    const failAt = 2; // step index that failed
-    return `
-      <div class="cfg" style="max-width:680px;">
-        <div class="cfg-head">
-          <div class="cfg-ico" style="color:var(--bad,#c0392b);">${icon('alert', 17)}</div>
-          <div class="grow"><div class="cfg-h">${t('Conversion paused', '转换已暂停')}</div><div class="cfg-sub mono">${escHtml(pathDisplay(exPath))} → ${preparedDestinationHint()}</div></div>
-          <span class="pill" style="height:20px;background:color-mix(in srgb,var(--bad,#c0392b) 14%,transparent);color:var(--bad,#c0392b);"><span class="dot" style="background:var(--bad,#c0392b);"></span>${t('1 step failed', '1 步失败')}</span>
-        </div>
-        <div class="cfg-body">
-          ${CONV_STEPS.map((s, i) => {
-            const st = i < failAt ? 'done' : i === failAt ? 'fail' : '';
-            const node = i < failAt ? icon('check', 12, 2.8) : i === failAt ? icon('close', 11, 3) : icon('clock', 11);
-            return `<div class="conv-step ${st}"><div class="conv-node" ${i === failAt ? 'style="background:var(--bad,#c0392b);border-color:var(--bad,#c0392b);color:#fff;"' : ''}>${node}</div><div><div class="conv-t">${t(s[0], s[1])}</div></div><div class="mono" style="font-size:10.5px;color:var(--ink-4);">${i < failAt ? 'ok' : i === failAt ? t('error', '错误') : ''}</div></div>`;
-          }).join('')}
-          <div class="note mt-16" style="padding:11px 13px;background:color-mix(in srgb,var(--bad,#c0392b) 7%,transparent);border-color:color-mix(in srgb,var(--bad,#c0392b) 22%,transparent);">
-            <div class="ico" style="color:var(--bad,#c0392b);">${icon('alert', 15)}</div>
-            <div class="body">
-              <div class="t" style="font-size:12.5px;">${t('Verify concept mapping failed', '概念映射校验失败')}</div>
-              <div class="d" style="font-size:11.5px;">${t('4 source tables had unmapped columns (e.g. labevents.valueuom). Steps 1–2 are cached, so resuming re-runs only this step.', '有 4 张源表存在未映射字段(如 labevents.valueuom)。步骤 1–2 已缓存,继续后仅重跑此步。')}</div>
-            </div>
-          </div>
-          <div class="row gap-8 mt-16">
-            <button class="btn primary" data-ex-resume>${icon('refresh', 14)} ${t('Resume from step 3', '从第 3 步继续')}</button>
-            <button class="btn" data-nav="settings">${icon('sliders', 13)} ${t('Edit column mapping', '编辑字段映射')}</button>
-            <button class="btn ghost" data-ex-rescan>${t('Start over', '重新开始')}</button>
-          </div>
-        </div>
-      </div>`;
-  }
+
   // Driven by the live convert job (/api/jobs/convert + SSE). Renders real
   // per-file progress instead of the four fake CONV_STEPS.
   function convertingState() {
@@ -1876,7 +1847,6 @@
       else if (real && exReal === 'connect') body = connectState();
       else if (real && exReal === 'scanning') body = scanningState();
       else if (real && exReal === 'scanresult') body = scanResultState();
-      else if (real && exReal === 'convfail') body = convFailState();
       else if (real && exReal === 'converting') body = convertingState();
       else {
         body = `
