@@ -40,6 +40,8 @@ def _prior_exhausted_reaudit_proof(
     prior_step_record: Mapping[str, Any],
     *,
     code_sha256: str,
+    provider_used: int,
+    provider_limit: int,
 ) -> tuple[str, ...]:
     block = prior_step_record.get("post_repair_concept_audit_block")
     if (
@@ -65,7 +67,8 @@ def _prior_exhausted_reaudit_proof(
             or not isinstance(used, int)
             or isinstance(limit, bool)
             or not isinstance(limit, int)
-            or used < limit
+            or used != provider_used
+            or limit != provider_limit
         ):
             return ()
     return _exact_automatic_repair_names(
@@ -80,6 +83,9 @@ def deterministic_concept_reaudit_authority(
     current_repair_names: Sequence[object],
     current_repair_code_sha256: object = None,
     prior_step_record: Mapping[str, Any] | None,
+    prior_step_records: Sequence[Mapping[str, Any]] = (),
+    provider_used: object = None,
+    provider_limit: object = None,
 ) -> tuple[str, ...]:
     """Return exact repair ids that authorize one final-category extension.
 
@@ -101,12 +107,76 @@ def deterministic_concept_reaudit_authority(
         == normalized_digest
     ):
         return _exact_automatic_repair_names(current_repair_names)
-    if isinstance(prior_step_record, Mapping):
+    if (
+        isinstance(provider_used, bool)
+        or not isinstance(provider_used, int)
+        or provider_used < 0
+        or isinstance(provider_limit, bool)
+        or not isinstance(provider_limit, int)
+        or provider_limit < 0
+        or provider_used < provider_limit
+    ):
+        return ()
+    candidates = [
+        record for record in prior_step_records if isinstance(record, Mapping)
+    ]
+    if isinstance(prior_step_record, Mapping) and all(
+        record is not prior_step_record for record in candidates
+    ):
+        candidates.append(prior_step_record)
+    for record in reversed(candidates):
+        block = record.get("post_repair_concept_audit_block")
+        if not isinstance(block, Mapping) or (
+            str(block.get("code_sha256") or "").strip().lower()
+            != normalized_digest
+        ):
+            continue
+        # The newest exact-digest block is authoritative.  A newer semantic
+        # rejection must not be bypassed by searching farther back for an old
+        # budget-only checkpoint.
         return _prior_exhausted_reaudit_proof(
-            prior_step_record,
+            record,
             code_sha256=normalized_digest,
+            provider_used=provider_used,
+            provider_limit=provider_limit,
         )
     return ()
 
 
-__all__ = ["deterministic_concept_reaudit_authority"]
+def deterministic_concept_reaudit_pending_errors(
+    findings: Sequence[Mapping[str, Any]],
+    *,
+    provider_used: int,
+    provider_limit: int,
+) -> tuple[dict[str, Any], ...]:
+    """Select the exact provider-only continuation error from quarantine.
+
+    Historical semantic findings remain useful regression constraints, but an
+    earlier exact-digest checkpoint may prove they were already repaired.  In
+    that narrow case only the matching exhausted final-audit error remains an
+    active quarantine blocker.  The caller must separately prove the repair
+    checkpoint with :func:`deterministic_concept_reaudit_authority`.
+    """
+
+    selected: list[dict[str, Any]] = []
+    for finding in findings:
+        if not isinstance(finding, Mapping):
+            continue
+        detail = finding.get("detail")
+        if (
+            finding.get("validator") != "provider_call_budget"
+            or finding.get("severity") != "error"
+            or not isinstance(detail, Mapping)
+            or detail.get("category") != "concept_audit"
+            or detail.get("used") != provider_used
+            or detail.get("limit") != provider_limit
+        ):
+            continue
+        selected.append(dict(finding))
+    return tuple(selected)
+
+
+__all__ = [
+    "deterministic_concept_reaudit_authority",
+    "deterministic_concept_reaudit_pending_errors",
+]
