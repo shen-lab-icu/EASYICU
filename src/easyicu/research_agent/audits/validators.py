@@ -1153,6 +1153,19 @@ class LLMConceptAuditor:
             "boundary, use issue_code "
             "`strict_numeric_nonfinite_guard_required` and include every "
             "affected name in `detail.variables`. "
+            # The sibling of the two boundaries above, for the event/time pair.
+            # Added with the boundary itself: a host helper the auditor does not
+            # recognise gets a "add a second guard" finding on the step that
+            # correctly called it, which is how a compliant script is blocked.
+            "A direct, uncaught call imported exactly as "
+            "`event_time_reconciliation_receipt` from "
+            "`easyicu.research_agent.methods.survival_inputs` is a host-owned "
+            "fail-closed boundary: it raises when an event row's time cannot "
+            "place it on the follow-up axis and when an event code falls outside "
+            "the declared closed set. Do not demand a second reconciliation of "
+            "the same pair, and do not report a censored row carrying no event "
+            "time as a defect -- that is the expected shape, and excluding on it "
+            "removes non-events from the denominator. "
             "A Step input whose exact ConceptDescriptor names a source_concept, "
             "analysis_window, and aggregation-compatible materialized column is "
             "a host-owned binding. Direct use of that exact input is therefore "

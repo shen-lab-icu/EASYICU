@@ -83,6 +83,26 @@ class MethodKernel:
 
 CURATED_METHOD_KERNELS: Tuple[MethodKernel, ...] = (
     MethodKernel(
+        module="survival_inputs",
+        requires=("numpy", "pandas"),
+        entrypoints=("event_time_reconciliation_receipt", "SurvivalInputError"),
+        capability=(
+            "fail-closed reconciliation of a declared event code against its "
+            "event time before a risk set is built — refuses an event row whose "
+            "time cannot place it on the follow-up axis, and an event code "
+            "outside the declared closed set, returning counts only so it "
+            "cannot change the analysis population. A censored row with no "
+            "event time is the expected shape and is reported, not refused"
+        ),
+        families=("time_to_event", "survival", "causal_inference"),
+        fallback=(
+            "reconcile the pair in the script and report both counts in the "
+            "step's own output: an event with no usable time recoded to 'no "
+            "event' moves it into the survivor arm, and dropped through "
+            "duration/event missingness it leaves both arms"
+        ),
+    ),
+    MethodKernel(
         module="ph_schoenfeld",
         requires=("pandas", "lifelines"),
         entrypoints=("ph_test", "run_ph_test", "PHTestResult"),

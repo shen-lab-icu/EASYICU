@@ -1642,7 +1642,15 @@ def study_endpoint_declaration_entry(endpoint: Any) -> Optional[Dict[str, Any]]:
             "definition, and a step that substitutes a different time column, "
             "origin, censoring rule or level set is analysing a different study "
             "than the one under review. If a field this step needs is absent "
-            "here, stop and report that rather than choosing one."
+            "here, stop and report that rather than choosing one. Before "
+            "building a risk set or a landmark outcome from event_column and "
+            "time_column, reconcile the pair: an event whose time is missing or "
+            "non-finite cannot be placed on the follow-up axis, and comparing it "
+            "against a horizon silently recodes it to 'no event'. A censored row "
+            "with no event time is the expected shape and must not be excluded "
+            "on that basis. `event_time_reconciliation_receipt` in "
+            "easyicu.research_agent.methods.survival_inputs checks exactly this "
+            "against these declared levels and returns counts only."
         ),
     }
     for field in (

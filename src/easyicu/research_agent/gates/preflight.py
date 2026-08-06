@@ -7261,6 +7261,10 @@ _SIGNATURE_DERIVED_HOST_HELPERS: tuple[tuple[str, str], ...] = (
         "easyicu.research_agent.methods.source_status",
         "reconcile_binary_event_presence",
     ),
+    (
+        "easyicu.research_agent.methods.survival_inputs",
+        "event_time_reconciliation_receipt",
+    ),
 )
 
 
