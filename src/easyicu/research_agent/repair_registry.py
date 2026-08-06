@@ -271,6 +271,7 @@ _SYNTACTIC_REPAIRS = {
     "host_helper_keyword_only_call_v1",
     "local_helper_unpack_receipt_v1",
     "local_read_before_assignment_hoist_v1",
+    "matplotlib_patch_source_rows_v1",
     "measurement_provenance_envelope_alias_v1",
     "measurement_receipt_stable_binding_v1",
     "missing_os_import_v1",
