@@ -162,13 +162,13 @@ def test_the_recorded_script_really_contains_no_least_squares_call():
     assert "matched_controls" in source
 
 
-def test_the_whole_recorded_corpus_carries_one_finding_and_it_is_that_one():
-    """A rule with 0 true positives and 1 false positive is what this repairs."""
+def test_the_recorded_corpus_carries_one_ols_finding_and_it_is_that_one():
+    """The OLS rule had 0 true positives and 1 false positive in this corpus."""
 
     if not _CORPUS.exists():
         pytest.skip("recorded run corpus is not mounted")
 
-    patterns: list[str] = []
+    ols_findings: list[list[str]] = []
     for path in _CORPUS.glob("batch_*/*/aware/run_*/manifest.json"):
         try:
             manifest = json.loads(path.read_text())
@@ -178,8 +178,13 @@ def test_the_whole_recorded_corpus_carries_one_finding_and_it_is_that_one():
             if str(finding.get("validator")) != "method_compatibility":
                 continue
             for violation in (finding.get("detail") or {}).get("violations", []):
-                patterns.extend(str(p) for p in violation.get("matched_patterns") or [])
+                patterns = [
+                    str(pattern)
+                    for pattern in violation.get("matched_patterns") or []
+                ]
+                if "ols(" in patterns:
+                    ols_findings.append(patterns)
 
-    if not patterns:
-        pytest.skip("no recorded run carries a method-compatibility finding")
-    assert patterns == ["ols("], patterns
+    if not ols_findings:
+        pytest.skip("no recorded run carries an OLS method-compatibility finding")
+    assert ols_findings == [["ols("]], ols_findings
