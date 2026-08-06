@@ -74,6 +74,7 @@ from .plausibility import (
     patch_flag_only_plausibility_range_rejection,
     patch_plausibility_range_schema_keys,
 )
+from .profile_roles import patch_all_rows_profile_roles_display
 from .provenance_summary import (
     patch_audit_only_companion_value_selector,
     patch_closed_provenance_envelope_alias,
@@ -2641,6 +2642,7 @@ def deterministic_concept_audit_repair(
     *,
     repair_reasons: Sequence[RepairReason] = (),
     repair_findings: Sequence[ValidationFinding] = (),
+    step: Any = None,
 ) -> tuple[str, List[str]]:
     """Apply narrow, science-neutral repairs named by concept-audit errors.
 
@@ -2663,6 +2665,21 @@ def deterministic_concept_audit_repair(
     )
     repaired = code
     repair_names: List[str] = []
+
+    repaired_profile_roles, profile_roles_repair_name = (
+        patch_all_rows_profile_roles_display(
+            repaired,
+            step=step,
+            audit_messages=audit_messages,
+            repair_findings=repair_findings,
+        )
+    )
+    if (
+        profile_roles_repair_name is not None
+        and repaired_profile_roles != repaired
+    ):
+        repaired = repaired_profile_roles
+        repair_names.append(profile_roles_repair_name)
 
     repaired_availability, availability_repair_name = (
         patch_availability_fraction_component_denominator(
