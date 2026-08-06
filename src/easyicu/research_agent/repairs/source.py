@@ -53,6 +53,10 @@ from .figure_distribution import (
     patch_categorical_distribution_clinical_bin_role,
     patch_text_distribution_denominator_from_counts,
 )
+from .figure_source_bundle import (
+    find_figure_contract_source_assignment as _figure_contract_source_assignment,
+    patch_complete_bound_figure_source_bundle as _patch_complete_bound_figure_source_bundle,
+)
 from .lossy_coercion import (
     patch_lossy_numeric_coercion_guard as _patch_lossy_numeric_coercion_guard,
     patch_returned_coercion_loss_guard as _patch_returned_coercion_loss_guard,
@@ -5305,41 +5309,6 @@ def _materialize_direct_bound_source_frames(
     return repaired
 
 
-def _figure_contract_source_assignment(
-    tree: ast.AST,
-    *,
-    source_value_type: type[ast.AST] | tuple[type[ast.AST], ...],
-) -> tuple[ast.Assign, ast.keyword] | None:
-    candidates: List[tuple[ast.Assign, ast.keyword]] = []
-    for node in ast.walk(tree):
-        if not (
-            isinstance(node, ast.Assign)
-            and len(node.targets) == 1
-            and isinstance(node.targets[0], ast.Name)
-            and isinstance(node.value, ast.Call)
-            and (
-                (
-                    isinstance(node.value.func, ast.Name)
-                    and node.value.func.id == "make_figure_contract"
-                )
-                or (
-                    isinstance(node.value.func, ast.Attribute)
-                    and node.value.func.attr == "make_figure_contract"
-                )
-            )
-        ):
-            continue
-        source_keywords = [
-            keyword
-            for keyword in node.value.keywords
-            if keyword.arg == "source_data"
-            and isinstance(keyword.value, source_value_type)
-        ]
-        if len(source_keywords) == 1:
-            candidates.append((node, source_keywords[0]))
-    return candidates[0] if len(candidates) == 1 else None
-
-
 def _patch_direct_bound_figure_source_projection(
     code: str,
     *,
@@ -5799,6 +5768,56 @@ def deterministic_contract_repair(
             and detail.get("missing_bound_tables")
         ):
             source_coverage_findings.append(finding)
+    complete_source_repair_name = "complete_bound_figure_source_bundle_v1"
+    if (
+        len(source_coverage_findings) == 1
+        and previous_repair != complete_source_repair_name
+    ):
+        coverage_finding = source_coverage_findings[0]
+        coverage_detail = (
+            coverage_finding.get("detail")
+            if isinstance(coverage_finding, dict)
+            else getattr(coverage_finding, "detail", {})
+        )
+        invalid_source_names: List[str] = []
+        for finding in findings:
+            validator = getattr(finding, "validator", None)
+            detail = getattr(finding, "detail", None)
+            if isinstance(finding, dict):
+                validator = finding.get("validator")
+                detail = finding.get("detail")
+            if validator != "figure_source_data" or not isinstance(detail, dict):
+                continue
+            mismatch = detail.get("best_mismatch")
+            if not (
+                isinstance(mismatch, dict)
+                and mismatch.get("reason")
+                in {
+                    "ambiguous_join_key",
+                    "declared_source_table_not_found",
+                    "no_verifiable_values",
+                }
+                and isinstance(detail.get("source_table"), str)
+            ):
+                continue
+            invalid_source_names.append(str(detail["source_table"]))
+        missing_table_names = coverage_detail.get("missing_bound_tables") or []
+        missing_statistic_ids = (
+            coverage_detail.get("missing_bound_statistics") or []
+        )
+        if (
+            invalid_source_names
+            or missing_statistic_ids
+            or any(Path(str(name)).suffix.lower() != ".csv" for name in missing_table_names)
+        ):
+            repaired = _patch_complete_bound_figure_source_bundle(
+                code,
+                missing_table_names=missing_table_names,
+                missing_statistic_ids=missing_statistic_ids,
+                invalid_source_names=invalid_source_names,
+            )
+            if repaired != code:
+                return complete_source_repair_name, repaired
     direct_source_repair_name = "direct_bound_figure_source_projection_v1"
     direct_source_names: List[str] = []
     if len(source_coverage_findings) == 1:

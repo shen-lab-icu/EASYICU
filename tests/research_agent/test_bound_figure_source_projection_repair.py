@@ -125,8 +125,7 @@ def test_bound_figure_repair_requires_unambiguous_loader_and_bundle_contract(
 ) -> None:
     code = _script(tmp_path).replace(
         "        tables[input_key] = frame\n",
-        "        tables[input_key] = frame\n"
-        "        shadow_tables[input_key] = frame\n",
+        "        tables[input_key] = frame\n        shadow_tables[input_key] = frame\n",
     )
 
     assert deterministic_contract_repair(code=code, findings=[_FINDING]) is None
@@ -740,6 +739,7 @@ def main():
 def test_bound_figure_source_projection_is_registered_structural() -> None:
     for repair_id in (
         "bound_figure_source_projection_v2",
+        "complete_bound_figure_source_bundle_v1",
         "direct_bound_figure_source_materialization_v1",
         "direct_bound_figure_source_projection_v1",
     ):
@@ -748,3 +748,174 @@ def test_bound_figure_source_projection_is_registered_structural() -> None:
         assert metadata.repair_class is RepairClass.STRUCTURAL
         assert metadata.introduces_numbers is False
         assert automatic_repair_allowed(metadata.repair_id)
+
+
+def test_complete_bound_bundle_reuses_parquet_tables_and_statistic_receipt(
+    tmp_path: Path,
+) -> None:
+    parent_path = tmp_path / "analysis_cohort.parquet"
+    pd.DataFrame({"stay_id": [1, 2], "age": [60, 70]}).to_parquet(parent_path)
+    code = f"""
+import json
+from pathlib import Path
+import pandas as pd
+
+OUT_DIR = Path({str(tmp_path)!r})
+
+def resolve_bound_product(manifest, input_key):
+    return Path({str(parent_path)!r}), {{}}, {{}}, ["stay_id", "age"]
+
+def load_bound_table(path, columns, input_key):
+    return pd.read_parquet(path, columns=columns)
+
+def write_json(path, payload):
+    path.write_text(json.dumps(payload))
+
+def make_figure_contract(**kwargs):
+    return kwargs
+
+def save_publication_figure(*, fig, out_dir, stem, contract):
+    return None
+
+(
+    analysis_artifact_path,
+    analysis_binding,
+    analysis_contract,
+    analysis_columns,
+) = resolve_bound_product({{}}, "artifact:analysis_cohort")
+analysis_artifact = load_bound_table(
+    analysis_artifact_path, analysis_columns, "artifact:analysis_cohort"
+)
+cluster_characteristics = pd.DataFrame({{"cluster": [0, 1], "n": [1, 1]}})
+cluster_characteristics_path = OUT_DIR / "cluster_characteristics.csv"
+cluster_characteristics.to_csv(cluster_characteristics_path, index=False)
+phenotype_structure = pd.DataFrame(
+    {{"cluster": [0, 1], "feature": ["hr", "hr"], "median": [-1.0, 1.0]}}
+)
+phenotype_structure_path = OUT_DIR / "phenotype_structure.csv"
+phenotype_structure.to_csv(phenotype_structure_path, index=False)
+selected_k = 2
+cluster_count_path = OUT_DIR / "cluster_count.json"
+write_json(cluster_count_path, {{"name": "cluster_count", "value": int(selected_k)}})
+valid_source_path = OUT_DIR / "valid_projection_source.csv"
+pd.DataFrame({{"stay_id": [1], "value": [-1.0]}}).to_csv(
+    valid_source_path, index=False
+)
+source_data_files = [valid_source_path.name, cluster_characteristics_path.name]
+contract = make_figure_contract(
+    figure_id="cluster_visualization",
+    source_data=source_data_files,
+)
+save_publication_figure(
+    fig=None, out_dir=OUT_DIR, stem="cluster_visualization", contract=contract
+)
+step_summary = {{"figure_qa": {{"source_data_files": source_data_files}}}}
+"""
+    findings = [
+        {
+            "validator": "figure_source_data",
+            "severity": "error",
+            "detail": {
+                "source_table": "cluster_characteristics.csv",
+                "best_mismatch": {"reason": "ambiguous_join_key"},
+            },
+        },
+        {
+            "validator": "figure_source_data",
+            "severity": "error",
+            "detail": {
+                "reason": "incomplete_source_lineage_coverage",
+                "missing_bound_tables": [
+                    "analysis_cohort.parquet",
+                    "phenotype_structure.csv",
+                ],
+                "missing_bound_statistics": ["same_step:statistic:cluster_count"],
+            },
+        },
+    ]
+
+    repair = deterministic_contract_repair(code=code, findings=findings)
+
+    assert repair is not None
+    repair_id, repaired = repair
+    assert repair_id == "complete_bound_figure_source_bundle_v1"
+    namespace: dict[str, object] = {}
+    exec(repaired, namespace)
+    declared = namespace["contract"]["source_data"]
+    assert declared == namespace["step_summary"]["figure_qa"]["source_data_files"]
+    assert "valid_projection_source.csv" in declared
+    assert "cluster_characteristics.csv" not in declared
+    assert len(declared) == 5
+    projected = [
+        pd.read_csv(tmp_path / name)
+        for name in declared
+        if name.startswith("bound_") and not name.startswith("bound_stat_")
+    ]
+    assert {frame["source_table"].iloc[0] for frame in projected} == {
+        "analysis_cohort.parquet",
+        "cluster_characteristics.csv",
+        "phenotype_structure.csv",
+    }
+    statistic = pd.read_csv(tmp_path / "bound_stat_000_cluster_count_source_data.csv")
+    assert statistic.to_dict(orient="records") == [
+        {
+            "statistic": "cluster_count",
+            "value": 2,
+        }
+    ]
+
+
+def test_complete_bound_bundle_declines_unresolved_table(tmp_path: Path) -> None:
+    code = """
+import pandas as pd
+from pathlib import Path
+OUT_DIR = Path(".")
+def make_figure_contract(**kwargs):
+    return kwargs
+def save_publication_figure(*, fig, out_dir, stem, contract):
+    return None
+contract = make_figure_contract(figure_id="x", source_data=["old.csv"])
+save_publication_figure(fig=None, out_dir=OUT_DIR, stem="x", contract=contract)
+"""
+    finding = {
+        "validator": "figure_source_data",
+        "severity": "error",
+        "detail": {
+            "reason": "incomplete_source_lineage_coverage",
+            "missing_bound_tables": ["unknown.parquet"],
+            "missing_bound_statistics": [],
+        },
+    }
+
+    assert deterministic_contract_repair(code=code, findings=[finding]) is None
+
+
+def test_complete_bound_bundle_declines_upstream_statistic(tmp_path: Path) -> None:
+    code = f"""
+import json
+from pathlib import Path
+import pandas as pd
+OUT_DIR = Path({str(tmp_path)!r})
+def write_json(path, payload):
+    path.write_text(json.dumps(payload))
+def make_figure_contract(**kwargs):
+    return kwargs
+def save_publication_figure(*, fig, out_dir, stem, contract):
+    return None
+cluster_count = 2
+cluster_count_path = OUT_DIR / "cluster_count.json"
+write_json(cluster_count_path, {{"name": "cluster_count", "value": cluster_count}})
+contract = make_figure_contract(figure_id="x", source_data=[])
+save_publication_figure(fig=None, out_dir=OUT_DIR, stem="x", contract=contract)
+"""
+    finding = {
+        "validator": "figure_source_data",
+        "severity": "error",
+        "detail": {
+            "reason": "incomplete_source_lineage_coverage",
+            "missing_bound_tables": [],
+            "missing_bound_statistics": ["upstream:statistic:cluster_count"],
+        },
+    }
+
+    assert deterministic_contract_repair(code=code, findings=[finding]) is None
