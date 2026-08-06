@@ -58,6 +58,7 @@ from .lossy_coercion import (
     patch_returned_coercion_loss_guard as _patch_returned_coercion_loss_guard,
 )
 from .merge_collision import patch_pandas_merge_dynamic_column_collision
+from .matplotlib_source import patch_matplotlib_patch_source_rows
 from .model_contract import patch_penalized_convergence_contract
 from .name_alias import patch_undefined_mapping_near_match_alias
 from .nonfinite_audit import (
@@ -6283,6 +6284,12 @@ def _deterministic_runner_repair(
         repaired = patch_structured_analysis_role_selection(code, run_log)
         if repaired is not None and repaired != code:
             return structured_role_repair, repaired
+
+    matplotlib_patch_source_repair = "matplotlib_patch_source_rows_v1"
+    if previous_repair != matplotlib_patch_source_repair:
+        repaired = patch_matplotlib_patch_source_rows(code, run_log)
+        if repaired != code:
+            return matplotlib_patch_source_repair, repaired
     if repair := _finding_json_repair(code, run_log, previous_repair):
         return repair
 
