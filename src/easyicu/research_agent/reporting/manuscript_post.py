@@ -9,7 +9,8 @@ final report. They are pure-text rewrites that:
 * drop sentences carrying ``[TBD]`` / ``[TODO]`` / ``[TK]`` writer
   placeholders that small/local models occasionally leak into the
   bound output;
-* repair common writer aliasing mistakes on prediction-task manuscripts, while
+* repair an ordinally drifted step placeholder only when its semantic suffix
+  names exactly one registered step, plus common prediction-task aliases while
   keeping outcome-rate aliases gated to binary/event-style targets.
 
 They were originally inline in :mod:`pipeline`. They are module-level
@@ -41,6 +42,9 @@ _UNRESOLVED_EVIDENCE_PLACEHOLDER_RE = re.compile(
 )
 
 _TBD_RE = re.compile(r"\[(?:TBD|TODO|TK)\]|\bTBD\b", re.IGNORECASE)
+
+_EVIDENCE_REFERENCE_RE = re.compile(r"\{evidence:(?P<id>[^{}]+)\}")
+_NUMBERED_STEP_ID_RE = re.compile(r"^(?P<ordinal>\d+)_(?P<suffix>.+)$")
 
 _FORBIDDEN_INTERPRETIVE_TERMS = (
     "surprise",
@@ -124,6 +128,51 @@ def _context_target_outcome_is_binary_like(context: ResearchContext) -> bool:
     }
 
 
+def _repair_unique_step_ordinal_placeholders(
+    scaffold: str,
+    *,
+    resolvable: set[str],
+) -> tuple[str, List[tuple[str, str]]]:
+    """Repair only an off-by-ordinal citation with one exact semantic owner.
+
+    Writer models sometimes preserve the full step name but invent the numeric
+    prefix (for example ``03_feature_availability_flow`` when the registered
+    step is ``02_feature_availability_flow``).  The suffix is the semantic step
+    identity; it is safe to repair only when exactly one resolvable numbered
+    step has that suffix.  No fuzzy spelling, substring, or nearest-neighbour
+    match is permitted, and ambiguous suffixes remain unresolved.
+    """
+
+    by_suffix: Dict[str, set[str]] = {}
+    for name in resolvable:
+        match = _NUMBERED_STEP_ID_RE.fullmatch(str(name))
+        if match is None:
+            continue
+        by_suffix.setdefault(match.group("suffix"), set()).add(str(name))
+
+    text = scaffold
+    repairs: List[tuple[str, str]] = []
+    seen: set[str] = set()
+    for match in _EVIDENCE_REFERENCE_RE.finditer(scaffold):
+        old = match.group("id").strip()
+        if old in seen or old in resolvable:
+            continue
+        seen.add(old)
+        step_match = _NUMBERED_STEP_ID_RE.fullmatch(old)
+        if step_match is None:
+            continue
+        candidates = sorted(by_suffix.get(step_match.group("suffix"), set()))
+        if len(candidates) != 1:
+            continue
+        new = candidates[0]
+        text = text.replace(
+            "{evidence:" + old + "}",
+            "{evidence:" + new + "}",
+        )
+        repairs.append((old, new))
+    return text, repairs
+
+
 def _repair_common_writer_placeholders(
     scaffold: str,
     *,
@@ -131,7 +180,7 @@ def _repair_common_writer_placeholders(
     evidence: EvidenceStore,
     allowed_evidence_names: Optional[Sequence[str]] = None,
 ) -> tuple[str, List[tuple[str, str]]]:
-    """Map common writer aliases to existing evidence for prediction tasks.
+    """Repair provable step ordinals and common prediction evidence aliases.
 
     The manuscript writer sometimes carries habits from association tasks
     (`table_one`, `outcome_rate`, `primary_association`) into prediction-model
@@ -139,12 +188,14 @@ def _repair_common_writer_placeholders(
     step summary, repair the placeholder before binding instead of letting the
     manuscript accumulate avoidable missing-evidence comments.
     """
-    text = scaffold
-    repairs: List[tuple[str, str]] = []
     resolvable = set(
         evidence.resolvable_names()
         if allowed_evidence_names is None
         else allowed_evidence_names
+    )
+    text, repairs = _repair_unique_step_ordinal_placeholders(
+        scaffold,
+        resolvable=resolvable,
     )
     question = (context.research_question or "").lower()
     is_prediction = any(
