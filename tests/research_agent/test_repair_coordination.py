@@ -213,6 +213,8 @@ def test_sync_provider_writes_exact_key_set(tmp_path):
     assert list(step_record) == [
         "step_provider_call_budget_scope",
         "step_provider_call_budget",
+        "step_provider_call_base_budget",
+        "step_provider_call_reaudit_extensions",
         "step_provider_call_attempts",
         "step_provider_call_remaining",
         "step_provider_call_budget_exhausted",
@@ -227,6 +229,8 @@ def test_sync_provider_writes_exact_key_set(tmp_path):
         step_record["step_provider_call_budget_scope"]
         == "coder_generation_repair_concept_audit_and_analyzer"
     )
+    assert step_record["step_provider_call_base_budget"] == provider.base_limit
+    assert step_record["step_provider_call_reaudit_extensions"] == 0
     # receipt path is only reported once something was actually paid
     assert step_record["step_provider_call_receipt"] is None
     provider.consume("initial_generation")

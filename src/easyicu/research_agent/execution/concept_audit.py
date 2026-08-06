@@ -314,6 +314,7 @@ class ConceptAuditRuntime:
         [Sequence[ValidationFinding]], List[dict[str, Any]]
     ]
     store_quarantined_draft: Callable[..., Any]
+    authorize_deterministic_reaudit: Callable[..., bool]
 
 
 @dataclass(slots=True)
@@ -563,6 +564,15 @@ class ConceptAuditCoordinator:
                     )
                     self.tokens_by_digest[audited_code_digest] = audit_key
                     cached_findings = runtime.cache.get(audit_key)
+                    if (
+                        cached_findings is None
+                        and not runtime.provider_budget.can_consume("concept_audit")
+                        and runtime.authorize_deterministic_reaudit(
+                            token=audit_key,
+                            code_sha256=audited_code_digest,
+                        )
+                    ):
+                        runtime.sync_provider_budget()
                     reservation_status = runtime.provider_budget.reservation_status(
                         "concept_audit",
                         token=audit_key,
