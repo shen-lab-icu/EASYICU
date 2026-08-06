@@ -884,7 +884,10 @@ def test_large_duplicate_grain_uses_bounded_duckdb_consolidation(
     )
     assert not (tmp_path / ".sepsis_shared.native-v2.tmp.parquet").exists()
     assert not (
-        tmp_path / ".sepsis_shared.native-v2.duckdb-consolidated.parquet"
+        tmp_path / ".sepsis_shared.native-v2.duckdb.tmp.parquet"
+    ).exists()
+    assert not (
+        tmp_path / ".sepsis_shared.native-v2.arrow.tmp.parquet"
     ).exists()
 
 
@@ -933,6 +936,65 @@ def test_duckdb_consolidation_matches_pandas_type_family_semantics(
     assert audit["duplicate_excess_rows_after"] == 0
 
 
+def test_large_duplicate_duckdb_path_is_streamed_and_preserves_schema_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        api,
+        "EXTRACT_MODULES",
+        {"neurological": ["gcs", "delirium_positive", "avpu"]},
+    )
+    monkeypatch.setattr(api, "_NATIVE_EXPORT_PANDAS_FALLBACK_MAX_ROWS", 1)
+    path = tmp_path / "neurological.parquet"
+    pd.DataFrame(
+        {
+            # Deliberately not key-sorted: keep the first source-row order.
+            "stay_id": [20, 20, 10, 10],
+            "charttime": [1.0, 1.0, 0.0, 0.0],
+            "gcs": [10.0, 14.0, None, None],
+            "delirium_positive": [None, None, False, True],
+            "avpu": ["A", "A", None, None],
+        }
+    ).to_parquet(path, index=False)
+    real_read_parquet = pd.read_parquet
+
+    def forbid_full_pandas_read(*_args, **_kwargs):
+        raise AssertionError("large duplicate module entered full pandas fallback")
+
+    monkeypatch.setattr(pd, "read_parquet", forbid_full_pandas_read)
+    api._publish_native_export_v2(
+        database="eicu",
+        data_path="/raw/source-must-not-be-read",
+        output_dir=str(tmp_path),
+        modules=["neurological"],
+        max_patients=None,
+        result=_completed_result("neurological"),
+    )
+
+    exported = real_read_parquet(path)
+    assert exported["stay_id"].tolist() == [20, 10]
+    assert exported["gcs"].iloc[0] == 12.0
+    assert pd.isna(exported["gcs"].iloc[1])
+    assert pd.isna(exported["delirium_positive"].iloc[0])
+    assert bool(exported["delirium_positive"].iloc[1]) is True
+    assert exported["avpu"].iloc[0] == "A"
+    assert pd.isna(exported["avpu"].iloc[1])
+
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    dictionary = api.load_dictionary(include_sofa2=True)
+    expected_schema = pa.Table.from_pandas(
+        api._native_export_empty_schema_frame(
+            module="neurological",
+            requested_concepts=["gcs", "delirium_positive", "avpu"],
+            dictionary=dictionary,
+        ),
+        preserve_index=False,
+    ).schema
+    assert pq.read_schema(path).equals(expected_schema, check_metadata=True)
+
+
 def test_large_duplicate_grain_duckdb_path_rejects_string_conflicts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -962,5 +1024,8 @@ def test_large_duplicate_grain_duckdb_path_rejects_string_conflicts(
     assert not (tmp_path / "_manifest.json").exists()
     assert not (tmp_path / ".neurological.native-v2.tmp.parquet").exists()
     assert not (
-        tmp_path / ".neurological.native-v2.duckdb-consolidated.parquet"
+        tmp_path / ".neurological.native-v2.duckdb.tmp.parquet"
+    ).exists()
+    assert not (
+        tmp_path / ".neurological.native-v2.arrow.tmp.parquet"
     ).exists()
