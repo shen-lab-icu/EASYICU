@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from easyicu.research_agent.execution.concept_reaudit import (
+    DETERMINISTIC_CONCEPT_REAUDIT_BUDGET_ISSUE_CODE,
     deterministic_concept_reaudit_authority,
     deterministic_concept_reaudit_pending_errors,
 )
@@ -16,6 +17,7 @@ def _provider_budget_error(*, used: int = 9, limit: int = 9) -> dict[str, object
         "severity": "error",
         "message": "Final concept audit had no provider slot.",
         "detail": {
+            "step_id": "08_cluster_profile_figure",
             "category": "concept_audit",
             "used": used,
             "limit": limit,
@@ -187,11 +189,15 @@ def test_resume_pending_errors_keep_only_matching_final_budget_failure() -> None
         _provider_budget_error(),
     ]
 
+    expected = _provider_budget_error()
+    expected["detail"]["issue_code"] = (
+        DETERMINISTIC_CONCEPT_REAUDIT_BUDGET_ISSUE_CODE
+    )
     assert deterministic_concept_reaudit_pending_errors(
         findings,
         provider_used=9,
         provider_limit=9,
-    ) == (_provider_budget_error(),)
+    ) == (expected,)
     assert (
         deterministic_concept_reaudit_pending_errors(
             findings,
