@@ -11,6 +11,7 @@ from easyicu.concept.callbacks import CALLBACK_REGISTRY, register_callback
 from easyicu.concept.expr_parser import _default_aggregator_for_dtype
 from easyicu.concept.parser import default_aggregator_for_dtype
 from easyicu.concept.schema import ConceptDefinition, ConceptDictionary, ConceptSource
+from easyicu.resources import load_data_sources
 from easyicu.table import ICUTable
 from easyicu.io.ts_utils import change_interval
 from easyicu.utils import compat
@@ -48,6 +49,111 @@ def test_bool_auto_aggregation_is_occurrence_not_count_or_majority() -> None:
 
     assert result["rrt"].tolist() == [True]
     assert str(result["rrt"].dtype) == "bool"
+
+
+def test_miiv_rrt_keeps_charted_points_and_expands_procedure_windows() -> None:
+    """A mixed MIIV RRT source must not erase either source representation."""
+
+    class DataSource:
+        config = load_data_sources().get("miiv")
+        base_path = None
+
+        def __init__(self) -> None:
+            intime = pd.Timestamp("2180-01-01 00:00:00")
+            self.frames = {
+                "chartevents": pd.DataFrame(
+                    {
+                        "stay_id": [1],
+                        "charttime": [intime + pd.Timedelta(hours=2)],
+                        "itemid": [224149],
+                        "valuenum": [10.0],
+                    }
+                ),
+                "procedureevents": pd.DataFrame(
+                    {
+                        "stay_id": [1],
+                        "starttime": [intime + pd.Timedelta(hours=4)],
+                        "endtime": [intime + pd.Timedelta(hours=6)],
+                        "itemid": [225441],
+                        "value": [120.0],
+                    }
+                ),
+                "icustays": pd.DataFrame(
+                    {
+                        "stay_id": [1],
+                        "intime": [intime],
+                        "outtime": [intime + pd.Timedelta(days=1)],
+                        "los": [1.0],
+                    }
+                ),
+            }
+
+        def load_table(self, table_name, columns=None, filters=None, verbose=False):
+            del columns, verbose
+            frame = self.frames[table_name].copy()
+            for filter_spec in filters or []:
+                frame = filter_spec.apply(frame)
+            defaults = self.config.get_table(table_name).defaults
+            return ICUTable(
+                data=frame,
+                id_columns=[defaults.id_var],
+                index_column=(
+                    defaults.index_var
+                    if defaults.index_var in frame.columns
+                    else None
+                ),
+                value_column=(
+                    defaults.val_var if defaults.val_var in frame.columns else None
+                ),
+                time_columns=[
+                    column
+                    for column in defaults.time_vars or []
+                    if column in frame.columns
+                ],
+            )
+
+    dictionary = ConceptDictionary(
+        {
+            "rrt": ConceptDefinition(
+                name="rrt",
+                class_name="lgl_cncpt",
+                sources={
+                    "miiv": [
+                        ConceptSource(
+                            table="chartevents",
+                            sub_var="itemid",
+                            ids=[224149],
+                            value_var="valuenum",
+                            index_var="charttime",
+                            callback="transform_fun(set_val(TRUE))",
+                        ),
+                        ConceptSource(
+                            table="procedureevents",
+                            sub_var="itemid",
+                            ids=[225441],
+                            value_var="value",
+                            index_var="starttime",
+                            callback="transform_fun(set_val(TRUE))",
+                        ),
+                    ]
+                },
+            )
+        }
+    )
+
+    loaded = ConceptResolver(dictionary).load_concepts(
+        ["rrt"],
+        DataSource(),
+        merge=False,
+        interval=pd.Timedelta(hours=1),
+        r_compatible=False,
+        verbose=False,
+        concept_workers=1,
+    )
+    result = loaded["rrt"].data.sort_values("charttime").reset_index(drop=True)
+
+    assert result["charttime"].tolist() == [2.0, 4.0, 5.0, 6.0]
+    assert result["rrt"].tolist() == [True, True, True, True]
 
 
 def test_recursive_bool_callback_load_concepts_uses_any_after_callback() -> None:

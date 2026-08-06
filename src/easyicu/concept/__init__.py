@@ -4742,6 +4742,37 @@ class ConceptResolver:
                 
                 if DEBUG_MODE:
                     print(f"   🔧 [AUMC] 时间列统一完成, charttime 有效值: {combined['charttime'].notna().sum()}/{len(combined)}")
+
+        # MIMIC-IV multi-source concepts can combine charted point events
+        # (``charttime``) with procedure/input windows (``starttime`` plus
+        # ``endtime``).  pd.concat keeps both start columns, while the first
+        # source fixes ``index_column`` to charttime.  Without coalescing,
+        # procedure rows have a null start and disappear during expansion.
+        elif db_name in ['miiv', 'miiv_demo']:
+            miiv_start_cols = [
+                col for col in ('charttime', 'starttime')
+                if col in combined.columns
+            ]
+            if miiv_start_cols:
+                if 'charttime' not in combined.columns:
+                    combined = combined.rename(
+                        columns={miiv_start_cols[0]: 'charttime'}
+                    )
+                for col in miiv_start_cols:
+                    if col == 'charttime' or col not in combined.columns:
+                        continue
+                    combined['charttime'] = combined['charttime'].fillna(
+                        combined[col]
+                    )
+                    combined = combined.drop(columns=[col])
+                index_column = 'charttime'
+
+                if DEBUG_MODE:
+                    print(
+                        "   🔧 [MIMIC-IV] 时间列统一完成, "
+                        f"charttime 有效值: "
+                        f"{combined['charttime'].notna().sum()}/{len(combined)}"
+                    )
         
         # 🔧 CRITICAL FIX 2026-02-09: MIMIC-III 多源时间列统一
         # MIMIC-III 的 inputevents_cv 使用 charttime，inputevents_mv 使用 starttime
@@ -5178,7 +5209,11 @@ class ConceptResolver:
             # 🔧 FIX: Only expand true window concepts, NOT point event concepts
             # POINT_EVENT_CONCEPTS like 'abx' have endtime/stoptime columns from source tables
             # but should NOT be expanded - they use set_val(TRUE) callback for point events
-            from ..utils.compat import POINT_EVENT_CONCEPTS, DURATION_CONCEPTS
+            from ..utils.compat import (
+                DURATION_CONCEPTS,
+                MIXED_POINT_WINDOW_CONCEPTS,
+                POINT_EVENT_CONCEPTS,
+            )
             is_point_event = concept_name in POINT_EVENT_CONCEPTS
             is_duration_concept = concept_name in DURATION_CONCEPTS or concept_name.endswith('_dur')
             
@@ -5316,17 +5351,58 @@ class ConceptResolver:
                 
                 # Expand windows to hourly time series
                 try:
+                    # RRT deliberately combines active point evidence (for
+                    # example MIMIC-IV CRRT charting) with explicit treatment
+                    # windows (procedureevents).  ``expand`` drops rows whose
+                    # end time is null, so partition the mixed frame and add
+                    # the point rows back after expanding only true windows.
+                    point_rows = pd.DataFrame()
+                    expansion_input = combined
+                    if (
+                        concept_name in MIXED_POINT_WINDOW_CONCEPTS
+                        and end_col in combined.columns
+                        and index_column in combined.columns
+                    ):
+                        point_mask = (
+                            combined[index_column].notna()
+                            & combined[end_col].isna()
+                        )
+                        if concept_name in combined.columns:
+                            point_mask &= combined[concept_name].notna()
+                        if point_mask.any():
+                            point_columns = list(dict.fromkeys([
+                                *id_columns,
+                                index_column,
+                                *keep_vars,
+                            ]))
+                            point_columns = [
+                                col for col in point_columns
+                                if col in combined.columns and col != end_col
+                            ]
+                            point_rows = combined.loc[
+                                point_mask, point_columns
+                            ].copy()
+                            expansion_input = combined.loc[~point_mask].copy()
+
                     if DEBUG_MODE:
-                        print(f"   🔍 DEBUG: expand前, 行数={len(combined)}, start_var={index_column}, end_var={end_col}")
-                        print(f"   🔍 DEBUG: endtime样本: {combined[end_col].head(3).tolist() if end_col in combined.columns else 'N/A'}")
-                    combined = expand(
-                        combined,
+                        print(f"   🔍 DEBUG: expand前, 行数={len(expansion_input)}, start_var={index_column}, end_var={end_col}")
+                        print(f"   🔍 DEBUG: endtime样本: {expansion_input[end_col].head(3).tolist() if end_col in expansion_input.columns else 'N/A'}")
+                    expanded = expand(
+                        expansion_input,
                         start_var=index_column,
                         end_var=end_col,
                         step_size=interval,
                         id_cols=id_columns,
                         keep_vars=keep_vars,
                     )
+                    if not point_rows.empty:
+                        combined = pd.concat(
+                            [expanded, point_rows],
+                            ignore_index=True,
+                            sort=False,
+                        )
+                    else:
+                        combined = expanded
                     if DEBUG_MODE:
                         print(f"   🔍 DEBUG: expand后, 行数={len(combined)}")
                     if verbose:
