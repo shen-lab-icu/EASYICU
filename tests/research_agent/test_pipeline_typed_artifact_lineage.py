@@ -1729,6 +1729,9 @@ def test_typed_parent_schema_context_is_bounded_and_points_to_full_manifest() ->
     )
 
     assert '"columns_omitted_from_prompt_n":108' in block
+    assert '"columns_preview":["field_0","field_1"' in block
+    assert '"columns":[' not in block
+    assert '"schema_preview_complete":false' in block
     assert "EASYICU_RESOLVED_INPUTS_JSON product_contract.columns" in block
     assert "/private/should/not/enter" not in block
     assert len(block.encode("utf-8")) <= 16 * 1024

@@ -61,6 +61,11 @@ def typed_parent_schema_context_block(
             "product using the Planner-owned method and scientific context. Do not "
             "use first-numeric, dtype-order, or nonexistent-column fallbacks; fail "
             "closed when the schema cannot support the declared product. A present "
+            "columns field is the complete ordered schema. When "
+            "schema_preview_complete is false, fields ending in _preview are only "
+            "a leading prompt projection and must never be compared with the full "
+            "artifact schema; load the exact contract from full_schema_location. "
+            "A present "
             "consumption_contract is mandatory: all_rows means preserve every row, "
             "single_row is valid only for the verified singleton, and one_per_role "
             "requires every declared role exactly once."
@@ -120,15 +125,22 @@ def typed_parent_schema_context_block(
         receipt: dict[str, Any] = {
             "tabular_format": tabular_format,
             "column_count": column_count,
-            "columns": prompt_columns,
         }
         if isinstance(row_count, int) and not isinstance(row_count, bool):
             receipt["row_count"] = row_count
         consumption_contract = binding.get("consumption_contract")
         if isinstance(consumption_contract, Mapping):
             receipt["consumption_contract"] = dict(consumption_contract)
-        receipt.update(typed_product_prompt_facts(contract, prompt_columns))
-        if len(prompt_columns) != len(columns):
+        prompt_facts = typed_product_prompt_facts(contract, prompt_columns)
+        if len(prompt_columns) == len(columns):
+            receipt["columns"] = prompt_columns
+            receipt.update(prompt_facts)
+        else:
+            receipt["columns_preview"] = prompt_columns
+            receipt["schema_preview_complete"] = False
+            receipt.update(
+                {f"{key}_preview": value for key, value in prompt_facts.items()}
+            )
             receipt["columns_omitted_from_prompt_n"] = len(columns) - len(
                 prompt_columns
             )
