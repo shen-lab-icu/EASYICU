@@ -1018,33 +1018,19 @@
      "_comment": "2026-07-03 semantic coverage review: active CRRT UF/out and Hemofiltration labels only; CRRT flush and CRRT citrate-calcium infusion labels remain excluded."
     }
    ],
-   "aumc": [
-    {
-     "table": "procedureorderitems",
-     "sub_var": "item",
-     "regex": "(CVVH starten|CVVH stoppen|CVVH anti-coagulantia starten|CVVH-citraat Calciumpomp starten|hemofiltrat)",
-     "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-07-03 audit: active AUMC RRT order events only; CVVH lab draws, urine collection, filter changes, reset orders, and generic CVVH orders are excluded."
-    },
-    {
-     "table": "numericitems",
-     "sub_var": "itemid",
-     "ids": [
-      8805,
-      7666,
-      7667,
-      7668,
-      10736,
-      12444,
-      6684,
-      8806,
-      8808,
-      12091
-     ],
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "CRRT/RRT indicators: 8805=CVVH Onttrokken (98K), 7666=Arteriele druk (83K), 7667=Pre Filter PBE (83K), 7668=Veneuze druk (83K), 10736=Bloed-flow (79K), 12444=Bloedflow ingesteld (70K), 6684=Vloeistofvolume ingesteld (68K); 2026-07-02 added hemodialysis/peritoneal/CVVH fluid-loss channels 8806, 8808, 12091."
-    }
+    "aumc": [
+      {
+        "table": "processitems",
+        "sub_var": "itemid",
+        "ids": [
+          12465,
+          16363
+        ],
+        "index_var": "start",
+        "dur_var": "stop",
+        "callback": "transform_fun(set_val(TRUE))",
+        "_comment": "2026-08-06 official AmsterdamUMCdb source audit: processitems stores continuous non-medication processes with explicit start/stop offsets. 12465=CVVH and 16363=Hemodialyse are treatment episodes; dialysis access items 9161/9162/9163 are deliberately excluded. The interval is expanded to active hourly RRT status."
+      }
    ],
    "mimic": [
     {

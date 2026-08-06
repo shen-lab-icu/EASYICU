@@ -2392,6 +2392,8 @@ class ConceptResolver:
                         extra_columns.append(source.value_var)
                     if getattr(source, 'index_var', None):
                         extra_columns.append(source.index_var)
+                    if getattr(source, 'dur_var', None):
+                        extra_columns.append(source.dur_var)
                     if getattr(source, 'unit_var', None):
                         extra_columns.append(source.unit_var)
                     # Some callbacks need a second, explicitly declared source column

@@ -1,9 +1,9 @@
 {
   "finalized": false,
-  "finalized_note": "2026-08-03 待六库全量纠正重跑 — 血管活性药 duration 现统一为小时制 episode 合同：MetaVision 排除 rewritten/cancelled/flush/bolus，按显式区间和 <=5 分钟 gap 合并并裁到 ICU outtime；CareVue 按正 rate、显式 stop/零 rate 与 <=5 小时 gap 推断观察跨度，单点为未知且不把该跨度写成精确泵时长；AUMC/eICU 的连续 episode 修复保持生效。旧发布仅保留历史证据，不得进入论文派生链；只有基于这些修复后继提交重跑、质控并封存的新六库发布才可提升为 current。",
-  "locked_for_extraction_run": "pending_harmonized_vasopressor_duration_rerun_20260803",
-  "concept_dict_sha256": "2e5fe81ca1a954262c55ffa5a655b9a89d95e0107d08da8746c303960066c60b",
-  "sofa2_dict_sha256": "ab39bdcf03ad481dd65bbd5f6e63bdc71612a2267539aa76cc9fb415e19a0fca",
+  "finalized_note": "2026-08-06 待 AUMC RRT 区间纠正重跑 — AUMC rrt 改用官方 processitems 治疗过程 12465=CVVH、16363=Hemodialyse 的 start/stop 区间并展开为逐小时在治状态；不再把 CVVH stoppen 医嘱映射为 TRUE，也不再用设备压力/流量记录代替治疗区间。透析导管/通路项目明确排除。旧发布仅保留历史证据，不得进入论文派生链；只有基于该修复提交重提取、质控并封存的新六库发布才可提升为 current。",
+  "locked_for_extraction_run": "pending_aumc_rrt_process_interval_rerun_20260806",
+  "concept_dict_sha256": "14ae7e89487e51e37ddab219af9b135c4b783ca50d59c64379a6033a0ebac773",
+  "sofa2_dict_sha256": "b653e6dec054abdd4db9d178acbad3a4cde4d272693b0cdca66067bcca8e822e",
   "total_concepts": 251,
   "own_concepts_not_in_ricu": 130,
   "new_this_round": [
