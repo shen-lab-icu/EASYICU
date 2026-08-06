@@ -303,6 +303,44 @@ score, evaluation_n = sampled_silhouette(
     )
 
 
+def test_large_cohort_accepts_index_first_bounded_deterministic_subset() -> None:
+    code = f"""\
+import numpy as np
+from sklearn.metrics import silhouette_score as sklearn_silhouette_score
+SILHOUETTE_ROWS = {PAIRWISE_EVALUATION_MAX_SAMPLE_SIZE}
+SILHOUETTE_SEED = 1729
+
+def deterministic_silhouette(feature_matrix, labels, sample_n, seed):
+    n_rows = int(feature_matrix.shape[0])
+    bounded_n = min(int(sample_n), n_rows)
+    if bounded_n > {PAIRWISE_EVALUATION_MAX_SAMPLE_SIZE}:
+        raise ValueError("sample exceeds the declared bound")
+    rng = np.random.default_rng(int(seed))
+    if bounded_n == n_rows:
+        indices = np.arange(n_rows, dtype=int)
+    else:
+        indices = np.sort(rng.choice(n_rows, size=bounded_n, replace=False))
+    sampled_labels = np.asarray(labels)[indices]
+    return sklearn_silhouette_score(
+        feature_matrix[indices, :],
+        sampled_labels,
+    )
+
+evaluation_n = min(SILHOUETTE_ROWS, len(cluster_labels))
+score = deterministic_silhouette(
+    feature_matrix,
+    cluster_labels,
+    evaluation_n,
+    SILHOUETTE_SEED,
+)
+"""
+
+    assert not _budget_violations(
+        code,
+        n_stays=PAIRWISE_EVALUATION_FULL_COHORT_MAX_ROWS + 50_000,
+    )
+
+
 def test_large_cohort_rejects_unseeded_explicit_subset() -> None:
     code = f"""\
 import numpy as np
