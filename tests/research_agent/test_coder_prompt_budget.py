@@ -1478,6 +1478,15 @@ def test_lossy_numeric_repair_binds_all_lines_to_host_helpers(ra):
             "format": PATCH_FORMAT,
             "edits": [
                 {
+                    "old": "import pandas as pd\n",
+                    "new": (
+                        "import pandas as pd\n"
+                        "from easyicu.research_agent.methods.descriptive_inputs "
+                        "import strict_numeric_input\n"
+                    ),
+                    "expected_count": 1,
+                },
+                {
                     "old": "value = pd.to_numeric(source, errors='coerce')",
                     "new": "value = strict_numeric_input(source).values",
                     "expected_count": 1,
