@@ -206,6 +206,52 @@ def test_the_roster_precedes_the_step_contract_it_qualifies() -> None:
 # --------------------------------------------------------------------------
 
 
+def test_every_keyword_the_call_site_passes_is_one_the_auditor_accepts() -> None:
+    """The seam that broke, and the shape of how it broke.
+
+    Adding `study_endpoint` and `plan_step_roster` to the call site left two
+    monkeypatched doubles in `test_resume.py` with the older, narrower signature.
+    The mismatch surfaced as `TypeError` inside the step worker, which aborted the
+    step mid-run and left its pre-review checkpoint status -- so the failure read
+    as `executed_pending_review` instead of `repair_failed`, three files away from
+    the keyword that caused it.
+
+    Comparing the call site's keywords against the real signature names the seam
+    directly. It does not police the doubles -- nothing can, from here -- but it
+    does mean a keyword the auditor cannot accept fails on this assertion instead
+    of on a status two suites over.
+    """
+
+    import inspect
+
+    from easyicu.research_agent.execution import concept_audit
+
+    # Both entry points the execute layer calls, not just `audit`. A first
+    # version checked only `audit`, and a mutation aimed at the `_prompt` call
+    # site survived it -- the execute layer builds the cache-key prompt through
+    # `_prompt` directly, so that call is the same seam with the same failure.
+    tree = ast.parse(inspect.getsource(concept_audit))
+    checked = 0
+    for method in ("audit", "_prompt"):
+        accepted = set(inspect.signature(getattr(LLMConceptAuditor, method)).parameters)
+        passed: set[str] = set()
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if not isinstance(func, ast.Attribute) or func.attr != method:
+                continue
+            passed.update(
+                keyword.arg for keyword in node.keywords if keyword.arg is not None
+            )
+        assert passed, f"no keyword call to .{method}() was found in the execute layer"
+        assert passed <= accepted, (method, sorted(passed - accepted))
+        # Not vacuous: both declarations must actually be travelling.
+        assert {"study_endpoint", "plan_step_roster"} <= passed, method
+        checked += 1
+    assert checked == 2
+
+
 def test_the_execute_phase_builds_the_roster_from_the_plan_without_this_step() -> None:
     """Located structurally.
 
