@@ -115,12 +115,17 @@ def _is_figure2_task_id(value: object) -> bool:
 
 
 def _operational_exposure_for_item(item: object) -> object:
-    """Resolve the execution exposure once without laundering falsey values."""
+    """Resolve the execution exposure once without laundering invalid values."""
 
     declared = getattr(item, "operational_exposure", None)
     if declared is not None:
         return declared
-    return getattr(item, "primary_predictor", None)
+    legacy_predictor = getattr(item, "primary_predictor", None)
+    # Historical multi-input rows encode an absent predictor as ``""``.  The
+    # run-input capsule and posthoc evaluator require that absence to be an
+    # explicit JSON null.  Preserve every other non-null value so whitespace,
+    # false booleans, and other malformed coordinates still fail closed.
+    return None if legacy_predictor == "" else legacy_predictor
 
 
 def _reject_jsonl_duplicate_pairs(
