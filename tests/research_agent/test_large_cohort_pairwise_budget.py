@@ -214,6 +214,36 @@ score = silhouette_score(
     )
 
 
+def test_large_cohort_accepts_provably_safe_kwargs_silhouette_wrapper() -> None:
+    code = f"""\
+from sklearn.metrics import silhouette_score as _sklearn_pairwise_silhouette_score
+
+SILHOUETTE_SAMPLE_SIZE = {PAIRWISE_EVALUATION_MAX_SAMPLE_SIZE}
+PRIMARY_SEED = 42
+
+def _pairwise_silhouette_score(X, labels, *args, **kwargs):
+    kwargs["sample_size"] = min(SILHOUETTE_SAMPLE_SIZE, int(len(X)))
+    kwargs["random_state"] = PRIMARY_SEED
+    return _sklearn_pairwise_silhouette_score(X, labels, *args, **kwargs)
+
+score = _pairwise_silhouette_score(feature_matrix, cluster_labels)
+"""
+
+    assert not _budget_violations(
+        code,
+        n_stays=PAIRWISE_EVALUATION_FULL_COHORT_MAX_ROWS + 1,
+    )
+
+    dynamic_seed = code.replace(
+        'kwargs["random_state"] = PRIMARY_SEED',
+        'kwargs["random_state"] = runtime_seed()',
+    )
+    assert _budget_violations(
+        dynamic_seed,
+        n_stays=PAIRWISE_EVALUATION_FULL_COHORT_MAX_ROWS + 1,
+    )
+
+
 def test_large_cohort_rejects_wrapper_without_a_provable_sample_cap() -> None:
     code = """\
 from sklearn.metrics import silhouette_score as _sklearn_silhouette_score
