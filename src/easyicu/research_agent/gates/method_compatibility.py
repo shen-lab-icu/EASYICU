@@ -676,6 +676,69 @@ def _manual_bounded_silhouette_contract(
 
     if function is None or len(call.args) < 2:
         return False
+
+    # A repair may preserve the original sklearn callable under an alias and
+    # bind its required budget arguments through ``**kwargs``. Accept only the
+    # closed wrapper shape we can prove: two unconditional subscript writes,
+    # followed immediately by the aliased call. Conditional/default-dependent
+    # updates and any later mutation remain untrusted.
+    kwarg = function.args.kwarg
+    if kwarg is not None and len(function.body) == 3:
+        kwarg_name = kwarg.arg
+        writes: Dict[str, ast.AST] = {}
+        writes_are_closed = True
+        for statement in function.body[:2]:
+            if not (
+                isinstance(statement, ast.Assign)
+                and len(statement.targets) == 1
+                and isinstance(statement.targets[0], ast.Subscript)
+                and isinstance(statement.targets[0].value, ast.Name)
+                and statement.targets[0].value.id == kwarg_name
+                and isinstance(statement.targets[0].slice, ast.Constant)
+                and isinstance(statement.targets[0].slice.value, str)
+                and statement.targets[0].slice.value not in writes
+            ):
+                writes_are_closed = False
+                break
+            writes[statement.targets[0].slice.value] = statement.value
+        positional_parameters = [argument.arg for argument in function.args.args]
+        return_statement = function.body[-1]
+        forwards_kwargs = (
+            isinstance(return_statement, ast.Return)
+            and return_statement.value is call
+            and len(call.keywords) == 1
+            and call.keywords[0].arg is None
+            and isinstance(call.keywords[0].value, ast.Name)
+            and call.keywords[0].value.id == kwarg_name
+            and len(positional_parameters) >= 2
+            and len(call.args) >= 2
+            and all(
+                isinstance(actual, ast.Name)
+                and actual.id == positional_parameters[index]
+                for index, actual in enumerate(call.args[:2])
+            )
+        )
+        sample_bound = _static_integer_upper_bound(
+            writes.get("sample_size"),
+            assignments=assignments,
+        )
+        deterministic_seed = _statically_deterministic_integer(
+            writes.get("random_state"),
+            tree=tree,
+            function=function,
+            assignments=assignments,
+            fixed_seed_names=fixed_seed_names,
+        )
+        if (
+            writes_are_closed
+            and set(writes) == {"sample_size", "random_state"}
+            and forwards_kwargs
+            and sample_bound is not None
+            and sample_bound <= PAIRWISE_EVALUATION_MAX_SAMPLE_SIZE
+            and deterministic_seed
+        ):
+            return True
+
     local = _simple_assignments(function)
 
     def indexed_by(node: ast.AST) -> Optional[str]:
