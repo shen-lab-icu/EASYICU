@@ -145,6 +145,16 @@ WINDOW_CONCEPTS = {
     # "ett_gcs" 也不应该展开，它使用 ts_to_win_tbl 回调返回窗口格式
 }
 
+# Concepts that intentionally combine point observations with explicit
+# treatment windows in at least one database.  When a multi-source frame has
+# an end-time column, the generic window expander must expand only rows with a
+# real end time and retain the point rows.  Treating the whole frame as a
+# window table drops every point row (and, when source time columns differ,
+# can drop the window rows too).
+MIXED_POINT_WINDOW_CONCEPTS = {
+    "rrt",
+}
+
 # 点事件概念（不应展开为连续时间序列）
 POINT_EVENT_CONCEPTS = {
     "abx", "samp", "cort", "dobu60", "susp_inf", "sep3", "avpu",
