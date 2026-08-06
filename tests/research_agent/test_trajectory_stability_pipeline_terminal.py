@@ -466,7 +466,16 @@ def _run_terminal_case(
 
         original_audit = pipeline_execute.ConceptUsageAuditor.audit
 
-        def concept_audit(self, *, context, script_text, step):
+        def concept_audit(
+            self,
+            *,
+            context,
+            script_text,
+            step,
+            provider_budget=None,
+            study_endpoint=None,
+            plan_step_roster=None,
+        ):
             if step.step_id == "03_stability":
                 return [
                     ValidationFinding(
