@@ -2823,7 +2823,16 @@ def test_resume_repair_ticket_uses_only_current_deterministic_coordinates(
 
     coordinate = {"call_line": 10}
 
-    def deterministic_finding(self, *, context, script_text, step):
+    def deterministic_finding(
+        self,
+        *,
+        context,
+        script_text,
+        step,
+        provider_budget=None,
+        study_endpoint=None,
+        plan_step_roster=None,
+    ):
         del self, context, script_text
         call_line = coordinate["call_line"]
         return [
@@ -3225,7 +3234,13 @@ def test_resume_reaudits_material_deterministic_quarantine_repair(
         *,
         repair_reasons=(),
         repair_findings=(),
+        step=None,
     ):
+        # `step` is forwarded by `authorized_deterministic_concept_repair` since
+        # the all-rows profile-roles repair was registered. Without it here the
+        # call raises TypeError, the whole deterministic-repair path dies, and the
+        # symptom surfaces as "zero coder repairs" on the FIRST run -- which reads
+        # as a deliberate lifecycle change rather than a crashed double.
         if not repair_enabled["value"]:
             return code, []
         return real_repair(
@@ -3233,6 +3248,7 @@ def test_resume_reaudits_material_deterministic_quarantine_repair(
             messages,
             repair_reasons=repair_reasons,
             repair_findings=repair_findings,
+            step=step,
         )
 
     monkeypatch.setattr(

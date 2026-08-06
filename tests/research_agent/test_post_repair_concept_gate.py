@@ -202,7 +202,16 @@ def test_contract_repair_reenters_concept_gate_before_runner(
 
     audited_scripts: list[str] = []
 
-    def concept_audit(self, *, context, script_text, step):
+    def concept_audit(
+        self,
+        *,
+        context,
+        script_text,
+        step,
+        provider_budget=None,
+        study_endpoint=None,
+        plan_step_roster=None,
+    ):
         del self, context
         audited_scripts.append(script_text)
         if "UNSAFE_POST_REPAIR" not in script_text:
@@ -285,7 +294,16 @@ def test_quarantined_contract_repair_keeps_the_executed_attempt_and_its_reason(
     )
     from easyicu.research_agent.contracts.runtime import ValidationFinding
 
-    def concept_audit(self, *, context, script_text, step):
+    def concept_audit(
+        self,
+        *,
+        context,
+        script_text,
+        step,
+        provider_budget=None,
+        study_endpoint=None,
+        plan_step_roster=None,
+    ):
         del self, context
         if "UNSAFE_POST_REPAIR" not in script_text:
             return []
@@ -417,7 +435,16 @@ def test_quarantine_persists_repaired_constraints_across_later_repairs(
         load_quarantined_concept_draft,
     )
 
-    def concept_audit(self, *, context, script_text, step):
+    def concept_audit(
+        self,
+        *,
+        context,
+        script_text,
+        step,
+        provider_budget=None,
+        study_endpoint=None,
+        plan_step_roster=None,
+    ):
         del self, context
         findings = []
         if "INITIAL_CONCEPT_ERROR" in script_text:
@@ -802,7 +829,16 @@ def test_keyboard_interrupt_during_concept_repair_saves_draft_and_reraises(
         load_quarantined_concept_draft,
     )
 
-    def reject_draft(self, *, context, script_text, step):
+    def reject_draft(
+        self,
+        *,
+        context,
+        script_text,
+        step,
+        provider_budget=None,
+        study_endpoint=None,
+        plan_step_roster=None,
+    ):
         del self, context, script_text
         return [
             ValidationFinding(
