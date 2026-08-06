@@ -167,6 +167,38 @@ _COMPACT_SERIALIZATION_GUIDANCE = """OUTPUT SERIALIZATION CONTRACT:
 - Never assign the result of an inplace pandas operation, and prefer stable `.agg`/`.transform` over mixed-shape `groupby.apply`."""
 
 
+#: Clustering execution guidance, moved out of the always-sent ``coder.txt``.
+#:
+#: MEASURED: as a paragraph in the base prompt file it cost 627 bytes on EVERY
+#: step, and the file had 152 bytes of headroom on the tightest measured case.
+#: The widest trajectory-representation generation prompt went to 42,802 against
+#: a hard 42,000-byte transport gate -- and that step is not a clustering step at
+#: all, so every one of those bytes was clustering advice sent to a step that
+#: could not use it, in place of the step's own typed context.
+#:
+#: It sits beside the schema-compiled manifest contract because they address the
+#: same reader on the same steps. The compiled one is authoritative for the
+#: manifest's shape; this one covers the execution choices the schema does not
+#: describe (feature selection, imputation, scaling, and the not-feasible exit).
+_CLUSTERING_EXECUTION_GUIDANCE = (
+    "CLUSTERING EXECUTION:\n"
+    "- Use numeric physiologic features, impute medians, scale before "
+    "KMeans/AgglomerativeClustering, and write `n_clusters`/`cluster_count` "
+    "plus method-appropriate selection evidence when at least two non-empty "
+    "clusters exist. At the top level of step_summary.json, record either a "
+    'replayable `"cluster_selection"` mapping with exact fields '
+    '`"criterion"`, `"selection_rule"`, `"direction"`, '
+    '`"selected_n_clusters"`, and `"candidates"` (at least two objects with '
+    '`"n_clusters"` and finite `"criterion_value"`), or a substantive '
+    '`"cluster_stability"` mapping with exact fields `"selected_n_clusters"`, '
+    '`"n_resamples"` (at least 2), and a finite metric such as '
+    '`"mean_adjusted_rand_index"`. Standalone scalars such as '
+    "`silhouette_score`, `selected_silhouette`, or `selected_stability_ari` do "
+    "not replace one of those nested evidence mappings. If clustering is not "
+    "feasible, write a precise skipped reason and exit normally."
+)
+
+
 def _cluster_selection_manifest_guidance(*, declared_manifest: bool) -> str:
     """Render the Coder contract from the validator-owned public schema."""
 
@@ -619,6 +651,7 @@ def coder_guide_for_step(
     if "serialization" not in _exclude_sections:
         parts.append(_COMPACT_SERIALIZATION_GUIDANCE)
     if is_clustering:
+        parts.append(_CLUSTERING_EXECUTION_GUIDANCE)
         parts.append(
             _cluster_selection_manifest_guidance(
                 declared_manifest="cluster_selection" in output_names,
