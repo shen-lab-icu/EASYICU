@@ -317,6 +317,7 @@ _STRUCTURAL_REPAIRS = {
     "bound_percentage_identity_guard_v1",
     "cohort_csv_to_parquet_v1",
     "complete_bound_figure_source_bundle_v1",
+    "complete_typed_input_receipt_v1",
     "cohort_file_direct_read_v1",
     "flag_only_plausibility_range_retention_v1",
     "categorical_level_reconciliation_guard_v1",
