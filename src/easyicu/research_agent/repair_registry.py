@@ -287,6 +287,7 @@ _SYNTACTIC_REPAIRS = {
     "raw_contract_mapping_iteration_v1",
     "relocate_known_host_helper_import_v1",
     "resolved_context_digest_load_v1",
+    "resolved_input_consumption_contract_owner_v1",
     "resolved_input_manifest_env_v1",
     "resolved_input_identity_key_v1",
     "resolved_input_json_document_adapter_v1",

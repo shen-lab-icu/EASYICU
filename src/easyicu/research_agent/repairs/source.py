@@ -119,6 +119,7 @@ from .reasons import RepairReason
 from .typed_input import (
     patch_all_rows_outcome_coordinate_filter,
     patch_resolved_input_cohort_env_shadow,
+    patch_resolved_input_consumption_contract_owner,
     patch_resolved_input_manifest_env,
     patch_resolved_input_relative_path_root,
 )
@@ -6382,6 +6383,16 @@ def _deterministic_runner_repair(
         repaired = patch_resolved_input_manifest_env(code, run_log)
         if repaired != code:
             return manifest_env_repair, repaired
+
+    consumption_owner_repair = "resolved_input_consumption_contract_owner_v1"
+    if previous_repair != consumption_owner_repair:
+        repaired = patch_resolved_input_consumption_contract_owner(
+            code,
+            run_log,
+            resolved_input_bindings=resolved_input_bindings,
+        )
+        if repaired != code:
+            return consumption_owner_repair, repaired
 
     all_rows_outcome_repair = "all_rows_outcome_coordinate_filter_v1"
     if previous_repair != all_rows_outcome_repair:

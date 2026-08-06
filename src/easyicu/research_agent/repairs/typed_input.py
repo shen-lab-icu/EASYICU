@@ -3,10 +3,147 @@
 from __future__ import annotations
 
 import ast
+import re
 from typing import Any, Mapping, Sequence
 
 from ..gates.typed_input import resolved_input_shadowed_by_cohort_env_findings
 from ..schema import ValidationFinding
+
+
+def patch_resolved_input_consumption_contract_owner(
+    code: str,
+    run_log: str,
+    *,
+    resolved_input_bindings: Mapping[str, Any] | None,
+) -> str:
+    """Read a verified consumption contract from its binding, not its product.
+
+    Resolved-input manifests place ``consumption_contract`` beside
+    ``product_contract`` on the typed binding.  This repair only corrects a
+    generated script after the exact all-rows runtime failure, when the host
+    binding named in that failure proves the top-level contract is ``all_rows``
+    and the product contract does not contain a competing nested contract.
+    The existing fail-closed all-rows check remains unchanged.
+    """
+
+    failure = re.search(
+        r"RuntimeError:\s+Input\s+(?P<input_key>\S+)\s+does not have the required "
+        r"all_rows contract",
+        str(run_log or ""),
+        flags=re.IGNORECASE,
+    )
+    if failure is None:
+        return code
+    input_key = failure.group("input_key")
+    binding = (resolved_input_bindings or {}).get(input_key)
+    if not isinstance(binding, Mapping):
+        return code
+    consumption_contract = binding.get("consumption_contract")
+    product_contract = binding.get("product_contract")
+    identity_row = binding.get("identity_row")
+    if (
+        not isinstance(consumption_contract, Mapping)
+        or consumption_contract.get("mode") != "all_rows"
+        or not isinstance(product_contract, Mapping)
+        or "consumption_contract" in product_contract
+        or not isinstance(identity_row, Mapping)
+        or identity_row.get("declared_kind") != "table"
+        or identity_row.get("input_key") != input_key
+    ):
+        return code
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+
+    product_owners: dict[str, set[str]] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)) or node.value is None:
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        if len(targets) != 1 or not isinstance(targets[0], ast.Name):
+            continue
+        value = node.value
+        binding_name: str | None = None
+        if (
+            isinstance(value, ast.Call)
+            and isinstance(value.func, ast.Attribute)
+            and isinstance(value.func.value, ast.Name)
+            and value.func.attr == "get"
+            and value.args
+            and isinstance(value.args[0], ast.Constant)
+            and value.args[0].value == "product_contract"
+        ):
+            binding_name = value.func.value.id
+        elif (
+            isinstance(value, ast.Subscript)
+            and isinstance(value.value, ast.Name)
+            and isinstance(value.slice, ast.Constant)
+            and value.slice.value == "product_contract"
+        ):
+            binding_name = value.value.id
+        if binding_name is not None and binding_name != targets[0].id:
+            product_owners.setdefault(targets[0].id, set()).add(binding_name)
+
+    candidates: list[tuple[ast.Name, str]] = []
+    for node in ast.walk(tree):
+        owner: ast.Name | None = None
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.attr == "get"
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+            and node.args[0].value == "consumption_contract"
+        ):
+            owner = node.func.value
+        elif (
+            isinstance(node, ast.Subscript)
+            and isinstance(node.value, ast.Name)
+            and isinstance(node.slice, ast.Constant)
+            and node.slice.value == "consumption_contract"
+        ):
+            owner = node.value
+        if owner is None:
+            continue
+        binding_names = product_owners.get(owner.id, set())
+        if len(binding_names) == 1:
+            candidates.append((owner, next(iter(binding_names))))
+    if len(candidates) != 1:
+        return code
+    owner, binding_name = candidates[0]
+    if not all(
+        isinstance(value, int)
+        for value in (
+            owner.lineno,
+            owner.col_offset,
+            owner.end_lineno,
+            owner.end_col_offset,
+        )
+    ):
+        return code
+
+    lines = code.splitlines(keepends=True)
+    line_starts: list[int] = []
+    cursor = 0
+    for line in lines:
+        line_starts.append(cursor)
+        cursor += len(line)
+
+    def _offset(lineno: int, utf8_column: int) -> int:
+        line = lines[lineno - 1]
+        char_column = len(line.encode("utf-8")[:utf8_column].decode("utf-8"))
+        return line_starts[lineno - 1] + char_column
+
+    start = _offset(owner.lineno, owner.col_offset)
+    end = _offset(owner.end_lineno, owner.end_col_offset)
+    repaired = code[:start] + binding_name + code[end:]
+    try:
+        ast.parse(repaired)
+    except SyntaxError:
+        return code
+    return repaired
 
 
 def patch_all_rows_outcome_coordinate_filter(
@@ -629,6 +766,7 @@ def patch_resolved_input_cohort_env_shadow(
 
 __all__ = [
     "patch_all_rows_outcome_coordinate_filter",
+    "patch_resolved_input_consumption_contract_owner",
     "patch_resolved_input_manifest_env",
     "patch_resolved_input_cohort_env_shadow",
     "patch_resolved_input_relative_path_root",
