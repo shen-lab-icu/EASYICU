@@ -19,6 +19,11 @@ from ..repair_registry import (
 )
 
 
+DETERMINISTIC_CONCEPT_REAUDIT_BUDGET_ISSUE_CODE = (
+    "deterministic_repair_final_audit_budget_exhausted"
+)
+
+
 def _exact_automatic_repair_names(values: Sequence[object]) -> tuple[str, ...]:
     names: list[str] = []
     for value in values:
@@ -172,11 +177,18 @@ def deterministic_concept_reaudit_pending_errors(
             or detail.get("limit") != provider_limit
         ):
             continue
-        selected.append(dict(finding))
+        marked_finding = dict(finding)
+        marked_detail = dict(detail)
+        marked_detail["issue_code"] = (
+            DETERMINISTIC_CONCEPT_REAUDIT_BUDGET_ISSUE_CODE
+        )
+        marked_finding["detail"] = marked_detail
+        selected.append(marked_finding)
     return tuple(selected)
 
 
 __all__ = [
+    "DETERMINISTIC_CONCEPT_REAUDIT_BUDGET_ISSUE_CODE",
     "deterministic_concept_reaudit_authority",
     "deterministic_concept_reaudit_pending_errors",
 ]
