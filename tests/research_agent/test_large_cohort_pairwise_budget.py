@@ -136,6 +136,97 @@ score = silhouette_score(
     )
 
 
+def test_large_cohort_accepts_provably_safe_silhouette_wrapper() -> None:
+    code = f"""\
+from sklearn.metrics import silhouette_score as _sklearn_silhouette_score
+
+def silhouette_score(features, labels, sample_size=None, random_state=None, **kwargs):
+    bounded_sample_size = (
+        min({PAIRWISE_EVALUATION_MAX_SAMPLE_SIZE}, len(features))
+        if sample_size is None
+        else min(sample_size, {PAIRWISE_EVALUATION_MAX_SAMPLE_SIZE})
+    )
+    deterministic_random_state = 42 if random_state is None else random_state
+    return _sklearn_silhouette_score(
+        features,
+        labels,
+        sample_size=bounded_sample_size,
+        random_state=deterministic_random_state,
+        **kwargs,
+    )
+
+BASE_SEED = 1729
+evaluation_rows = min({PAIRWISE_EVALUATION_MAX_SAMPLE_SIZE}, len(feature_matrix))
+score = silhouette_score(
+    feature_matrix,
+    cluster_labels,
+    sample_size=int(evaluation_rows),
+    random_state=int(BASE_SEED + 300000),
+)
+"""
+
+    assert not _budget_violations(
+        code,
+        n_stays=PAIRWISE_EVALUATION_FULL_COHORT_MAX_ROWS + 1,
+    )
+
+
+def test_large_cohort_rejects_wrapper_without_a_provable_sample_cap() -> None:
+    code = """\
+from sklearn.metrics import silhouette_score as _sklearn_silhouette_score
+
+def silhouette_score(features, labels, sample_size=None, random_state=None):
+    evaluation_rows = len(features) if sample_size is None else sample_size
+    deterministic_seed = 42 if random_state is None else random_state
+    return _sklearn_silhouette_score(
+        features,
+        labels,
+        sample_size=evaluation_rows,
+        random_state=deterministic_seed,
+    )
+
+score = silhouette_score(feature_matrix, cluster_labels, random_state=1729)
+"""
+
+    violations = _budget_violations(
+        code,
+        n_stays=PAIRWISE_EVALUATION_FULL_COHORT_MAX_ROWS + 1,
+    )
+
+    assert len(violations) == 1
+    assert "sample_size" in violations[0]["matched_patterns"]
+
+
+def test_large_cohort_rejects_wrapper_with_dynamic_random_state() -> None:
+    code = f"""\
+import time
+from sklearn.metrics import silhouette_score as _sklearn_silhouette_score
+
+def silhouette_score(features, labels, sample_size=None, random_state=None):
+    evaluation_rows = min({PAIRWISE_EVALUATION_MAX_SAMPLE_SIZE}, len(features))
+    return _sklearn_silhouette_score(
+        features,
+        labels,
+        sample_size=evaluation_rows,
+        random_state=random_state,
+    )
+
+score = silhouette_score(
+    feature_matrix,
+    cluster_labels,
+    random_state=int(time.time()),
+)
+"""
+
+    violations = _budget_violations(
+        code,
+        n_stays=PAIRWISE_EVALUATION_FULL_COHORT_MAX_ROWS + 1,
+    )
+
+    assert len(violations) == 1
+    assert "random_state" in violations[0]["matched_patterns"]
+
+
 def test_large_cohort_accepts_explicit_bounded_deterministic_subset() -> None:
     code = f"""\
 import numpy as np
