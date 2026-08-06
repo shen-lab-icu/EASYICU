@@ -533,6 +533,30 @@ def _static_integer_upper_bound(
             is not None
         ]
         return min(bounds) if bounds else None
+    if isinstance(node, ast.IfExp):
+        branch_bounds = [
+            _static_integer_upper_bound(
+                branch,
+                assignments=assignments,
+                seen=seen,
+            )
+            for branch in (node.body, node.orelse)
+        ]
+        if all(bound is not None for bound in branch_bounds):
+            return max(bound for bound in branch_bounds if bound is not None)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left_bound = _static_integer_upper_bound(
+            node.left,
+            assignments=assignments,
+            seen=seen,
+        )
+        right_bound = _static_integer_upper_bound(
+            node.right,
+            assignments=assignments,
+            seen=seen,
+        )
+        if left_bound is not None and right_bound is not None:
+            return left_bound + right_bound
     return None
 
 
@@ -572,6 +596,60 @@ def _fixed_parameter_at_every_call(
         _static_integer_upper_bound(actual, assignments=assignments) is not None
         for actual in actuals
     )
+
+
+def _statically_deterministic_integer(
+    node: Optional[ast.AST],
+    *,
+    tree: ast.AST,
+    function: Optional[ast.FunctionDef],
+    assignments: Dict[str, ast.AST],
+    fixed_seed_names: set[str],
+    seen: Optional[set[str]] = None,
+) -> bool:
+    """Return whether an integer expression is fixed by code and call sites."""
+
+    if node is None:
+        return False
+    if _static_integer_upper_bound(node, assignments=assignments) is not None:
+        return True
+    if isinstance(node, ast.Name):
+        if node.id in fixed_seed_names:
+            return True
+        if function is not None and node.id in {
+            argument.arg for argument in function.args.args
+        }:
+            return _fixed_parameter_at_every_call(
+                tree,
+                function,
+                node.id,
+                assignments,
+            )
+        active_seen = set() if seen is None else set(seen)
+        if node.id in active_seen or node.id not in assignments:
+            return False
+        active_seen.add(node.id)
+        return _statically_deterministic_integer(
+            assignments[node.id],
+            tree=tree,
+            function=function,
+            assignments=assignments,
+            fixed_seed_names=fixed_seed_names,
+            seen=active_seen,
+        )
+    if isinstance(node, ast.IfExp):
+        return all(
+            _statically_deterministic_integer(
+                branch,
+                tree=tree,
+                function=function,
+                assignments=assignments,
+                fixed_seed_names=fixed_seed_names,
+                seen=seen,
+            )
+            for branch in (node.body, node.orelse)
+        )
+    return False
 
 
 def _manual_bounded_silhouette_contract(
@@ -702,11 +780,13 @@ def _large_cohort_silhouette_violations(
         return []
 
     assignments: Dict[str, ast.AST] = {}
-    imported_names = {"silhouette_score"}
+    imported_names: set[str] = set()
+    local_function_names: set[str] = set()
     fixed_seed_names: set[str] = set()
     enclosing_functions: Dict[int, ast.FunctionDef] = {}
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef):
+            local_function_names.add(node.name.casefold())
             for descendant in ast.walk(node):
                 enclosing_functions.setdefault(id(descendant), node)
         if isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr)):
@@ -739,10 +819,24 @@ def _large_cohort_silhouette_violations(
             fixed_seed_names.add(node.target.id)
 
     violations: List[Dict[str, object]] = []
+    imported_names_casefold = {name.casefold() for name in imported_names}
     for call in (node for node in ast.walk(tree) if isinstance(node, ast.Call)):
         callable_path = _callable_path(call.func, {})
         terminal_name = callable_path.rsplit(".", 1)[-1]
-        if terminal_name not in {name.casefold() for name in imported_names}:
+        direct_import = (
+            isinstance(call.func, ast.Name)
+            and terminal_name in imported_names_casefold
+        )
+        attribute_call = (
+            isinstance(call.func, ast.Attribute)
+            and terminal_name == "silhouette_score"
+        )
+        unresolved_bare_call = (
+            isinstance(call.func, ast.Name)
+            and terminal_name == "silhouette_score"
+            and terminal_name not in local_function_names
+        )
+        if not (direct_import or attribute_call or unresolved_bare_call):
             continue
         keywords = {
             keyword.arg: keyword.value
@@ -763,17 +857,12 @@ def _large_cohort_silhouette_violations(
             or sample_bound > PAIRWISE_EVALUATION_MAX_SAMPLE_SIZE
         ):
             missing_contracts.append("sample_size")
-        random_state = keywords.get("random_state")
-        deterministic_random_state = (
-            isinstance(random_state, ast.Name)
-            and random_state.id in fixed_seed_names
-        ) or (
-            random_state is not None
-            and _static_integer_upper_bound(
-                random_state,
-                assignments=assignments,
-            )
-            is not None
+        deterministic_random_state = _statically_deterministic_integer(
+            keywords.get("random_state"),
+            tree=tree,
+            function=enclosing_functions.get(id(call)),
+            assignments=assignments,
+            fixed_seed_names=fixed_seed_names,
         )
         manual_bounded_contract = _manual_bounded_silhouette_contract(
             call,
