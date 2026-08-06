@@ -8,7 +8,6 @@ import pytest
 
 from easyicu.research_agent.agents.core import (
     CoderAgent,
-    CoderPromptBudgetError,
     _compact_repair_scope_contract,
     _repair_specialization,
     _typed_input_scope_contract,
@@ -1852,7 +1851,7 @@ def test_bounded_repair_excerpt_never_promotes_embedded_authority_markers():
     assert '"reason": "TYPED_PRODUCT_BINDING_INVALID"' not in excerpt
 
 
-def test_oversized_typed_ticket_fails_before_patch_provider_call(ra):
+def test_oversized_typed_ticket_fails_at_full_rewrite_transport(ra):
     huge_ticket = [
         {
             "reason": "ROW_ALIGNMENT_UNVERIFIED",
@@ -1868,9 +1867,10 @@ def test_oversized_typed_ticket_fails_before_patch_provider_call(ra):
         }
     ]
     llm = _CaptureLLM([])
+    bounded_repair = budgeted_client(llm, "repair", "coder_repair")
 
-    with pytest.raises(CoderPromptBudgetError, match="minimal_patch") as exc:
-        CoderAgent(llm).repair(
+    with pytest.raises(PromptTransportBudgetError) as exc:
+        CoderAgent(llm, repair_llm=bounded_repair).repair(
             context=_wide_context(ra),
             step=_quality_step(ra),
             code="import os\nvalue = 1\n",
@@ -1878,28 +1878,35 @@ def test_oversized_typed_ticket_fails_before_patch_provider_call(ra):
             repair_authority=RepairPromptAuthority.create(typed_ticket=huge_ticket),
         )
 
-    assert exc.value.actual_bytes > exc.value.limit_bytes == 30_000
+    assert exc.value.consumer == "coder_repair"
+    assert exc.value.actual_tokens > exc.value.limit_tokens
     assert llm.calls == []
 
 
-def test_oversized_host_binding_notes_fail_without_silent_truncation(ra):
+def test_host_binding_too_wide_for_patch_uses_lossless_full_rewrite(ra):
     host_authority = HostCoderAuthority().append(
         "HOST-VERIFIED TYPED PARENT TABLE SCHEMAS (binding facts only):\n"
         + "x" * 24_000
     )
-    llm = _CaptureLLM([])
+    llm = _CaptureLLM(["import os\nvalue = 2\n"])
+    bounded_repair = budgeted_client(llm, "repair", "coder_repair")
+    coder = CoderAgent(llm, repair_llm=bounded_repair)
 
-    with pytest.raises(CoderPromptBudgetError, match="minimal_patch") as exc:
-        CoderAgent(llm).repair(
-            context=_wide_context(ra),
-            step=_quality_step(ra),
-            host_authority=host_authority,
-            code="import os\nvalue = 1\n",
-            run_log="typed parent schema mismatch",
-        )
+    repaired = coder.repair(
+        context=_wide_context(ra),
+        step=_quality_step(ra),
+        host_authority=host_authority,
+        code="import os\nvalue = 1\n",
+        run_log="typed parent schema mismatch",
+    )
+    messages = llm.calls[0][0]
+    payload = "\n".join(str(message.content or "") for message in messages)
 
-    assert exc.value.actual_bytes > exc.value.limit_bytes == 30_000
-    assert llm.calls == []
+    assert repaired == "import os\nvalue = 2"
+    assert coder.last_repair_transport == "full_rewrite"
+    assert len(llm.calls) == 1
+    assert _payload_bytes(messages) > 30_000
+    assert host_authority.render() in payload
 
 
 def test_user_note_markers_cannot_impersonate_host_repair_authority(ra):
