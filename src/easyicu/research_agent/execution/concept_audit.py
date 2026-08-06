@@ -40,6 +40,7 @@ from ..authority.run_input import canonical_sha256
 from ..schema import AnalysisStep, ResearchContext
 from ..authority.step_attempt import StepAttemptState
 from ..authority.step_runtime import read_concept_audit_findings
+from .concept_reaudit import DETERMINISTIC_CONCEPT_REAUDIT_BUDGET_ISSUE_CODE
 from .step_worker_state import StepWorkerProgress
 
 _RETRYABLE_FINAL_AUDIT_ISSUE_CODE = "llm_concept_audit_provider_failure"
@@ -89,14 +90,32 @@ def _retryable_final_audit_provider_failure(
     never authorize another paid final-audit call.
     """
 
-    return bool(findings) and all(
-        finding.validator == "llm_concept_auditor"
-        and finding.severity == "error"
-        and str((finding.detail or {}).get("issue_code") or "")
-        == _RETRYABLE_FINAL_AUDIT_ISSUE_CODE
-        and str((finding.detail or {}).get("step_id") or "") == step_id
-        for finding in findings
-    )
+    def _is_retryable(finding: ValidationFinding) -> bool:
+        detail = finding.detail or {}
+        issue_code = str(detail.get("issue_code") or "")
+        finding_step_id = str(detail.get("step_id") or "")
+        if finding.severity != "error" or finding_step_id != step_id:
+            return False
+        if finding.validator == "llm_concept_auditor":
+            return issue_code == _RETRYABLE_FINAL_AUDIT_ISSUE_CODE
+        if (
+            finding.validator != "provider_call_budget"
+            or issue_code
+            != DETERMINISTIC_CONCEPT_REAUDIT_BUDGET_ISSUE_CODE
+            or detail.get("category") != "concept_audit"
+        ):
+            return False
+        used = detail.get("used")
+        limit = detail.get("limit")
+        return (
+            not isinstance(used, bool)
+            and isinstance(used, int)
+            and not isinstance(limit, bool)
+            and isinstance(limit, int)
+            and used >= limit
+        )
+
+    return bool(findings) and all(_is_retryable(finding) for finding in findings)
 
 
 def _final_audit_continuation_allowed(
@@ -318,6 +337,7 @@ class ConceptAuditRuntime:
         [Sequence[ValidationFinding]], List[dict[str, Any]]
     ]
     store_quarantined_draft: Callable[..., Any]
+    authorize_deterministic_reaudit: Callable[..., bool]
 
 
 @dataclass(slots=True)
@@ -568,6 +588,15 @@ class ConceptAuditCoordinator:
                     )
                     self.tokens_by_digest[audited_code_digest] = audit_key
                     cached_findings = runtime.cache.get(audit_key)
+                    if (
+                        cached_findings is None
+                        and not runtime.provider_budget.can_consume("concept_audit")
+                        and runtime.authorize_deterministic_reaudit(
+                            token=audit_key,
+                            code_sha256=audited_code_digest,
+                        )
+                    ):
+                        runtime.sync_provider_budget()
                     reservation_status = runtime.provider_budget.reservation_status(
                         "concept_audit",
                         token=audit_key,

@@ -212,6 +212,46 @@ def test_nullable_boolean_metadata_does_not_break_exact_numeric_projection(
     assert drift.get("reason") == "source_values_disagree", drift
 
 
+def test_estimate_unit_is_compared_as_text_not_parsed_as_a_number(
+    tmp_path: Path,
+):
+    """A truthful unit label must not become a numeric parse failure."""
+
+    upstream = tmp_path / "cluster_stability.csv"
+    pd.DataFrame(
+        {
+            "metric": ["bootstrap_ari", "silhouette"],
+            "estimate": [0.84, 0.31],
+            "estimate_unit": ["adjusted_rand_index", "silhouette_coefficient"],
+        }
+    ).to_csv(upstream, index=False)
+    source = pd.DataFrame(
+        {
+            "source_row_index": [0, 1],
+            "metric": ["bootstrap_ari", "silhouette"],
+            "estimate": [0.84, 0.31],
+            "estimate_unit": ["adjusted_rand_index", "silhouette_coefficient"],
+        }
+    )
+
+    clean = FigureSourceDataValidator._compare_source_to_upstream(
+        source_df=source,
+        source_path=tmp_path / "cluster_stability_source_data.csv",
+        upstream_path=upstream,
+    )
+    assert clean.get("ok") is True, clean
+
+    source.loc[1, "estimate_unit"] = "adjusted_rand_index"
+    drift = FigureSourceDataValidator._compare_source_to_upstream(
+        source_df=source,
+        source_path=tmp_path / "cluster_stability_source_data.csv",
+        upstream_path=upstream,
+    )
+    assert drift.get("ok") is False, drift
+    assert drift.get("reason") == "source_values_disagree", drift
+    assert drift.get("mismatches", [])[0]["column"] == "estimate_unit"
+
+
 def test_model_id_term_composite_key_disambiguates_shared_terms_and_flags_drift(
     tmp_path: Path,
 ):

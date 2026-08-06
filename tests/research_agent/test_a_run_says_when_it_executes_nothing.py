@@ -109,8 +109,9 @@ def test_the_block_is_announced_with_its_reason_and_its_casualties():
 
     source = inspect.getsource(phase)
     assert _MESSAGE in ast.dump(call)
-    # The three blocks that can empty the list must all be nameable.
+    # Every block that can empty the list must be nameable.
     for reason in (
+        "endpoint_contract_blocked",
         "trajectory_plan_contract_blocked",
         "typed_plan_dag_blocked",
         "development_sample_unauthorized",

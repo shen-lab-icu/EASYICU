@@ -310,7 +310,7 @@ def test_explicit_resume_appends_initial_generation_without_resetting_history(
 
     state = load_provider_call_budget_state(path, step_id="resume_generation")
     payload = json.loads(path.read_text(encoding="utf-8"))
-    assert state.schema_version == 7
+    assert state.schema_version == PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION
     assert state.categories == ("initial_generation", "initial_generation")
     assert len(state.initial_generations) == 2
     assert state.initial_generations[0] == first_entry
@@ -404,6 +404,7 @@ def test_schema_v6_initial_generation_loads_into_generation_ledger(tmp_path):
     payload.pop("sha256")
     payload["schema_version"] = 6
     payload["initial_generation"] = payload.pop("initial_generations")[0]
+    payload.pop("reserved_category_extensions")
     payload["sha256"] = _canonical_digest(payload)
     path.write_text(
         json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n",
@@ -684,6 +685,154 @@ def test_final_audit_phase_roundtrips_in_the_single_provider_receipt(tmp_path):
         expected_reserved_final_category="concept_audit",
     )
     assert released.reservation_released is True
+
+
+def test_deterministic_reaudit_extension_is_reserved_and_roundtrips(tmp_path):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="deterministic_reaudit")
+    budget = StepProviderCallBudget(
+        1,
+        step_id="deterministic_reaudit",
+        receipt_path=path,
+        reserved_final_category="concept_audit",
+    )
+    budget.bind_reserved_category("concept_audit", token="audit-before-repair")
+    budget.consume("concept_audit")
+    budget.bind_reserved_category("concept_audit", token="audit-after-repair")
+
+    assert budget.can_consume("concept_audit") is False
+    assert (
+        budget.authorize_deterministic_reserved_category_extension(
+            "concept_audit",
+            token="audit-after-repair",
+        )
+        is True
+    )
+    assert budget.base_limit == 1
+    assert budget.limit == 2
+    assert budget.can_consume("analyzer") is False
+    assert budget.can_consume("concept_audit") is True
+    budget.consume("concept_audit")
+
+    state = load_provider_call_budget_state(
+        path,
+        step_id="deterministic_reaudit",
+        expected_reserved_final_category="concept_audit",
+    )
+    assert state.limit == 1
+    assert state.categories == ("concept_audit", "concept_audit")
+    assert len(state.reserved_category_extensions) == 1
+    assert state.reserved_category_extensions[0]["token"] == "audit-after-repair"
+
+    resumed = StepProviderCallBudget(
+        state.limit,
+        step_id="deterministic_reaudit",
+        consumed_categories=state.categories,
+        logical_repair_entries=state.logical_repairs,
+        initial_generation_entries=state.initial_generations,
+        receipt_path=path,
+        reserved_final_category=state.reserved_final_category,
+        required_reservation_token=state.required_reservation_token,
+        reservation_bound_provider_history_len=(
+            state.reservation_bound_provider_history_len
+        ),
+        completed_reservation_token=state.completed_reservation_token,
+        reservation_released=state.reservation_released,
+        reserved_category_extensions=state.reserved_category_extensions,
+    )
+    assert resumed.limit == 2
+    assert (
+        resumed.reservation_status(
+            "concept_audit",
+            token="audit-after-repair",
+        )
+        == "attempted_incomplete"
+    )
+    assert resumed.can_consume("concept_audit") is False
+
+
+def test_deterministic_reaudit_extension_cannot_buy_another_category(tmp_path):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="audit_only_extension")
+    budget = StepProviderCallBudget(
+        1,
+        step_id="audit_only_extension",
+        receipt_path=path,
+        reserved_final_category="concept_audit",
+    )
+    budget.bind_reserved_category("concept_audit", token="audit-before-repair")
+    budget.consume("concept_audit")
+    budget.bind_reserved_category("concept_audit", token="audit-after-repair")
+    budget.authorize_deterministic_reserved_category_extension(
+        "concept_audit",
+        token="audit-after-repair",
+    )
+
+    with pytest.raises(ProviderCallBudgetExhausted):
+        budget.consume("post_mutation_concept_repair_patch")
+    assert budget.categories == ("concept_audit",)
+    assert budget.can_consume("concept_audit") is True
+
+
+def test_deterministic_reaudit_extension_refuses_duplicate_token(tmp_path):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="one_call_per_token")
+    budget = StepProviderCallBudget(
+        1,
+        step_id="one_call_per_token",
+        receipt_path=path,
+        reserved_final_category="concept_audit",
+    )
+    budget.bind_reserved_category("concept_audit", token="audit-before-repair")
+    budget.consume("concept_audit")
+    budget.bind_reserved_category("concept_audit", token="audit-after-repair")
+    budget.authorize_deterministic_reserved_category_extension(
+        "concept_audit",
+        token="audit-after-repair",
+    )
+    budget.consume("concept_audit")
+
+    assert (
+        budget.authorize_deterministic_reserved_category_extension(
+            "concept_audit",
+            token="audit-after-repair",
+        )
+        is False
+    )
+    assert budget.limit == 2
+    assert budget.used == 2
+
+
+def test_deterministic_reaudit_extension_tamper_fails_closed(tmp_path):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="reaudit_tamper")
+    budget = StepProviderCallBudget(
+        1,
+        step_id="reaudit_tamper",
+        receipt_path=path,
+        reserved_final_category="concept_audit",
+    )
+    budget.bind_reserved_category("concept_audit", token="audit-before-repair")
+    budget.consume("concept_audit")
+    budget.bind_reserved_category("concept_audit", token="audit-after-repair")
+    budget.authorize_deterministic_reserved_category_extension(
+        "concept_audit",
+        token="audit-after-repair",
+    )
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["reserved_category_extensions"][0]["provider_history_len"] = 0
+    payload["sha256"] = _payload_digest_without_sha(payload)
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ProviderCallBudgetReceiptError,
+        match="reserved-category extension is inconsistent",
+    ):
+        load_provider_call_budget_state(
+            path,
+            step_id="reaudit_tamper",
+            expected_reserved_final_category="concept_audit",
+        )
 
 
 def test_final_audit_state_tamper_fails_with_recomputed_outer_digest(tmp_path):
@@ -1419,6 +1568,7 @@ def test_schema_v2_receipt_loads_without_inventing_logical_repairs(tmp_path):
     payload.pop("logical_repairs")
     payload.pop("initial_generations")
     payload.pop("final_reservation_state")
+    payload.pop("reserved_category_extensions")
     canonical = json.dumps(
         payload,
         ensure_ascii=False,
@@ -1456,6 +1606,7 @@ def test_schema_v3_receipt_keeps_logical_repairs_without_audit_phase(tmp_path):
     payload["schema_version"] = 3
     payload.pop("initial_generations")
     payload.pop("final_reservation_state")
+    payload.pop("reserved_category_extensions")
     canonical = json.dumps(
         payload,
         ensure_ascii=False,

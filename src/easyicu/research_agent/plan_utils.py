@@ -30,7 +30,7 @@ import json
 import math
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence, Set, Tuple
 
 from pydantic import ValidationError
 
@@ -372,10 +372,12 @@ def _cohort_definition_contract_findings(
     ]
 
 
-def _endpoint_contract_findings(
+def endpoint_contract_findings(
     plan: AnalysisPlan,
+    *,
+    severity: Literal["info", "warning", "error"] = "warning",
 ) -> List[ValidationFinding]:
-    """Reject a plan whose family needs a declared endpoint and has none.
+    """Report a plan whose family needs a declared endpoint and has none.
 
     The sibling of :func:`_cohort_definition_contract_findings`, for the other
     half of a study's identity. The cohort answers *who*; the endpoint answers
@@ -412,18 +414,16 @@ def _endpoint_contract_findings(
     # of 12 with a death at step 0 every time the Planner missed twice, which is
     # a regression dressed as a gate.
     #
-    # Nothing guesses silently at warning severity, which is what fail-closed
-    # actually requires here: the retry in `pipeline` gives the Planner a second
-    # chance with the declaration in its prompt, the step record simply omits
-    # the endpoint key when nothing was declared, and the concept auditor is
-    # told "NONE declared" outright and instructed not to supply a rule from the
-    # research question. The absence is stated to every consumer instead of
-    # being filled in differently by each. Raising this to error belongs with
-    # evidence that the Planner reliably declares it.
+    # Warning is the plan-phase diagnostic: it keeps the initial miss retryable
+    # instead of aborting before the Planner gets a directed second chance. The
+    # execution preflight invokes this same rule with severity="error" after
+    # that retry. If the declaration is still absent, no scientific step runs.
+    # At neither stage may a consumer infer the endpoint from question prose,
+    # column names, dtypes, or step prose.
     return [
         ValidationFinding(
             validator="endpoint_contract",
-            severity="warning",
+            severity=severity,
             message=(
                 f"The plan declares analysis_type='{plan.analysis_type}', whose "
                 f"registry entry requires a typed endpoint of kind "
@@ -579,6 +579,7 @@ _CLUSTERING_ANALYSIS_METHODS = frozenset(
         "k_means_clustering",
         "phenotyping",
         "phenotype_clustering",
+        "phenotype_clustering_and_structure",
         "unsupervised_clustering",
         "latent_class",
         "latent_class_analysis",
@@ -4245,6 +4246,7 @@ def _step_contract_findings(
     completed_step_records: Optional[Sequence[Dict[str, Any]]] = None,
     resolved_input_bindings: Optional[Mapping[str, Mapping[str, Any]]] = None,
     out_dir: Optional[Path] = None,
+    trajectory_role_contract_applies: bool = True,
 ) -> List[ValidationFinding]:
     if not isinstance(step_summary, dict) or not step_summary:
         return [
@@ -4320,6 +4322,7 @@ def _step_contract_findings(
                 resolved_input_bindings=resolved_input_bindings,
             ),
             out_dir=out_dir,
+            trajectory_role_contract_applies=trajectory_role_contract_applies,
         )
     )
     from .figures.distribution_availability import (
@@ -5025,6 +5028,21 @@ def _step_contract_repair_guidance(
             "statistic, resampling stability, or silhouette when appropriate)."
         )
         guidance.append(
+            "Use one of these exact top-level step_summary JSON shapes, populated "
+            "with the values this script actually evaluated. Non-binding selection "
+            "example: `\"cluster_selection\": {\"criterion\": "
+            "\"silhouette_score\", \"selection_rule\": \"maximum\", "
+            "\"direction\": \"maximize\", \"selected_n_clusters\": 2, "
+            "\"candidates\": [{\"n_clusters\": 2, \"criterion_value\": 0.31}, "
+            "{\"n_clusters\": 3, \"criterion_value\": 0.27}], \"rationale\": "
+            "\"selected the evaluated maximum\"}`. Stability alternative: "
+            "`\"cluster_stability\": {\"selected_n_clusters\": 2, "
+            "\"n_resamples\": 3, \"mean_adjusted_rand_index\": 0.93}`. "
+            "Replace every example value with the truthful selected k, criterion "
+            "values, repeat count, and stability metric; do not leave only sibling "
+            "scalars such as `selected_silhouette` or `selected_stability_ari`."
+        )
+        guidance.append(
             "Keep clustering self-contained: create labels, cluster characteristics, "
             "method/selection metadata, and the clustering figure inside this "
             "script. Add descriptive outcomes only when the plan declares them; "
@@ -5035,11 +5053,29 @@ def _step_contract_repair_guidance(
             "the declared cluster-selection manifest so manuscript evidence aliases bind."
         )
     if "figure:" in expected:
+        declared_figure_stems = [
+            str(item).split(":", 1)[1].strip()
+            for item in (step.expected_outputs or [])
+            if str(item).strip().lower().startswith("figure:")
+            and str(item).split(":", 1)[1].strip()
+        ]
         guidance.append(
             "This step declares a figure output. Save a real figure file such as PNG/SVG/"
             "PDF/TIFF and record its path in step_summary.json using a key such as "
             "`figure_path`, `figure_file`, or `figure_files`."
         )
+        for stem in declared_figure_stems:
+            quoted_stem = json.dumps(stem, ensure_ascii=False)
+            guidance.append(
+                f"For declared `figure:{stem}`, call the host helper directly as "
+                "`saved = save_publication_figure(fig=fig, out_dir=out_dir, "
+                f"stem={quoted_stem}, contract=contract)`. It writes the canonical "
+                f"same-stem companion `{stem}.figure_contract.json`; record "
+                "`saved[\"contract\"]` in step_summary.json. Do not manually write, "
+                f"rename, or advertise the underscore alias "
+                f"`{stem}_figure_contract.json`; it must not replace the canonical "
+                "dot-suffix companion."
+            )
         guidance.append(
             "In every top-level FigureContract, `source_data` must be one local CSV "
             "basename string or a flat list of local CSV basename strings from the "

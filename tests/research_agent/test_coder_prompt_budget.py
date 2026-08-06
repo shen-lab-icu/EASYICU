@@ -41,6 +41,7 @@ from easyicu.research_agent.repairs.reasons import (
     repair_prompt_binding_sha256,
 )
 from easyicu.research_agent.schema import (
+    ClusterSelectionManifest,
     MissingnessProfile,
     PlannedModelRequirement,
     TemporalConstraint,
@@ -930,6 +931,40 @@ def test_compact_rendering_guide_is_structural_not_intent_routed(ra):
     assert "exact digest-bound typed inputs" in guide
     assert "Do not call `measurement_provenance_receipt`" in guide
     assert "save matching PNG, SVG, PDF, and TIFF" in guide
+
+
+def test_clustering_generation_guide_names_replayable_selection_summary(ra):
+    step = ra.AnalysisStep(
+        step_id="fit_candidate_clusters",
+        intent="Fit the declared candidate clustering solutions.",
+        inputs=["dataset:cluster_features"],
+        expected_outputs=[
+            "statistic:cluster_count",
+            "manifest:cluster_selection",
+            "table:cluster_characteristics",
+        ],
+        method="kmeans_clustering",
+    )
+
+    guide = coder_guide_for_step(load_prompt_pack()["coder"], step)
+
+    manifest_schema = json.dumps(
+        ClusterSelectionManifest.model_json_schema(),
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    assert manifest_schema in guide
+    assert '"cluster_selection"' in guide
+    assert '"selection_rule"' in guide
+    assert '"selected_n_clusters"' in guide
+    assert '"candidates"' in guide
+    assert '"minimum","maximum","elbow","multi_criteria"' in guide
+    assert "Pair `minimum` only with `minimize`" in guide
+    assert "the same closed object both to `cluster_selection.json`" in guide
+    assert '"cluster_stability"' in guide
+    assert '"n_resamples"' in guide
+    assert '"mean_adjusted_rand_index"' in guide
 
 
 @pytest.mark.parametrize(

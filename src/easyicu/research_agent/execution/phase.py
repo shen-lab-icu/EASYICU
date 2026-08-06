@@ -131,6 +131,10 @@ from .concept_audit import (
     ConceptQuarantineState,
     verified_capsule_concept_audit_replay as _verified_capsule_concept_audit_replay,
 )
+from .concept_reaudit import (
+    deterministic_concept_reaudit_authority,
+    deterministic_concept_reaudit_pending_errors,
+)
 from ..gates.concept import (
     DETERMINISTIC_CODE_GATE_VALIDATORS as _DETERMINISTIC_CODE_GATE_VALIDATORS,
     deterministic_code_gate_findings as _deterministic_code_gate_findings,
@@ -359,6 +363,7 @@ from ..plan_utils import (
     _cohort_definition_contract_findings,
     _cohort_definition_is_empty,
     _cohort_definition_prose,
+    endpoint_contract_findings,
     _normalised_expected_output_names,
     _normalised_structured_output_names,
     _output_declares_figure,
@@ -643,6 +648,7 @@ def _extract_cohort_definition_with_provider_budget(
     reservation_bound_provider_history_len: Optional[int] = None
     completed_reservation_token: Optional[str] = None
     reservation_released = False
+    reserved_category_extensions: tuple[Dict[str, object], ...] = ()
     if receipt_path.exists():
         receipt_state = load_provider_call_budget_state(
             receipt_path,
@@ -659,6 +665,7 @@ def _extract_cohort_definition_with_provider_budget(
         )
         completed_reservation_token = receipt_state.completed_reservation_token
         reservation_released = receipt_state.reservation_released
+        reserved_category_extensions = receipt_state.reserved_category_extensions
     budget = StepProviderCallBudget(
         effective_limit,
         step_id=budget_owner_step_id,
@@ -671,6 +678,7 @@ def _extract_cohort_definition_with_provider_budget(
         reservation_bound_provider_history_len=(reservation_bound_provider_history_len),
         completed_reservation_token=completed_reservation_token,
         reservation_released=reservation_released,
+        reserved_category_extensions=reserved_category_extensions,
     )
     definition = complete_with_provider_budget(
         budget=budget,
@@ -4870,6 +4878,7 @@ def run_execute_phase(
 
     trajectory_plan_blocked = False
     typed_plan_dag_blocked = False
+    endpoint_contract_blocked = False
     probe_step_id = "00_probe"
     # The plan-time gates below validate the PLAN, not the probe, so they
     # must not live inside the probe branch. canary36 is why: its probe was
@@ -4948,6 +4957,7 @@ def run_execute_phase(
     )
     owner_declaration_preflight = owner_declaration_plan_findings(plan=plan)
     product_promise_preflight = product_promise_plan_findings(plan=plan)
+    endpoint_preflight = endpoint_contract_findings(plan, severity="error")
     trajectory_directive = None
     typed_plan_directive = None
     declared_input_directive = None
@@ -5043,6 +5053,23 @@ def run_execute_phase(
     product_promise_directive = product_promise_replan_directive(
         product_promise_preflight
     )
+    endpoint_directive = None
+    if endpoint_preflight:
+        endpoint_directive = (
+            "Repair the plan's typed study endpoint without changing the "
+            "research question, cohort, estimand, or analysis family. Declare "
+            "the endpoint fields named by the contract finding; do not infer "
+            "follow-up, time origin, censoring, or event levels from column "
+            "names, dtypes, or step prose. Contract findings: "
+            + json.dumps(
+                [
+                    {"message": finding.message, "detail": finding.detail}
+                    for finding in endpoint_preflight
+                ],
+                ensure_ascii=False,
+                default=str,
+            )
+        )
     plan = _maybe_replan(
         current_plan=plan,
         reason=(
@@ -5076,6 +5103,7 @@ def run_execute_phase(
         directive="\n\n".join(
             directive
             for directive in (
+                endpoint_directive,
                 typed_plan_directive,
                 primary_cohort_directive,
                 trajectory_directive,
@@ -5088,6 +5116,7 @@ def run_execute_phase(
         or None,
         force=bool(
             typed_plan_preflight
+            or endpoint_preflight
             or primary_cohort_preflight
             or trajectory_preflight
             or declared_input_preflight
@@ -5105,6 +5134,27 @@ def run_execute_phase(
         # here with a named, repairable finding.
         *declared_raw_input_plan_findings(plan=plan, context=context),
     ]
+    final_endpoint_findings = [
+        finding.model_copy(
+            update={
+                "detail": {
+                    **dict(finding.detail or {}),
+                    "stage": "execute_final",
+                    "reason": "endpoint_retry_exhausted",
+                }
+            }
+        )
+        for finding in endpoint_contract_findings(plan, severity="error")
+    ]
+    if final_endpoint_findings:
+        endpoint_contract_blocked = True
+        findings.extend(final_endpoint_findings)
+        _flush_partial_manifest(
+            {
+                "endpoint_contract_blocked": True,
+                "endpoint_contract_error_count": len(final_endpoint_findings),
+            }
+        )
     if final_typed_plan_findings:
         typed_plan_dag_blocked = True
         findings.extend(final_typed_plan_findings)
@@ -5453,6 +5503,7 @@ def run_execute_phase(
         prior_reservation_bound_provider_history_len: Optional[int] = None
         prior_completed_reservation_token: Optional[str] = None
         prior_reservation_released = False
+        prior_reserved_category_extensions: tuple[Dict[str, object], ...] = ()
         prior_provider_attempts = 0
         provider_receipt_integrity_error: Optional[str] = None
         prior_snapshot_present = False
@@ -5522,6 +5573,9 @@ def run_execute_phase(
                     receipt_state.completed_reservation_token
                 )
                 prior_reservation_released = receipt_state.reservation_released
+                prior_reserved_category_extensions = (
+                    receipt_state.reserved_category_extensions
+                )
                 effective_provider_limit = min(
                     effective_provider_limit,
                     receipt_limit,
@@ -5569,6 +5623,7 @@ def run_execute_phase(
             ),
             completed_reservation_token=prior_completed_reservation_token,
             reservation_released=prior_reservation_released,
+            reserved_category_extensions=prior_reserved_category_extensions,
         )
 
         if provider_receipt_integrity_error is None:
@@ -6528,13 +6583,52 @@ def run_execute_phase(
             quarantine_state.resumed_draft_used = True
             quarantine_state.draft_active = True
             quarantine_state.repair_succeeded = False
+            budget_snapshot = provider_budget.snapshot()
+            historical_repair_names = deterministic_concept_reaudit_authority(
+                code_sha256=draft.sha256,
+                current_repair_count=0,
+                current_repair_names=(),
+                prior_step_record=prior_step_record,
+                prior_step_records=prior_attempt_records,
+                provider_used=budget_snapshot["used"],
+                provider_limit=budget_snapshot["limit"],
+            )
+            reaudit_errors = deterministic_concept_reaudit_pending_errors(
+                draft.findings,
+                provider_used=budget_snapshot["used"],
+                provider_limit=budget_snapshot["limit"],
+            )
+            active_findings = (
+                reaudit_errors
+                if historical_repair_names and reaudit_errors
+                else draft.findings
+            )
             quarantine_state.pending_errors = [
-                ValidationFinding.model_validate(payload) for payload in draft.findings
+                ValidationFinding.model_validate(payload)
+                for payload in active_findings
             ]
             # Historical errors remain binding regression constraints, but
             # their old source coordinates are not findings on the current
             # digest and must never enter an exact minimal-patch ticket.
-            _remember_concept_constraints(quarantine_state.pending_errors)
+            _remember_concept_constraints(
+                [
+                    ValidationFinding.model_validate(payload)
+                    for payload in draft.findings
+                ]
+            )
+            if historical_repair_names and reaudit_errors:
+                # The append-only checkpoint proves this exact draft was
+                # materially changed by the named deterministic repair in the
+                # prior attempt.  Preserve that lifecycle state so a passing
+                # digest-bound re-audit can retire the quarantine normally.
+                quarantine_state.repair_materially_changed = True
+                step_record["resumed_deterministic_concept_reaudit"] = {
+                    "code_sha256": draft.sha256,
+                    "repair_names": list(historical_repair_names),
+                    "diagnostic_code": (
+                        "deterministic_repair_budget_only_quarantine_v1"
+                    ),
+                }
             step_record["resumed_quarantined_draft"] = True
             step_record["quarantined_draft_sha256"] = draft.sha256
             step_record["quarantined_draft_relative_path"] = draft.relative_path
@@ -7526,6 +7620,42 @@ def run_execute_phase(
         # The injection itself lives at the audit loop head (see below), not
         # here: a repair that rewrites the script drops an appended host block,
         # and injecting only at initial settling let exactly that happen.
+        def _authorize_deterministic_concept_reaudit(
+            *,
+            token: str,
+            code_sha256: str,
+        ) -> bool:
+            budget_snapshot = provider_budget.snapshot()
+            repair_names = deterministic_concept_reaudit_authority(
+                code_sha256=code_sha256,
+                current_repair_count=worker_progress.deterministic_concept_repairs,
+                current_repair_names=worker_progress.applied_concept_repair_names,
+                current_repair_code_sha256=step_record.get(
+                    "deterministic_concept_repair_code_sha256"
+                ),
+                prior_step_record=prior_step_record,
+                prior_step_records=prior_attempt_records,
+                provider_used=budget_snapshot["used"],
+                provider_limit=budget_snapshot["limit"],
+            )
+            if not repair_names:
+                return False
+            granted = (
+                provider_budget.authorize_deterministic_reserved_category_extension(
+                    "concept_audit",
+                    token=token,
+                )
+            )
+            if granted:
+                step_record["deterministic_concept_reaudit_extension"] = {
+                    "code_sha256": code_sha256,
+                    "repair_names": list(repair_names),
+                    "diagnostic_code": (
+                        "deterministic_repair_final_audit_extension_v1"
+                    ),
+                }
+            return granted
+
         concept_audit = ConceptAuditCoordinator(
             authority=ConceptAuditAuthority(
                 context=context,
@@ -7576,6 +7706,9 @@ def run_execute_phase(
                 emit_progress=emit_progress,
                 quarantine_error_payloads=_quarantine_error_payloads,
                 store_quarantined_draft=store_quarantined_concept_draft,
+                authorize_deterministic_reaudit=(
+                    _authorize_deterministic_concept_reaudit
+                ),
             ),
         )
 
@@ -7802,6 +7935,9 @@ def run_execute_phase(
                     )
                     step_record["applied_concept_repair_names"] = list(
                         worker_progress.applied_concept_repair_names
+                    )
+                    step_record["deterministic_concept_repair_code_sha256"] = (
+                        sha256_of_bytes(_det_code.encode("utf-8"))
                     )
                     for _name in _det_names:
                         _record_repair(
@@ -8539,6 +8675,9 @@ def run_execute_phase(
                             step_record["applied_concept_repair_names"] = list(
                                 worker_progress.applied_concept_repair_names
                             )
+                            step_record[
+                                "deterministic_concept_repair_code_sha256"
+                            ] = sha256_of_bytes(code.encode("utf-8"))
                             for repair_name in deterministic_names:
                                 _record_repair(
                                     repair_id=repair_name,
@@ -12006,15 +12145,19 @@ def run_execute_phase(
         and run_input_authority_state.development_sample is None
     )
     plan_block_reason = (
-        "trajectory_plan_contract_blocked"
-        if trajectory_plan_blocked
+        "endpoint_contract_blocked"
+        if endpoint_contract_blocked
         else (
-            "typed_plan_dag_blocked"
-            if typed_plan_dag_blocked
+            "trajectory_plan_contract_blocked"
+            if trajectory_plan_blocked
             else (
-                "development_sample_unauthorized"
-                if development_sample_blocked
-                else None
+                "typed_plan_dag_blocked"
+                if typed_plan_dag_blocked
+                else (
+                    "development_sample_unauthorized"
+                    if development_sample_blocked
+                    else None
+                )
             )
         )
     )
@@ -12425,7 +12568,8 @@ def run_execute_phase(
         )
 
     if (
-        not trajectory_plan_blocked
+        not endpoint_contract_blocked
+        and not trajectory_plan_blocked
         and not typed_plan_dag_blocked
         and trajectory_plan_contract_applies(
             plan=plan,

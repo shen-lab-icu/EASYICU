@@ -52,6 +52,7 @@ from ..planning.primary_result_contract import (
 )
 from ..trajectory.contract import trajectory_phenotyping_code_contract
 from ..trajectory.plan_contract import (
+    trajectory_context_is_bound,
     trajectory_planner_contract_guide,
     trajectory_role_code_contract,
 )
@@ -274,7 +275,10 @@ def _format_context(
         variable_names=detailed_variable_names,
     )
     if include_method_constraints:
-        from ..gates.method_compatibility import render_variable_constraints
+        from ..gates.method_compatibility import (
+            render_computational_budget_constraints,
+            render_variable_constraints,
+        )
 
         constraint_context = ctx
         if method_constraint_variable_names is not None:
@@ -288,12 +292,16 @@ def _format_context(
                     ]
                 }
             )
-        constraints = render_variable_constraints(
-            constraint_context,
-            compact=compact_method_constraints,
-        )
-        if constraints:
-            rendered += "\n\n" + constraints
+        constraint_blocks = [
+            render_variable_constraints(
+                constraint_context,
+                compact=compact_method_constraints,
+            ),
+            render_computational_budget_constraints(constraint_context),
+        ]
+        for constraints in constraint_blocks:
+            if constraints:
+                rendered += "\n\n" + constraints
     return rendered
 
 
@@ -2981,7 +2989,12 @@ def _typed_input_scope_contract(step: AnalysisStep) -> str:
         "an exposure, outcome, method, cohort, estimand, or role. Select only exact "
         "declared columns; fail closed instead of using positional/dtype fallbacks.\n"
         "- A typed product without product_contract.columns is non-tabular. "
-        "Load its digest-bound representation by suffix; never invent a table schema.\n"
+        "Load its digest-bound representation by suffix; never invent a table schema. "
+        "For JSON, a present product_contract.json_structure is the exact "
+        "host-observed structural receipt: follow its JSON Pointer paths and "
+        "object_item_keys instead of converting the root object to a DataFrame, "
+        "guessing aliases, or scanning arbitrary nested values. The receipt "
+        "contains no scientific role assignments or data values.\n"
         "- Do not glob EASYICU_EVIDENCE_DIR, choose a file by mtime or basename, "
         "or reconstruct a declared upstream product from COHORT_PARQUET.\n"
         "- In step_summary.json, record one input_bindings row per typed input "
@@ -3249,7 +3262,11 @@ class CoderAgent:
                 context=context,
                 step=step,
             )
-            + trajectory_role_code_contract(context=context, step=step)
+            + trajectory_role_code_contract(
+                context=context,
+                step=step,
+                applies=trajectory_context_is_bound(context),
+            )
             + "\n\n"
             "OUTPUT FORMAT — VERY IMPORTANT:\n"
             "Return *only* a complete, runnable Python script. A "
@@ -3503,7 +3520,11 @@ class CoderAgent:
             + _primary_analysis_cohort_output_contract(step)
             + _cohort_predicate_partition_safety_contract(step)
             + trajectory_phenotyping_code_contract(context=context, step=step)
-            + trajectory_role_code_contract(context=context, step=step)
+            + trajectory_role_code_contract(
+                context=context,
+                step=step,
+                applies=trajectory_context_is_bound(context),
+            )
             + mechanical_guardrails
         )
         from ..research_context.outbound import (
