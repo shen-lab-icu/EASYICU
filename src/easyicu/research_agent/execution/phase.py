@@ -131,7 +131,10 @@ from .concept_audit import (
     ConceptQuarantineState,
     verified_capsule_concept_audit_replay as _verified_capsule_concept_audit_replay,
 )
-from .concept_reaudit import deterministic_concept_reaudit_authority
+from .concept_reaudit import (
+    deterministic_concept_reaudit_authority,
+    deterministic_concept_reaudit_pending_errors,
+)
 from ..gates.concept import (
     DETERMINISTIC_CODE_GATE_VALIDATORS as _DETERMINISTIC_CODE_GATE_VALIDATORS,
     deterministic_code_gate_findings as _deterministic_code_gate_findings,
@@ -6580,13 +6583,52 @@ def run_execute_phase(
             quarantine_state.resumed_draft_used = True
             quarantine_state.draft_active = True
             quarantine_state.repair_succeeded = False
+            budget_snapshot = provider_budget.snapshot()
+            historical_repair_names = deterministic_concept_reaudit_authority(
+                code_sha256=draft.sha256,
+                current_repair_count=0,
+                current_repair_names=(),
+                prior_step_record=prior_step_record,
+                prior_step_records=prior_attempt_records,
+                provider_used=budget_snapshot["used"],
+                provider_limit=budget_snapshot["limit"],
+            )
+            reaudit_errors = deterministic_concept_reaudit_pending_errors(
+                draft.findings,
+                provider_used=budget_snapshot["used"],
+                provider_limit=budget_snapshot["limit"],
+            )
+            active_findings = (
+                reaudit_errors
+                if historical_repair_names and reaudit_errors
+                else draft.findings
+            )
             quarantine_state.pending_errors = [
-                ValidationFinding.model_validate(payload) for payload in draft.findings
+                ValidationFinding.model_validate(payload)
+                for payload in active_findings
             ]
             # Historical errors remain binding regression constraints, but
             # their old source coordinates are not findings on the current
             # digest and must never enter an exact minimal-patch ticket.
-            _remember_concept_constraints(quarantine_state.pending_errors)
+            _remember_concept_constraints(
+                [
+                    ValidationFinding.model_validate(payload)
+                    for payload in draft.findings
+                ]
+            )
+            if historical_repair_names and reaudit_errors:
+                # The append-only checkpoint proves this exact draft was
+                # materially changed by the named deterministic repair in the
+                # prior attempt.  Preserve that lifecycle state so a passing
+                # digest-bound re-audit can retire the quarantine normally.
+                quarantine_state.repair_materially_changed = True
+                step_record["resumed_deterministic_concept_reaudit"] = {
+                    "code_sha256": draft.sha256,
+                    "repair_names": list(historical_repair_names),
+                    "diagnostic_code": (
+                        "deterministic_repair_budget_only_quarantine_v1"
+                    ),
+                }
             step_record["resumed_quarantined_draft"] = True
             step_record["quarantined_draft_sha256"] = draft.sha256
             step_record["quarantined_draft_relative_path"] = draft.relative_path
@@ -7583,6 +7625,7 @@ def run_execute_phase(
             token: str,
             code_sha256: str,
         ) -> bool:
+            budget_snapshot = provider_budget.snapshot()
             repair_names = deterministic_concept_reaudit_authority(
                 code_sha256=code_sha256,
                 current_repair_count=worker_progress.deterministic_concept_repairs,
@@ -7591,6 +7634,9 @@ def run_execute_phase(
                     "deterministic_concept_repair_code_sha256"
                 ),
                 prior_step_record=prior_step_record,
+                prior_step_records=prior_attempt_records,
+                provider_used=budget_snapshot["used"],
+                provider_limit=budget_snapshot["limit"],
             )
             if not repair_names:
                 return False

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from easyicu.research_agent.execution.concept_reaudit import (
     deterministic_concept_reaudit_authority,
+    deterministic_concept_reaudit_pending_errors,
 )
 
 
@@ -59,6 +60,8 @@ def test_resume_exact_budget_only_block_authorizes_reaudit() -> None:
         current_repair_count=0,
         current_repair_names=[],
         prior_step_record=_prior_record(),
+        provider_used=9,
+        provider_limit=9,
     ) == (_REPAIR_ID,)
 
 
@@ -68,6 +71,8 @@ def test_resume_stale_digest_fails_closed() -> None:
         current_repair_count=0,
         current_repair_names=[],
         prior_step_record=_prior_record(),
+        provider_used=9,
+        provider_limit=9,
     ) == ()
 
 
@@ -87,6 +92,8 @@ def test_resume_semantic_error_alongside_budget_error_fails_closed() -> None:
         current_repair_count=0,
         current_repair_names=[],
         prior_step_record=record,
+        provider_used=9,
+        provider_limit=9,
     ) == ()
 
 
@@ -99,6 +106,8 @@ def test_unknown_or_method_substitution_repair_fails_closed() -> None:
         current_repair_count=0,
         current_repair_names=[],
         prior_step_record=record,
+        provider_used=9,
+        provider_limit=9,
     ) == ()
 
 
@@ -113,4 +122,81 @@ def test_unexhausted_budget_does_not_authorize_resume_extension() -> None:
         current_repair_count=0,
         current_repair_names=[],
         prior_step_record=record,
+        provider_used=8,
+        provider_limit=9,
     ) == ()
+
+
+def test_append_only_history_recovers_latest_exact_budget_only_proof() -> None:
+    later_stale_quarantine_projection = {
+        "step_id": "08_render",
+        "status": "blocked_by_concept_audit",
+        "quarantined_draft_sha256": _DIGEST,
+        "usage_findings": [
+            {
+                "validator": "llm_concept_auditor",
+                "severity": "error",
+                "message": "Historical repaired constraint.",
+                "detail": {},
+            },
+            _provider_budget_error(),
+        ],
+    }
+
+    assert deterministic_concept_reaudit_authority(
+        code_sha256=_DIGEST,
+        current_repair_count=0,
+        current_repair_names=[],
+        prior_step_record=later_stale_quarantine_projection,
+        prior_step_records=[_prior_record(), later_stale_quarantine_projection],
+        provider_used=9,
+        provider_limit=9,
+    ) == (_REPAIR_ID,)
+
+
+def test_newer_exact_semantic_block_supersedes_old_budget_only_proof() -> None:
+    newer = _prior_record()
+    newer["post_repair_concept_audit_block"]["errors"] = [
+        {
+            "validator": "llm_concept_auditor",
+            "severity": "error",
+            "message": "Fresh exact-digest semantic rejection.",
+            "detail": {},
+        }
+    ]
+
+    assert deterministic_concept_reaudit_authority(
+        code_sha256=_DIGEST,
+        current_repair_count=0,
+        current_repair_names=[],
+        prior_step_record=newer,
+        prior_step_records=[_prior_record(), newer],
+        provider_used=9,
+        provider_limit=9,
+    ) == ()
+
+
+def test_resume_pending_errors_keep_only_matching_final_budget_failure() -> None:
+    findings = [
+        {
+            "validator": "llm_concept_auditor",
+            "severity": "error",
+            "message": "Historical repaired constraint.",
+            "detail": {},
+        },
+        _provider_budget_error(),
+    ]
+
+    assert deterministic_concept_reaudit_pending_errors(
+        findings,
+        provider_used=9,
+        provider_limit=9,
+    ) == (_provider_budget_error(),)
+    assert (
+        deterministic_concept_reaudit_pending_errors(
+            findings,
+            provider_used=10,
+            provider_limit=10,
+        )
+        == ()
+    )
