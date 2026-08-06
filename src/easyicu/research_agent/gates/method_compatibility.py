@@ -670,15 +670,216 @@ def _manual_bounded_silhouette_contract(
     tree: ast.AST,
     function: Optional[ast.FunctionDef],
     assignments: Dict[str, ast.AST],
+    fixed_seed_names: set[str],
 ) -> bool:
     """Accept the explicit bounded-subsample shape observed in generated code."""
 
-    if function is None or len(call.args) < 2 or not all(
-        isinstance(item, ast.Name) for item in call.args[:2]
-    ):
+    if function is None or len(call.args) < 2:
+        return False
+    local = _simple_assignments(function)
+
+    def indexed_by(node: ast.AST) -> Optional[str]:
+        candidate = node
+        if isinstance(candidate, ast.Name):
+            values = local.get(candidate.id, [])
+            if len(values) != 1:
+                return None
+            candidate = values[0]
+        if not isinstance(candidate, ast.Subscript):
+            return None
+        index = candidate.slice
+        if isinstance(index, ast.Tuple) and index.elts:
+            index = index.elts[0]
+        return index.id if isinstance(index, ast.Name) else None
+
+    index_names = {indexed_by(item) for item in call.args[:2]}
+    if len(index_names) == 1 and None not in index_names:
+        index_name = next(iter(index_names))
+        parameters = [argument.arg for argument in function.args.args]
+
+        def parameter_actuals(parameter: str) -> Optional[List[ast.AST]]:
+            if parameter not in parameters:
+                return None
+            position = parameters.index(parameter)
+            actuals: List[ast.AST] = []
+            for candidate in (
+                node for node in ast.walk(tree) if isinstance(node, ast.Call)
+            ):
+                if (
+                    _callable_path(candidate.func, {}).rsplit(".", 1)[-1]
+                    != function.name
+                ):
+                    continue
+                actual = next(
+                    (
+                        item.value
+                        for item in candidate.keywords
+                        if item.arg == parameter
+                    ),
+                    (
+                        candidate.args[position]
+                        if position < len(candidate.args)
+                        else None
+                    ),
+                )
+                if actual is None:
+                    return None
+                actuals.append(actual)
+            return actuals or None
+
+        for branch in (
+            item for item in function.body if isinstance(item, ast.If)
+        ):
+            test = branch.test
+            if not (
+                isinstance(test, ast.Compare)
+                and len(test.ops) == len(test.comparators) == 1
+                and isinstance(test.ops[0], ast.Eq)
+                and isinstance(test.left, ast.Name)
+                and isinstance(test.comparators[0], ast.Name)
+                and branch.orelse
+            ):
+                continue
+            sample_name = test.left.id
+            population_name = test.comparators[0].id
+            sample_parameter: Optional[str] = None
+            for value in local.get(sample_name, []):
+                if not (
+                    isinstance(value, ast.Call)
+                    and isinstance(value.func, ast.Name)
+                    and value.func.id == "min"
+                    and any(
+                        isinstance(argument, ast.Name)
+                        and argument.id == population_name
+                        for argument in value.args
+                    )
+                ):
+                    continue
+                for argument in value.args:
+                    candidate = argument
+                    if (
+                        isinstance(candidate, ast.Call)
+                        and isinstance(candidate.func, ast.Name)
+                        and candidate.func.id == "int"
+                        and len(candidate.args) == 1
+                    ):
+                        candidate = candidate.args[0]
+                    if (
+                        isinstance(candidate, ast.Name)
+                        and candidate.id != population_name
+                        and candidate.id in parameters
+                    ):
+                        sample_parameter = candidate.id
+                        break
+            if sample_parameter is None:
+                continue
+            sample_actuals = parameter_actuals(sample_parameter)
+            if sample_actuals is None or any(
+                (bound := _static_integer_upper_bound(
+                    actual,
+                    assignments=assignments,
+                ))
+                is None
+                or bound > PAIRWISE_EVALUATION_MAX_SAMPLE_SIZE
+                for actual in sample_actuals
+            ):
+                continue
+
+            body = _simple_assignments(ast.Module(body=branch.body, type_ignores=[]))
+            otherwise = _simple_assignments(
+                ast.Module(body=branch.orelse, type_ignores=[])
+            )
+            branch_values = body.get(index_name, [])
+            otherwise_values = otherwise.get(index_name, [])
+            if len(branch_values) != 1 or len(otherwise_values) != 1:
+                continue
+
+            def is_full_index(node: ast.AST) -> bool:
+                return bool(
+                    isinstance(node, ast.Call)
+                    and _callable_path(node.func, {}).rsplit(".", 1)[-1]
+                    == "arange"
+                    and len(node.args) == 1
+                    and isinstance(node.args[0], ast.Name)
+                    and node.args[0].id == population_name
+                )
+
+            def choice_call(node: ast.AST) -> Optional[ast.Call]:
+                candidate = node
+                if (
+                    isinstance(candidate, ast.Call)
+                    and _callable_path(candidate.func, {}).rsplit(".", 1)[-1]
+                    == "sort"
+                    and len(candidate.args) == 1
+                ):
+                    candidate = candidate.args[0]
+                return (
+                    candidate
+                    if isinstance(candidate, ast.Call)
+                    and _callable_path(candidate.func, {}).rsplit(".", 1)[-1]
+                    == "choice"
+                    else None
+                )
+
+            full_value, sampled_value = branch_values[0], otherwise_values[0]
+            if not is_full_index(full_value):
+                full_value, sampled_value = sampled_value, full_value
+            choice = choice_call(sampled_value)
+            if not is_full_index(full_value) or choice is None:
+                continue
+            keywords = {
+                item.arg: item.value for item in choice.keywords if item.arg
+            }
+            if not (
+                choice.args
+                and isinstance(choice.args[0], ast.Name)
+                and choice.args[0].id == population_name
+                and isinstance(keywords.get("size"), ast.Name)
+                and keywords["size"].id == sample_name
+                and isinstance(keywords.get("replace"), ast.Constant)
+                and keywords["replace"].value is False
+                and isinstance(choice.func, ast.Attribute)
+                and isinstance(choice.func.value, ast.Name)
+            ):
+                continue
+            rng_name = choice.func.value.id
+            rng_values = local.get(rng_name, [])
+            if len(rng_values) != 1:
+                continue
+            rng = rng_values[0]
+            if not (
+                isinstance(rng, ast.Call)
+                and _callable_path(rng.func, {}).rsplit(".", 1)[-1]
+                == "default_rng"
+                and len(rng.args) == 1
+            ):
+                continue
+            seed = rng.args[0]
+            if (
+                isinstance(seed, ast.Call)
+                and isinstance(seed.func, ast.Name)
+                and seed.func.id == "int"
+                and len(seed.args) == 1
+            ):
+                seed = seed.args[0]
+            if not isinstance(seed, ast.Name):
+                continue
+            seed_actuals = parameter_actuals(seed.id)
+            if seed_actuals and all(
+                _statically_deterministic_integer(
+                    actual,
+                    tree=tree,
+                    function=None,
+                    assignments=assignments,
+                    fixed_seed_names=fixed_seed_names,
+                )
+                for actual in seed_actuals
+            ):
+                return True
+
+    if not all(isinstance(item, ast.Name) for item in call.args[:2]):
         return False
     call_inputs = [item.id for item in call.args[:2] if isinstance(item, ast.Name)]
-    local = _simple_assignments(function)
     parameters = {argument.arg for argument in function.args.args}
 
     for branch in (item for item in function.body if isinstance(item, ast.If)):
@@ -900,6 +1101,7 @@ def _large_cohort_silhouette_violations(
             tree=tree,
             function=enclosing_functions.get(id(call)),
             assignments=assignments,
+            fixed_seed_names=fixed_seed_names,
         )
         if manual_bounded_contract:
             sample_bound = PAIRWISE_EVALUATION_MAX_SAMPLE_SIZE

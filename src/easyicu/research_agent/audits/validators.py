@@ -9955,6 +9955,7 @@ class FigureSourceDataValidator:
         table_products: Dict[Path, str] = dict(same_step_tables)
         table_frames: Dict[Path, pd.DataFrame] = {}
         declared_table_aliases: Dict[str, Set[Path]] = {}
+        declared_statistic_artifacts: Dict[str, Set[str]] = {}
         bound_tabular_paths: Set[Path] = set()
         unsupported_value_inputs: List[str] = []
         if resolved_input_bindings is not None:
@@ -10030,6 +10031,10 @@ class FigureSourceDataValidator:
                         for family in result_families
                     ):
                         required_statistics[raw_input] = (product_name, value)
+                        declared_statistic_artifacts.setdefault(
+                            bound_path.name,
+                            set(),
+                        ).add(raw_input)
                     else:
                         unsupported_value_inputs.append(raw_input)
                     continue
@@ -10474,6 +10479,21 @@ class FigureSourceDataValidator:
                     group_df = source_df.loc[
                         declared_row_names.eq(declared_name)
                     ].copy()
+                    declared_statistic_ids = declared_statistic_artifacts.get(
+                        declared_name,
+                        set(),
+                    )
+                    if declared_statistic_ids and all(
+                        statistic_id in source_statistic_matches
+                        for statistic_id in declared_statistic_ids
+                    ):
+                        # A source row may truthfully name the exact JSON file
+                        # backing a digest-verified typed statistic.  It is not
+                        # an upstream *table*, so do not force that provenance
+                        # claim through the tabular basename resolver.  The
+                        # statistic payload/value checks below still have to
+                        # pass before the source receives credit.
+                        continue
                     group_tables = sorted(
                         {
                             path
