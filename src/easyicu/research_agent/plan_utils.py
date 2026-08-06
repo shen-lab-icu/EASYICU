@@ -5083,6 +5083,18 @@ def _step_contract_repair_guidance(
             "evidence object, absolute path, or path metadata there; put evidence ids "
             "in panel `evidence_ids` and other provenance in step_summary metadata."
         )
+        guidance.append(
+            "Build figure source-data CSVs from the actual plotted analytic rows "
+            "before rendering, preserving a host-verifiable source row/key and the "
+            "upstream value columns; never reconstruct source data from Matplotlib "
+            "Axes, collections, lines, patches, artist coordinates, or rendered "
+            "pixels: a canvas is not scientific provenance. Every panel contract "
+            "must declare a panel title, reader-facing claim, role, local "
+            "source-data basename(s), source columns, and the evidence ids that bind "
+            "those rows. Do not invent a synthetic source table such as a rendered "
+            "panel; if the plotted values cannot be traced to a declared analytic "
+            "table or statistic, fail closed instead of emitting the figure."
+        )
     if not guidance:
         guidance.append(
             "Repair the script so each expected output is written as machine-readable "
