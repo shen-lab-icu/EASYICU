@@ -5710,21 +5710,22 @@ class ConceptResolver:
                 if admittedat.abs().median(skipna=True) > 1_000_000_000
                 else 60.0
             )
-            origin_hours = admittedat / admittedat_scale
             discharge_hours = None
             if "dischargedat" in frame.columns:
                 discharge_hours = (
                     pd.to_numeric(frame["dischargedat"], errors="coerce")
-                    / admittedat_scale
-                    - origin_hours
-                )
+                    - admittedat
+                ) / admittedat_scale
             for col in cols_to_convert:
                 if col in frame.columns and pd.api.types.is_numeric_dtype(frame[col]):
                     # Source columns reach this layer as absolute minutes.
+                    # Subtract on the source clock before scaling.  Dividing
+                    # two large absolute offsets separately can turn an exact
+                    # integer hour into e.g. 634.9999999999999, which floors to
+                    # the preceding ICU hour at a clinical window boundary.
                     frame[col] = (
-                        pd.to_numeric(frame[col], errors="coerce") / 60.0
-                        - origin_hours
-                    )
+                        pd.to_numeric(frame[col], errors="coerce") - admittedat
+                    ) / admittedat_scale
             if (
                 not source_contains_admission_origin
                 and index_column
