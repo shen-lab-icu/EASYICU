@@ -303,6 +303,7 @@ _SYNTACTIC_REPAIRS = {
 
 _STRUCTURAL_REPAIRS = {
     "all_rows_outcome_coordinate_filter_v1",
+    "all_rows_profile_roles_display_v1",
     "arbitrary_column_fallback_fail_closed_v1",
     "audit_only_companion_value_selector_v1",
     "availability_fraction_component_denominator_v1",

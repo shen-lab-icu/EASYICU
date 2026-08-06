@@ -734,6 +734,7 @@ def authorized_deterministic_concept_repair(
         error_messages,
         repair_reasons=repair_reasons,
         repair_findings=repair_findings,
+        step=step,
     )
     if context is not None:
         binary_guarded = patch_observed_binary_primary_exposure_guard(
