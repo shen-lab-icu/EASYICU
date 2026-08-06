@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+from collections import Counter
 
 from ..schema import ValidationFinding
 from .typed_input_symbols import (
@@ -66,7 +67,38 @@ def resolved_input_relative_path_root_findings(
             and _subscript_key(node.args[0]) == "relative_path"
         )
 
-    occurrences: list[dict[str, int]] = []
+    def environment_value_is(node: ast.AST, expected: str) -> bool:
+        if (
+            isinstance(node, ast.Subscript)
+            and isinstance(node.value, ast.Attribute)
+            and isinstance(node.value.value, ast.Name)
+            and node.value.value.id == "os"
+            and node.value.attr == "environ"
+        ):
+            return _subscript_key(node.slice) == expected
+        return bool(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Attribute)
+            and isinstance(node.func.value.value, ast.Name)
+            and node.func.value.value.id == "os"
+            and node.func.value.attr == "environ"
+            and node.func.attr == "get"
+            and node.args
+            and _subscript_key(node.args[0]) == expected
+        )
+
+    def path_from_environment(node: ast.AST, expected: str) -> bool:
+        return bool(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "Path"
+            and len(node.args) == 1
+            and not node.keywords
+            and environment_value_is(node.args[0], expected)
+        )
+
+    occurrences: list[dict[str, object]] = []
     for node in ast.walk(tree):
         if not (
             isinstance(node, ast.BinOp)
@@ -89,8 +121,197 @@ def resolved_input_relative_path_root_findings(
                 "column": int(key.col_offset),
                 "end_line": int(key.end_lineno),
                 "end_column": int(key.end_col_offset),
+                "kind": "environment_key",
             }
         )
+
+    assignment_counts: Counter[tuple[int, str]] = Counter()
+    evidence_root_candidates: set[tuple[int, str]] = set()
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None
+        ):
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        if len(targets) != 1 or not isinstance(targets[0], ast.Name):
+            continue
+        scope = _scope_id(node, parents=parents, tree=tree)
+        coordinate = (scope, targets[0].id)
+        assignment_counts[coordinate] += 1
+        if path_from_environment(node.value, "EASYICU_EVIDENCE_DIR"):
+            evidence_root_candidates.add(coordinate)
+    evidence_root_names = {
+        coordinate
+        for coordinate in evidence_root_candidates
+        if assignment_counts[coordinate] == 1
+    }
+
+    function_names = [
+        node.name
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    ]
+    unique_functions = {
+        node.name: node
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and function_names.count(node.name) == 1
+    }
+
+    def call_argument(
+        call: ast.Call,
+        *,
+        parameter: str,
+        position: int,
+    ) -> ast.AST | None:
+        if position < len(call.args):
+            return call.args[position]
+        for keyword in call.keywords:
+            if keyword.arg == parameter:
+                return keyword.value
+        return None
+
+    def helper_relative_names(
+        function: ast.FunctionDef | ast.AsyncFunctionDef,
+        *,
+        entry_parameter: str,
+    ) -> set[str]:
+        names: set[str] = set()
+        changed = True
+        while changed:
+            changed = False
+            for assignment in ast.walk(function):
+                if not (
+                    isinstance(assignment, (ast.Assign, ast.AnnAssign))
+                    and assignment.value is not None
+                ):
+                    continue
+                targets = (
+                    assignment.targets
+                    if isinstance(assignment, ast.Assign)
+                    else [assignment.target]
+                )
+                if len(targets) != 1 or not isinstance(targets[0], ast.Name):
+                    continue
+                value = assignment.value
+                derived = bool(
+                    isinstance(value, ast.Name)
+                    and value.id in names
+                    or isinstance(value, ast.Subscript)
+                    and isinstance(value.value, ast.Name)
+                    and value.value.id == entry_parameter
+                    and _subscript_key(value.slice) == "relative_path"
+                    or isinstance(value, ast.Call)
+                    and isinstance(value.func, ast.Attribute)
+                    and value.func.attr == "get"
+                    and isinstance(value.func.value, ast.Name)
+                    and value.func.value.id == entry_parameter
+                    and value.args
+                    and _subscript_key(value.args[0]) == "relative_path"
+                )
+                if derived and targets[0].id not in names:
+                    names.add(targets[0].id)
+                    changed = True
+        return names
+
+    calls_by_name: dict[str, list[ast.Call]] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            calls_by_name.setdefault(node.func.id, []).append(node)
+
+    for function_name, function in unique_functions.items():
+        positional = [*function.args.posonlyargs, *function.args.args]
+        parameter_positions = {
+            parameter.arg: index for index, parameter in enumerate(positional)
+        }
+        calls = calls_by_name.get(function_name, [])
+        if not calls:
+            continue
+        for entry_parameter in parameter_positions:
+            relative_names = helper_relative_names(
+                function,
+                entry_parameter=entry_parameter,
+            )
+            if not relative_names:
+                continue
+            for root_parameter in parameter_positions:
+                if root_parameter == entry_parameter:
+                    continue
+                root_nodes: list[ast.Name] = []
+                for node in ast.walk(function):
+                    if not (
+                        isinstance(node, ast.BinOp)
+                        and isinstance(node.op, ast.Div)
+                        and isinstance(node.left, ast.Call)
+                        and isinstance(node.left.func, ast.Name)
+                        and node.left.func.id == "Path"
+                        and len(node.left.args) == 1
+                        and isinstance(node.left.args[0], ast.Name)
+                        and node.left.args[0].id == root_parameter
+                        and isinstance(node.right, ast.Name)
+                        and node.right.id in relative_names
+                    ):
+                        continue
+                    root_nodes.append(node.left.args[0])
+                if not root_nodes:
+                    continue
+                loaded_roots = [
+                    node
+                    for node in ast.walk(function)
+                    if isinstance(node, ast.Name)
+                    and isinstance(node.ctx, ast.Load)
+                    and node.id == root_parameter
+                ]
+                if {id(node) for node in loaded_roots} != {
+                    id(node) for node in root_nodes
+                }:
+                    continue
+                calls_proven = True
+                for call in calls:
+                    call_scope = _scope_id(call, parents=parents, tree=tree)
+                    entry_argument = call_argument(
+                        call,
+                        parameter=entry_parameter,
+                        position=parameter_positions[entry_parameter],
+                    )
+                    root_argument = call_argument(
+                        call,
+                        parameter=root_parameter,
+                        position=parameter_positions[root_parameter],
+                    )
+                    binding_proven = bool(
+                        isinstance(entry_argument, ast.Name)
+                        and (call_scope, entry_argument.id) in binding_names
+                        and assignment_counts[(call_scope, entry_argument.id)] == 1
+                    )
+                    evidence_root_proven = bool(
+                        path_from_environment(
+                            root_argument,
+                            "EASYICU_EVIDENCE_DIR",
+                        )
+                        if root_argument is not None
+                        else False
+                    ) or bool(
+                        isinstance(root_argument, ast.Name)
+                        and (call_scope, root_argument.id) in evidence_root_names
+                    )
+                    if not binding_proven or not evidence_root_proven:
+                        calls_proven = False
+                        break
+                if not calls_proven:
+                    continue
+                for root_node in root_nodes:
+                    if root_node.end_lineno is None or root_node.end_col_offset is None:
+                        continue
+                    occurrences.append(
+                        {
+                            "line": int(root_node.lineno),
+                            "column": int(root_node.col_offset),
+                            "end_line": int(root_node.end_lineno),
+                            "end_column": int(root_node.end_col_offset),
+                            "kind": "root_parameter",
+                        }
+                    )
     if not occurrences:
         return []
     return [
