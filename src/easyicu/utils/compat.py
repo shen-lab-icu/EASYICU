@@ -136,6 +136,7 @@ STATIC_CONCEPTS = {"age", "sex", "bmi", "height", "weight", "los_icu"}
 # 注意：ins 不在这里，因为 ricu 中它是 ts_tbl 而不是 win_tbl
 WINDOW_CONCEPTS = {
     "mech_vent", "vent_ind", "supp_o2",
+    "rrt",  # Sources with explicit treatment intervals expand; point-only sources remain points.
     "norepi_rate", "epi_rate", "dobu_rate", "adh_rate",
     "dopa_rate", "phn_rate", "vaso_ind",
     # Sedation/analgesia rate concepts (2026-05-13)
@@ -147,7 +148,6 @@ WINDOW_CONCEPTS = {
 # 点事件概念（不应展开为连续时间序列）
 POINT_EVENT_CONCEPTS = {
     "abx", "samp", "cort", "dobu60", "susp_inf", "sep3", "avpu",
-    "rrt",  # Renal replacement therapy: uses set_val(TRUE), point events from chartevents + procedureevents
     "vent_end", "vent_start",  # Ventilation events: uses set_val(TRUE), point events
     "furosemide",  # Loop diuretic: lgl_cncpt with set_val(TRUE), point events from drug administration tables
     # New medication lgl_cncpt concepts (2026-05-12)
@@ -412,10 +412,12 @@ def expand_interval_rows(
     #   - logical → sum (或 any)  
     #   - character → first
     value_dtype = expanded[value_col].dtype
-    if pd.api.types.is_numeric_dtype(value_dtype):
-        agg_func = 'median'
-    elif pd.api.types.is_bool_dtype(value_dtype):
+    # Pandas treats bool as a numeric dtype, so logical must be tested first.
+    # Otherwise ``median`` silently converts an in-use flag to float 0/1.
+    if pd.api.types.is_bool_dtype(value_dtype):
         agg_func = 'any'
+    elif pd.api.types.is_numeric_dtype(value_dtype):
+        agg_func = 'median'
     else:
         # object/string/category → first
         agg_func = 'first'

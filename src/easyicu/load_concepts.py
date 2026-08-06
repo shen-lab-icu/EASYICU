@@ -290,6 +290,8 @@ class ConceptLoader:
             extra.append(source.value_var)
         if getattr(source, 'index_var', None):
             extra.append(source.index_var)
+        if getattr(source, 'dur_var', None):
+            extra.append(source.dur_var)
         if getattr(source, 'unit_var', None):
             extra.append(source.unit_var)
 
