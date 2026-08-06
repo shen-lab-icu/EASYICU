@@ -88,6 +88,43 @@ def test_aumc_later_admissions_use_icu_relative_hours():
     assert "admittedat" not in out.columns
 
 
+def test_aumc_large_offsets_preserve_exact_integer_hour_boundaries():
+    """Subtract the admission origin before scaling to avoid cancellation."""
+
+    resolver = ConceptResolver.__new__(ConceptResolver)
+    resolver._aumc_admissions_cache = None
+    source = SimpleNamespace(
+        config=SimpleNamespace(name="aumc"),
+        load_table=lambda *_args, **_kwargs: pd.DataFrame(
+            {
+                "admissionid": [14301],
+                # Converted source clock in integer minutes.
+                "admittedat": [28_926.0],
+                "dischargedat": [75_892.0],
+            }
+        ),
+    )
+    frame = pd.DataFrame(
+        {
+            "admissionid": [14301],
+            "start": [67_026.0],
+            "stop": [69_096.0],
+            "rrt": [True],
+        }
+    )
+
+    out = resolver._align_time_to_admission(
+        frame,
+        source,
+        ["admissionid"],
+        "start",
+        time_columns=["stop"],
+    )
+
+    assert out["start"].tolist() == [635.0]
+    assert out["stop"].tolist() == [669.5]
+
+
 def test_aumc_admission_table_time_does_not_merge_its_origin_twice():
     """Stay-level AUMC concepts already carry admittedat in their frame."""
 
