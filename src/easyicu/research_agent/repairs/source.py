@@ -124,6 +124,7 @@ from .preflight import patch_preflight_repairs
 from .reasons import RepairReason
 from .typed_input import (
     patch_all_rows_outcome_coordinate_filter,
+    patch_missing_typed_input_receipt,
     patch_resolved_input_cohort_env_shadow,
     patch_resolved_input_consumption_contract_owner,
     patch_resolved_input_manifest_env,
@@ -5712,6 +5713,12 @@ def deterministic_contract_repair(
         repaired = _patch_unresolved_input_binding_receipts(code, findings=findings)
         if repaired != code:
             return unresolved_receipt_repair_name, repaired
+
+    missing_receipt_repair_name = "complete_typed_input_receipt_v1"
+    if previous_repair != missing_receipt_repair_name:
+        repaired = patch_missing_typed_input_receipt(code, findings=findings)
+        if repaired != code:
+            return missing_receipt_repair_name, repaired
 
     render_echo_repair_name = "render_only_effect_echo_suppression_v1"
     if previous_repair != render_echo_repair_name:
