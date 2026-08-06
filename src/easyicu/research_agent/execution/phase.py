@@ -131,6 +131,7 @@ from .concept_audit import (
     ConceptQuarantineState,
     verified_capsule_concept_audit_replay as _verified_capsule_concept_audit_replay,
 )
+from .concept_reaudit import deterministic_concept_reaudit_authority
 from ..gates.concept import (
     DETERMINISTIC_CODE_GATE_VALIDATORS as _DETERMINISTIC_CODE_GATE_VALIDATORS,
     deterministic_code_gate_findings as _deterministic_code_gate_findings,
@@ -644,6 +645,7 @@ def _extract_cohort_definition_with_provider_budget(
     reservation_bound_provider_history_len: Optional[int] = None
     completed_reservation_token: Optional[str] = None
     reservation_released = False
+    reserved_category_extensions: tuple[Dict[str, object], ...] = ()
     if receipt_path.exists():
         receipt_state = load_provider_call_budget_state(
             receipt_path,
@@ -660,6 +662,7 @@ def _extract_cohort_definition_with_provider_budget(
         )
         completed_reservation_token = receipt_state.completed_reservation_token
         reservation_released = receipt_state.reservation_released
+        reserved_category_extensions = receipt_state.reserved_category_extensions
     budget = StepProviderCallBudget(
         effective_limit,
         step_id=budget_owner_step_id,
@@ -672,6 +675,7 @@ def _extract_cohort_definition_with_provider_budget(
         reservation_bound_provider_history_len=(reservation_bound_provider_history_len),
         completed_reservation_token=completed_reservation_token,
         reservation_released=reservation_released,
+        reserved_category_extensions=reserved_category_extensions,
     )
     definition = complete_with_provider_budget(
         budget=budget,
@@ -5496,6 +5500,7 @@ def run_execute_phase(
         prior_reservation_bound_provider_history_len: Optional[int] = None
         prior_completed_reservation_token: Optional[str] = None
         prior_reservation_released = False
+        prior_reserved_category_extensions: tuple[Dict[str, object], ...] = ()
         prior_provider_attempts = 0
         provider_receipt_integrity_error: Optional[str] = None
         prior_snapshot_present = False
@@ -5565,6 +5570,9 @@ def run_execute_phase(
                     receipt_state.completed_reservation_token
                 )
                 prior_reservation_released = receipt_state.reservation_released
+                prior_reserved_category_extensions = (
+                    receipt_state.reserved_category_extensions
+                )
                 effective_provider_limit = min(
                     effective_provider_limit,
                     receipt_limit,
@@ -5612,6 +5620,7 @@ def run_execute_phase(
             ),
             completed_reservation_token=prior_completed_reservation_token,
             reservation_released=prior_reservation_released,
+            reserved_category_extensions=prior_reserved_category_extensions,
         )
 
         if provider_receipt_integrity_error is None:
@@ -7569,6 +7578,38 @@ def run_execute_phase(
         # The injection itself lives at the audit loop head (see below), not
         # here: a repair that rewrites the script drops an appended host block,
         # and injecting only at initial settling let exactly that happen.
+        def _authorize_deterministic_concept_reaudit(
+            *,
+            token: str,
+            code_sha256: str,
+        ) -> bool:
+            repair_names = deterministic_concept_reaudit_authority(
+                code_sha256=code_sha256,
+                current_repair_count=worker_progress.deterministic_concept_repairs,
+                current_repair_names=worker_progress.applied_concept_repair_names,
+                current_repair_code_sha256=step_record.get(
+                    "deterministic_concept_repair_code_sha256"
+                ),
+                prior_step_record=prior_step_record,
+            )
+            if not repair_names:
+                return False
+            granted = (
+                provider_budget.authorize_deterministic_reserved_category_extension(
+                    "concept_audit",
+                    token=token,
+                )
+            )
+            if granted:
+                step_record["deterministic_concept_reaudit_extension"] = {
+                    "code_sha256": code_sha256,
+                    "repair_names": list(repair_names),
+                    "diagnostic_code": (
+                        "deterministic_repair_final_audit_extension_v1"
+                    ),
+                }
+            return granted
+
         concept_audit = ConceptAuditCoordinator(
             authority=ConceptAuditAuthority(
                 context=context,
@@ -7605,6 +7646,9 @@ def run_execute_phase(
                 emit_progress=emit_progress,
                 quarantine_error_payloads=_quarantine_error_payloads,
                 store_quarantined_draft=store_quarantined_concept_draft,
+                authorize_deterministic_reaudit=(
+                    _authorize_deterministic_concept_reaudit
+                ),
             ),
         )
 
@@ -7831,6 +7875,9 @@ def run_execute_phase(
                     )
                     step_record["applied_concept_repair_names"] = list(
                         worker_progress.applied_concept_repair_names
+                    )
+                    step_record["deterministic_concept_repair_code_sha256"] = (
+                        sha256_of_bytes(_det_code.encode("utf-8"))
                     )
                     for _name in _det_names:
                         _record_repair(
@@ -8568,6 +8615,9 @@ def run_execute_phase(
                             step_record["applied_concept_repair_names"] = list(
                                 worker_progress.applied_concept_repair_names
                             )
+                            step_record[
+                                "deterministic_concept_repair_code_sha256"
+                            ] = sha256_of_bytes(code.encode("utf-8"))
                             for repair_name in deterministic_names:
                                 _record_repair(
                                     repair_id=repair_name,

@@ -298,6 +298,10 @@ class StepRepairBudget:
             "coder_generation_repair_concept_audit_and_analyzer"
         )
         step_record["step_provider_call_budget"] = snapshot["limit"]
+        step_record["step_provider_call_base_budget"] = snapshot["base_limit"]
+        step_record["step_provider_call_reaudit_extensions"] = snapshot[
+            "reserved_category_extension_count"
+        ]
         step_record["step_provider_call_attempts"] = snapshot["used"]
         step_record["step_provider_call_remaining"] = snapshot["remaining"]
         step_record["step_provider_call_budget_exhausted"] = snapshot["exhausted"]
