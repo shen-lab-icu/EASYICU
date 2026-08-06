@@ -136,6 +136,49 @@ score = silhouette_score(
     )
 
 
+def test_large_cohort_accepts_seed_derived_from_fixed_integer_range() -> None:
+    code = f"""\
+from sklearn.metrics import silhouette_score
+SEED_BASE = 1729
+for candidate_count in range(2, 7):
+    candidate_seed = SEED_BASE + candidate_count
+    score = silhouette_score(
+        feature_matrix,
+        cluster_labels,
+        sample_size={PAIRWISE_EVALUATION_MAX_SAMPLE_SIZE},
+        random_state=candidate_seed,
+    )
+"""
+
+    assert not _budget_violations(
+        code,
+        n_stays=PAIRWISE_EVALUATION_FULL_COHORT_MAX_ROWS + 1,
+    )
+
+
+def test_large_cohort_rejects_seed_derived_from_dynamic_range() -> None:
+    code = f"""\
+from sklearn.metrics import silhouette_score
+SEED_BASE = 1729
+for candidate_count in range(2, runtime_candidate_limit()):
+    candidate_seed = SEED_BASE + candidate_count
+    score = silhouette_score(
+        feature_matrix,
+        cluster_labels,
+        sample_size={PAIRWISE_EVALUATION_MAX_SAMPLE_SIZE},
+        random_state=candidate_seed,
+    )
+"""
+
+    violations = _budget_violations(
+        code,
+        n_stays=PAIRWISE_EVALUATION_FULL_COHORT_MAX_ROWS + 1,
+    )
+
+    assert len(violations) == 1
+    assert "random_state" in violations[0]["matched_patterns"]
+
+
 def test_large_cohort_accepts_provably_safe_silhouette_wrapper() -> None:
     code = f"""\
 from sklearn.metrics import silhouette_score as _sklearn_silhouette_score
