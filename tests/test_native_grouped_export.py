@@ -844,7 +844,7 @@ def test_arrow_publication_matches_legacy_canonical_values_order_and_schema(
     } == expected_bounds_audit
 
 
-def test_large_duplicate_grain_fails_closed_before_unbounded_pandas_fallback(
+def test_large_duplicate_grain_uses_bounded_duckdb_consolidation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(api, "EXTRACT_MODULES", {"sepsis_shared": ["samp"]})
@@ -858,18 +858,109 @@ def test_large_duplicate_grain_fails_closed_before_unbounded_pandas_fallback(
     )
     path = tmp_path / "sepsis_shared.parquet"
     source.to_parquet(path, index=False)
+
+    api._publish_native_export_v2(
+        database="eicu",
+        data_path="/raw/source-must-not-be-read",
+        output_dir=str(tmp_path),
+        modules=["sepsis_shared"],
+        max_patients=None,
+        result=_completed_result("sepsis_shared"),
+    )
+
+    exported = pd.read_parquet(path)
+    assert exported["stay_id"].tolist() == [1]
+    assert exported["charttime"].isna().tolist() == [True]
+    assert exported["samp"].tolist() == [True]
+    manifest = json.loads((tmp_path / "_manifest.json").read_text())
+    audit = manifest["files"][0]["row_grain_audit"]
+    assert audit["source_rows"] == 2
+    assert audit["published_rows"] == 1
+    assert audit["duplicate_excess_rows_before"] == 1
+    assert audit["rows_consolidated"] == 1
+    assert audit["duplicate_excess_rows_after"] == 0
+    assert audit["publication_backend"] == (
+        "duckdb_bounded_spillable_row_grain_consolidation"
+    )
+    assert not (tmp_path / ".sepsis_shared.native-v2.tmp.parquet").exists()
+    assert not (
+        tmp_path / ".sepsis_shared.native-v2.duckdb-consolidated.parquet"
+    ).exists()
+
+
+def test_duckdb_consolidation_matches_pandas_type_family_semantics(
+    tmp_path: Path,
+) -> None:
+    dictionary = api.load_dictionary(include_sofa2=True)
+    concepts = ["rrt", "creat", "avpu"]
+    canonical = api._canonicalise_native_export_frame(
+        pd.DataFrame(
+            {
+                "stay_id": [1, 1, 2, 2],
+                "charttime": [0.0, 0.0, None, None],
+                "rrt": [False, True, None, None],
+                "creat": [1.0, 3.0, None, None],
+                "avpu": ["A", None, None, None],
+            }
+        ),
+        module="renal",
+        requested_concepts=concepts,
+        dictionary=dictionary,
+    )
+    expected, _ = api._consolidate_native_export_row_grain(
+        canonical.copy(),
+        module="renal",
+        requested_concepts=concepts,
+        dictionary=dictionary,
+    )
+    path = tmp_path / ".renal.native-v2.tmp.parquet"
+    canonical.to_parquet(path, index=False)
+    before = api._native_export_arrow_row_grain_audit(path, module="renal")
+
+    audit, non_null = api._native_export_duckdb_consolidate_row_grain(
+        path,
+        module="renal",
+        requested_concepts=concepts,
+        dictionary=dictionary,
+        before_audit=before,
+    )
+
+    observed = pd.read_parquet(path)
+    pd.testing.assert_frame_equal(observed, expected)
+    assert non_null == {"rrt": 1, "creat": 1, "avpu": 1}
+    assert audit["source_rows"] == 4
+    assert audit["published_rows"] == 2
+    assert audit["duplicate_excess_rows_after"] == 0
+
+
+def test_large_duplicate_grain_duckdb_path_rejects_string_conflicts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(api, "EXTRACT_MODULES", {"neurological": ["avpu"]})
+    monkeypatch.setattr(api, "_NATIVE_EXPORT_PANDAS_FALLBACK_MAX_ROWS", 1)
+    path = tmp_path / "neurological.parquet"
+    pd.DataFrame(
+        {
+            "stay_id": [1, 1],
+            "charttime": [0.0, 0.0],
+            "avpu": ["A", "V"],
+        }
+    ).to_parquet(path, index=False)
     original_digest = hashlib.sha256(path.read_bytes()).hexdigest()
 
-    with pytest.raises(ValueError, match="exceeds the bounded pandas fallback"):
+    with pytest.raises(ValueError, match="conflicting string concept 'avpu'"):
         api._publish_native_export_v2(
             database="eicu",
             data_path="/raw/source-must-not-be-read",
             output_dir=str(tmp_path),
-            modules=["sepsis_shared"],
+            modules=["neurological"],
             max_patients=None,
-            result=_completed_result("sepsis_shared"),
+            result=_completed_result("neurological"),
         )
 
     assert hashlib.sha256(path.read_bytes()).hexdigest() == original_digest
     assert not (tmp_path / "_manifest.json").exists()
-    assert not (tmp_path / ".sepsis_shared.native-v2.tmp.parquet").exists()
+    assert not (tmp_path / ".neurological.native-v2.tmp.parquet").exists()
+    assert not (
+        tmp_path / ".neurological.native-v2.duckdb-consolidated.parquet"
+    ).exists()

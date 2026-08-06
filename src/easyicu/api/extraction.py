@@ -2828,6 +2828,249 @@ def _native_export_arrow_row_grain_audit(
     }
 
 
+def _native_export_duckdb_consolidate_row_grain(
+    path: Path,
+    *,
+    module: str,
+    requested_concepts: List[str],
+    dictionary,
+    before_audit: Dict[str, object],
+) -> tuple[Dict[str, object], Dict[str, int]]:
+    """Consolidate a large duplicate-bearing longitudinal parquet boundedly.
+
+    Only the old fallback needed a full pandas DataFrame.  DuckDB can perform
+    the same NULL-equal key grouping under the publisher's fixed memory limit
+    and spill beside the output.  A final bounded Arrow pass restores the
+    package's canonical schema metadata without materialising the module.
+    """
+    import tempfile
+
+    import duckdb
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    if module == "demographics":
+        raise ValueError("DuckDB row-grain consolidation is longitudinal-only")
+
+    def quote_identifier(value: str) -> str:
+        return '"' + str(value).replace('"', '""') + '"'
+
+    memory_mb = _native_export_duckdb_memory_mb()
+    target_schema = pq.read_schema(path)
+    duckdb_output = path.with_name(f".{module}.native-v2.duckdb.tmp.parquet")
+    arrow_output = path.with_name(f".{module}.native-v2.arrow.tmp.parquet")
+    for candidate in (duckdb_output, arrow_output):
+        if candidate.exists() or candidate.is_symlink():
+            raise ValueError(
+                f"native_export_v2 refuses stale consolidation file: {candidate}"
+            )
+
+    string_concepts = [
+        concept
+        for concept in requested_concepts
+        if _native_export_storage_kind(concept, dictionary) == "string"
+    ]
+    aggregate_expressions = []
+    for concept in requested_concepts:
+        column = quote_identifier(concept)
+        alias = quote_identifier(concept)
+        kind = _native_export_storage_kind(concept, dictionary)
+        if kind == "boolean":
+            expression = f"bool_or({column})::BOOLEAN AS {alias}"
+        elif kind == "string":
+            expression = (
+                f"first({column} ORDER BY _row_order) "
+                f"FILTER (WHERE {column} IS NOT NULL)::VARCHAR AS {alias}"
+            )
+        else:
+            expression = f"median({column})::DOUBLE AS {alias}"
+        aggregate_expressions.append(expression)
+
+    source_columns = ", ".join(
+        quote_identifier(column)
+        for column in ("stay_id", "charttime", *requested_concepts)
+    )
+    output_columns = ", ".join(
+        quote_identifier(column)
+        for column in ("stay_id", "charttime", *requested_concepts)
+    )
+    aggregate_sql = ",\n                        ".join(aggregate_expressions)
+
+    try:
+        with tempfile.TemporaryDirectory(
+            prefix=f".{module}.native-v2-consolidate-",
+            dir=path.parent,
+        ) as spill_dir:
+            connection = duckdb.connect(
+                database=":memory:",
+                config={
+                    "memory_limit": f"{memory_mb}MB",
+                    "threads": "1",
+                    "temp_directory": spill_dir,
+                    "preserve_insertion_order": "true",
+                },
+            )
+            try:
+                if string_concepts:
+                    conflict_counts = ", ".join(
+                        f"count(DISTINCT s.{quote_identifier(concept)}) "
+                        f"AS {quote_identifier('_conflict_' + concept)}"
+                        for concept in string_concepts
+                    )
+                    conflict_predicate = " OR ".join(
+                        f"{quote_identifier('_conflict_' + concept)} > 1"
+                        for concept in string_concepts
+                    )
+                    conflict_row = connection.execute(
+                        f"""
+                        WITH duplicate_keys AS (
+                            SELECT stay_id, charttime
+                            FROM read_parquet(?)
+                            GROUP BY stay_id, charttime
+                            HAVING count(*) > 1
+                        ), conflicts AS (
+                            SELECT
+                                s.stay_id,
+                                s.charttime,
+                                {conflict_counts}
+                            FROM read_parquet(?) AS s
+                            JOIN duplicate_keys AS d
+                              ON s.stay_id IS NOT DISTINCT FROM d.stay_id
+                             AND s.charttime IS NOT DISTINCT FROM d.charttime
+                            GROUP BY s.stay_id, s.charttime
+                        )
+                        SELECT *
+                        FROM conflicts
+                        WHERE {conflict_predicate}
+                        LIMIT 1
+                        """,
+                        [str(path), str(path)],
+                    ).fetchone()
+                    if conflict_row is not None:
+                        stay_id, charttime, *counts = conflict_row
+                        conflict_index = next(
+                            index for index, count in enumerate(counts) if count > 1
+                        )
+                        concept = string_concepts[conflict_index]
+                        values = connection.execute(
+                            f"""
+                            SELECT DISTINCT {quote_identifier(concept)}
+                            FROM read_parquet(?)
+                            WHERE stay_id IS NOT DISTINCT FROM ?
+                              AND charttime IS NOT DISTINCT FROM ?
+                              AND {quote_identifier(concept)} IS NOT NULL
+                            ORDER BY {quote_identifier(concept)}
+                            """,
+                            [str(path), stay_id, charttime],
+                        ).fetchall()
+                        raise ValueError(
+                            "native export cannot consolidate conflicting string "
+                            f"concept {concept!r} at key {(stay_id, charttime)!r}: "
+                            f"{[value[0] for value in values]!r}"
+                        )
+
+                connection.execute(
+                    f"""
+                    COPY (
+                        WITH source AS (
+                            SELECT
+                                file_row_number::BIGINT AS _row_order,
+                                {source_columns}
+                            FROM read_parquet(?, file_row_number=true)
+                        ), consolidated AS (
+                            SELECT
+                                min(_row_order)::BIGINT AS _row_order,
+                                stay_id::BIGINT AS stay_id,
+                                charttime::DOUBLE AS charttime,
+                                {aggregate_sql}
+                            FROM source
+                            GROUP BY stay_id, charttime
+                        )
+                        SELECT {output_columns}
+                        FROM consolidated
+                        ORDER BY _row_order
+                    ) TO ? (
+                        FORMAT PARQUET,
+                        COMPRESSION SNAPPY,
+                        ROW_GROUP_SIZE 262144
+                    )
+                    """,
+                    # DuckDB binds COPY's TO placeholder before placeholders
+                    # in its SELECT body, irrespective of textual order.
+                    [str(duckdb_output), str(path)],
+                )
+            finally:
+                connection.close()
+
+        # DuckDB deliberately owns the global grouping; Arrow owns the exact
+        # package schema and pandas metadata.  This pass is record-batch bounded.
+        source_file = pq.ParquetFile(duckdb_output)
+        concept_non_null = {concept: 0 for concept in requested_concepts}
+        writer = pq.ParquetWriter(arrow_output, target_schema, compression="snappy")
+        try:
+            for batch in source_file.iter_batches(
+                batch_size=_native_export_arrow_batch_rows(),
+                use_threads=False,
+            ):
+                table = pa.Table.from_batches([batch]).cast(target_schema, safe=True)
+                for concept in requested_concepts:
+                    column = table[concept]
+                    concept_non_null[concept] += int(len(column) - column.null_count)
+                if len(table):
+                    writer.write_table(table)
+                del table
+                _release_stream_batch_memory(pa, trim_native_allocator=False)
+        finally:
+            writer.close()
+        arrow_output.replace(path)
+    except Exception:
+        arrow_output.unlink(missing_ok=True)
+        raise
+    finally:
+        duckdb_output.unlink(missing_ok=True)
+
+    after_audit = _native_export_arrow_row_grain_audit(path, module=module)
+    if int(after_audit["duplicate_excess_rows_after"]):
+        raise RuntimeError(
+            f"native export module {module!r} DuckDB consolidation was not unique"
+        )
+    expected_rows = int(before_audit["source_rows"]) - int(
+        before_audit["duplicate_excess_rows_before"]
+    )
+    if int(after_audit["published_rows"]) != expected_rows:
+        raise RuntimeError(
+            f"native export module {module!r} DuckDB consolidation changed the "
+            f"row count unexpectedly ({after_audit['published_rows']} != "
+            f"{expected_rows})"
+        )
+
+    after_audit.update(
+        {
+            "source_rows": int(before_audit["source_rows"]),
+            "null_charttime_rows_before": int(
+                before_audit["null_charttime_rows_before"]
+            ),
+            "duplicate_key_rows_before": int(
+                before_audit["duplicate_key_rows_before"]
+            ),
+            "duplicate_key_groups_before": int(
+                before_audit["duplicate_key_groups_before"]
+            ),
+            "duplicate_excess_rows_before": int(
+                before_audit["duplicate_excess_rows_before"]
+            ),
+            "rows_consolidated": int(
+                before_audit["duplicate_excess_rows_before"]
+            ),
+            "publication_backend": (
+                "duckdb_bounded_spillable_row_grain_consolidation"
+            ),
+            "consolidation_memory_limit_mb": memory_mb,
+        }
+    )
+    return after_audit, concept_non_null
+
+
 def _try_publish_native_export_arrow_fast_path(
     *,
     source_parquet: Path,
@@ -2843,9 +3086,9 @@ def _try_publish_native_export_arrow_fast_path(
 
     The temporary file is canonicalised and bounded batch-by-batch.  A global
     NULL-equal uniqueness audit is then performed under a fixed DuckDB memory
-    budget.  Small duplicate-bearing modules return ``None`` for the exact
-    pandas consolidation path; a large duplicate-bearing module fails closed
-    rather than silently escaping the documented memory contract.
+    budget. Small duplicate-bearing modules return ``None`` for the exact
+    pandas consolidation path. Large modules use the same aggregation contract
+    in a bounded, spillable DuckDB query.
     """
     import pyarrow as pa
     import pyarrow.parquet as pq
@@ -3007,13 +3250,17 @@ def _try_publish_native_export_arrow_fast_path(
     duplicate_excess = int(row_grain_audit["duplicate_excess_rows_before"])
     if duplicate_excess:
         fallback_size = _native_export_pandas_fallback_size(source_parquet)
-        temporary_parquet.unlink(missing_ok=True)
         if _native_export_pandas_fallback_is_bounded(fallback_size):
+            temporary_parquet.unlink(missing_ok=True)
             return None
-        raise ValueError(
-            "native export row-grain consolidation exceeds the bounded pandas "
-            f"fallback (module={module!r}, {fallback_size=}, "
-            f"duplicate_excess_rows={duplicate_excess})"
+        row_grain_audit, concept_non_null = (
+            _native_export_duckdb_consolidate_row_grain(
+                temporary_parquet,
+                module=module,
+                requested_concepts=requested_concepts,
+                dictionary=dictionary,
+                before_audit=row_grain_audit,
+            )
         )
 
     return {
