@@ -613,6 +613,21 @@ def _statically_deterministic_integer(
         return False
     if _static_integer_upper_bound(node, assignments=assignments) is not None:
         return True
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "int"
+        and len(node.args) == 1
+        and not node.keywords
+    ):
+        return _statically_deterministic_integer(
+            node.args[0],
+            tree=tree,
+            function=function,
+            assignments=assignments,
+            fixed_seed_names=fixed_seed_names,
+            seen=seen,
+        )
     if isinstance(node, ast.Name):
         if node.id in fixed_seed_names:
             return True
@@ -1048,6 +1063,315 @@ def _permutation_sample_bounded_silhouette_contract(
     )
 
 
+def _choice_sample_bounded_silhouette_contract(
+    call: ast.Call,
+    *,
+    tree: ast.AST,
+    function: Optional[ast.FunctionDef],
+    assignments: Dict[str, ast.AST],
+    fixed_seed_names: set[str],
+) -> bool:
+    """Accept a deterministic ``Generator.choice`` silhouette sampler.
+
+    A generated step may use the direct, bounded shape::
+
+        sample_n = min(int(max_sample_size), int(matrix.shape[0]))
+        rng = np.random.default_rng(int(seed))
+        indices = rng.choice(matrix.shape[0], size=sample_n, replace=False)
+        return silhouette_score(matrix[indices], labels[indices])
+
+    The sklearn call has no ``sample_size``/``random_state`` keywords in this
+    form, so the recognizer must prove the bound and seed at the helper's
+    definition and at every call site.  It deliberately does not accept a
+    generic RNG call, a full-data overwrite, or a dynamic seed.
+    """
+
+    if function is None or len(call.args) < 2:
+        return False
+
+    parameters = [argument.arg for argument in function.args.args]
+    if len(parameters) < 3:
+        return False
+    local = _simple_assignments(function)
+
+    def _name_call(node: Optional[ast.AST], path: str) -> bool:
+        return (
+            isinstance(node, ast.Call)
+            and _callable_path(node.func, {}).casefold() == path.casefold()
+        )
+
+    def _subscript_index(node: ast.AST) -> Optional[str]:
+        if not isinstance(node, ast.Subscript):
+            return None
+        index = node.slice
+        if isinstance(index, ast.Tuple) and index.elts:
+            index = index.elts[0]
+        return index.id if isinstance(index, ast.Name) else None
+
+    def _same_population(left: ast.AST, right: ast.AST) -> bool:
+        def _unwrap_int(node: ast.AST) -> ast.AST:
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "int"
+                and len(node.args) == 1
+                and not node.keywords
+            ):
+                return _unwrap_int(node.args[0])
+            return node
+
+        left = _unwrap_int(left)
+        right = _unwrap_int(right)
+        return ast.dump(left, include_attributes=False) == ast.dump(
+            right, include_attributes=False
+        )
+
+    sample_assignment: Optional[tuple[str, ast.Call, ast.AST, ast.AST]] = None
+    for name, values in local.items():
+        if len(values) != 1 or not isinstance(values[0], ast.Call):
+            continue
+        value = values[0]
+        if not (
+            isinstance(value.func, ast.Name)
+            and value.func.id == "min"
+            and len(value.args) == 2
+            and not value.keywords
+        ):
+            continue
+        cap_expr, population_expr = value.args
+        if isinstance(cap_expr, ast.Call) and (
+            not isinstance(cap_expr.func, ast.Name)
+            or cap_expr.func.id != "int"
+            or len(cap_expr.args) != 1
+            or cap_expr.keywords
+        ):
+            continue
+        if isinstance(cap_expr, ast.Call):
+            cap_expr = cap_expr.args[0]
+        sample_assignment = (name, value, cap_expr, population_expr)
+        break
+    if sample_assignment is None:
+        return False
+    sample_name, _, cap_expr, population_expr = sample_assignment
+
+    cap_parameter = (
+        cap_expr.id if isinstance(cap_expr, ast.Name) and cap_expr.id in parameters else None
+    )
+    if cap_parameter is None:
+        return False
+
+    # The population expression may be ``n_rows`` or ``matrix.shape[0]``;
+    # either is safe as long as the choice call uses that same expression.
+    rng_name: Optional[str] = None
+    seed_expr: Optional[ast.AST] = None
+    for name, values in local.items():
+        if len(values) != 1 or not _name_call(values[0], "np.random.default_rng"):
+            continue
+        rng_call = values[0]
+        if len(rng_call.args) != 1 or rng_call.keywords:
+            continue
+        rng_name = name
+        seed_expr = rng_call.args[0]
+        if (
+            isinstance(seed_expr, ast.Call)
+            and isinstance(seed_expr.func, ast.Name)
+            and seed_expr.func.id == "int"
+            and len(seed_expr.args) == 1
+            and not seed_expr.keywords
+        ):
+            seed_expr = seed_expr.args[0]
+        break
+    if rng_name is None or seed_expr is None:
+        return False
+
+    choice_name: Optional[str] = None
+    choice_call: Optional[ast.Call] = None
+    choice_assignment: Optional[ast.Assign] = None
+    for name, values in local.items():
+        for value in values:
+            if not isinstance(value, ast.Call):
+                continue
+            candidate = value
+            if (
+                isinstance(candidate.func, ast.Attribute)
+                and candidate.func.attr == "sort"
+                and len(candidate.args) == 1
+                and not candidate.keywords
+            ):
+                candidate = candidate.args[0]
+            if not (
+                isinstance(candidate.func, ast.Attribute)
+                and isinstance(candidate.func.value, ast.Name)
+                and candidate.func.value.id == rng_name
+                and candidate.func.attr == "choice"
+                and len(candidate.args) == 1
+            ):
+                continue
+            keywords = {item.arg: item.value for item in candidate.keywords if item.arg}
+            if (
+                not _same_population(candidate.args[0], population_expr)
+                or not isinstance(keywords.get("size"), ast.Name)
+                or keywords["size"].id != sample_name
+                or not isinstance(keywords.get("replace"), ast.Constant)
+                or keywords["replace"].value is not False
+                or len(keywords) != 2
+            ):
+                continue
+            choice_name = name
+            choice_call = candidate
+            choice_assignment = next(
+                (
+                    node
+                    for node in ast.walk(function)
+                    if isinstance(node, ast.Assign)
+                    and any(
+                        isinstance(target, ast.Name) and target.id == name
+                        for target in node.targets
+                    )
+                    and (
+                        node.value is value
+                        or (
+                            isinstance(node.value, ast.Call)
+                            and isinstance(node.value.func, ast.Attribute)
+                            and node.value.func.attr == "sort"
+                            and len(node.value.args) == 1
+                            and node.value.args[0] is candidate
+                        )
+                    )
+                ),
+                None,
+            )
+            break
+        if choice_name is not None:
+            break
+    if choice_name is None or choice_call is None or choice_assignment is None:
+        return False
+
+    # Require the helper to pass the sampled indices into the metric.  A
+    # direct subscript is preferred, but a local ``sampled_features`` /
+    # ``sampled_labels`` assignment is also safe when it is not overwritten.
+    index_name = choice_name
+    metric_feature_index = _subscript_index(call.args[0])
+    metric_label_index = _subscript_index(call.args[1])
+    if metric_feature_index != index_name:
+        feature_name = call.args[0].value.id if (
+            isinstance(call.args[0], ast.Subscript)
+            and isinstance(call.args[0].value, ast.Name)
+        ) else None
+        if feature_name is None:
+            return False
+        feature_values = local.get(feature_name, [])
+        if len(feature_values) != 1 or _subscript_index(feature_values[0]) != index_name:
+            return False
+    if metric_label_index != index_name:
+        if not isinstance(call.args[1], ast.Name):
+            return False
+        label_values = local.get(call.args[1].id, [])
+        if not any(_subscript_index(value) == index_name for value in label_values):
+            return False
+
+    # The helper must have a fixed-size branch (or an equivalent guard) so the
+    # full cohort is never passed to the metric when the cohort is large.
+    has_bounded_branch: Optional[ast.If] = None
+    for node in ast.walk(function):
+        if not isinstance(node, ast.If) or not isinstance(node.test, ast.Compare):
+            continue
+        if not (
+            len(node.test.ops) == 1
+            and isinstance(node.test.ops[0], ast.Lt)
+            and isinstance(node.test.left, ast.Name)
+            and node.test.left.id == sample_name
+            and len(node.test.comparators) == 1
+            and _same_population(node.test.comparators[0], population_expr)
+            and node.orelse
+        ):
+            continue
+        has_bounded_branch = node
+        break
+    if has_bounded_branch is None:
+        return False
+
+    def _is_descendant(node: ast.AST, ancestor: ast.AST) -> bool:
+        return any(candidate is node for candidate in ast.walk(ancestor))
+
+    if not any(
+        _is_descendant(choice_assignment, statement)
+        for statement in has_bounded_branch.body
+    ):
+        return False
+    if getattr(call, "lineno", 0) <= getattr(has_bounded_branch, "end_lineno", 0):
+        return False
+    if getattr(choice_assignment, "lineno", 0) >= getattr(call, "lineno", 0):
+        return False
+    # An index assignment after the bounded branch is an unsafe full-cohort
+    # overwrite. The only permitted second assignment is the mutually
+    # exclusive full-index fallback in the branch's ``else`` arm.
+    for node in ast.walk(function):
+        if not (
+            isinstance(node, ast.Assign)
+            and getattr(node, "lineno", 0) < getattr(call, "lineno", 0)
+            and any(
+                isinstance(target, ast.Name) and target.id == index_name
+                for target in node.targets
+            )
+        ):
+            continue
+        if node is choice_assignment:
+            continue
+        if not any(
+            _is_descendant(node, statement)
+            for statement in has_bounded_branch.orelse
+        ):
+            return False
+
+    def _call_site_actuals(parameter: str) -> Optional[List[ast.AST]]:
+        position = parameters.index(parameter)
+        defaults_start = len(parameters) - len(function.args.defaults)
+        default = (
+            function.args.defaults[position - defaults_start]
+            if position >= defaults_start
+            else None
+        )
+        actuals: List[ast.AST] = []
+        for candidate in ast.walk(tree):
+            if not isinstance(candidate, ast.Call):
+                continue
+            if _callable_path(candidate.func, {}).rsplit(".", 1)[-1] != function.name:
+                continue
+            actual = next(
+                (item.value for item in candidate.keywords if item.arg == parameter),
+                candidate.args[position] if position < len(candidate.args) else default,
+            )
+            if actual is None:
+                return None
+            actuals.append(actual)
+        return actuals or None
+
+    cap_actuals = _call_site_actuals(cap_parameter)
+    if cap_actuals is None or any(
+        (bound := _static_integer_upper_bound(actual, assignments=assignments)) is None
+        or bound > PAIRWISE_EVALUATION_MAX_SAMPLE_SIZE
+        for actual in cap_actuals
+    ):
+        return False
+    return all(
+        _statically_deterministic_integer(
+            actual,
+            tree=tree,
+            function=None,
+            assignments=assignments,
+            fixed_seed_names=fixed_seed_names,
+        )
+        for actual in _call_site_actuals(
+            next(
+                (parameter for parameter in parameters if parameter == seed_expr.id),
+                parameters[2],
+            )
+        )
+        or []
+    )
+
+
 def _manual_bounded_silhouette_contract(
     call: ast.Call,
     *,
@@ -1062,6 +1386,15 @@ def _manual_bounded_silhouette_contract(
         return False
 
     if _permutation_sample_bounded_silhouette_contract(
+        call,
+        tree=tree,
+        function=function,
+        assignments=assignments,
+        fixed_seed_names=fixed_seed_names,
+    ):
+        return True
+
+    if _choice_sample_bounded_silhouette_contract(
         call,
         tree=tree,
         function=function,
@@ -1485,6 +1818,17 @@ def _large_cohort_silhouette_violations(
                         and isinstance(item.value, int)
                         and not isinstance(item.value, bool)
                         for item in node.iter.elts
+                    )
+                )
+                or (
+                    isinstance(node.iter, ast.Name)
+                    and isinstance(assignments.get(node.iter.id), (ast.List, ast.Set, ast.Tuple))
+                    and assignments[node.iter.id].elts
+                    and all(
+                        isinstance(item, ast.Constant)
+                        and isinstance(item.value, int)
+                        and not isinstance(item.value, bool)
+                        for item in assignments[node.iter.id].elts
                     )
                 )
                 or (

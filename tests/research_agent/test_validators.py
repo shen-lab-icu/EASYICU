@@ -2893,6 +2893,26 @@ def test_llm_concept_auditor_prompt_includes_outcome_semantics(ra):
     assert "Named time windows:" in prompt
 
 
+def test_llm_concept_auditor_distinguishes_cluster_fit_and_sampling_seeds(ra):
+    auditor = ra.LLMConceptAuditor(ra.MockLLMClient())
+    ctx = ra.build_research_context(
+        research_question="Assess stability of an ICU clustering solution.",
+        cohort=pd.DataFrame({"stay_id": [1, 2], "feature_a": [0.1, 0.2]}),
+        cohort_name="c",
+        database="synthetic",
+    )
+    prompt = auditor._prompt(
+        context=ctx,
+        script_text="silhouette_score(matrix[indices], labels[indices])",
+        step=None,
+    )
+
+    assert "distinguish an estimator's fit seed" in prompt
+    assert "silhouette sampling seed" in prompt
+    assert "do not demand a second scaling pass" in prompt
+    assert "explicit threshold-based decision rule" in prompt
+
+
 def _plausibility_range_context(ra, *, binary: bool = False):
     return ra.ResearchContext(
         research_question="Assess a continuous ICU marker.",

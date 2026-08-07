@@ -5336,6 +5336,40 @@ def _patch_direct_bound_figure_source_projection(
     loaded_tables: Dict[str, str] = {}
     duplicate_products: Set[str] = set()
     unkeyed_loaded_frames: List[str] = []
+    string_bindings: Dict[str, Set[str]] = {}
+
+    # A typed loader commonly receives a local ``input_key`` variable rather
+    # than a literal.  Resolve only unambiguous module-local string bindings;
+    # this lets the projection attach to the frame returned by the loader,
+    # instead of guessing from an implementation-local variable such as
+    # ``loaded_df`` inside that loader.
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        target = node.targets[0]
+        value = node.value
+        if (
+            isinstance(target, ast.Name)
+            and isinstance(value, ast.Constant)
+            and isinstance(value.value, str)
+        ):
+            string_bindings.setdefault(target.id, set()).add(value.value)
+
+    def _string_literal(node: ast.AST | None) -> Optional[str]:
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return node.value
+        if isinstance(node, ast.Name):
+            values = string_bindings.get(node.id, set())
+            if len(values) == 1:
+                return next(iter(values))
+        return None
+
+    def _call_name(node: ast.Call) -> Optional[str]:
+        if isinstance(node.func, ast.Name):
+            return node.func.id
+        if isinstance(node.func, ast.Attribute):
+            return node.func.attr
+        return None
 
     source_table_path_names: Set[str] = set()
     source_table_name_variables: Set[str] = set()
@@ -5454,27 +5488,37 @@ def _patch_direct_bound_figure_source_projection(
             and target.elts
             and isinstance(target.elts[0], ast.Name)
             and isinstance(value, ast.Call)
-            and (
-                (
-                    isinstance(value.func, ast.Name)
-                    and value.func.id == "load_bound_table"
-                )
-                or (
-                    isinstance(value.func, ast.Attribute)
-                    and value.func.attr == "load_bound_table"
-                )
-            )
+            and _call_name(value)
+            in {"load_bound_table", "load_typed_table", "_load_typed_table"}
         ):
             continue
-        if not (
-            value.args
-            and isinstance(value.args[0], ast.Constant)
-            and isinstance(value.args[0].value, str)
-        ):
+        loader_name = _call_name(value)
+        if loader_name in {"load_typed_table", "_load_typed_table"}:
+            # The project helper convention is ``(manifest, input_key)``;
+            # tolerate a keyword for generated variants as well.
+            input_key_node = next(
+                (
+                    keyword.value
+                    for keyword in value.keywords
+                    if keyword.arg == "input_key"
+                ),
+                value.args[1] if len(value.args) > 1 else None,
+            )
+        else:
+            input_key_node = next(
+                (
+                    keyword.value
+                    for keyword in value.keywords
+                    if keyword.arg == "input_key"
+                ),
+                value.args[0] if value.args else None,
+            )
+        input_key = _string_literal(input_key_node)
+        if input_key is None:
             unkeyed_loaded_frames.append(target.elts[0].id)
             continue
         _register_loaded_table(
-            input_key=str(value.args[0].value),
+            input_key=input_key,
             frame_name=target.elts[0].id,
         )
     if duplicate_products:

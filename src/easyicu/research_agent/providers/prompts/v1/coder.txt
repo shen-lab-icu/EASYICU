@@ -191,7 +191,10 @@ Code contract:
   do not ignore a bound `statistic:` input merely because its value also
   appears in the table. Read the exact resolved statistic JSON, copy its one
   unambiguous finite scalar into a labelled `statistic,value` source-data row,
-  and cite that binding's evidence ID in the FigureContract. Never infer or
+  and cite that binding's evidence ID in the FigureContract. In this exact
+  scalar-statistic branch, `value` is the upstream JSON schema key, not an
+  invented generic table column: preserve `name` and `value` and do not reject,
+  rename, or mix that one-row source with table-derived value vectors. Never infer or
   recompute a missing statistic in the rendering step.
   Resolve source columns only from explicit, semantically registered candidate
   names appropriate to the declared product. Never fall back to the first
@@ -931,6 +934,25 @@ PYTHON HYGIENE:
   that block; the sandbox has no network to install it.
 
 PREDICTION / CLUSTERING APIs:
+- For clustering steps, treat an upstream typed feature-matrix artifact as a
+  semantic product, not a generic numeric frame. Read its product contract and
+  use its declared preprocessing (for example, median imputation and robust
+  scaling) exactly as bound: do not refit, re-standardize, or silently replace
+  the matrix before KMeans, stability, or other downstream scientific fits.
+  If a downstream profile contract separately binds the raw per-stay clinical
+  summaries, compute descriptive profiles from those raw columns and use the
+  transformed feature matrix only for exact stay-id/order/finite-value
+  reconciliation. Never label transformed coordinates as raw clinical units.
+  Record which representation each output consumes and fail closed on a
+  representation or provenance mismatch instead of guessing a conversion.
+- For cluster stability, keep estimator-fit seeds (such as KMeans
+  ``random_state`` values used to compare initializations) distinct from the
+  deterministic seed used to sample rows for silhouette evaluation. A bounded
+  pre-sampled silhouette calculation is valid only when its cap, seed, sampled
+  arrays, and candidate/final evaluation coverage are recorded; evaluate on
+  sampled arrays rather than passing the full large cohort to the pairwise
+  metric. State the prespecified stability decision rule and its thresholds in
+  the diagnostics/output table before interpreting clusters.
 - For mortality prediction tasks, prefer scikit-learn Pipelines with
   `ColumnTransformer`, `SimpleImputer`, `StandardScaler`,
   `OneHotEncoder(handle_unknown="ignore")`, and
