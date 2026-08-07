@@ -467,8 +467,10 @@
   },
   "readiness": {
     "gates": {
-      "analysis_error_count": 0,
-      "analysis_errors": [],
+      "analysis_error_count": 1,
+      "analysis_errors": [
+        "The run locked robustness specifications that no step estimated, so the panel carries them as blank rows: complete_case_trajectory_inputs. A step re-estimating the locked grid must declare robustness_replay_spec to reach the deterministic replay owner; generic refitting stays disabled here because it would choose an exposure, outcome or method on the plan's behalf."
+      ],
       "analysis_validated": false,
       "blocked_outcome_not_leaked": true,
       "blocked_outcome_step_ids": [],
@@ -528,7 +530,7 @@
       "manifest:trajectory_representation_schema": {
         "evidence_id": "log_step_artifact_0f4f445ed6fa6b09",
         "identity_row_sha256": "f7f556a2f6e5139c4e1ec952a62b19132361f57b3125f740969a289a8311d246",
-        "product_contract_sha256": "1b741622d7e0e8a8417b7f238cea3cbcd91126e28bdc52d13234722996648bcb",
+        "product_contract_sha256": "47ec5d9d8a88aa288ed407437483bb96b9e698cdeaaac7ba4474c92de5309292",
         "sha256": "55313bb645ab98774ade76d1d308b70544d99b202aaf6bdef98675c4d974ce53"
       }
     },
@@ -536,7 +538,7 @@
       "artifact:candidate_cluster_assignments": {
         "evidence_id": "table_step_artifact_b727decb45ffd129",
         "identity_row_sha256": "d3c3b218964cb7f28fc48e70eb7fcedc23c55dd9cd340a567f445c010a4509d0",
-        "product_contract_sha256": "ff1297d31c0afc4a36bfdd52c754749c3885818ce178dfdf99ed3e153f01cce1",
+        "product_contract_sha256": "10dd736770ad32bd8b848e3fb59ae813e1a1ac329e27bf2f489cc300f0cf75aa",
         "sha256": "2b93c86ac49157764325a833567fea729d386112c3ea0716ef477a56a3c4a749"
       },
       "artifact:trajectory_representation": {
@@ -548,19 +550,19 @@
       "manifest:candidate_cluster_solution_schema": {
         "evidence_id": "log_step_artifact_d9d678b90a6e7e4a",
         "identity_row_sha256": "1fb4c40ec38f9753cf5f720c00dbe16a4b326ea02d081cf65ac75c01d29dbe19",
-        "product_contract_sha256": "3aae68a1ca1054b4238a9a381fadf282ef819987c43d316d19bd77b6f769924c",
+        "product_contract_sha256": "0adc888c658ee815f724cdaad001f4a608b63290c620030f9e642be7d32cd877",
         "sha256": "77da73008f17a4d7ec8dbc95e8e9aeab31cbb09444e971a48fd7ceb471d4f3cd"
       },
       "manifest:cluster_selection": {
         "evidence_id": "log_step_artifact_d3e2b37dc6ffc275",
         "identity_row_sha256": "e43feefc369b0072adc9802aa96dd4b23a90709f29e0da07dd8dfa0f86172956",
-        "product_contract_sha256": "92f23a1c5e20defe0053fa02b5bf001002809c2c6de5744f067aa2caf1b82c0d",
+        "product_contract_sha256": "e72a336e66ee44018d881616e3ef7e2298eb10f4debc0319b097d7109bc389a7",
         "sha256": "cb3568dafd78603deceadb4d496326f2a40848cc74d6eec551227f7bbfb1e953"
       },
       "manifest:trajectory_representation_schema": {
         "evidence_id": "log_step_artifact_0f4f445ed6fa6b09",
         "identity_row_sha256": "f7f556a2f6e5139c4e1ec952a62b19132361f57b3125f740969a289a8311d246",
-        "product_contract_sha256": "1b741622d7e0e8a8417b7f238cea3cbcd91126e28bdc52d13234722996648bcb",
+        "product_contract_sha256": "47ec5d9d8a88aa288ed407437483bb96b9e698cdeaaac7ba4474c92de5309292",
         "sha256": "55313bb645ab98774ade76d1d308b70544d99b202aaf6bdef98675c4d974ce53"
       }
     },
@@ -568,19 +570,19 @@
       "artifact:cluster_assignments": {
         "evidence_id": "table_step_artifact_b50c9b24510b60cc",
         "identity_row_sha256": "a59e9ed27128c40c19e051df0a12f3158c648e2d65f8d822be8ce50b058d2dac",
-        "product_contract_sha256": "21e7763e76547e5fb1dd06c0b1069444718d329204db7329b49dc230786a6571",
+        "product_contract_sha256": "ad2b97a6397e36dbc59cc77ce8313c177b354db6c67f8132081d77aa048afce3",
         "sha256": "b3626090b553c9fadc160e7de410a2804c752995f4d611095af81b5645d0404c"
       }
     }
   },
   "validator_findings": {
     "by_severity": {
-      "error": 0,
+      "error": 1,
       "info": 3,
-      "warning": 10
+      "warning": 9
     },
     "count": 13,
-    "set_sha256": "d614e4ee22163bcacc87a571a7264ac79cd1671c15b41b23acb42edc72ac6d1e"
+    "set_sha256": "b8b6f1e00889b5ee5be221666779d75cf8319bcaab79bd0d57af91f93d119424"
   },
   "volatile_field_allowlist": [
     "absolute_path",
