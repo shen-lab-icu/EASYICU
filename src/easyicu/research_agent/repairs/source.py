@@ -6763,9 +6763,13 @@ def _deterministic_runner_repair(
             "object of type ndarray is not json serializable",
         )
     )
+    json_nonfinite_value_failure = (
+        "out of range float values are not json compliant" in lowered
+    )
     json_numpy_key_failure = (
         "keys must be str, int, float, bool or none" in lowered
         or json_numpy_scalar_failure
+        or json_nonfinite_value_failure
     ) and "json.dump(" in code
     if json_numpy_key_failure:
         repair_name = "json_dump_numpy_key_sanitizer_v1"

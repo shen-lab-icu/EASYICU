@@ -2067,6 +2067,30 @@ print(json.dumps(step_summary, indent=2, allow_nan=False))
     assert "_easyicu_json_sanitize_v1" in patched
 
 
+def test_runner_repair_sanitizes_nonfinite_values_before_strict_json_dump(
+    tmp_path, monkeypatch
+):
+    code = """
+import json
+
+step_summary = {"score": float("nan")}
+with open("step_summary.json", "w", encoding="utf-8") as handle:
+    json.dump(step_summary, handle, indent=2, allow_nan=False)
+"""
+    repair = _deterministic_runner_repair(
+        code=code,
+        run_log="ValueError: Out of range float values are not JSON compliant: nan",
+    )
+
+    assert repair is not None
+    repair_id, patched = repair
+    assert repair_id == "json_dump_numpy_key_sanitizer_v1"
+    assert "_easyicu_json_sanitize_v1" in patched
+    monkeypatch.chdir(tmp_path)
+    exec(compile(patched, "<patched>", "exec"), {})
+    assert json.loads((tmp_path / "step_summary.json").read_text()) == {"score": None}
+
+
 def test_runner_repair_does_not_trigger_case_fallbacks_by_default():
     """Default repair path must stay case-neutral.
 
