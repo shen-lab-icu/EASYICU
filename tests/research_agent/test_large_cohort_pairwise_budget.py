@@ -136,6 +136,81 @@ score = silhouette_score(
     )
 
 
+def test_large_cohort_accepts_label_preserving_permutation_sampler() -> None:
+    code = f"""\
+import numpy as np
+from sklearn.metrics import silhouette_score as sklearn_silhouette_score
+
+def bounded_silhouette(matrix, labels, seed, maximum_sample_size):
+    labels_array = np.asarray(labels)
+    n_rows = len(labels_array)
+    unique_labels = np.unique(labels_array)
+    sample_size = min(maximum_sample_size, n_rows)
+    rng = np.random.default_rng(seed)
+    permutation = rng.permutation(n_rows)
+    selected = []
+    selected_set = set()
+    for cluster_id in unique_labels:
+        cluster_indices = np.flatnonzero(labels_array == cluster_id)
+        selected.append(int(cluster_indices[0]))
+        selected_set.add(int(cluster_indices[0]))
+    for index in permutation:
+        index = int(index)
+        if index not in selected_set:
+            selected.append(index)
+            selected_set.add(index)
+            if len(selected) == sample_size:
+                break
+    sample_indices = np.asarray(selected, dtype=np.int64)
+    sample_labels = labels_array[sample_indices]
+    if np.unique(sample_labels).size != unique_labels.size:
+        raise ValueError("sample omitted a cluster")
+    return sklearn_silhouette_score(matrix[sample_indices], sample_labels)
+
+SILHOUETTE_ROWS = min({PAIRWISE_EVALUATION_MAX_SAMPLE_SIZE}, len(feature_matrix))
+SILHOUETTE_SEED = 1729
+score = bounded_silhouette(
+    feature_matrix,
+    cluster_labels,
+    seed=SILHOUETTE_SEED,
+    maximum_sample_size=SILHOUETTE_ROWS,
+)
+"""
+
+    assert not _budget_violations(
+        code,
+        n_stays=PAIRWISE_EVALUATION_FULL_COHORT_MAX_ROWS + 1,
+    )
+
+
+def test_large_cohort_rejects_unproven_permutation_sampler() -> None:
+    code = f"""\
+import numpy as np
+from sklearn.metrics import silhouette_score as sklearn_silhouette_score
+
+def bounded_silhouette(matrix, labels, seed, maximum_sample_size):
+    n_rows = len(labels)
+    sample_size = min(maximum_sample_size, n_rows)
+    indices = np.random.default_rng(seed).permutation(n_rows)[:sample_size]
+    return sklearn_silhouette_score(matrix[indices], labels[indices])
+
+SILHOUETTE_ROWS = min({PAIRWISE_EVALUATION_MAX_SAMPLE_SIZE}, len(feature_matrix))
+score = bounded_silhouette(
+    feature_matrix,
+    cluster_labels,
+    seed=1729,
+    maximum_sample_size=SILHOUETTE_ROWS,
+)
+"""
+
+    violations = _budget_violations(
+        code,
+        n_stays=PAIRWISE_EVALUATION_FULL_COHORT_MAX_ROWS + 1,
+    )
+    assert len(violations) == 1
+    assert violations[0]["matched_patterns"] == ["sample_size", "random_state"]
+
+
 def test_large_cohort_accepts_seed_derived_from_fixed_integer_range() -> None:
     code = f"""\
 from sklearn.metrics import silhouette_score

@@ -664,6 +664,390 @@ def _statically_deterministic_integer(
     return False
 
 
+def _permutation_sample_bounded_silhouette_contract(
+    call: ast.Call,
+    *,
+    tree: ast.AST,
+    function: Optional[ast.FunctionDef],
+    assignments: Dict[str, ast.AST],
+    fixed_seed_names: set[str],
+) -> bool:
+    """Accept a closed, label-preserving permutation sampler.
+
+    Some repairs cannot pass ``sample_size``/``random_state`` to sklearn: they
+    first materialise a deterministic sample, force one row per label, and
+    then call the metric on those sampled arrays.  This recognizer accepts only
+    that explicit shape.  It does not infer a bound from a comment or from a
+    generic ``rng`` call; the sample cap and seed must be fixed at every helper
+    call site, and the sampler must prove that every label survives sampling.
+    """
+
+    if function is None or len(call.args) < 2:
+        return False
+
+    local = _simple_assignments(function)
+    parameters = [argument.arg for argument in function.args.args]
+    if len(parameters) < 4:
+        return False
+
+    def _single_assignment(name: str) -> Optional[ast.AST]:
+        values = local.get(name, [])
+        return values[0] if len(values) == 1 else None
+
+    def _name_call(node: Optional[ast.AST], path: str) -> bool:
+        return (
+            isinstance(node, ast.Call)
+            and _callable_path(node.func, {}).casefold() == path.casefold()
+        )
+
+    labels_assignment = next(
+        (
+            (name, value)
+            for name, values in local.items()
+            for value in values
+            if _name_call(value, "np.asarray")
+            and len(value.args) == 1
+            and isinstance(value.args[0], ast.Name)
+            and value.args[0].id == parameters[1]
+        ),
+        None,
+    )
+    if labels_assignment is None:
+        return False
+    labels_name, _ = labels_assignment
+
+    unique_labels_assignment = next(
+        (
+            (name, value)
+            for name, values in local.items()
+            for value in values
+            if _name_call(value, "np.unique")
+            and len(value.args) == 1
+            and isinstance(value.args[0], ast.Name)
+            and value.args[0].id == labels_name
+        ),
+        None,
+    )
+    if unique_labels_assignment is None:
+        return False
+    unique_labels_name, _ = unique_labels_assignment
+
+    n_rows_assignment = next(
+        (
+            (name, value)
+            for name, values in local.items()
+            for value in values
+            if isinstance(value, ast.Call)
+            and isinstance(value.func, ast.Name)
+            and value.func.id == "len"
+            and len(value.args) == 1
+            and isinstance(value.args[0], ast.Name)
+            and value.args[0].id == labels_name
+        ),
+        None,
+    )
+    if n_rows_assignment is None:
+        return False
+    n_rows_name, _ = n_rows_assignment
+
+    sample_size_assignment = next(
+        (
+            (name, value)
+            for name, values in local.items()
+            for value in values
+            if isinstance(value, ast.Call)
+            and isinstance(value.func, ast.Name)
+            and value.func.id == "min"
+            and len(value.args) == 2
+            and isinstance(value.args[1], ast.Name)
+            and value.args[1].id == n_rows_name
+            and (
+                (
+                    isinstance(value.args[0], ast.Name)
+                    and value.args[0].id in parameters
+                )
+                or (
+                    isinstance(value.args[0], ast.Call)
+                    and isinstance(value.args[0].func, ast.Name)
+                    and value.args[0].func.id == "int"
+                    and len(value.args[0].args) == 1
+                    and isinstance(value.args[0].args[0], ast.Name)
+                    and value.args[0].args[0].id in parameters
+                )
+            )
+        ),
+        None,
+    )
+    if sample_size_assignment is None:
+        return False
+    sample_size_name, sample_size_value = sample_size_assignment
+    sample_cap_expression = sample_size_value.args[0]
+    if isinstance(sample_cap_expression, ast.Call):
+        sample_cap_parameter = sample_cap_expression.args[0].id
+    else:
+        sample_cap_parameter = sample_cap_expression.id
+
+    rng_assignment = next(
+        (
+            (name, value)
+            for name, values in local.items()
+            for value in values
+            if _name_call(value, "np.random.default_rng")
+            and len(value.args) == 1
+            and isinstance(value.args[0], ast.Name)
+            and value.args[0].id in parameters
+        ),
+        None,
+    )
+    if rng_assignment is None:
+        return False
+    rng_name, rng_value = rng_assignment
+    seed_parameter = rng_value.args[0].id
+
+    permutation_assignment = next(
+        (
+            (name, value)
+            for name, values in local.items()
+            for value in values
+            if isinstance(value, ast.Call)
+            and isinstance(value.func, ast.Attribute)
+            and isinstance(value.func.value, ast.Name)
+            and value.func.value.id == rng_name
+            and value.func.attr == "permutation"
+            and len(value.args) == 1
+            and isinstance(value.args[0], ast.Name)
+            and value.args[0].id == n_rows_name
+        ),
+        None,
+    )
+    if permutation_assignment is None:
+        return False
+    permutation_name, _ = permutation_assignment
+
+    selected_name = next(
+        (
+            name
+            for name, values in local.items()
+            if len(values) == 1 and isinstance(values[0], ast.List)
+        ),
+        None,
+    )
+    selected_set_name = next(
+        (
+            name
+            for name, values in local.items()
+            if len(values) == 1
+            and isinstance(values[0], ast.Call)
+            and isinstance(values[0].func, ast.Name)
+            and values[0].func.id == "set"
+            and not values[0].args
+        ),
+        None,
+    )
+    if selected_name is None or selected_set_name is None:
+        return False
+
+    def _contains_first_label_selection(loop: ast.For) -> bool:
+        if not (
+            isinstance(loop.iter, ast.Name)
+            and loop.iter.id == unique_labels_name
+        ):
+            return False
+        has_cluster_indices = False
+        has_append = False
+        has_add = False
+        for node in ast.walk(loop):
+            if (
+                isinstance(node, ast.Assign)
+                and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and isinstance(node.value, ast.Call)
+                and _callable_path(node.value.func, {}).rsplit(".", 1)[-1]
+                == "flatnonzero"
+            ):
+                has_cluster_indices = True
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == selected_name
+                and node.func.attr == "append"
+            ):
+                has_append = True
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == selected_set_name
+                and node.func.attr == "add"
+            ):
+                has_add = True
+        return has_cluster_indices and has_append and has_add
+
+    def _contains_permutation_fill(loop: ast.For) -> bool:
+        if not (
+            isinstance(loop.target, ast.Name)
+            and isinstance(loop.iter, ast.Name)
+            and loop.iter.id == permutation_name
+        ):
+            return False
+        has_membership_guard = False
+        has_append = False
+        has_add = False
+        has_cap_break = False
+        for node in ast.walk(loop):
+            if (
+                isinstance(node, ast.Compare)
+                and len(node.ops) == 1
+                and isinstance(node.ops[0], ast.NotIn)
+                and isinstance(node.left, ast.Name)
+                and node.left.id == loop.target.id
+                and len(node.comparators) == 1
+                and isinstance(node.comparators[0], ast.Name)
+                and node.comparators[0].id == selected_set_name
+            ):
+                has_membership_guard = True
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == selected_name
+                and node.func.attr == "append"
+            ):
+                has_append = True
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == selected_set_name
+                and node.func.attr == "add"
+            ):
+                has_add = True
+            if (
+                isinstance(node, ast.Compare)
+                and len(node.ops) == 1
+                and isinstance(node.ops[0], ast.Eq)
+                and isinstance(node.left, ast.Call)
+                and isinstance(node.left.func, ast.Name)
+                and node.left.func.id == "len"
+                and len(node.left.args) == 1
+                and isinstance(node.left.args[0], ast.Name)
+                and node.left.args[0].id == selected_name
+                and len(node.comparators) == 1
+                and isinstance(node.comparators[0], ast.Name)
+                and node.comparators[0].id == sample_size_name
+            ):
+                has_cap_break = any(isinstance(child, ast.Break) for child in ast.walk(loop))
+        return has_membership_guard and has_append and has_add and has_cap_break
+
+    loops = [node for node in ast.walk(function) if isinstance(node, ast.For)]
+    if not any(_contains_first_label_selection(loop) for loop in loops):
+        return False
+    if not any(_contains_permutation_fill(loop) for loop in loops):
+        return False
+
+    sample_indices_assignment = next(
+        (
+            (name, value)
+            for name, values in local.items()
+            for value in values
+            if _name_call(value, "np.asarray")
+            and len(value.args) == 1
+            and isinstance(value.args[0], ast.Name)
+            and value.args[0].id == selected_name
+        ),
+        None,
+    )
+    if sample_indices_assignment is None:
+        return False
+    sample_indices_name, _ = sample_indices_assignment
+    sample_labels_assignment = next(
+        (
+            (name, value)
+            for name, values in local.items()
+            for value in values
+            if isinstance(value, ast.Subscript)
+            and isinstance(value.value, ast.Name)
+            and value.value.id == labels_name
+            and isinstance(value.slice, ast.Name)
+            and value.slice.id == sample_indices_name
+        ),
+        None,
+    )
+    if sample_labels_assignment is None:
+        return False
+    sample_labels_name, _ = sample_labels_assignment
+
+    if not any(
+        isinstance(node, ast.If)
+        and isinstance(node.test, ast.Compare)
+        and len(node.test.ops) == 1
+        and isinstance(node.test.ops[0], ast.NotEq)
+        and isinstance(node.test.left, ast.Attribute)
+        and node.test.left.attr == "size"
+        and isinstance(node.test.left.value, ast.Call)
+        and _callable_path(node.test.left.value.func, {}).rsplit(".", 1)[-1]
+        == "unique"
+        and node.test.left.value.args
+        and isinstance(node.test.left.value.args[0], ast.Name)
+        and node.test.left.value.args[0].id == sample_labels_name
+        and len(node.test.comparators) == 1
+        and isinstance(node.test.comparators[0], ast.Attribute)
+        and node.test.comparators[0].attr == "size"
+        and isinstance(node.test.comparators[0].value, ast.Name)
+        and node.test.comparators[0].value.id == unique_labels_name
+        for node in ast.walk(function)
+    ):
+        return False
+
+    if not (
+        isinstance(call.args[0], ast.Subscript)
+        and isinstance(call.args[0].slice, ast.Name)
+        and call.args[0].slice.id == sample_indices_name
+        and isinstance(call.args[1], ast.Name)
+        and call.args[1].id == sample_labels_name
+    ):
+        return False
+
+    def _call_site_actuals(parameter: str) -> Optional[List[ast.AST]]:
+        position = parameters.index(parameter)
+        actuals: List[ast.AST] = []
+        for candidate in ast.walk(tree):
+            if not isinstance(candidate, ast.Call):
+                continue
+            if _callable_path(candidate.func, {}).rsplit(".", 1)[-1] != function.name:
+                continue
+            actual = next(
+                (item.value for item in candidate.keywords if item.arg == parameter),
+                candidate.args[position] if position < len(candidate.args) else None,
+            )
+            if actual is None:
+                return None
+            actuals.append(actual)
+        return actuals or None
+
+    cap_actuals = _call_site_actuals(sample_cap_parameter)
+    seed_actuals = _call_site_actuals(seed_parameter)
+    if cap_actuals is None or seed_actuals is None:
+        return False
+    if any(
+        (bound := _static_integer_upper_bound(actual, assignments=assignments)) is None
+        or bound > PAIRWISE_EVALUATION_MAX_SAMPLE_SIZE
+        for actual in cap_actuals
+    ):
+        return False
+    return all(
+        _statically_deterministic_integer(
+            actual,
+            tree=tree,
+            function=None,
+            assignments=assignments,
+            fixed_seed_names=fixed_seed_names,
+        )
+        for actual in seed_actuals
+    )
+
+
 def _manual_bounded_silhouette_contract(
     call: ast.Call,
     *,
@@ -676,6 +1060,15 @@ def _manual_bounded_silhouette_contract(
 
     if function is None or len(call.args) < 2:
         return False
+
+    if _permutation_sample_bounded_silhouette_contract(
+        call,
+        tree=tree,
+        function=function,
+        assignments=assignments,
+        fixed_seed_names=fixed_seed_names,
+    ):
+        return True
 
     # A repair may preserve the original sklearn callable under an alias and
     # bind its required budget arguments through ``**kwargs``. Accept only the
