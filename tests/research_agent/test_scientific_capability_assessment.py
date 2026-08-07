@@ -84,9 +84,11 @@ def test_causal_execution_is_honest_about_missing_identification_validator() -> 
         analysis_type="causal_inference", context=_context()
     )
 
-    assert assessment.question_understood is True
-    assert assessment.data_available is True
-    assert assessment.estimator_available is True
+    assert assessment.question_present is True
+    assert assessment.question_grounded is True
+    assert assessment.input_contract_resolved is True
+    assert assessment.runtime_data_available is None
+    assert assessment.execution_backend_available is None
     assert assessment.scientific_validator_available is False
     assert assessment.status == "analysis_only"
     assert assessment.issue_code == "scientific_validator_unavailable"
@@ -107,7 +109,47 @@ def test_ordinary_survival_is_distinguished_from_a_competing_risk_endpoint() -> 
     assert ordinary.scientific_validator_available is True
     assert competing.status == "unsupported"
     assert competing.issue_code == "competing_risk_estimator_unavailable"
-    assert competing.estimator_available is False
+    assert competing.execution_backend_available is None
+
+
+def test_ordinal_association_uses_its_directly_declared_capability() -> None:
+    context = ResearchContext(
+        research_question="Does ordered severity predict mortality?",
+        cohort=CohortDescriptor(
+            cohort_name="synthetic", database="synthetic", n_patients=12, n_stays=12
+        ),
+        variables=[
+            ConceptDescriptor(
+                name="severity_stage",
+                dtype="int64",
+                role=VariableRole.ORDINAL_SCORE,
+                is_ordinal=True,
+                ordinal_levels=[0, 1, 2, 3],
+            ),
+            ConceptDescriptor(
+                name="death", dtype="int64", role=VariableRole.OUTCOME
+            ),
+        ],
+        primary_exposure="severity_stage",
+        target_outcome="death",
+    )
+
+    assessment = assess_scientific_capability(
+        analysis_type="ordinal_dose_response", context=context
+    )
+
+    assert assessment.capability_id == "association_ordinal_trend_v1"
+    assert assessment.status == "reportable"
+
+
+def test_ordinal_association_fails_closed_without_a_declared_ordinal_input() -> None:
+    assessment = assess_scientific_capability(
+        analysis_type="ordinal_dose_response", context=_context()
+    )
+
+    assert assessment.capability_id == "association_ordinal_trend_v1"
+    assert assessment.status == "analysis_only"
+    assert assessment.issue_code == "scientific_capability_data_contract_unresolved"
 
 
 @pytest.mark.parametrize(

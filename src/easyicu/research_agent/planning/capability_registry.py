@@ -46,6 +46,7 @@ __all__ = [
     "KNOWN_UNSUPPORTED_ESTIMANDS",
     "FAIL_CLOSED_LADDER",
     "get_capability",
+    "get_capability_by_id",
     "assess_scientific_capability",
     "deterministic_primary_families",
     "llm_coded_primary_families",
@@ -102,9 +103,15 @@ class ScientificCapabilityAssessment:
 
     capability_id: Optional[str]
     analysis_type: Optional[str]
-    question_understood: bool
-    data_available: bool
-    estimator_available: bool
+    question_present: bool
+    question_grounded: bool
+    input_contract_resolved: bool
+    # This pre-execution receipt cannot truthfully say whether source rows or
+    # a provider/backend were available. Those facts belong to execution
+    # receipts, so leave them unknown instead of turning a schema declaration
+    # into an availability claim.
+    runtime_data_available: Optional[bool]
+    execution_backend_available: Optional[bool]
     scientific_validator_available: bool
     status: Literal["reportable", "analysis_only", "unsupported"]
     issue_code: Optional[str] = None
@@ -118,15 +125,14 @@ class ScientificCapabilityAssessment:
         """Return a stable, JSON-ready readiness receipt."""
 
         return {
-            "schema_version": "easyicu.scientific_capability_assessment/1",
+            "schema_version": "easyicu.scientific_capability_assessment/2",
             "capability_id": self.capability_id,
             "analysis_type": self.analysis_type,
-            "question_understood": self.question_understood,
-            # This means the typed context declares every column-shaped input
-            # required by the capability. Row-level availability remains the
-            # responsibility of the executor and its evidence receipt.
-            "data_available": self.data_available,
-            "estimator_available": self.estimator_available,
+            "question_present": self.question_present,
+            "question_grounded": self.question_grounded,
+            "input_contract_resolved": self.input_contract_resolved,
+            "runtime_data_available": self.runtime_data_available,
+            "execution_backend_available": self.execution_backend_available,
             "scientific_validator_available": self.scientific_validator_available,
             "status": self.status,
             "publication_eligible": self.publication_eligible,
@@ -472,6 +478,22 @@ def get_capability(
     return matches[0]
 
 
+def get_capability_by_id(capability_id: Optional[str]) -> Optional[ScientificCapability]:
+    """Return one directly declared capability, rejecting unknown ids."""
+
+    wanted = str(capability_id or "").strip()
+    if not wanted:
+        return None
+    matches = [
+        capability
+        for capability in CAPABILITY_REGISTRY
+        if capability.capability_id == wanted
+    ]
+    if len(matches) != 1:
+        return None
+    return matches[0]
+
+
 def assess_scientific_capability(
     *,
     analysis_type: Optional[str],
@@ -480,21 +502,26 @@ def assess_scientific_capability(
     """State whether the declared question can make a reportable claim.
 
     This is a *capability* receipt, not an estimator or a data-quality check.
-    ``data_available`` means that the typed context names the input shape the
-    capability requires; executors still prove row-level availability.  The
-    assessment is deliberately conservative: an unregistered scientific
-    validator keeps an otherwise executable run at ``analysis_only``.
+    ``input_contract_resolved`` means that the typed context names the input
+    shape the capability requires; executors still prove row-level availability
+    and backend availability in their own receipts. The assessment is
+    deliberately conservative: an unregistered scientific validator keeps an
+    otherwise executable run at ``analysis_only``.
     """
 
-    question_understood = bool(str(getattr(context, "research_question", "") or "").strip())
+    question_present = bool(
+        str(getattr(context, "research_question", "") or "").strip()
+    )
     raw_type = str(analysis_type or "").strip()
     if not raw_type:
         return ScientificCapabilityAssessment(
             capability_id=None,
             analysis_type=None,
-            question_understood=question_understood,
-            data_available=False,
-            estimator_available=False,
+            question_present=question_present,
+            question_grounded=False,
+            input_contract_resolved=False,
+            runtime_data_available=None,
+            execution_backend_available=None,
             scientific_validator_available=False,
             status="unsupported",
             issue_code="analysis_family_unresolved",
@@ -502,8 +529,7 @@ def assess_scientific_capability(
         )
 
     try:
-        from .analysis_types import canonical_analysis_family
-        from .study_design import study_design_family_for_analysis_type
+        from .analysis_types import canonical_analysis_family, get_analysis_type
 
         canonical = canonical_analysis_family(raw_type)
         if canonical is None:
@@ -515,9 +541,11 @@ def assess_scientific_capability(
             return ScientificCapabilityAssessment(
                 capability_id=None,
                 analysis_type=canonical,
-                question_understood=question_understood,
-                data_available=False,
-                estimator_available=False,
+                question_present=question_present,
+                question_grounded=False,
+                input_contract_resolved=False,
+                runtime_data_available=None,
+                execution_backend_available=None,
                 scientific_validator_available=False,
                 status="unsupported",
                 issue_code="scientific_capability_unregistered",
@@ -526,7 +554,7 @@ def assess_scientific_capability(
                     "the descriptive display fallback is not a result validator."
                 ),
             )
-        capability = get_capability(study_design_family_for_analysis_type(canonical))
+        capability = get_capability_by_id(get_analysis_type(canonical).capability_id)
     except (TypeError, ValueError):
         capability = None
         canonical = raw_type
@@ -535,9 +563,11 @@ def assess_scientific_capability(
         return ScientificCapabilityAssessment(
             capability_id=None,
             analysis_type=canonical,
-            question_understood=question_understood,
-            data_available=False,
-            estimator_available=False,
+            question_present=question_present,
+            question_grounded=False,
+            input_contract_resolved=False,
+            runtime_data_available=None,
+            execution_backend_available=None,
             scientific_validator_available=False,
             status="unsupported",
             issue_code="scientific_capability_unregistered",
@@ -551,16 +581,34 @@ def assess_scientific_capability(
     # phenotyping run has a feature matrix and no exposure/outcome by design;
     # requiring those association coordinates would silently misclassify it.
     if capability.family in {"association", "causal_emulation"}:
-        data_available = bool(exposure and outcome)
+        input_contract_resolved = bool(exposure and outcome)
     elif capability.family == "prediction":
-        data_available = bool(outcome and variables)
+        input_contract_resolved = bool(outcome and variables)
     elif capability.family == "phenotyping":
-        data_available = bool(variables)
+        input_contract_resolved = bool(variables)
     else:
-        data_available = bool(getattr(context, "cohort", None))
+        input_contract_resolved = bool(getattr(context, "cohort", None))
+    if capability.capability_id == "association_ordinal_trend_v1":
+        exposure_descriptor = next(
+            (
+                variable
+                for variable in variables
+                if str(getattr(variable, "name", "") or "").strip() == exposure
+            ),
+            None,
+        )
+        levels = list(
+            getattr(exposure_descriptor, "ordinal_levels", None) or []
+        )
+        input_contract_resolved = bool(
+            exposure
+            and outcome
+            and bool(getattr(exposure_descriptor, "is_ordinal", False))
+            and len(levels) >= 3
+        )
     endpoint = getattr(context, "endpoint", None)
     if capability.family == "time_to_event":
-        data_available = bool(
+        input_contract_resolved = bool(
             exposure
             and outcome
             and endpoint is not None
@@ -571,9 +619,11 @@ def assess_scientific_capability(
             return ScientificCapabilityAssessment(
                 capability_id=capability.capability_id,
                 analysis_type=canonical,
-                question_understood=question_understood,
-                data_available=data_available,
-                estimator_available=False,
+                question_present=question_present,
+                question_grounded=bool(question_present and input_contract_resolved),
+                input_contract_resolved=input_contract_resolved,
+                runtime_data_available=None,
+                execution_backend_available=None,
                 scientific_validator_available=False,
                 status="unsupported",
                 issue_code="competing_risk_estimator_unavailable",
@@ -584,25 +634,29 @@ def assess_scientific_capability(
                 ),
             )
 
-    if not question_understood:
+    if not question_present:
         return ScientificCapabilityAssessment(
             capability_id=capability.capability_id,
             analysis_type=canonical,
-            question_understood=False,
-            data_available=data_available,
-            estimator_available=True,
+            question_present=False,
+            question_grounded=False,
+            input_contract_resolved=input_contract_resolved,
+            runtime_data_available=None,
+            execution_backend_available=None,
             scientific_validator_available=False,
             status="analysis_only",
             issue_code="research_question_unresolved",
             reason="A scientific capability cannot validate an empty research question.",
         )
-    if not data_available:
+    if not input_contract_resolved:
         return ScientificCapabilityAssessment(
             capability_id=capability.capability_id,
             analysis_type=canonical,
-            question_understood=True,
-            data_available=False,
-            estimator_available=True,
+            question_present=True,
+            question_grounded=False,
+            input_contract_resolved=False,
+            runtime_data_available=None,
+            execution_backend_available=None,
             scientific_validator_available=False,
             status="analysis_only",
             issue_code="scientific_capability_data_contract_unresolved",
@@ -615,9 +669,11 @@ def assess_scientific_capability(
         return ScientificCapabilityAssessment(
             capability_id=capability.capability_id,
             analysis_type=canonical,
-            question_understood=True,
-            data_available=True,
-            estimator_available=True,
+            question_present=True,
+            question_grounded=True,
+            input_contract_resolved=True,
+            runtime_data_available=None,
+            execution_backend_available=None,
             scientific_validator_available=False,
             status="analysis_only",
             issue_code="scientific_validator_unavailable",
@@ -629,9 +685,11 @@ def assess_scientific_capability(
     return ScientificCapabilityAssessment(
         capability_id=capability.capability_id,
         analysis_type=canonical,
-        question_understood=True,
-        data_available=True,
-        estimator_available=True,
+        question_present=True,
+        question_grounded=True,
+        input_contract_resolved=True,
+        runtime_data_available=None,
+        execution_backend_available=None,
         scientific_validator_available=True,
         status="reportable",
         reason="The registered result and diagnostic contracts can support a claim.",

@@ -59,6 +59,11 @@ class AnalysisTypeSpec:
     # how the routing layer grew to 1,395 lines. The requirement is compiled
     # once, here.
     required_endpoint_kind: Optional[str] = None
+    # The scientific capability is an execution contract, not a display-family
+    # inference.  It is declared here so readiness never has to reconstruct a
+    # capability by passing through a second analysis-type -> display-family
+    # mapping. ``None`` is an explicit unsupported boundary.
+    capability_id: Optional[str] = None
 
 
 _REGISTRY: Dict[str, AnalysisTypeSpec] = {
@@ -90,6 +95,7 @@ _REGISTRY: Dict[str, AnalysisTypeSpec] = {
             "Do not imply causal or predictive effects from descriptive summaries.",
             "Use the study time anchor consistently when reporting incidence.",
         ),
+        capability_id="descriptive_measurement_v1",
     ),
     "association_study": AnalysisTypeSpec(
         key="association_study",
@@ -122,6 +128,27 @@ _REGISTRY: Dict[str, AnalysisTypeSpec] = {
             "Avoid causal language unless the design is explicitly causal.",
             "Report effect estimates with uncertainty and analytic population.",
         ),
+        capability_id="association_adjusted_v1",
+    ),
+    "ordinal_dose_response": AnalysisTypeSpec(
+        key="ordinal_dose_response",
+        name="Association / ordered exposure trend",
+        description=(
+            "Estimate an adjusted association for a declared ordered exposure, "
+            "without inferring an ordinal scale from the column name or values."
+        ),
+        trigger_terms=("ordinal dose response", "ordered trend"),
+        candidate_steps=(
+            "declare ordered exposure levels and reference",
+            "ordered-exposure quality audit",
+            "primary adjusted trend model",
+        ),
+        guardrails=(
+            "Require a declared ordinal exposure with at least three ordered levels.",
+            "Do not coerce binary or continuous exposures into a graded trend.",
+            "Avoid causal language unless the design is explicitly causal.",
+        ),
+        capability_id="association_ordinal_trend_v1",
     ),
     "prediction_model": AnalysisTypeSpec(
         key="prediction_model",
@@ -156,6 +183,7 @@ _REGISTRY: Dict[str, AnalysisTypeSpec] = {
             "Do not substitute a simple association model for a full prediction workflow.",
             "Explicitly define the prediction horizon and anti-leakage rules.",
         ),
+        capability_id="prediction_risk_model_v1",
     ),
     "survival": AnalysisTypeSpec(
         key="survival",
@@ -194,6 +222,7 @@ _REGISTRY: Dict[str, AnalysisTypeSpec] = {
         # censoring, and event definitions"; requiring the typed endpoint is
         # what makes that sentence checkable instead of aspirational.
         required_endpoint_kind="time_to_event",
+        capability_id="survival_time_to_event_v1",
         guardrails=(
             "Do not reduce a time-to-event question to a fixed binary outcome unless the user explicitly asks for that simplification.",
             "Make the event definition, censoring mechanism, and follow-up horizon explicit.",
@@ -256,6 +285,7 @@ _REGISTRY: Dict[str, AnalysisTypeSpec] = {
             "Do not treat clusters as validated biology without robustness checks.",
             "Make time alignment explicit before comparing trajectories.",
         ),
+        capability_id="phenotyping_cluster_v1",
     ),
     "multimodal": AnalysisTypeSpec(
         key="multimodal",
@@ -376,6 +406,7 @@ _REGISTRY: Dict[str, AnalysisTypeSpec] = {
             "Do not present causal estimates without an explicit design.",
             "Check alignment of eligibility, treatment assignment, and follow-up.",
         ),
+        capability_id="causal_target_trial_v1",
     ),
     "reinforcement_learning": AnalysisTypeSpec(
         key="reinforcement_learning",
@@ -562,6 +593,9 @@ _FAMILY_ALIASES: Dict[str, str] = {
     "phenotype": "trajectory_clustering",
     "association": "association_study",
     "association_study": "association_study",
+    "ordinal_dose_response": "ordinal_dose_response",
+    "association_ordinal": "ordinal_dose_response",
+    "ordered_association": "ordinal_dose_response",
     "survival": "survival",
     "dynamic_prediction": "dynamic_prediction",
     "treatment_response": "treatment_response",
