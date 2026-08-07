@@ -629,7 +629,7 @@ def _rrt_active_from_initiation(
 
 
 def kdigo_stages(
-    crea_df: pd.DataFrame,
+    crea_df: Optional[pd.DataFrame] = None,
     urine_df: Optional[pd.DataFrame] = None,
     weight_df: Optional[pd.DataFrame] = None,
     rrt_df: Optional[pd.DataFrame] = None,
@@ -641,7 +641,7 @@ def kdigo_stages(
     urine_source_is_rate: bool = False,
     interval: Optional[pd.Timedelta] = None,
 ) -> pd.DataFrame:
-    """Calculate combined KDIGO AKI staging using creatinine and urine output.
+    """Calculate component-neutral KDIGO AKI staging.
     
     This is the main function for KDIGO AKI staging. It combines:
     - Creatinine-based staging (baseline and acute rise)
@@ -653,7 +653,7 @@ def kdigo_stages(
     cannot establish either AKI or no AKI; it is intentionally not a stage 0.
     
     Args:
-        crea_df: DataFrame with creatinine values
+        crea_df: DataFrame with creatinine values (optional)
         urine_df: DataFrame with urine output values (optional)
         weight_df: DataFrame with patient weight (optional, required if urine_df provided)
         rrt_df: DataFrame with RRT indicator (optional)
@@ -669,23 +669,46 @@ def kdigo_stages(
         DataFrame with combined AKI staging including:
         - aki_stage_creat: Creatinine-based stage (0-3)
         - aki_stage_uo: Urine output-based stage (0-3)
-        - aki_stage: Final combined stage (0-3)
+        - aki_stage: Final combined stage (0-3, or ``<NA>`` when indeterminate)
         - aki: Boolean indicator (True if aki_stage > 0)
+        - creat_assessable, uo_assessable, rrt_observed, aki_assessable,
+          aki_assessment_reason: component/overall ascertainment receipt
     """
-    if crea_df.empty:
+    source_frames = tuple(
+        frame
+        for frame in (crea_df, urine_df, rrt_df)
+        if isinstance(frame, pd.DataFrame) and not frame.empty
+    )
+    if not source_frames:
         return pd.DataFrame()
-    
-    # Auto-detect columns
-    id_col = _detect_id_col(crea_df, id_col)
-    time_col = _detect_time_col(crea_df, time_col)
-    
-    # Calculate creatinine-based staging
-    crea_staging = kdigo_creatinine(crea_df, id_col, time_col, crea_col)
-    
+
+    # Do not let one component decide whether a patient enters the KDIGO
+    # table.  The first available component supplies the public timeline key;
+    # every component then contributes its own rows to the union spine below.
+    anchor = next(
+        frame
+        for frame in (crea_df, urine_df, rrt_df)
+        if isinstance(frame, pd.DataFrame) and not frame.empty
+    )
+    id_col = _detect_id_col(anchor, id_col)
+    time_col = _detect_time_col(anchor, time_col)
+    if id_col is None or time_col is None:
+        raise ValueError(
+            "Could not detect a KDIGO ID/time key from available components. "
+            f"Found columns: {list(anchor.columns)}"
+        )
+
+    crea_staging = pd.DataFrame()
+    if isinstance(crea_df, pd.DataFrame) and not crea_df.empty:
+        crea_staging = kdigo_creatinine(crea_df, id_col, time_col, crea_col)
+
     if crea_staging.empty:
-        return pd.DataFrame()
-    
-    result = crea_staging.copy()
+        result = anchor[[id_col, time_col]].copy()
+        result['aki_stage_creat'] = pd.Series(
+            pd.NA, index=result.index, dtype="Int64"
+        )
+    else:
+        result = crea_staging.copy()
     result['creat_assessable'] = result['aki_stage_creat'].notna()
     
     # Calculate urine output-based staging if data available
@@ -746,6 +769,37 @@ def kdigo_stages(
         result['uo_assessable'] = False
         result['uo_assessment_reason'] = "urine_or_weight_unavailable"
 
+    def _component_timeline(frame: Optional[pd.DataFrame]) -> pd.DataFrame:
+        if frame is None or frame.empty:
+            return pd.DataFrame(columns=[id_col, time_col])
+        source_id = _detect_id_col(frame, id_col)
+        source_time = _detect_time_col(frame, time_col)
+        if source_id is None or source_time is None:
+            return pd.DataFrame(columns=[id_col, time_col])
+        return (
+            frame[[source_id, source_time]]
+            .rename(columns={source_id: id_col, source_time: time_col})
+            .dropna(subset=[id_col, time_col])
+        )
+
+    # Retain rows from every observed KDIGO component.  In particular, an RRT
+    # initiation must survive even when no contemporaneous creatinine exists.
+    spine = (
+        pd.concat(
+            [
+                result[[id_col, time_col]],
+                _component_timeline(urine_df),
+                _component_timeline(rrt_df),
+            ],
+            ignore_index=True,
+        )
+        .dropna(subset=[id_col, time_col])
+        .drop_duplicates()
+        .sort_values([id_col, time_col], kind="stable")
+        .reset_index(drop=True)
+    )
+    result = spine.merge(result, on=[id_col, time_col], how='left', sort=False)
+
     # An outer UO merge can add times that have no creatinine row.  Preserve
     # the distinction between an unavailable baseline and a proven negative.
     result['creat_assessable'] = result['aki_stage_creat'].notna()
@@ -782,6 +836,7 @@ def kdigo_stages(
     result['aki_stage_creat'] = result['aki_stage_creat'].astype("Int64")
     result['aki_stage_uo'] = result['aki_stage_uo'].astype("Int64")
     result['aki_stage_rrt'] = result['aki_stage_rrt'].astype("Int64")
+    result['rrt_observed'] = (result['aki_stage_rrt'] > 0).astype("boolean")
     rrt_positive = result['aki_stage_rrt'].where(
         result['aki_stage_rrt'] > 0, pd.NA
     )
@@ -791,6 +846,17 @@ def kdigo_stages(
     )
     result['aki_stage'] = components.max(axis=1, skipna=True).astype("Int64")
     result['aki'] = (result['aki_stage'] > 0).astype("boolean")
+    result['aki_assessable'] = result['aki_stage'].notna()
+    result['aki_assessment_reason'] = pd.Series(
+        pd.NA, index=result.index, dtype="string"
+    )
+    result.loc[result['aki_stage'] > 0, 'aki_assessment_reason'] = "positive_component"
+    result.loc[result['aki_stage'] == 0, 'aki_assessment_reason'] = (
+        "assessable_components_negative"
+    )
+    result.loc[
+        ~result['aki_assessable'], 'aki_assessment_reason'
+    ] = "no_assessable_component"
     
     return result
 
@@ -827,14 +893,15 @@ def load_kdigo_aki(
     Example:
         >>> from easyicu.kdigo_aki import load_kdigo_aki
         >>> aki_df = load_kdigo_aki('miiv', max_patients=100)
-        >>> print(f"AKI prevalence: {aki_df['aki'].mean():.1%}")
+        >>> summary = summarize_aki(aki_df)
+        >>> print(summary['aki_prevalence_among_assessable'])
     """
     from easyicu.api import load_concepts  # was `from .api` -> resolved to non-existent easyicu.scores.api
 
     _pre = preloaded_data or {}
     
     def _load_or_reuse(concept):
-        if concept in _pre and isinstance(_pre[concept], pd.DataFrame) and not _pre[concept].empty:
+        if concept in _pre and isinstance(_pre[concept], pd.DataFrame):
             return _pre[concept]
         try:
             return load_concepts(
@@ -848,21 +915,19 @@ def load_kdigo_aki(
     if verbose:
         logger.info(f"Loading KDIGO AKI data for {database}...")
     
-    # Load creatinine
+    # Load all KDIGO components before deciding whether the patient has an
+    # assessable timeline.  Creatinine is not a membership prerequisite.
     crea_df = _load_or_reuse('crea')
-    
-    if crea_df is None or crea_df.empty:
-        logger.warning(f"No creatinine data found for {database}")
-        return pd.DataFrame()
-    
-    # Detect ID column for this database
-    id_col = _detect_id_col(crea_df)
-    time_col = _detect_time_col(crea_df)
-    
-    # Load urine output, weight, and RRT
     urine_df = _load_or_reuse('urine')
     weight_df = _load_or_reuse('weight')
     rrt_df = _load_or_reuse('rrt')
+
+    if not any(
+        isinstance(frame, pd.DataFrame) and not frame.empty
+        for frame in (crea_df, urine_df, rrt_df)
+    ):
+        logger.warning("No creatinine, urine-output, or RRT data found for %s", database)
+        return pd.DataFrame()
     
     # Calculate KDIGO AKI staging
     result = kdigo_stages(
@@ -870,8 +935,6 @@ def load_kdigo_aki(
         urine_df=urine_df,
         weight_df=weight_df,
         rrt_df=rrt_df,
-        id_col=id_col,
-        time_col=time_col,
         crea_col='crea',
         urine_col='urine',
         weight_col='weight',
@@ -880,11 +943,27 @@ def load_kdigo_aki(
     )
     
     if verbose and not result.empty:
-        aki_rate = result['aki'].mean() * 100
+        n_total = len(result)
+        n_assessable = int(result['aki_assessable'].sum())
+        n_positive = int(result['aki'].eq(True).fillna(False).sum())
+        n_negative = int(result['aki'].eq(False).fillna(False).sum())
+        n_indeterminate = n_total - n_assessable
+        prevalence = (
+            100.0 * n_positive / n_assessable if n_assessable else float("nan")
+        )
         stage_dist = result['aki_stage'].value_counts().sort_index()
         logger.info(f"KDIGO AKI Results for {database}:")
-        logger.info(f"  Total rows: {len(result):,}")
-        logger.info(f"  AKI prevalence: {aki_rate:.1f}%")
+        logger.info(f"  Total rows: {n_total:,}")
+        logger.info(f"  AKI positive: {n_positive:,}")
+        logger.info(f"  AKI negative (assessable): {n_negative:,}")
+        logger.info(f"  AKI indeterminate: {n_indeterminate:,}")
+        logger.info(
+            "  Prevalence among assessable: %.1f%% (coverage: %d/%d, %.1f%%)",
+            prevalence,
+            n_assessable,
+            n_total,
+            100.0 * n_assessable / n_total,
+        )
         logger.info(f"  Stage distribution: {stage_dist.to_dict()}")
     
     return result
@@ -998,7 +1077,11 @@ def get_aki_incidence(
 
 
 def summarize_aki(aki_df: pd.DataFrame, id_col: Optional[str] = None) -> Dict[str, Any]:
-    """Generate summary statistics for AKI staging results.
+    """Generate explicit patient-level AKI ascertainment statistics.
+
+    The prevalence denominator is patients with at least one assessable KDIGO
+    component.  Indeterminate patients remain visible rather than being
+    silently counted as non-AKI.
     
     Args:
         aki_df: DataFrame from kdigo_stages or load_kdigo_aki
@@ -1015,9 +1098,33 @@ def summarize_aki(aki_df: pd.DataFrame, id_col: Optional[str] = None) -> Dict[st
     n_patients = aki_df[id_col].nunique()
     n_measurements = len(aki_df)
     
-    # Patient-level AKI (any AKI during stay)
-    patient_aki = aki_df.groupby(id_col)['aki'].any()
-    n_aki_patients = patient_aki.sum()
+    if id_col is None:
+        return {'error': 'Could not detect patient ID column'}
+
+    assessable_rows = (
+        aki_df['aki_assessable']
+        if 'aki_assessable' in aki_df.columns
+        else aki_df['aki'].notna()
+    )
+    per_patient = pd.DataFrame(
+        {
+            id_col: aki_df[id_col],
+            'positive': aki_df['aki'].eq(True).fillna(False),
+            'assessable': assessable_rows.fillna(False),
+        }
+    ).groupby(id_col, dropna=True, sort=False).agg(
+        positive=('positive', 'any'),
+        assessable=('assessable', 'any'),
+    )
+    n_aki_patients = int(per_patient['positive'].sum())
+    n_assessable_patients = int(per_patient['assessable'].sum())
+    n_indeterminate_patients = int((~per_patient['assessable']).sum())
+    n_negative_patients = n_assessable_patients - n_aki_patients
+    prevalence_among_assessable = (
+        float(n_aki_patients / n_assessable_patients)
+        if n_assessable_patients > 0
+        else None
+    )
     
     # Stage distribution (at measurement level)
     stage_dist = aki_df['aki_stage'].value_counts().sort_index().to_dict()
@@ -1029,8 +1136,18 @@ def summarize_aki(aki_df: pd.DataFrame, id_col: Optional[str] = None) -> Dict[st
     return {
         'n_patients': n_patients,
         'n_measurements': n_measurements,
-        'aki_patients': int(n_aki_patients),
-        'aki_rate': float(n_aki_patients / n_patients) if n_patients > 0 else 0.0,
+        'aki_positive_patients': n_aki_patients,
+        'aki_negative_assessable_patients': n_negative_patients,
+        'aki_indeterminate_patients': n_indeterminate_patients,
+        'n_assessable_patients': n_assessable_patients,
+        'aki_prevalence_among_assessable': prevalence_among_assessable,
+        'ascertainment_coverage': (
+            float(n_assessable_patients / n_patients) if n_patients > 0 else None
+        ),
+        # Retained for callers that used the historical key; its denominator
+        # is now explicit above and is never the whole cohort by implication.
+        'aki_rate': prevalence_among_assessable,
+        'aki_rate_denominator': 'assessable_patients',
         'stage_distribution_measurements': stage_dist,
         'max_stage_distribution_patients': max_stage_dist,
     }
