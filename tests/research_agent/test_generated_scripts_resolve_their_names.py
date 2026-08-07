@@ -137,6 +137,36 @@ def _executor_scripts() -> Dict[str, Callable[[], str]]:
                     "analysis_set": "source_aware",
                     "required_for_step_success": True,
                     "covariates": ["age", "sex", "charlson_first"],
+                    "model_terms": [
+                        {
+                            "name": "sep3_sofa2_max",
+                            "role": "exposure",
+                            "coding": "binary",
+                            "levels": ["0", "1"],
+                            "reference_level": "0",
+                            "transform": "treatment_contrast",
+                        },
+                        {
+                            "name": "age",
+                            "role": "covariate",
+                            "coding": "continuous",
+                            "transform": "identity",
+                        },
+                        {
+                            "name": "sex",
+                            "role": "covariate",
+                            "coding": "binary",
+                            "levels": ["Female", "Male"],
+                            "reference_level": "Female",
+                            "transform": "treatment_contrast",
+                        },
+                        {
+                            "name": "charlson_first",
+                            "role": "covariate",
+                            "coding": "continuous",
+                            "transform": "identity",
+                        },
+                    ],
                 }
             ],
         }
@@ -335,7 +365,9 @@ def test_a_closure_reading_its_enclosing_scope_is_not_reported() -> None:
 def test_a_function_reading_a_module_level_name_is_not_reported() -> None:
     """The commonest shape in every generated script."""
 
-    source = "import os\n\nOUT = os.environ['STEP_OUT_DIR']\n\ndef main():\n    return OUT\n"
+    source = (
+        "import os\n\nOUT = os.environ['STEP_OUT_DIR']\n\ndef main():\n    return OUT\n"
+    )
 
     assert _unbound_findings(source) == []
 

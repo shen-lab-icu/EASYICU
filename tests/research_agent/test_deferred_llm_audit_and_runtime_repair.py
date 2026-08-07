@@ -281,7 +281,14 @@ def test_automatic_contract_repair_does_not_consume_llm_contract_allowance(
             )
         ]
 
-    def one_structural_repair(*, code, findings, previous_repair=None):
+    def one_structural_repair(
+        *,
+        code,
+        findings,
+        previous_repair=None,
+        on_semantic_escalation=None,
+    ):
+        del on_semantic_escalation
         del findings
         if (
             "INITIAL_CONTRACT_ERROR" in code

@@ -131,7 +131,6 @@ def test_the_guard_actually_sees_the_dead_modules_it_was_written_for():
     for module in (
         "delong_auc",
         "decision_curve",
-        "ph_schoenfeld",
         "rmst",
         "conformal",
         "evalue",
@@ -156,7 +155,13 @@ def test_the_scan_does_see_a_module_the_host_really_imports():
     """
 
     host_imported = _modules_imported_from_src()
-    for module in ("multiple_testing", "sensitivity", "table_one", "fairness"):
+    for module in (
+        "multiple_testing",
+        "sensitivity",
+        "table_one",
+        "fairness",
+        "ph_schoenfeld",
+    ):
         assert module in host_imported, (
             f"{module} is imported by src/ but the scan missed it -- the "
             "reachability scan under-reports and would flag live code as dead"
@@ -207,9 +212,9 @@ def test_declared_unreachable_kernels_carry_a_reason_and_a_decision(entry):
     # Without both fields this list degrades into "wire it later", which is the
     # state that produced 1,430 lines of dead code in the first place.
     assert len(entry.reason.strip()) > 40, f"{entry.module}: reason is not a reason"
-    assert (
-        len(entry.pending_decision.strip()) > 40
-    ), f"{entry.module}: no named pending decision"
+    assert len(entry.pending_decision.strip()) > 40, (
+        f"{entry.module}: no named pending decision"
+    )
 
 
 def test_a_module_cannot_be_both_offered_and_declared_dead():
@@ -338,9 +343,9 @@ def test_a_plain_association_step_is_not_handed_the_trajectory_kernel():
         method="adjusted_association_models",
     )
     assert "methods.temporal_features" not in prompt
-    assert (
-        "statsmodels" in prompt
-    ), "the tool this step actually needs was ranked out of its three slots"
+    assert "statsmodels" in prompt, (
+        "the tool this step actually needs was ranked out of its three slots"
+    )
 
 
 # ---------------------------------------------------------------------------

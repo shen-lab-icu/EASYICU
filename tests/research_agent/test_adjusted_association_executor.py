@@ -44,6 +44,41 @@ _REAL_STEP_ID = "07_primary_adjusted_association"
 _COVARIATES = ["age", "sex", "charlson_max"]
 
 
+def _model_terms(covariates=_COVARIATES) -> list[dict]:
+    terms = [
+        {
+            "name": "sep3_sofa2_max",
+            "role": "exposure",
+            "coding": "binary",
+            "levels": ["0", "1"],
+            "reference_level": "0",
+            "transform": "treatment_contrast",
+        }
+    ]
+    for name in covariates:
+        if name == "sex":
+            terms.append(
+                {
+                    "name": name,
+                    "role": "covariate",
+                    "coding": "binary",
+                    "levels": ["0", "1"],
+                    "reference_level": "0",
+                    "transform": "treatment_contrast",
+                }
+            )
+        else:
+            terms.append(
+                {
+                    "name": name,
+                    "role": "covariate",
+                    "coding": "continuous",
+                    "transform": "identity",
+                }
+            )
+    return terms
+
+
 def _real_step_payload() -> dict:
     document = json.loads(_FIXTURE.read_text(encoding="utf-8"))
     plan = next(e for e in document["plans"] if e["label"] == "fresh19")["plan"]
@@ -54,6 +89,7 @@ def _step(*, covariates=_COVARIATES, **overrides) -> AnalysisStep:
     payload = json.loads(json.dumps(_real_step_payload()))
     if covariates is not None:
         payload["model_requirements"][0]["covariates"] = list(covariates)
+        payload["model_requirements"][0]["model_terms"] = _model_terms(covariates)
     payload.update(overrides)
     return AnalysisStep.model_validate(payload)
 
@@ -85,12 +121,15 @@ def _run(tmp_path, frame=None, **overrides):
         "exposure": "sep3_sofa2_max",
         "outcome": "death",
         "covariates": _COVARIATES,
+        "model_terms": _model_terms(),
         "estimator_kind": "logistic",
         "analysis_set": "source_aware",
         "analysis_role": "primary",
         "method_family": "binary_logistic_regression",
     }
     payload.update(overrides)
+    if "covariates" in overrides and "model_terms" not in overrides:
+        payload["model_terms"] = _model_terms(overrides["covariates"])
     previous = os.environ.get("STEP_OUT_DIR")
     os.environ["STEP_OUT_DIR"] = str(tmp_path)
     try:
@@ -171,6 +210,20 @@ def test_an_unimplemented_method_family_is_not_claimed() -> None:
         covariates=_COVARIATES,
         outcome_type="continuous",
         method_family="quantile_regression",
+    )
+
+    assert (
+        adjusted_association_executor_owns_step(AnalysisStep.model_validate(payload))
+        is False
+    )
+
+
+def test_glm_binomial_is_not_claimed_by_the_logit_owner() -> None:
+    payload = json.loads(json.dumps(_real_step_payload()))
+    payload["model_requirements"][0].update(
+        covariates=_COVARIATES,
+        model_terms=_model_terms(),
+        method_family="statsmodels_glm_binomial",
     )
 
     assert (

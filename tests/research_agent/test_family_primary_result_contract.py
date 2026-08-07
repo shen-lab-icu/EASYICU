@@ -35,6 +35,19 @@ from easyicu.research_agent.contracts.survival_execution import (
 )
 
 
+def _survival_terms() -> list[dict]:
+    return [
+        {
+            "name": "treatment",
+            "role": "exposure",
+            "coding": "binary",
+            "levels": ["0", "1"],
+            "reference_level": "0",
+            "transform": "treatment_contrast",
+        }
+    ]
+
+
 def _context() -> ResearchContext:
     return ResearchContext(
         research_question="Does treatment change 28-day mortality?",
@@ -140,7 +153,9 @@ def test_causal_primary_result_contract_is_reconciled_to_registered_csv(
     assert findings == []
 
 
-def test_family_primary_result_rejects_an_unmatched_or_uncertain_effect(tmp_path) -> None:
+def test_family_primary_result_rejects_an_unmatched_or_uncertain_effect(
+    tmp_path,
+) -> None:
     requirement = _causal_requirement()
     plan = _plan(requirement)
     result_path = tmp_path / "primary_causal_contrast.csv"
@@ -185,8 +200,11 @@ def test_cox_contract_requires_the_ph_diagnostic() -> None:
             competing_risk_strategy="none",
             time_horizon="28 days",
             effect_measure="hazard ratio",
+            proportional_hazards_alpha=0.05,
+            proportional_hazards_policy="block_paper_authorization",
             covariates=[],
-            exposure_encoding="numeric_linear",
+            model_terms=_survival_terms(),
+            exposure_encoding="declared_model_terms",
             missing_data_policy="complete_case",
             time_unit="days",
             event_value=1,
@@ -206,7 +224,10 @@ def _survival_context() -> ResearchContext:
             ),
             ConceptDescriptor(name="death", role=VariableRole.OUTCOME, dtype="int64"),
             ConceptDescriptor(
-                name="follow_up_days", role=VariableRole.TIME, dtype="float64"
+                name="follow_up_days",
+                role=VariableRole.TIME,
+                dtype="float64",
+                unit="days",
             ),
         ],
         primary_exposure="treatment",
@@ -243,9 +264,12 @@ def _survival_requirement() -> FamilyPrimaryResultRequirement:
         competing_risk_strategy="none",
         time_horizon="28 days",
         effect_measure="hazard ratio",
-        proportional_hazards_diagnostic="global Schoenfeld residual test",
+        proportional_hazards_diagnostic="schoenfeld_global_test",
+        proportional_hazards_alpha=0.05,
+        proportional_hazards_policy="block_paper_authorization",
         covariates=[],
-        exposure_encoding="numeric_linear",
+        model_terms=_survival_terms(),
+        exposure_encoding="declared_model_terms",
         missing_data_policy="complete_case",
         time_unit="days",
         event_value=1,
@@ -326,14 +350,21 @@ def _write_survival_receipt(
                 "time_horizon_value": requirement.time_horizon_value,
                 "estimator": requirement.estimator,
                 "effect_measure": requirement.effect_measure,
-                "formula": "Surv(follow_up_days, death==1) ~ treatment",
+                "formula": "Surv(follow_up_days, death==1) ~ treatment__is_1",
                 "covariates": requirement.covariates,
+                "model_terms": [
+                    item.model_dump(mode="json")
+                    for item in requirement.model_terms or ()
+                ],
+                "design_columns": ["treatment__is_1"],
+                "exposure_design_column": "treatment__is_1",
                 "applied_filter": canonical_survival_applied_filter(
                     time_column=str(requirement.time_column),
                     event_column=str(requirement.event_column),
                     event_value=int(requirement.event_value),
                     exposure_source=requirement.exposure_source,
                     covariates=list(requirement.covariates or ()),
+                    model_terms=list(requirement.model_terms or ()),
                     time_horizon_value=float(requirement.time_horizon_value),
                     time_unit=str(requirement.time_unit),
                 ),
@@ -345,6 +376,11 @@ def _write_survival_receipt(
                 "proportional_hazards_diagnostic": requirement.proportional_hazards_diagnostic,
                 "proportional_hazards_tested": True,
                 "proportional_hazards_p_value": 0.42,
+                "proportional_hazards_alpha": requirement.proportional_hazards_alpha,
+                "proportional_hazards_policy": requirement.proportional_hazards_policy,
+                "proportional_hazards_status": "not_rejected",
+                "paper_authorization_allowed": True,
+                "time_unit_authority": "research_context_concept_descriptor",
             }
         ),
         encoding="utf-8",
@@ -371,7 +407,7 @@ def test_survival_headline_requires_an_execution_receipt(tmp_path) -> None:
         step_summary={
             "deterministic_standard_analysis": SURVIVAL_PRIMARY_ANALYSIS_KIND,
             "receipt_issuer": SURVIVAL_PRIMARY_OWNER,
-            "output_files": {requirement.expected_result_product: result_path.name}
+            "output_files": {requirement.expected_result_product: result_path.name},
         },
         out_dir=tmp_path,
     )
@@ -379,9 +415,7 @@ def test_survival_headline_requires_an_execution_receipt(tmp_path) -> None:
         "survival_execution_receipt_unregistered"
     ]
 
-    receipt_name, ph_name = _write_survival_receipt(
-        tmp_path, requirement, result_path
-    )
+    receipt_name, ph_name = _write_survival_receipt(tmp_path, requirement, result_path)
     findings = family_primary_result_reconciliation_findings(
         step=plan.steps[0],
         plan=plan,
@@ -391,11 +425,15 @@ def test_survival_headline_requires_an_execution_receipt(tmp_path) -> None:
             "receipt_issuer": SURVIVAL_PRIMARY_OWNER,
             "input_evidence_id": "evidence-analysis-cohort",
             "input_sha256": "a" * 64,
+            "design_columns": ["treatment__is_1"],
+            "exposure_design_column": "treatment__is_1",
+            "proportional_hazards_status": "not_rejected",
+            "paper_authorization_allowed": True,
             "output_files": {
                 requirement.expected_result_product: result_path.name,
                 SURVIVAL_ANALYSIS_RECEIPT_PRODUCT: receipt_name,
                 SURVIVAL_PH_DIAGNOSTIC_PRODUCT: ph_name,
-            }
+            },
         },
         out_dir=tmp_path,
     )
@@ -412,9 +450,7 @@ def test_survival_receipt_cannot_relabel_the_endpoint_or_skip_ph(tmp_path) -> No
         "treatment,death,hazard_ratio,0.81,0.66,0.98\n",
         encoding="utf-8",
     )
-    receipt_name, ph_name = _write_survival_receipt(
-        tmp_path, requirement, result_path
-    )
+    receipt_name, ph_name = _write_survival_receipt(tmp_path, requirement, result_path)
     receipt_path = tmp_path / receipt_name
     receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
     receipt["time_column"] = "guessed_time"
@@ -434,7 +470,7 @@ def test_survival_receipt_cannot_relabel_the_endpoint_or_skip_ph(tmp_path) -> No
                 requirement.expected_result_product: result_path.name,
                 SURVIVAL_ANALYSIS_RECEIPT_PRODUCT: receipt_name,
                 SURVIVAL_PH_DIAGNOSTIC_PRODUCT: ph_name,
-            }
+            },
         },
         out_dir=tmp_path,
     )

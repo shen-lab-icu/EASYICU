@@ -710,24 +710,26 @@ def test_table_one_spec_must_bind_only_explicit_step_inputs() -> None:
         AnalysisStep.model_validate(payload)
 
 
-def test_plan_normalizer_keeps_only_closed_table_one_schema() -> None:
+def test_plan_normalizer_retries_unknown_table_one_science() -> None:
+    from easyicu.research_agent.agents.plan_payload import (
+        PlannerScientificProjectionError,
+    )
+
     payload = {
         "research_question": "Describe the cohort.",
         "steps": [_step(include_spec=True)],
     }
     payload["steps"][0]["table_one_spec"]["invented_policy"] = "ignore"
     payload["steps"][0]["table_one_spec"]["variables"][0]["invented"] = True
-    normalized, dropped = _normalise_plan_payload(payload)
-    spec = normalized["steps"][0]["table_one_spec"]
-    assert "invented_policy" not in spec
-    assert "invented" not in spec["variables"][0]
-    assert dropped["table_one_spec"] == [
-        "step[0]:invented_policy",
-        "step[0].variables[0]:invented",
-    ]
+    with pytest.raises(PlannerScientificProjectionError, match="invented_policy"):
+        _normalise_plan_payload(payload)
 
 
-def test_plan_normalizer_omits_empty_unsupported_consumption_contract() -> None:
+def test_plan_normalizer_retries_unsupported_consumption_contract_shape() -> None:
+    from easyicu.research_agent.agents.plan_payload import (
+        PlannerScientificProjectionError,
+    )
+
     payload = {
         "research_question": "Describe the cohort.",
         "steps": [
@@ -743,13 +745,8 @@ def test_plan_normalizer_omits_empty_unsupported_consumption_contract() -> None:
         ],
     }
 
-    normalized, dropped = _normalise_plan_payload(payload)
-
-    assert normalized["steps"][0]["input_consumption_contracts"] == []
-    assert any(
-        item.endswith(":empty_after_normalization")
-        for item in dropped["input_consumption_contracts"]
-    )
+    with pytest.raises(PlannerScientificProjectionError, match="input"):
+        _normalise_plan_payload(payload)
 
 
 def test_table_one_sdk_guidance_is_only_added_for_typed_table_one() -> None:

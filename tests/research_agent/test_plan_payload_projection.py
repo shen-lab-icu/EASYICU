@@ -32,6 +32,9 @@ from easyicu.research_agent.agents.core import (
     _declared_field_names,
     _normalise_plan_payload,
 )
+from easyicu.research_agent.agents.plan_payload import (
+    PlannerScientificProjectionError,
+)
 from easyicu.research_agent.planning.robustness_contract import RobustnessSpec
 from easyicu.research_agent.schema import (
     AnalysisPlan,
@@ -126,19 +129,25 @@ def test_the_projection_accepts_every_field_the_schemas_declare() -> None:
     assert set(normalized["robustness_specs"][0]) == _schema_fields(RobustnessSpec)
 
 
-def test_a_key_no_schema_declares_is_still_dropped() -> None:
-    """The projection keeps doing the job it exists for."""
+def test_presentation_keys_are_dropped_but_scientific_keys_force_retry() -> None:
+    """Top/step chatter is harmless; nested scientific mutation is not."""
 
     payload = _maximal_payload()
     payload["invented_top_level"] = "x"
     payload["steps"][0]["invented_step_key"] = "x"
-    payload["steps"][0]["table_one_spec"]["invented_table_one_key"] = "x"
 
     _normalized, dropped = _normalise_plan_payload(payload)
 
     assert dropped["top_level"] == ["invented_top_level"]
     assert dropped["steps"] == ["01_step:invented_step_key"]
-    assert dropped["table_one_spec"] == ["step[0]:invented_table_one_key"]
+
+    payload["steps"][0]["table_one_spec"]["invented_table_one_key"] = "x"
+    with pytest.raises(PlannerScientificProjectionError) as exc_info:
+        _normalise_plan_payload(payload)
+
+    assert exc_info.value.issue_code == "planner_scientific_contract_unknown_key"
+    assert exc_info.value.path == "steps[0].table_one_spec"
+    assert exc_info.value.unknown_keys == ("invented_table_one_key",)
 
 
 def test_the_distribution_spec_reaches_the_planner_validator() -> None:

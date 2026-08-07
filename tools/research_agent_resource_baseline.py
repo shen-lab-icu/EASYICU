@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
+import sys
 from typing import Any, Iterable
 
 from easyicu.research_agent.agents.core import PlannerAgent
@@ -257,9 +258,7 @@ def _task_measurement(
         "resource_catalog_sha256": selection.receipt.catalog_sha256,
         "resource_allowlist_sha256": selection.receipt.allowlist_sha256,
         "know_how_prompt_bytes": len(know_how_prompt.encode("utf-8")),
-        "planning_contract_bytes": len(
-            planning_contract_context.encode("utf-8")
-        ),
+        "planning_contract_bytes": len(planning_contract_context.encode("utf-8")),
         "planning_contract_sha256": hashlib.sha256(
             planning_contract_context.encode("utf-8")
         ).hexdigest(),
@@ -345,21 +344,76 @@ def measure() -> dict[str, Any]:
     }
 
 
+_GOVERNANCE_KEYS = frozenset(
+    {"baseline_reason", "baseline_change_summary", "baseline_history"}
+)
+
+
+def _measurement_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Exclude append-only governance metadata from the exact measurement."""
+
+    return {key: value for key, value in payload.items() if key not in _GOVERNANCE_KEYS}
+
+
 def diff(baseline: dict[str, Any], current: dict[str, Any]) -> int:
-    if baseline == current:
+    baseline_measurement = _measurement_payload(baseline)
+    current_measurement = _measurement_payload(current)
+    if baseline_measurement == current_measurement:
         return 0
-    baseline_text = json.dumps(baseline, ensure_ascii=False, sort_keys=True)
-    current_text = json.dumps(current, ensure_ascii=False, sort_keys=True)
+    baseline_text = json.dumps(baseline_measurement, ensure_ascii=False, sort_keys=True)
+    current_text = json.dumps(current_measurement, ensure_ascii=False, sort_keys=True)
     if baseline_text != current_text:
         print("FAIL: research-agent resource/context baseline drifted", flush=True)
         return 1
     return 0
 
 
-def _write(path: Path, payload: dict[str, Any]) -> None:
+def _change_summary(
+    previous: dict[str, Any], current: dict[str, Any]
+) -> dict[str, Any]:
+    old_summary = previous.get("summary") or {}
+    new_summary = current.get("summary") or {}
+    summary_changes = {
+        key: {"was": old_summary.get(key), "now": new_summary.get(key)}
+        for key in sorted(set(old_summary) | set(new_summary))
+        if old_summary.get(key) != new_summary.get(key)
+    }
+    old_sources = previous.get("source_sha256") or {}
+    new_sources = current.get("source_sha256") or {}
+    source_digest_changes = [
+        key
+        for key in sorted(set(old_sources) | set(new_sources))
+        if old_sources.get(key) != new_sources.get(key)
+    ]
+    return {
+        "summary_changes": summary_changes,
+        "source_digest_changes": source_digest_changes,
+    }
+
+
+def _write(path: Path, payload: dict[str, Any], *, reason: str) -> None:
+    previous: dict[str, Any] = {}
+    if path.exists():
+        try:
+            previous = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            previous = {}
+    change_summary = _change_summary(_measurement_payload(previous), payload)
+    history = [
+        item
+        for item in (previous.get("baseline_history") or [])
+        if isinstance(item, dict)
+    ]
+    history.append({"reason": reason, **change_summary})
+    recorded = {
+        **payload,
+        "baseline_reason": reason,
+        "baseline_change_summary": change_summary,
+        "baseline_history": history,
+    }
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        json.dumps(recorded, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
 
@@ -369,6 +423,10 @@ def _parser() -> argparse.ArgumentParser:
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--emit", type=Path)
     group.add_argument("--diff", dest="diff_path", type=Path)
+    parser.add_argument(
+        "--reason",
+        help="why an intentional resource/context baseline move is accepted",
+    )
     return parser
 
 
@@ -376,7 +434,14 @@ def main(argv: Iterable[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     current = measure()
     if args.emit:
-        _write(args.emit, current)
+        reason = str(args.reason or "").strip()
+        if not reason:
+            print(
+                "refusing to emit a resource/context baseline without --reason",
+                file=sys.stderr,
+            )
+            return 2
+        _write(args.emit, current, reason=reason)
         return 0
     if args.diff_path:
         baseline = json.loads(args.diff_path.read_text(encoding="utf-8"))

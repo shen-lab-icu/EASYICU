@@ -83,6 +83,28 @@ def _owner_summary(out_dir) -> dict:
             analysis_set="source_aware",
             analysis_role="primary",
             method_family="binary_logistic_regression",
+            model_terms=[
+                {
+                    "name": "exposure",
+                    "role": "exposure",
+                    "coding": "binary",
+                    "levels": ["0", "1"],
+                    "reference_level": "0",
+                    "transform": "treatment_contrast",
+                },
+                {
+                    "name": "age",
+                    "role": "covariate",
+                    "coding": "continuous",
+                    "transform": "identity",
+                },
+                {
+                    "name": "charlson",
+                    "role": "covariate",
+                    "coding": "continuous",
+                    "transform": "identity",
+                },
+            ],
         )
     finally:
         if previous is None:

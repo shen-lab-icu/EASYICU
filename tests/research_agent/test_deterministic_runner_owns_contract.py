@@ -99,7 +99,7 @@ def test_historical_survival_runner_cannot_demote_step_contract_errors():
     assert out[0].severity == "error"
 
 
-def test_current_host_survival_owner_can_demote_only_step_shape_errors():
+def test_current_host_survival_owner_cannot_waive_an_untyped_shape_error():
     step_record = {"deterministic_standard_analysis": "survival_primary_cox"}
     summary = {
         "status": "ok",
@@ -110,7 +110,7 @@ def test_current_host_survival_owner_can_demote_only_step_shape_errors():
         step_record, summary, [_contract_error(), _integrity_error()]
     )
     by_validator = {finding.validator: finding.severity for finding in out}
-    assert by_validator["step_contract"] == "warning"
+    assert by_validator["step_contract"] == "error"
     assert by_validator["primary_exposure_overadjustment"] == "error"
 
 

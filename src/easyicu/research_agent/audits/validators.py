@@ -49,6 +49,7 @@ from ..contracts.fraction_scale import (
     is_scale_descriptor_field,
     normalize_metric_key,
 )
+from ..contracts.model_tokens import canonical_association_method
 from ..replication.metrics import compare_metric_values
 from ..contracts.ordered_stratified import ordered_stratified_numeric_findings
 from ..schema import (
@@ -4149,9 +4150,12 @@ class PrimaryModelContractValidator:
                 "analysis_role",
                 "analysis_set",
             ):
-                if cls._normalise(reported[field]) != cls._normalise(
-                    requirement[field]
-                ):
+                reported_value = reported[field]
+                required_value = requirement[field]
+                if field == "method_family":
+                    reported_value = canonical_association_method(reported_value)
+                    required_value = canonical_association_method(required_value)
+                if cls._normalise(reported_value) != cls._normalise(required_value):
                     mismatches[field] = {
                         "expected": requirement[field],
                         "reported": reported[field],
@@ -4286,7 +4290,8 @@ class PrimaryModelContractValidator:
         )
         if method in cls._FIGURE_ONLY_METHODS or figure_only_outputs:
             return False
-        supported_direct_method = method in (
+        canonical_method = canonical_association_method(method)
+        supported_direct_method = canonical_method in (
             cls._BINARY_MODEL_FAMILIES | cls._CONTINUOUS_MODEL_FAMILIES
         )
         if has_planned_requirements:
@@ -6436,8 +6441,7 @@ class CrossStepReconciliationTraceValidator:
                             {
                                 "row": label,
                                 "issue": (
-                                    f"registered_{statistic}_field_must_be_"
-                                    f"{statistic}"
+                                    f"registered_{statistic}_field_must_be_{statistic}"
                                 ),
                                 "reported": reported_field,
                             }
@@ -8882,9 +8886,7 @@ class FigureSourceDataValidator:
             interval_columns.setdefault(
                 prefix,
                 {"lower": [], "upper": []},
-            )[
-                side
-            ].append(str(column))
+            )[side].append(str(column))
         normalised_points = {
             str(column): cls._normalise(column) for column in ratio_point_columns
         }
@@ -10527,7 +10529,7 @@ class FigureSourceDataValidator:
                     declared_parent_step: Optional[str] = None
                     if "source_step_id" in group_df.columns:
                         declared_step_values = group_df["source_step_id"].map(
-                            lambda item: (str(item).strip() if pd.notna(item) else "")
+                            lambda item: str(item).strip() if pd.notna(item) else ""
                         )
                         declared_parent_steps = {
                             item for item in declared_step_values if item

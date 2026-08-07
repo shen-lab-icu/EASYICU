@@ -389,21 +389,19 @@ print(candidate_diagnostics)
     )
 
 
-def test_prediction_split_repair_requires_explicit_outcome_col():
+def test_prediction_split_template_escalates_instead_of_replacing_analysis():
+    escalations = []
     repaired = _deterministic_runner_repair(
         code=(
             "figure_contract = FigureContract()\n"
             "train_test_split(X, y, test_size=0.2, test_size=0.3)\n"
         ),
         run_log="SyntaxError: keyword argument repeated",
+        on_semantic_escalation=escalations.append,
     )
 
-    assert repaired is not None
-    name, patched = repaired
-    assert name == "prediction_split_minimal_v1"
-    assert 'os.environ.get("OUTCOME_COL")' in patched
-    assert "df.columns[-1]" not in patched
-    assert '"death" if "death" in df.columns' not in patched
+    assert repaired is None
+    assert [item.repair_id for item in escalations] == ["prediction_split_minimal_v1"]
 
 
 def test_summary_repair_handles_age_without_measured_indicator():
@@ -464,7 +462,7 @@ plotted_or = float(matrix_row["primary_or"])
         step_summary={
             "status": "failed",
             "error": (
-                "robustness_matrix.absolute_or_difference " "contains non-finite values"
+                "robustness_matrix.absolute_or_difference contains non-finite values"
             ),
         },
     )
@@ -517,7 +515,7 @@ plotted_difference = float(matrix_row["absolute_or_difference"])
         step_summary={
             "status": "failed",
             "error": (
-                "robustness_matrix.absolute_or_difference " "contains non-finite values"
+                "robustness_matrix.absolute_or_difference contains non-finite values"
             ),
         },
     )
@@ -542,7 +540,7 @@ plotted_value = float(matrix_row[selected_column])
         step_summary={
             "status": "failed",
             "error": (
-                "robustness_matrix.absolute_or_difference " "contains non-finite values"
+                "robustness_matrix.absolute_or_difference contains non-finite values"
             ),
         },
     )
@@ -991,12 +989,13 @@ def make_source(out_dir, source_table, frame):
     )
 
 
-def test_contract_repair_drops_overadjustment_covariates():
+def test_contract_repair_escalates_instead_of_dropping_declared_covariates():
     code = (
         'continuous_covariates = ["age", "map_first", "lact_first"]\n'
         'source_vars_for_table = ["sepsis3", "death", "age", "map_first"]\n'
     )
 
+    escalations = []
     repaired = deterministic_contract_repair(
         code=code,
         findings=[
@@ -1009,16 +1008,17 @@ def test_contract_repair_drops_overadjustment_covariates():
                 },
             }
         ],
+        on_semantic_escalation=escalations.append,
     )
 
-    assert repaired is not None
-    name, patched = repaired
-    assert name == "drop_overadjustment_covariates_v1"
-    assert '"map_first"' not in patched
-    assert '"lact_first"' in patched
+    assert repaired is None
+    assert [item.repair_id for item in escalations] == [
+        "drop_overadjustment_covariates_v1"
+    ]
+    assert escalations[0].action == "replan_or_human_review"
 
 
-def test_contract_repair_filters_generated_overadjustment_covariates_at_runtime():
+def test_contract_repair_never_filters_generated_predictor_roster_at_runtime():
     code = """
 x_cols = ["sepsis3"]
 raw = "map_min"
@@ -1028,6 +1028,7 @@ x_cols.extend([model_name, miss_name, "age_per_10y"])
 x_cols = list(dict.fromkeys(x_cols))
 """
 
+    escalations = []
     repaired = deterministic_contract_repair(
         code=code,
         findings=[
@@ -1043,15 +1044,13 @@ x_cols = list(dict.fromkeys(x_cols))
                 },
             }
         ],
+        on_semantic_escalation=escalations.append,
     )
 
-    assert repaired is not None
-    name, patched = repaired
-    assert name == "drop_overadjustment_covariates_v1"
-    assert "_easyicu_overadjustment_drop_v1" in patched
-    namespace = {}
-    exec(patched, namespace)
-    assert namespace["x_cols"] == ["sepsis3", "age_per_10y"]
+    assert repaired is None
+    assert [item.repair_id for item in escalations] == [
+        "drop_overadjustment_covariates_v1"
+    ]
 
 
 def test_contract_repair_keeps_measurement_provenance_receipts_machine_readable():
@@ -1522,8 +1521,9 @@ step_summary = {
     assert name == "measurement_provenance_summary_mapping_v2"
     namespace: dict = {}
     exec(patched, namespace)  # noqa: S102 - deterministic test source
-    assert namespace["step_summary"]["measurement_provenance_audit"] is (
-        namespace["diagnostics"]["measurement_provenance_audit"]
+    assert (
+        namespace["step_summary"]["measurement_provenance_audit"]
+        is (namespace["diagnostics"]["measurement_provenance_audit"])
     )
 
 
@@ -1571,8 +1571,7 @@ summary = {
     repair_id, patched = repaired
     assert repair_id == "measurement_provenance_summary_mapping_v2"
     assert (
-        "measurement_provenance_receipt as "
-        "_easyicu_measurement_provenance_receipt_v1"
+        "measurement_provenance_receipt as _easyicu_measurement_provenance_receipt_v1"
     ) in patched
     assert "_easyicu_measurement_provenance_receipt_v1(frame," in patched
     assert "measured_column='marker_measured'" in patched
@@ -1772,74 +1771,6 @@ step_summary = {"measurement_provenance_audit": audit}
         )
         is None
     )
-
-
-def test_prediction_split_repair_uses_outcome_col_at_runtime(
-    tmp_path,
-    monkeypatch,
-):
-    repaired = _deterministic_runner_repair(
-        code=(
-            "figure_contract = FigureContract()\n"
-            "train_test_split(X, y, test_size=0.2, test_size=0.3)\n"
-        ),
-        run_log="SyntaxError: keyword argument repeated",
-    )
-    assert repaired is not None
-    _, patched = repaired
-
-    cohort = tmp_path / "cohort.parquet"
-    pd = pytest.importorskip("pandas")
-    pd.DataFrame(
-        {
-            "death": [1] * 10,
-            "endpoint_x": [0, 0, 0, 0, 1, 1, 1, 1, 1, 1],
-            "age": [50, 55, 60, 65, 70, 75, 80, 85, 90, 95],
-        }
-    ).to_parquet(cohort, index=False)
-    out_dir = tmp_path / "out"
-    out_dir.mkdir()
-    monkeypatch.setenv("COHORT_PARQUET", str(cohort))
-    monkeypatch.setenv("STEP_OUT_DIR", str(out_dir))
-    monkeypatch.setenv("OUTCOME_COL", "endpoint_x")
-
-    exec(patched, {})
-
-    summary = json.loads((out_dir / "step_summary.json").read_text(encoding="utf-8"))
-    assert summary["event_rate_total"] == 0.6
-
-
-def test_prediction_split_repair_rejects_non_binary_outcome(
-    tmp_path,
-    monkeypatch,
-):
-    repaired = _deterministic_runner_repair(
-        code=(
-            "figure_contract = FigureContract()\n"
-            "train_test_split(X, y, test_size=0.2, test_size=0.3)\n"
-        ),
-        run_log="SyntaxError: keyword argument repeated",
-    )
-    assert repaired is not None
-    _, patched = repaired
-
-    cohort = tmp_path / "cohort.parquet"
-    pd = pytest.importorskip("pandas")
-    pd.DataFrame(
-        {
-            "los_icu": [1.2, 2.0, 3.5, 4.0, 5.25, 6.0],
-            "age": [50, 55, 60, 65, 70, 75],
-        }
-    ).to_parquet(cohort, index=False)
-    out_dir = tmp_path / "out"
-    out_dir.mkdir()
-    monkeypatch.setenv("COHORT_PARQUET", str(cohort))
-    monkeypatch.setenv("STEP_OUT_DIR", str(out_dir))
-    monkeypatch.setenv("OUTCOME_COL", "los_icu")
-
-    with pytest.raises(RuntimeError, match="binary 0/1 OUTCOME_COL"):
-        exec(patched, {})
-    assert not (out_dir / "step_summary.json").exists()
 
 
 def test_binary_prediction_runner_repair_is_family_gated():
@@ -2077,124 +2008,41 @@ def test_runner_repair_does_not_trigger_case_fallbacks_by_default():
         assert _deterministic_runner_repair(code=code, run_log=run_log) is None
 
 
-def test_prediction_discrimination_template_is_case_neutral():
-    repaired = _deterministic_runner_repair(
-        code="model_bundle = ...\n",
-        run_log="SyntaxError: invalid syntax near placeholder ellipsis",
-    )
-
-    assert repaired is not None
-    repair_id, generated = repaired
-    assert repair_id == "prediction_discrimination_template_v1"
-    ast.parse(generated)
-    assert "OUTCOME_COL" in generated
-    assert 'model_bundle.get("outcome_col")' in generated
-    assert 'df["death"]' not in generated
-    assert "death_icu" not in generated
-    assert "death_hosp" not in generated
-    assert "mortality" not in generated
-    assert "sofa2" not in generated.lower()
-
-
-def test_table_one_repair_uses_explicit_outcome_only():
-    repaired = _deterministic_runner_repair(
-        code="pd.DataFrame().to_csv('table_one.csv')\n",
-        run_log="SyntaxError: '(' was never closed",
-    )
-
-    assert repaired is not None
-    repair_id, generated = repaired
-    assert repair_id == "table_one_descriptive_repair_v1"
-    ast.parse(generated)
-    assert "OUTCOME_COL" in generated
-    assert 'df["death"]' not in generated
-    assert "death_icu" not in generated
-    assert "death_hosp" not in generated
-    assert "mortality" not in generated
-    assert "outcome_rate" in generated
-
-
-def test_table_one_repair_does_not_report_continuous_outcome_rate(
-    tmp_path,
-    monkeypatch,
+@pytest.mark.parametrize(
+    ("code", "run_log", "repair_id"),
+    [
+        (
+            "model_bundle = ...\n",
+            "SyntaxError: invalid syntax near placeholder ellipsis",
+            "prediction_discrimination_template_v1",
+        ),
+        (
+            "pd.DataFrame().to_csv('table_one.csv')\n",
+            "SyntaxError: '(' was never closed",
+            "table_one_descriptive_repair_v1",
+        ),
+        (
+            "# outcome_incidence\n...\n",
+            "SyntaxError: invalid syntax",
+            "outcome_incidence_descriptive_repair_v1",
+        ),
+    ],
+)
+def test_analysis_template_repairs_escalate_instead_of_replacing_science(
+    code,
+    run_log,
+    repair_id,
 ):
+    escalations = []
+
     repaired = _deterministic_runner_repair(
-        code="pd.DataFrame().to_csv('table_one.csv')\n",
-        run_log="SyntaxError: '(' was never closed",
-    )
-    assert repaired is not None
-    _, generated = repaired
-
-    pd = pytest.importorskip("pandas")
-    cohort = tmp_path / "cohort.parquet"
-    pd.DataFrame(
-        {
-            "los_icu": [1.0, 2.5, 3.0, 4.25],
-            "age": [50, 60, 70, 80],
-        }
-    ).to_parquet(cohort, index=False)
-    out_dir = tmp_path / "out"
-    out_dir.mkdir()
-    monkeypatch.setenv("COHORT_PARQUET", str(cohort))
-    monkeypatch.setenv("STEP_OUT_DIR", str(out_dir))
-    monkeypatch.setenv("OUTCOME_COL", "los_icu")
-
-    exec(generated, {})
-
-    summary = json.loads((out_dir / "step_summary.json").read_text(encoding="utf-8"))
-    assert summary["outcome_col"] == "los_icu"
-    assert summary["outcome_kind"] == "non_binary"
-    assert "outcome_rate" not in summary
-    assert "outcome_n" not in summary
-
-
-def test_outcome_incidence_repair_uses_explicit_outcome_only():
-    repaired = _deterministic_runner_repair(
-        code="# outcome_incidence\n...\n",
-        run_log="SyntaxError: invalid syntax",
+        code=code,
+        run_log=run_log,
+        on_semantic_escalation=escalations.append,
     )
 
-    assert repaired is not None
-    repair_id, generated = repaired
-    assert repair_id == "outcome_incidence_descriptive_repair_v1"
-    ast.parse(generated)
-    assert "OUTCOME_COL" in generated
-    assert "OUTCOME_COL is required" in generated
-    assert 'df["death"]' not in generated
-    assert "death_icu" not in generated
-    assert "death_hosp" not in generated
-    assert "mortality" not in generated
-    assert "_measured" not in generated
-    assert "outcome_rate" in generated
-
-
-def test_outcome_incidence_repair_rejects_non_binary_outcome(
-    tmp_path,
-    monkeypatch,
-):
-    repaired = _deterministic_runner_repair(
-        code="# outcome_incidence\n...\n",
-        run_log="SyntaxError: invalid syntax",
-    )
-    assert repaired is not None
-    _, generated = repaired
-
-    pd = pytest.importorskip("pandas")
-    cohort = tmp_path / "cohort.parquet"
-    pd.DataFrame(
-        {
-            "los_icu": [1.0, 2.5, 3.0, 4.25],
-            "age": [50, 60, 70, 80],
-        }
-    ).to_parquet(cohort, index=False)
-    out_dir = tmp_path / "out"
-    out_dir.mkdir()
-    monkeypatch.setenv("COHORT_PARQUET", str(cohort))
-    monkeypatch.setenv("STEP_OUT_DIR", str(out_dir))
-    monkeypatch.setenv("OUTCOME_COL", "los_icu")
-
-    with pytest.raises(RuntimeError, match="binary 0/1 OUTCOME_COL"):
-        exec(generated, {})
+    assert repaired is None
+    assert [item.repair_id for item in escalations] == [repair_id]
 
 
 # ---------------------------------------------------------------------------
@@ -2895,80 +2743,19 @@ def timing_columns(candidates):
     assert twice == out
 
 
-# ---------------------------------------------------------------------------
-# seaborn matplotlib fallback (baseline-library sandbox)
-# ---------------------------------------------------------------------------
-
-
-def _inject_seaborn_fallback_namespace():
-    """Fire the seaborn fallback repair and exec the injected shim.
-
-    Returns the ``sns`` object the generated analysis code would use inside the
-    baseline-library sandbox where ``import seaborn`` raises ModuleNotFoundError.
-    """
-    import matplotlib
-
-    matplotlib.use("Agg")
-    res = _deterministic_runner_repair(
+def test_missing_plotting_library_escalates_instead_of_swapping_plot_method():
+    escalations = []
+    repaired = _deterministic_runner_repair(
         code="import seaborn as sns\n",
         run_log="ModuleNotFoundError: No module named 'seaborn'",
         previous_repair=None,
+        on_semantic_escalation=escalations.append,
     )
-    assert res is not None, "seaborn fallback repair did not fire"
-    name, repaired = res
-    assert name == "seaborn_matplotlib_fallback_v1"
-    namespace: dict = {}
-    exec(repaired, namespace)  # noqa: S102 - trusted deterministic shim under test
-    return namespace["sns"]
 
-
-def test_seaborn_fallback_supports_despine():
-    # Regression: the E3 KDIGO figure step crashed with
-    # "'_EasyICUSeabornFallback' object has no attribute 'despine'", which
-    # fail-closed the whole run. despine must be a safe no-op on the shim.
-    import matplotlib.pyplot as plt
-
-    sns = _inject_seaborn_fallback_namespace()
-    _fig, ax = plt.subplots()
-    sns.set_style("whitegrid")
-    sns.despine(ax=ax)  # the exact crashing call
-    sns.despine()  # bare form used by many templates
-    plt.close(_fig)
-
-
-def test_seaborn_fallback_unknown_method_is_noop_not_crash():
-    # Durability: any seaborn method the shim does not implement must degrade to
-    # a no-op returning the passed ``ax`` rather than raising AttributeError and
-    # crashing the figure render (and therefore the entire run).
-    import matplotlib.pyplot as plt
-
-    sns = _inject_seaborn_fallback_namespace()
-    _fig, ax = plt.subplots()
-    assert sns.displot(x=[1, 2, 3]) is None  # unknown, no ax kwarg -> None
-    assert sns.catplot(ax=ax) is ax  # unknown, ax passed through
-    sns.set_context("paper")
-    sns.set_palette("deep")
-    sns.move_legend(ax, "upper right")
-    plt.close(_fig)
-
-
-def test_seaborn_fallback_common_statistical_plots_draw_without_error():
-    import matplotlib.pyplot as plt
-    import pandas as pd
-
-    sns = _inject_seaborn_fallback_namespace()
-    df = pd.DataFrame({"g": ["a", "a", "b", "b"], "v": [1.0, 2.0, 3.0, 4.0]})
-    _fig, ax = plt.subplots()
-    for call in (
-        lambda: sns.boxplot(data=df, x="g", y="v", ax=ax),
-        lambda: sns.violinplot(data=df, x="g", y="v", ax=ax),
-        lambda: sns.pointplot(data=df, x="g", y="v", ax=ax),
-        lambda: sns.countplot(data=df, x="g", ax=ax),
-        lambda: sns.kdeplot(data=df, x="v", ax=ax),
-        lambda: sns.stripplot(data=df, x="g", y="v", ax=ax),
-    ):
-        assert call() is ax
-    plt.close(_fig)
+    assert repaired is None
+    assert [item.repair_id for item in escalations] == [
+        "seaborn_matplotlib_fallback_v1"
+    ]
 
 
 def _merge_collision_script(*, disagree: bool = False) -> str:
@@ -3067,7 +2854,9 @@ def test_runner_repair_preserves_authored_table_one_secondary_overlay():
 
 
 def test_runner_repair_keeps_left_cohort_measurement_provenance_canonical():
-    code = _table_one_secondary_overlay_script() + """
+    code = (
+        _table_one_secondary_overlay_script()
+        + """
 from easyicu.research_agent.methods.descriptive_inputs import (
     measurement_provenance_receipt,
 )
@@ -3090,6 +2879,7 @@ step_summary = {
     }
 }
 """
+    )
 
     repair = _deterministic_runner_repair(
         code=code,
@@ -3140,7 +2930,7 @@ def _measurement_source_invalid_finding() -> dict:
         "detail": {
             "issue": "measurement_provenance_source_invalid",
             "reported_source": (
-                "artifact:analysis_cohort plus " "artifact:validated_measurement_set"
+                "artifact:analysis_cohort plus artifact:validated_measurement_set"
             ),
         },
     }
@@ -3206,8 +2996,7 @@ def test_runner_repair_rejects_unresolved_table_one_secondary_overlay():
         _deterministic_runner_repair(
             code=_table_one_secondary_overlay_script(resolved_right=False),
             run_log=(
-                "TableOneContractError: Table 1 input columns are missing: "
-                "['marker']"
+                "TableOneContractError: Table 1 input columns are missing: ['marker']"
             ),
         )
         is None

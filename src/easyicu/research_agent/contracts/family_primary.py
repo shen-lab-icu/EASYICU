@@ -11,7 +11,13 @@ from typing import List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from .model_tokens import normalise_model_contract_token
+from .model_terms import ModelTermSpec, validate_model_term_roster
+from .model_tokens import (
+    SURVIVAL_COX_ESTIMATOR,
+    SURVIVAL_PH_DIAGNOSTIC,
+    canonical_survival_estimator,
+    canonical_survival_ph_diagnostic,
+)
 
 
 class FamilyPrimaryResultRequirement(BaseModel):
@@ -42,8 +48,15 @@ class FamilyPrimaryResultRequirement(BaseModel):
     time_horizon: Optional[str] = None
     effect_measure: Optional[str] = None
     proportional_hazards_diagnostic: Optional[str] = None
+    proportional_hazards_alpha: Optional[float] = Field(default=None, gt=0, lt=1)
+    proportional_hazards_policy: Optional[
+        Literal["report_only", "block_paper_authorization", "human_review"]
+    ] = None
     covariates: Optional[List[str]] = None
-    exposure_encoding: Optional[Literal["numeric_linear"]] = "numeric_linear"
+    model_terms: Optional[List[ModelTermSpec]] = None
+    exposure_encoding: Optional[Literal["numeric_linear", "declared_model_terms"]] = (
+        None
+    )
     missing_data_policy: Optional[Literal["complete_case"]] = "complete_case"
     time_unit: Optional[Literal["minutes", "hours", "days"]] = None
     event_value: Optional[int] = None
@@ -65,6 +78,22 @@ class FamilyPrimaryResultRequirement(BaseModel):
             raise ValueError("family primary-result contract fields must be non-empty")
         return text
 
+    @field_validator("estimator", mode="before")
+    @classmethod
+    def _canonical_estimator(cls, value: object) -> str:
+        token = canonical_survival_estimator(value)
+        if not token:
+            raise ValueError("family primary-result contract fields must be non-empty")
+        return token
+
+    @field_validator("proportional_hazards_diagnostic", mode="before")
+    @classmethod
+    def _canonical_ph_diagnostic(cls, value: object) -> Optional[str]:
+        if value is None:
+            return None
+        token = canonical_survival_ph_diagnostic(value)
+        return token or None
+
     @field_validator("covariates")
     @classmethod
     def _validate_survival_covariates(
@@ -74,7 +103,9 @@ class FamilyPrimaryResultRequirement(BaseModel):
             return None
         names = [str(item or "").strip() for item in value]
         if any(not name for name in names) or len(names) != len(set(names)):
-            raise ValueError("family primary-result covariates must be unique and nonblank")
+            raise ValueError(
+                "family primary-result covariates must be unique and nonblank"
+            )
         return names
 
     @model_validator(mode="after")
@@ -104,6 +135,21 @@ class FamilyPrimaryResultRequirement(BaseModel):
                     "causal primary-result contract requires " + ", ".join(missing)
                 )
         else:
+            if self.model_terms is not None:
+                _, adjustment_terms = validate_model_term_roster(
+                    terms=self.model_terms,
+                    exposure=self.exposure_source,
+                    covariates=self.covariates,
+                )
+                declared_covariates = [item.name for item in adjustment_terms]
+                if self.covariates is None:
+                    self.covariates = declared_covariates
+                if self.exposure_encoding not in (None, "declared_model_terms"):
+                    raise ValueError(
+                        "a survival model_terms contract requires "
+                        "exposure_encoding='declared_model_terms'"
+                    )
+                self.exposure_encoding = "declared_model_terms"
             missing = [
                 name
                 for name in (
@@ -119,6 +165,7 @@ class FamilyPrimaryResultRequirement(BaseModel):
                     "exposure_encoding",
                     "missing_data_policy",
                     "time_unit",
+                    "model_terms",
                 )
                 if not str(getattr(self, name) or "").strip()
             ]
@@ -128,17 +175,24 @@ class FamilyPrimaryResultRequirement(BaseModel):
                 missing.append("event_value")
             if self.time_horizon_value is None:
                 missing.append("time_horizon_value")
+            if self.estimator == SURVIVAL_COX_ESTIMATOR:
+                if self.proportional_hazards_diagnostic is None:
+                    missing.append("proportional_hazards_diagnostic")
+                if self.proportional_hazards_alpha is None:
+                    missing.append("proportional_hazards_alpha")
+                if self.proportional_hazards_policy is None:
+                    missing.append("proportional_hazards_policy")
             if missing:
                 raise ValueError(
                     "survival primary-result contract requires " + ", ".join(missing)
                 )
-            estimator = normalise_model_contract_token(self.estimator)
-            if "cox" in estimator and not str(
-                self.proportional_hazards_diagnostic or ""
-            ).strip():
+            if (
+                self.estimator == SURVIVAL_COX_ESTIMATOR
+                and self.proportional_hazards_diagnostic != SURVIVAL_PH_DIAGNOSTIC
+            ):
                 raise ValueError(
-                    "a Cox primary-result contract requires "
-                    "proportional_hazards_diagnostic"
+                    "the implemented Cox primary-result contract requires the "
+                    f"exact diagnostic {SURVIVAL_PH_DIAGNOSTIC!r}"
                 )
             if self.outcome in (self.covariates or []):
                 raise ValueError("survival covariates must not contain the outcome")

@@ -11,7 +11,7 @@ import math
 from dataclasses import dataclass
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence, Tuple
 
 from ..cohort.schema import CohortDefinition, build_cohort
 from ..methods.missing import apply_missing_strategy
@@ -179,6 +179,7 @@ def _fitted_terms(
     *,
     design_columns: Sequence[str],
     encoded_map: Dict[str, List[str]],
+    source_by_design_column: Optional[Mapping[str, str]],
     exponentiate: bool,
 ) -> Tuple[EstimatorTerm, ...]:
     """Read every coefficient off the fit that produced the point estimate.
@@ -196,6 +197,12 @@ def _fitted_terms(
     for original, names in encoded_map.items():
         for name in names:
             source_of[name] = original
+    source_of.update(
+        {
+            str(column): str(source)
+            for column, source in (source_by_design_column or {}).items()
+        }
+    )
 
     def _scaled(value: Optional[float]) -> Optional[float]:
         if value is None or not exponentiate:
@@ -277,6 +284,7 @@ def fit_estimator(
     y: Any,
     kind: EstimatorKind | str,
     term: Optional[str] = None,
+    source_by_design_column: Optional[Mapping[str, str]] = None,
 ) -> EstimatorResult:
     """Fit a supported estimator and capture failures as non-converged results.
 
@@ -478,6 +486,7 @@ def fit_estimator(
                     result,
                     design_columns=list(x_const.columns),
                     encoded_map=encoded_map,
+                    source_by_design_column=source_by_design_column,
                     exponentiate=False,
                 ),
             )
@@ -532,6 +541,7 @@ def fit_estimator(
                 result,
                 design_columns=list(x_const.columns),
                 encoded_map=encoded_map,
+                source_by_design_column=source_by_design_column,
                 exponentiate=True,
             ),
             n_events=n_events,

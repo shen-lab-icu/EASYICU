@@ -74,3 +74,42 @@ def test_checked_in_resource_context_baseline_has_no_drift() -> None:
     baseline = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
 
     assert tool.diff(baseline, tool.measure()) == 0
+
+
+def test_resource_baseline_emit_requires_a_reason(tmp_path, monkeypatch) -> None:
+    tool = _load_tool()
+    out = tmp_path / "baseline.json"
+    monkeypatch.setattr(tool, "measure", lambda: {"summary": {"task_count": 9}})
+
+    assert tool.main(["--emit", str(out)]) == 2
+    assert not out.exists()
+
+
+def test_resource_baseline_history_is_append_only(tmp_path, monkeypatch) -> None:
+    tool = _load_tool()
+    out = tmp_path / "baseline.json"
+    first = {
+        "summary": {"max_planner_with_resources_bytes": 100},
+        "source_sha256": {"planner.py": "a"},
+    }
+    second = {
+        "summary": {"max_planner_with_resources_bytes": 120},
+        "source_sha256": {"planner.py": "b"},
+    }
+    monkeypatch.setattr(tool, "measure", lambda: first)
+    assert tool.main(["--emit", str(out), "--reason", "initial fixture"]) == 0
+    monkeypatch.setattr(tool, "measure", lambda: second)
+    assert tool.main(["--emit", str(out), "--reason", "typed contract growth"]) == 0
+
+    recorded = json.loads(out.read_text(encoding="utf-8"))
+    assert [item["reason"] for item in recorded["baseline_history"]] == [
+        "initial fixture",
+        "typed contract growth",
+    ]
+    assert recorded["baseline_change_summary"]["summary_changes"] == {
+        "max_planner_with_resources_bytes": {"was": 100, "now": 120}
+    }
+    assert recorded["baseline_change_summary"]["source_digest_changes"] == [
+        "planner.py"
+    ]
+    assert tool.diff(recorded, second) == 0

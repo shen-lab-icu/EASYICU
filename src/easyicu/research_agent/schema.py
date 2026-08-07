@@ -35,7 +35,13 @@ from pydantic import (
     model_validator,
 )
 
+from .contracts.model_terms import ModelTermSpec, validate_model_term_roster
 from .contracts.model_tokens import (
+    ADJUSTED_ASSOCIATION_ANALYSIS_KIND as PLANNED_MODEL_REQUIREMENTS_OUTPUT,
+    ASSOCIATION_GLM_BINOMIAL_ESTIMATOR,
+    ASSOCIATION_LOGIT_ESTIMATOR,
+    ASSOCIATION_OLS_ESTIMATOR,
+    canonical_association_method as _canonical_association_method,
     normalise_model_contract_token as _normalise_model_contract_token,
 )
 from .contracts.family_primary import FamilyPrimaryResultRequirement
@@ -970,28 +976,19 @@ class HypothesisBlueprint(BaseModel):
 # family-specific plans/contracts until an equally typed validator exists.
 ADJUSTED_ASSOCIATION_BINARY_METHOD_FAMILIES = frozenset(
     {
-        "binary_logistic_regression",
-        "binomial_logistic_regression",
-        "logistic_regression",
-        "logit",
-        "statsmodels_logit_mle",
-        "statsmodels_glm_binomial",
+        ASSOCIATION_LOGIT_ESTIMATOR,
+        ASSOCIATION_GLM_BINOMIAL_ESTIMATOR,
     }
 )
 ADJUSTED_ASSOCIATION_CONTINUOUS_METHOD_FAMILIES = frozenset(
     {
-        "linear_regression",
-        "ordinary_least_squares",
-        "ols",
-        "quantile_regression",
-        "median_quantile_regression",
+        ASSOCIATION_OLS_ESTIMATOR,
         "statsmodels_quantreg",
         "statsmodels_quantreg_median_vcov_robust",
     }
 )
 PLANNED_MODEL_REQUIREMENTS_STEP_METHOD = "adjusted_association_models"
 PLANNED_MODEL_REQUIREMENTS_OUTPUT_KIND = "table"
-PLANNED_MODEL_REQUIREMENTS_OUTPUT = "adjusted_association_estimates"
 
 
 class PlannedModelRequirement(BaseModel):
@@ -1022,6 +1019,14 @@ class PlannedModelRequirement(BaseModel):
             "is not the same statement as null."
         ),
     )
+    model_terms: Optional[List[ModelTermSpec]] = Field(
+        default=None,
+        description=(
+            "The exact exposure and covariate coding contract. Legacy plans "
+            "without this field remain readable but cannot authorize a "
+            "deterministic host fit."
+        ),
+    )
     exposure_levels: Optional[List[str]] = Field(
         default=None,
         description=(
@@ -1047,7 +1052,6 @@ class PlannedModelRequirement(BaseModel):
     @field_validator(
         "requirement_id",
         "outcome",
-        "method_family",
         "exposure_source",
     )
     @classmethod
@@ -1056,6 +1060,14 @@ class PlannedModelRequirement(BaseModel):
         if not text:
             raise ValueError("planned model requirement fields must be non-empty")
         return text
+
+    @field_validator("method_family", mode="before")
+    @classmethod
+    def _canonical_method_family(cls, value: object) -> str:
+        method = _canonical_association_method(value)
+        if not method:
+            raise ValueError("planned model requirement fields must be non-empty")
+        return method
 
     @field_validator("covariates")
     @classmethod
@@ -1120,6 +1132,62 @@ class PlannedModelRequirement(BaseModel):
                     "covariates must not contain the exposure "
                     f"{self.exposure_source!r}; adjusting for the exposure "
                     "removes the association the requirement declares"
+                )
+        if self.model_terms is not None:
+            exposure_term, adjustment_terms = validate_model_term_roster(
+                terms=self.model_terms,
+                exposure=self.exposure_source,
+                covariates=self.covariates,
+            )
+            term_covariates = [item.name for item in adjustment_terms]
+            if self.covariates is None:
+                self.covariates = term_covariates
+            if exposure_term.transform == "treatment_contrast":
+                levels = list(exposure_term.levels or ())
+                reference = exposure_term.reference_level
+                if (
+                    self.exposure_levels is not None
+                    and list(self.exposure_levels) != levels
+                ):
+                    raise ValueError(
+                        "exposure_levels must match the exposure ModelTermSpec"
+                    )
+                if (
+                    self.exposure_reference_level is not None
+                    and self.exposure_reference_level != reference
+                ):
+                    raise ValueError(
+                        "exposure_reference_level must match the exposure ModelTermSpec"
+                    )
+                self.exposure_levels = levels
+                self.exposure_reference_level = reference
+                if exposure_term.coding == "binary":
+                    only_contrast = exposure_term.contrast_levels[0]
+                    if (
+                        self.primary_contrast_level is not None
+                        and self.primary_contrast_level != only_contrast
+                    ):
+                        raise ValueError(
+                            "a binary exposure's primary contrast is its one "
+                            "non-reference level"
+                        )
+                    self.primary_contrast_level = only_contrast
+                elif self.primary_contrast_level is None:
+                    raise ValueError(
+                        "a categorical exposure ModelTermSpec requires "
+                        "primary_contrast_level on the model requirement"
+                    )
+            elif any(
+                value is not None
+                for value in (
+                    self.exposure_levels,
+                    self.exposure_reference_level,
+                    self.primary_contrast_level,
+                )
+            ):
+                raise ValueError(
+                    "identity/ordinal-linear exposure coding cannot also declare "
+                    "treatment-contrast fields"
                 )
         self._check_declared_exposure_levels()
         return self
@@ -2098,15 +2166,13 @@ class AnalysisStep(BaseModel):
             "step contract and is required for other analysis families."
         ),
     )
-    family_primary_result_requirement: Optional[FamilyPrimaryResultRequirement] = (
-        Field(
-            default=None,
-            description=(
-                "Planner-owned causal/survival headline-result requirement. "
-                "It binds the scientific estimand to one registered result table; "
-                "it is not an adjusted-association model roster."
-            ),
-        )
+    family_primary_result_requirement: Optional[FamilyPrimaryResultRequirement] = Field(
+        default=None,
+        description=(
+            "Planner-owned causal/survival headline-result requirement. "
+            "It binds the scientific estimand to one registered result table; "
+            "it is not an adjusted-association model roster."
+        ),
     )
     input_consumption_contracts: List[ArtifactConsumptionContract] = Field(
         default_factory=list,
@@ -2523,7 +2589,7 @@ class AnalysisPlan(BaseModel):
             prior = normalized_keys.get(normalized)
             if prior is not None and prior != label:
                 raise ValueError(
-                    "display_labels contains conflicting normalized keys: " f"{key!r}"
+                    f"display_labels contains conflicting normalized keys: {key!r}"
                 )
             normalized_keys[normalized] = label
             labels[key] = label

@@ -121,6 +121,44 @@ def _requirement(**overrides) -> PlannedModelRequirement:
         primary_contrast_level=_STAGE_TOKENS[-1],
     )
     payload.update(overrides)
+    exposure_levels = payload["exposure_levels"]
+    exposure_term = (
+        {
+            "name": "aki_stage_max",
+            "role": "exposure",
+            "coding": "categorical",
+            "levels": list(exposure_levels),
+            "reference_level": payload["exposure_reference_level"],
+            "transform": "treatment_contrast",
+        }
+        if exposure_levels is not None
+        else {
+            "name": "aki_stage_max",
+            "role": "exposure",
+            "coding": "continuous",
+            "transform": "identity",
+        }
+    )
+    payload.setdefault(
+        "model_terms",
+        [
+            exposure_term,
+            {
+                "name": "age",
+                "role": "covariate",
+                "coding": "continuous",
+                "transform": "identity",
+            },
+            {
+                "name": "sex",
+                "role": "covariate",
+                "coding": "binary",
+                "levels": ["Female", "Male"],
+                "reference_level": "Female",
+                "transform": "treatment_contrast",
+            },
+        ],
+    )
     return PlannedModelRequirement.model_validate(payload)
 
 
@@ -219,7 +257,7 @@ def test_the_generated_model_code_carries_no_placeholder() -> None:
     code = adjusted_association_executor_code(step)
 
     assert "__easyicu_level_" not in code
-    assert "'exposure_levels': ['0', '1', '2', '3']" in code.replace('"', "'")
+    assert "'levels': ['0', '1', '2', '3']" in code.replace('"', "'")
 
 
 def test_the_public_plan_still_holds_the_placeholders() -> None:
@@ -277,9 +315,9 @@ def test_the_spelling_rule_is_shared_with_the_executor() -> None:
     function, so they cannot drift into two spellings of one level.
     """
 
-    from easyicu.research_agent.execution.runners import adjusted_association_executor
+    from easyicu.research_agent.execution import model_matrix
 
-    assert adjusted_association_executor._level_key is level_spelling
+    assert model_matrix.level_spelling is level_spelling
     assert level_spelling(3.0) == "3"
     assert level_spelling(2.5) == "2.5"
     assert level_spelling(True) == "true"

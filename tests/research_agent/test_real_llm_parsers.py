@@ -49,12 +49,7 @@ def test_strip_code_fence_handles_leading_prose(ra):
 
 def test_strip_code_fence_python_block(ra):
     helpers = _load_agents_helpers(ra)
-    raw = (
-        "Here you go:\n```python\n"
-        "import pandas as pd\n"
-        "df = pd.read_parquet('x')\n"
-        "```"
-    )
+    raw = "Here you go:\n```python\nimport pandas as pd\ndf = pd.read_parquet('x')\n```"
     out = helpers._strip_code_fence(raw).strip()
     assert out.startswith("import pandas")
 
@@ -402,6 +397,9 @@ def test_planner_retries_non_column_step_and_model_references(tmp_path) -> None:
             f'"outcome":"{outcome}","outcome_type":"binary",'
             '"method_family":"logistic_regression",'
             f'"exposure_source":"{exposure}",'
+            f'"covariates":[],"model_terms":[{{"name":"{exposure}",'
+            '"role":"exposure","coding":"continuous",'
+            '"transform":"identity"}],'
             '"analysis_role":"primary","analysis_set":"complete_case",'
             '"required_for_step_success":true}]}]}'
         )
@@ -614,9 +612,12 @@ def test_typed_binding_gate_rejects_identity_coordinate_as_raw_step_input(
     message = str(caught.value)
     assert "reserved for host navigation" in message
     assert "reserved navigation coordinates=['stay_id']" in message
-    assert "'stay_id'" not in message.split("executable cohort columns=", 1)[1].split(
-        "; reserved navigation coordinates=", 1
-    )[0]
+    assert (
+        "'stay_id'"
+        not in message.split("executable cohort columns=", 1)[1].split(
+            "; reserved navigation coordinates=", 1
+        )[0]
+    )
 
     from easyicu.research_agent.agents.core import PlannerAgent
 
@@ -650,6 +651,15 @@ def test_planner_retries_robustness_window_absent_from_sealed_input(tmp_path) ->
                 "outcome_type": "binary",
                 "method_family": "logistic_regression",
                 "exposure_source": "lact_max",
+                "covariates": [],
+                "model_terms": [
+                    {
+                        "name": "lact_max",
+                        "role": "exposure",
+                        "coding": "continuous",
+                        "transform": "identity",
+                    }
+                ],
                 "analysis_role": "primary",
                 "analysis_set": "complete_case",
                 "required_for_step_success": True,
@@ -767,6 +777,9 @@ def test_planner_retries_primary_cohort_that_erases_its_closed_comparison(
             '"outcome":"death","outcome_type":"binary",'
             '"method_family":"logistic_regression",'
             '"exposure_source":"lact_max",'
+            '"covariates":[],"model_terms":[{'
+            '"name":"lact_max","role":"exposure",'
+            '"coding":"continuous","transform":"identity"}],'
             '"analysis_role":"primary","analysis_set":"source_aware",'
             '"required_for_step_success":true}]}]}'
         )

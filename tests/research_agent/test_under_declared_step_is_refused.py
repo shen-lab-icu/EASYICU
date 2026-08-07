@@ -271,6 +271,28 @@ def test_a_fully_declared_step_reports_no_gap_and_is_claimed():
                 analysis_role="primary",
                 analysis_set="complete_case",
                 covariates=["age", "sex"],
+                model_terms=[
+                    {
+                        "name": "value",
+                        "role": "exposure",
+                        "coding": "continuous",
+                        "transform": "identity",
+                    },
+                    {
+                        "name": "age",
+                        "role": "covariate",
+                        "coding": "continuous",
+                        "transform": "identity",
+                    },
+                    {
+                        "name": "sex",
+                        "role": "covariate",
+                        "coding": "binary",
+                        "levels": ["F", "M"],
+                        "reference_level": "F",
+                        "transform": "treatment_contrast",
+                    },
+                ],
             )
         ],
     )

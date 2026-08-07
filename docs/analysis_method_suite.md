@@ -38,7 +38,7 @@ A `planned` method carries no runner. It must fail closed if requested as a prim
 | Method | Tier | Implementation | Produces | Runner |
 | --- | --- | --- | --- | --- |
 | Ordinal dose-response (OR per +1 stage, per-stage forest, monotonicity) | primary | LLM-coded ⚠️ | agent-declared ordered trend + dose_response.csv; deterministic forest | — |
-| Adjusted association (logistic / linear) | primary | LLM-coded ⚠️ | adjusted effect estimate (bound via NumericClaim) + forest (deterministic figure) | — |
+| Adjusted association (logistic / linear) | primary | deterministic ✅ | host-bound adjusted effect + typed model/coefficient contract + deterministic forest | `adjusted_association_estimates` |
 | Multiple adjustment sets (crude / minimal / full) | standard_supporting | LLM-coded ⚠️ | nested-model effect table | — |
 | Effect modification / interaction + subgroup forest | standard_supporting | LLM-coded ⚠️ | interaction test + subgroup forest | — |
 | Missing-data audit + complete-case vs imputation sensitivity | standard_supporting | deterministic ✅ | missingness_summary.csv + sensitivity contrast | `missing_data` |

@@ -97,6 +97,7 @@ from ..repairs.source import (
     _deterministic_summary_repair,
     deterministic_contract_repair,
 )
+from ..repairs.semantic_boundary import SemanticRepairRecorder
 from ..repairs.attempt_record import record_deterministic_runner_repair_attempt
 from .code_hygiene import reorder_forward_references
 from ..repairs.coordination import (
@@ -1387,6 +1388,7 @@ def _step_status_from_contract_findings(
     }:
         return "critic_failed"
     return "ok"
+
 
 _LOCKED_MEASUREMENT_DATA_QUALITY_ISSUES = frozenset(
     {
@@ -2740,6 +2742,7 @@ def _fresh_plausibility_receipt_findings(
         script_text=script_text,
         scope=authority.scope,
     )
+
 
 def _selectively_revalidate_resume_successes(
     *,
@@ -5071,6 +5074,7 @@ def run_execute_phase(
                 _serializable_plan_scientific_scope_signature(plan)
             ),
         }
+
         step_execution_cohort_path = _step_execution_cohort_path(
             step=step,
             plan=plan,
@@ -5303,6 +5307,15 @@ def run_execute_phase(
                 initial_llm_repair_attempts=step_llm_repair_attempts,
                 provider_receipt_relative_path=provider_receipt_relative_path,
             )
+        step_repair_budget.bind_semantic_escalation_recorder(
+            SemanticRepairRecorder(
+                step_record=step_record,
+                findings=findings,
+                lock=shared_lock,
+                step_id=step.step_id,
+                attempt_id=attempt_id,
+            )
+        )
         _sync_provider_budget = step_repair_budget.sync_provider
 
         _sync_provider_budget()
@@ -6026,9 +6039,7 @@ def run_execute_phase(
                     step_record["step_authority_capsule_stage"] = (
                         step_attempt_state.selected_resume_capsule.capsule.stage
                     )
-                    selected_digest = (
-                        step_attempt_state.selected_resume_capsule.capsule.candidate_code.sha256
-                    )
+                    selected_digest = step_attempt_state.selected_resume_capsule.capsule.candidate_code.sha256
                     if (
                         step_attempt_state.selected_resume_capsule.capsule.concept_audit
                         is not None
@@ -6233,8 +6244,7 @@ def run_execute_phase(
                 else draft.findings
             )
             quarantine_state.pending_errors = [
-                ValidationFinding.model_validate(payload)
-                for payload in active_findings
+                ValidationFinding.model_validate(payload) for payload in active_findings
             ]
             # Historical errors remain binding regression constraints, but
             # their old source coordinates are not findings on the current
@@ -7360,6 +7370,7 @@ def run_execute_phase(
                 step=step,
                 source=source,
                 context=context,
+                on_semantic_escalation=step_repair_budget.record_semantic_escalation,
             )
 
         worker_progress.concept_repair_attempts = 0
@@ -8304,9 +8315,9 @@ def run_execute_phase(
                             step_record["applied_concept_repair_names"] = list(
                                 worker_progress.applied_concept_repair_names
                             )
-                            step_record[
-                                "deterministic_concept_repair_code_sha256"
-                            ] = sha256_of_bytes(code.encode("utf-8"))
+                            step_record["deterministic_concept_repair_code_sha256"] = (
+                                sha256_of_bytes(code.encode("utf-8"))
+                            )
                             for repair_name in deterministic_names:
                                 _record_repair(
                                     repair_id=repair_name,
@@ -9901,6 +9912,9 @@ def run_execute_phase(
                             step_summary=visual_step_summary,
                             previous_repair=worker_progress.runner_repair_name,
                             analysis_family=local_runtime_state.analysis_family,
+                            on_semantic_escalation=(
+                                step_repair_budget.record_semantic_escalation
+                            ),
                         )
                         summary_repair = _authorize_automatic_repair(
                             summary_repair,
@@ -9959,6 +9973,9 @@ def run_execute_phase(
                             code=code,
                             findings=early_contract_errors,
                             previous_repair=worker_progress.runner_repair_name,
+                            on_semantic_escalation=(
+                                step_repair_budget.record_semantic_escalation
+                            ),
                         )
                         contract_repair = _authorize_automatic_repair(
                             contract_repair,
@@ -10184,6 +10201,9 @@ def run_execute_phase(
                         step_summary=visual_step_summary,
                         previous_repair=worker_progress.runner_repair_name,
                         analysis_family=local_runtime_state.analysis_family,
+                        on_semantic_escalation=(
+                            step_repair_budget.record_semantic_escalation
+                        ),
                     )
                     summary_repair = _authorize_automatic_repair(
                         summary_repair,
@@ -10358,6 +10378,9 @@ def run_execute_phase(
                         previous_repair=worker_progress.runner_repair_name,
                         analysis_family=local_runtime_state.analysis_family,
                         resolved_input_bindings=resolved_input_bindings,
+                        on_semantic_escalation=(
+                            step_repair_budget.record_semantic_escalation
+                        ),
                     )
                 runner_repair = _authorize_automatic_repair(
                     runner_repair,
@@ -10593,7 +10616,9 @@ def run_execute_phase(
         figure_role = (
             "publication_figure"
             if publication_step
-            else "analysis_figure" if _step_expects_figure(step) else None
+            else "analysis_figure"
+            if _step_expects_figure(step)
+            else None
         )
         if (
             publication_step

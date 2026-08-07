@@ -197,7 +197,9 @@ def test_existing_multi_table_visualization_gets_all_rows_contracts() -> None:
     )
 
 
-def test_split_figure_contracts_cover_tables_without_claiming_statistic_inputs() -> None:
+def test_split_figure_contracts_cover_tables_without_claiming_statistic_inputs() -> (
+    None
+):
     plan = AnalysisPlan(
         research_question="Fit a model and render its result table.",
         steps=[
@@ -224,38 +226,35 @@ def test_split_figure_contracts_cover_tables_without_claiming_statistic_inputs()
     ] == ["table:model_results"]
 
 
-def test_planner_normalizer_preserves_only_closed_consumption_fields() -> None:
-    payload, dropped = _normalise_plan_payload(
-        {
-            "research_question": "Render a verified table.",
-            "steps": [
-                {
-                    "step_id": "figure",
-                    "planned_analysis_role": "auxiliary",
-                    "intent": "Render all rows.",
-                    "inputs": ["table:result"],
-                    "expected_outputs": ["figure:result"],
-                    "method": "visualization",
-                    "input_consumption_contracts": [
-                        {
-                            "schema_version": "easyicu.artifact_consumption/1",
-                            "input_key": "table:result",
-                            "mode": "all_rows",
-                            "invented_selector": "first",
-                        }
-                    ],
-                }
-            ],
-        }
+def test_planner_normalizer_retries_unknown_consumption_fields() -> None:
+    from easyicu.research_agent.agents.plan_payload import (
+        PlannerScientificProjectionError,
     )
 
-    contract = payload["steps"][0]["input_consumption_contracts"][0]
-    assert contract == {
-        "schema_version": "easyicu.artifact_consumption/1",
-        "input_key": "table:result",
-        "mode": "all_rows",
-    }
-    assert dropped["input_consumption_contracts"] == ["table:result:invented_selector"]
+    with pytest.raises(PlannerScientificProjectionError, match="invented_selector"):
+        _normalise_plan_payload(
+            {
+                "research_question": "Render a verified table.",
+                "steps": [
+                    {
+                        "step_id": "figure",
+                        "planned_analysis_role": "auxiliary",
+                        "intent": "Render all rows.",
+                        "inputs": ["table:result"],
+                        "expected_outputs": ["figure:result"],
+                        "method": "visualization",
+                        "input_consumption_contracts": [
+                            {
+                                "schema_version": "easyicu.artifact_consumption/1",
+                                "input_key": "table:result",
+                                "mode": "all_rows",
+                                "invented_selector": "first",
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
 
 
 def test_consumption_contract_change_is_scientific_scope_change() -> None:
