@@ -9929,7 +9929,7 @@ def run_execute_phase(
                 with shared_lock:
                     completed_records_snapshot = list(per_step_records)
                 # Early pre-registration deterministic contract gate: the SAME
-                # 14-validator sequence the final gate runs
+                # 15-validator sequence the final gate runs
                 # (_evaluate_final_deterministic_gates), evaluated here before
                 # evidence registration so contract errors enter the in-run repair
                 # loop instead of becoming a terminal record. The figure-contract

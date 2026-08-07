@@ -1121,26 +1121,7 @@ class PlannedModelRequirement(BaseModel):
         return self
 
     def _check_declared_exposure_levels(self) -> None:
-        """A level set is declared whole, or not at all.
-
-        Three fields describe one decision -- which levels exist, which is the
-        reference, and which contrast the manuscript reports -- so a partial
-        answer is not a smaller version of it. Whichever of the three is
-        missing, the model cannot be fitted as declared.
-
-        THIS IS DELIBERATELY THE OPPOSITE CALL FROM THE ROBUSTNESS REPLAY SPEC,
-        and the difference is worth stating so it is not "fixed" later by
-        analogy. There, a partial declaration was refused while an ABSENT one
-        was claimed by an equally correct fallback path, so refusing charged
-        the planner for trying and the fix was to fall through. Here the
-        fallback is not equally correct: with the levels absent the executor
-        fits the exposure as a single term, which on a four-level ordinal scale
-        is a *different scientific quantity* -- a per-unit trend rather than a
-        set of stage contrasts -- reported under the declared estimand's name.
-        A wrong number under the right label is exactly what must not happen
-        silently, so an incomplete level declaration fails closed and names the
-        field that is missing.
-        """
+        """Refuse a partial categorical-exposure contrast declaration."""
 
         declared = {
             "exposure_levels": self.exposure_levels,
@@ -1157,20 +1138,15 @@ class PlannedModelRequirement(BaseModel):
                 + ", ".join(sorted(declared))
                 + " together; this requirement is missing "
                 + ", ".join(repr(name) for name in missing)
-                + ", so the host cannot tell which contrast the manuscript "
-                "reports and must not choose one"
+                + ", so the host cannot tell which contrast the manuscript reports"
             )
-
         levels = [str(value or "").strip() for value in self.exposure_levels or []]
         if any(not level for level in levels):
             raise ValueError("exposure_levels must not contain a blank level")
         if len(levels) != len(set(levels)):
             raise ValueError("exposure_levels must not repeat a level")
         if len(levels) < 2:
-            raise ValueError(
-                "exposure_levels needs at least two levels; a contrast is "
-                "between two of them"
-            )
+            raise ValueError("exposure_levels needs at least two levels")
         reference = str(self.exposure_reference_level or "").strip()
         primary = str(self.primary_contrast_level or "").strip()
         if reference not in levels:
@@ -1184,11 +1160,110 @@ class PlannedModelRequirement(BaseModel):
                 "declared exposure_levels"
             )
         if primary == reference:
+            raise ValueError("primary_contrast_level must not be the reference level")
+
+
+class FamilyPrimaryResultRequirement(BaseModel):
+    """Planner-owned headline-result contract for causal and survival studies.
+
+    This contract deliberately does not reuse :class:`PlannedModelRequirement`:
+    an adjusted association model roster cannot represent a causal estimand or
+    the time-origin/censoring semantics of a survival effect.  The planner
+    declares the scientific target here; the execution gate reconciles the
+    declared product with a materialised result table before the step can pass.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    analysis_family: Literal["causal_inference", "survival"]
+    exposure_source: str
+    outcome: str
+    expected_result_product: str
+    estimator: str
+    effect_scale: str
+    uncertainty_method: str
+    population: str
+    estimand: Optional[str] = None
+    treatment: Optional[str] = None
+    comparator: Optional[str] = None
+    adjustment_strategy: Optional[str] = None
+    overlap_diagnostic: Optional[str] = None
+    time_origin: Optional[str] = None
+    event_definition: Optional[str] = None
+    censoring_strategy: Optional[str] = None
+    competing_risk_strategy: Optional[str] = None
+    time_horizon: Optional[str] = None
+    effect_measure: Optional[str] = None
+    proportional_hazards_diagnostic: Optional[str] = None
+
+    @field_validator(
+        "exposure_source",
+        "outcome",
+        "expected_result_product",
+        "estimator",
+        "effect_scale",
+        "uncertainty_method",
+        "population",
+    )
+    @classmethod
+    def _require_nonblank_contract_text(cls, value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError("family primary-result contract fields must be non-empty")
+        return text
+
+    @model_validator(mode="after")
+    def _require_family_specific_scientific_fields(
+        self,
+    ) -> "FamilyPrimaryResultRequirement":
+        product = str(self.expected_result_product).strip()
+        if not product.startswith("table:"):
             raise ValueError(
-                "primary_contrast_level must not be the reference level; a "
-                "level contrasted against itself is not an estimate"
+                "family primary-result expected_result_product must be a typed table"
             )
 
+        if self.analysis_family == "causal_inference":
+            missing = [
+                name
+                for name in (
+                    "estimand",
+                    "treatment",
+                    "comparator",
+                    "adjustment_strategy",
+                    "overlap_diagnostic",
+                )
+                if not str(getattr(self, name) or "").strip()
+            ]
+            if missing:
+                raise ValueError(
+                    "causal primary-result contract requires " + ", ".join(missing)
+                )
+        else:
+            missing = [
+                name
+                for name in (
+                    "time_origin",
+                    "event_definition",
+                    "censoring_strategy",
+                    "competing_risk_strategy",
+                    "time_horizon",
+                    "effect_measure",
+                )
+                if not str(getattr(self, name) or "").strip()
+            ]
+            if missing:
+                raise ValueError(
+                    "survival primary-result contract requires " + ", ".join(missing)
+                )
+            estimator = _normalise_model_contract_token(self.estimator)
+            if "cox" in estimator and not str(
+                self.proportional_hazards_diagnostic or ""
+            ).strip():
+                raise ValueError(
+                    "a Cox primary-result contract requires "
+                    "proportional_hazards_diagnostic"
+                )
+        return self
 
 _DEFAULT_STABILITY_BASE_SEED = 1729
 """Recorded starting seed when the study does not pick one.
@@ -2121,6 +2196,16 @@ class AnalysisStep(BaseModel):
             "step contract and is required for other analysis families."
         ),
     )
+    family_primary_result_requirement: Optional[FamilyPrimaryResultRequirement] = (
+        Field(
+            default=None,
+            description=(
+                "Planner-owned causal/survival headline-result requirement. "
+                "It binds the scientific estimand to one registered result table; "
+                "it is not an adjusted-association model roster."
+            ),
+        )
+    )
     input_consumption_contracts: List[ArtifactConsumptionContract] = Field(
         default_factory=list,
         description=(
@@ -2361,6 +2446,17 @@ class AnalysisStep(BaseModel):
                     "expected output 'table:adjusted_association_estimates'; "
                     "other analysis families must use their family-specific "
                     "planning and validation contracts"
+                )
+        family_requirement = self.family_primary_result_requirement
+        if family_requirement is not None:
+            if self.planned_analysis_role != "primary":
+                raise ValueError(
+                    "family_primary_result_requirement belongs only on the primary step"
+                )
+            if family_requirement.expected_result_product not in self.expected_outputs:
+                raise ValueError(
+                    "family_primary_result_requirement expected_result_product must "
+                    "be declared in this step's expected_outputs"
                 )
         return self
 

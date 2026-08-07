@@ -2730,12 +2730,15 @@ def _step_recovery_contract(step: AnalysisStep) -> dict[str, Any]:
     """Persist the inspectable recovery identity of one dropped plan step."""
 
     signature = StepRecoverySignature.from_step(step)
+    payload = signature.model_dump(mode="json")
+    if signature.family_primary_result_requirement is None:
+        payload.pop("family_primary_result_requirement", None)
     return {
         "step_id": signature.step_id,
         "planned_analysis_role": signature.planned_analysis_role,
         "method": signature.method,
         "expected_outputs": list(signature.expected_outputs),
-        "recovery_signature": signature.model_dump(mode="json"),
+        "recovery_signature": payload,
         "recovery_signature_sha256": signature.canonical_digest(),
     }
 

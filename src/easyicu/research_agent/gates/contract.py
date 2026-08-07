@@ -81,6 +81,7 @@ from ..robustness.panel import RobustnessSpec
 from ..authority.runtime_artifacts import current_successful_step_records
 from ..schema import AnalysisPlan, AnalysisStep, ResearchContext
 from ..trajectory.plan_contract import trajectory_plan_contract_applies
+from .family_primary_result import family_primary_result_reconciliation_findings
 
 
 def _primary_cohort_integrity_authority_paths(
@@ -704,7 +705,7 @@ def _step_deterministic_contract_findings(
 
     Both the early pre-registration gate inside ``_execute_one_step`` and the
     final deterministic gate ``_evaluate_final_deterministic_gates`` evaluate this
-    IDENTICAL 14-validator sequence in the SAME order — the early gate runs it
+    IDENTICAL 15-validator sequence in the SAME order — the early gate runs it
     before evidence registration so contract errors enter the in-run repair loop
     instead of becoming a terminal record. This is that single reusable sequence.
 
@@ -817,6 +818,13 @@ def _step_deterministic_contract_findings(
         completed_step_records=completed_step_records,
         out_dir=out_dir,
         cohort_path=integrity_universe_path,
+    )
+    findings += family_primary_result_reconciliation_findings(
+        step=step,
+        plan=plan,
+        context=context,
+        step_summary=step_summary,
+        out_dir=out_dir,
     )
     findings += _primary_exposure_contract_findings(
         step=step,

@@ -31,7 +31,9 @@ class StepRecoverySignature(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["easyicu.step_recovery_signature/1"] = (
+    schema_version: Literal[
+        "easyicu.step_recovery_signature/1", "easyicu.step_recovery_signature/2"
+    ] = (
         "easyicu.step_recovery_signature/1"
     )
     step_id: str
@@ -42,6 +44,7 @@ class StepRecoverySignature(BaseModel):
     icu_rule_refs: tuple[str, ...]
     model_requirements: tuple[dict[str, Any], ...]
     input_consumption_contracts: tuple[dict[str, Any], ...]
+    family_primary_result_requirement: dict[str, Any] | None = None
     table_one_spec: dict[str, Any] | None
     trajectory_stability_spec: dict[str, Any] | None
 
@@ -50,6 +53,11 @@ class StepRecoverySignature(BaseModel):
         """Project every structured scientific field except free-text intent."""
 
         return cls(
+            schema_version=(
+                "easyicu.step_recovery_signature/2"
+                if step.family_primary_result_requirement is not None
+                else "easyicu.step_recovery_signature/1"
+            ),
             step_id=str(step.step_id or "").strip(),
             planned_analysis_role=str(step.planned_analysis_role or "").strip(),
             method=str(step.method or "").strip(),
@@ -59,6 +67,11 @@ class StepRecoverySignature(BaseModel):
             model_requirements=_canonical_model_payloads(step.model_requirements),
             input_consumption_contracts=_canonical_model_payloads(
                 step.input_consumption_contracts
+            ),
+            family_primary_result_requirement=(
+                step.family_primary_result_requirement.model_dump(mode="json")
+                if step.family_primary_result_requirement is not None
+                else None
             ),
             table_one_spec=(
                 step.table_one_spec.model_dump(mode="json")
@@ -75,7 +88,13 @@ class StepRecoverySignature(BaseModel):
     def canonical_digest(self) -> str:
         """Hash this protocol through the shared canonical JSON owner."""
 
-        return canonical_sha256(self.model_dump(mode="json"))
+        payload = self.model_dump(mode="json")
+        # Preserve the /1 byte contract for a step that does not use the new
+        # family result packet.  Otherwise every historical association step
+        # would look scientifically changed just because this field exists.
+        if self.family_primary_result_requirement is None:
+            payload.pop("family_primary_result_requirement", None)
+        return canonical_sha256(payload)
 
 
 __all__ = ["StepRecoverySignature"]

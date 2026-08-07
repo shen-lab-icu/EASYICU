@@ -193,6 +193,17 @@ def _step_scientific_signature(step: AnalysisStep) -> Tuple[Any, ...]:
             )
             for contract in step.input_consumption_contracts
         ),
+        *(
+            (
+                json.dumps(
+                    step.family_primary_result_requirement.model_dump(mode="json"),
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+            )
+            if step.family_primary_result_requirement is not None
+            else ()
+        ),
         (
             json.dumps(
                 step.trajectory_stability_spec.model_dump(mode="json"),

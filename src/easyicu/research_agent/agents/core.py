@@ -47,6 +47,7 @@ from ..planning.analysis_types import (
     planner_analysis_type_guide,
 )
 from ..planning.primary_result_contract import (
+    family_primary_result_execution_guide,
     primary_result_contract_guide,
     validate_required_primary_result as _validate_required_primary_result,
 )
@@ -1343,6 +1344,7 @@ def _planner_retry_response_projection(raw: str) -> str:
         "method",
         "icu_rule_refs",
         "model_requirements",
+        "family_primary_result_requirement",
         "input_consumption_contracts",
         "table_one_spec",
         "trajectory_stability_spec",
@@ -1392,6 +1394,7 @@ def _planner_retry_response_projection(raw: str) -> str:
         "expected_outputs",
         "method",
         "model_requirements",
+        "family_primary_result_requirement",
     )
     projection["steps"] = [
         {key: step[key] for key in minimal_step_keys if key in step}
@@ -1583,6 +1586,7 @@ class PlannerAgent:
                 "steps (array of objects "
                 "each with step_id, planned_analysis_role, intent, inputs, expected_outputs, "
                 "method, icu_rule_refs, optional model_requirements, optional "
+                "family_primary_result_requirement, optional "
                 "input_consumption_contracts, optional table_one_spec, optional "
                 "trajectory_stability_spec, optional "
                 "exposure_outcome_distribution_spec, and optional "
@@ -3241,6 +3245,13 @@ class CoderAgent:
             for value in (requirement.outcome, requirement.exposure_source)
             if str(value or "").strip()
         )
+        if step.family_primary_result_requirement is not None:
+            detailed_variable_names.update(
+                {
+                    step.family_primary_result_requirement.exposure_source.lower(),
+                    step.family_primary_result_requirement.outcome.lower(),
+                }
+            )
         user_content = (
             f"Write the Python CODE for STEP {step.step_id}.\n"
             f"Analysis-family context: {_family.key} ({_family.name}). "
@@ -3253,11 +3264,14 @@ class CoderAgent:
             f"Expected outputs: {step.expected_outputs}\n"
             "Model requirements: "
             f"{json.dumps([item.model_dump(mode='json') for item in step.model_requirements], ensure_ascii=False)}\n"
+            "Family primary-result requirement: "
+            f"{json.dumps(step.family_primary_result_requirement.model_dump(mode='json') if step.family_primary_result_requirement is not None else None, ensure_ascii=False)}\n"
             f"Method: {step.method or '(unspecified — choose conservatively)'}\n\n"
             + _declared_output_scope_contract(step)
             + _primary_analysis_cohort_output_contract(step)
             + _cohort_predicate_partition_safety_contract(step)
             + _typed_input_scope_contract(step)
+            + family_primary_result_execution_guide(step)
             + coder_method_capability_block()
             + trajectory_phenotyping_code_contract(
                 context=context,
@@ -3491,6 +3505,8 @@ class CoderAgent:
             # here consumed transport budget without adding authority.
             "Model requirements: "
             f"{json.dumps([item.model_dump(mode='json') for item in step.model_requirements], ensure_ascii=False)}\n"
+            "Family primary-result requirement: "
+            f"{json.dumps(step.family_primary_result_requirement.model_dump(mode='json') if step.family_primary_result_requirement is not None else None, ensure_ascii=False)}\n"
             f"Method: {step.method or '(unspecified)'}\n\n"
         )
         mechanical_guardrails = (
@@ -3518,6 +3534,7 @@ class CoderAgent:
         shared_contract = (
             step_contract_header
             + _compact_repair_scope_contract(step)
+            + family_primary_result_execution_guide(step)
             + _primary_analysis_cohort_output_contract(step)
             + _cohort_predicate_partition_safety_contract(step)
             + trajectory_phenotyping_code_contract(context=context, step=step)
