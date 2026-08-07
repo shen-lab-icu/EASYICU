@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from easyicu.research_agent.gates.preflight import audit_mechanical_code_contracts
-from easyicu.research_agent.repairs.reasons import repair_reason_for_finding
+from easyicu.research_agent.repairs.reasons import (
+    RepairReason,
+    repair_reason_for_finding,
+)
 from easyicu.research_agent.repairs.source import deterministic_concept_audit_repair
 
 
@@ -127,8 +130,7 @@ counts = closed_categorical_counts(count, declared_levels=count_levels)
         ("closed_categorical_counts", 7, "value_n"),
     ]
     assert all(
-        repair_reason_for_finding(finding).value
-        == "SCIENTIFIC_SEMANTICS_VIOLATION"
+        repair_reason_for_finding(finding).value == "SCIENTIFIC_SEMANTICS_VIOLATION"
         for finding in findings
     )
 
@@ -239,9 +241,7 @@ receipt = measurement_provenance_receipt(
     findings = _provenance_scope_findings(script, _step(ra))
 
     assert len(findings) == 1
-    assert findings[0].detail["declared_pairs"] == [
-        ["value_measured", "value_n"]
-    ]
+    assert findings[0].detail["declared_pairs"] == [["value_measured", "value_n"]]
     assert findings[0].detail["observed_pair"] == [
         "other_measured",
         "other_n",
@@ -276,8 +276,7 @@ receipt = measurement_provenance_receipt(
     findings = [
         finding
         for finding in audit_mechanical_code_contracts(script, _step(ra))
-        if (finding.detail or {}).get("reason")
-        == "host_helper_runtime_introspection"
+        if (finding.detail or {}).get("reason") == "host_helper_runtime_introspection"
     ]
 
     assert len(findings) == 1
@@ -703,8 +702,13 @@ def summarize(closed_categorical_counts, sex):
 
 
 def test_table_one_sdk_repairs_local_schema_to_exact_planner_spec(ra):
+    # The prologue binding `frame` is part of the fixture, not decoration: the
+    # gate runs on the assembled script, and a module-level read of a name
+    # nothing binds is itself a blocking finding.
     script = """
+import pandas as pd
 from easyicu.research_agent.methods.table_one import build_grouped_table_one
+frame = pd.DataFrame({"age": [61.0], "death": [0]})
 table_one_spec = {
     "group_by": "death",
     "group_levels": [0, 1],
@@ -738,13 +742,118 @@ def test_table_one_sdk_accepts_exact_planner_spec(ra):
     step = _table_step(ra)
     spec = step.table_one_spec.model_dump(mode="python")
     script = (
+        "import pandas as pd\n"
         "from easyicu.research_agent.methods.table_one import "
         "build_grouped_table_one\n"
+        'frame = pd.DataFrame({"age": [61.0], "death": [0]})\n'
         f"table_one_spec = {spec!r}\n"
         "result = build_grouped_table_one(frame, table_one_spec)\n"
     )
 
     assert audit_mechanical_code_contracts(script, step) == []
+
+
+def _spec_not_passed_findings(script: str, step):
+    return [
+        finding
+        for finding in audit_mechanical_code_contracts(script, step)
+        if (finding.detail or {}).get("reason") == "table_one_spec_not_passed"
+    ]
+
+
+def test_table_one_sdk_call_that_passes_no_spec_is_refused_before_launch(ra):
+    """The gate constrained WHICH spec is passed and never that one is.
+
+    m1's ``02_baseline_table_one`` died in the sandbox with
+    ``build_grouped_table_one() missing 1 required positional argument:
+    'spec'`` -- while the correct spec sat four lines above, host-rendered,
+    and was used later in the same script for the receipt.  The gate that
+    exists to constrain this exact call could not see it: its entry condition
+    required two arguments before it would look at anything, so the one shape
+    that supplies no spec skipped the check entirely.
+
+    Measured across the recorded corpus: 121 calls pass the spec positionally
+    and 3 pass nothing, in three different runs under three different step
+    names.  This is not a one-off typo.
+    """
+
+    step = _table_step(ra)
+    spec = step.table_one_spec.model_dump(mode="python")
+    script = (
+        "import pandas as pd\n"
+        "from easyicu.research_agent.methods.table_one import "
+        "build_grouped_table_one\n"
+        'frame = pd.DataFrame({"age": [61.0], "death": [0]})\n'
+        f"table_one_spec = {spec!r}\n"
+        "result = build_grouped_table_one(frame)\n"
+    )
+
+    findings = _spec_not_passed_findings(script, step)
+
+    assert len(findings) == 1
+    assert findings[0].severity == "error"
+    assert findings[0].detail["line"] == 5
+    # Omitting the argument is the same class of defect as passing the wrong
+    # one, and its sibling reason ``table_one_spec_not_planner_owned`` is
+    # already classified that way. Left unmapped this fell into the generic
+    # output-contract bucket, which blames the wrong layer in the ledger.
+    assert (
+        repair_reason_for_finding(findings[0]) is RepairReason.INVALID_HELPER_SIGNATURE
+    )
+
+
+def test_table_one_sdk_accepts_the_spec_by_keyword(ra):
+    """The signature names the parameter, so naming it is a legal call."""
+
+    step = _table_step(ra)
+    spec = step.table_one_spec.model_dump(mode="python")
+    script = (
+        "import pandas as pd\n"
+        "from easyicu.research_agent.methods.table_one import "
+        "build_grouped_table_one\n"
+        'frame = pd.DataFrame({"age": [61.0], "death": [0]})\n'
+        f"table_one_spec = {spec!r}\n"
+        "result = build_grouped_table_one(frame, spec=table_one_spec)\n"
+    )
+
+    assert _spec_not_passed_findings(script, step) == []
+
+
+def test_a_spec_forwarded_through_a_mapping_splat_is_not_refused(ra):
+    """Refusing what cannot be resolved here would block legal code.
+
+    The gate reads one call site; a ``**mapping`` may carry the spec and
+    nothing at this layer can prove otherwise.  Staying silent keeps the
+    refusal aimed at the shape that is unambiguously wrong.
+    """
+
+    step = _table_step(ra)
+    spec = step.table_one_spec.model_dump(mode="python")
+    script = (
+        "import pandas as pd\n"
+        "from easyicu.research_agent.methods.table_one import "
+        "build_grouped_table_one\n"
+        'frame = pd.DataFrame({"age": [61.0], "death": [0]})\n'
+        f"table_one_spec = {spec!r}\n"
+        'kwargs = {"spec": table_one_spec}\n'
+        "result = build_grouped_table_one(frame, **kwargs)\n"
+    )
+
+    assert _spec_not_passed_findings(script, step) == []
+
+
+def test_a_step_with_no_table_one_spec_is_not_policed_here(ra):
+    """No Planner declaration, nothing for this gate to enforce."""
+
+    script = (
+        "import pandas as pd\n"
+        "from easyicu.research_agent.methods.table_one import "
+        "build_grouped_table_one\n"
+        'frame = pd.DataFrame({"age": [61.0]})\n'
+        "result = build_grouped_table_one(frame)\n"
+    )
+
+    assert _spec_not_passed_findings(script, _step(ra)) == []
 
 
 def test_closed_counts_missing_levels_is_repaired_without_inventing_categories(ra):
@@ -845,8 +954,7 @@ def add_categorical(series, allowed_values, name):
     ]
     assert names == ["closed_counts_stable_keywords_v1"]
     assert (
-        "closed_categorical_counts(series, declared_levels=allowed_values)"
-        in repaired
+        "closed_categorical_counts(series, declared_levels=allowed_values)" in repaired
     )
     assert "variable_name=name" not in repaired
     assert _signature_findings(repaired, ra) == []
@@ -1067,14 +1175,22 @@ qa = audit_publication_exports(out_dir=out_dir, stem=stem)
     )
 
     assert len(findings) == 1
-    assert findings[0].detail == {
-        "reason": "host_helper_call_signature_invalid",
-        "helper_name": "audit_publication_exports",
-        "line": 3,
-        "max_positional": 1,
-        "required_keywords": [],
-        "violations": ["paths_argument_missing", "unknown_keyword_argument"],
-    }
+    detail = findings[0].detail
+    # The stable identity of the finding. Asserted item by item rather than as
+    # whole-dict equality: an added diagnostic field is not a contract change,
+    # and equality made every one of them look like one.
+    assert detail["reason"] == "host_helper_call_signature_invalid"
+    assert detail["helper_name"] == "audit_publication_exports"
+    assert detail["line"] == 3
+    assert detail["max_positional"] == 1
+    assert detail["required_keywords"] == []
+    assert detail["violations"] == [
+        "paths_argument_missing",
+        "unknown_keyword_argument",
+    ]
+    # And the names a repair needs in order to act without guessing.
+    assert detail["unknown_keywords"] == ["out_dir", "stem"]
+    assert "paths" in detail["allowed_keywords"]
     assert names == ["publication_export_audit_paths_v1"]
     assert "audit_publication_exports(paths=out_dir)" in repaired
     assert "stem=" not in repaired

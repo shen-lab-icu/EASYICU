@@ -213,6 +213,8 @@ def test_sync_provider_writes_exact_key_set(tmp_path):
     assert list(step_record) == [
         "step_provider_call_budget_scope",
         "step_provider_call_budget",
+        "step_provider_call_base_budget",
+        "step_provider_call_reaudit_extensions",
         "step_provider_call_attempts",
         "step_provider_call_remaining",
         "step_provider_call_budget_exhausted",
@@ -227,6 +229,8 @@ def test_sync_provider_writes_exact_key_set(tmp_path):
         step_record["step_provider_call_budget_scope"]
         == "coder_generation_repair_concept_audit_and_analyzer"
     )
+    assert step_record["step_provider_call_base_budget"] == provider.base_limit
+    assert step_record["step_provider_call_reaudit_extensions"] == 0
     # receipt path is only reported once something was actually paid
     assert step_record["step_provider_call_receipt"] is None
     provider.consume("initial_generation")
@@ -569,6 +573,57 @@ def test_repair_coordinator_keeps_patch_as_default_without_audit_reservation():
     assert provider.categories == (
         "runtime_repair_patch",
         "runtime_repair_full_rewrite",
+    )
+
+
+def test_mechanically_rejected_patch_falls_through_to_full_rewrite():
+    calls: list[str] = []
+    reasons: list[str] = []
+    provider = StepProviderCallBudget(2, step_id=STEP_ID)
+    coordinator = RepairCoordinator(
+        provider_budget=provider,
+        provider_category="concept_repair",
+        normalize_script=lambda value: value,
+        is_executable_script=lambda value: value.startswith("import "),
+    )
+
+    result = coordinator.repair(
+        code="import helper\nvalue = helper()\n",
+        patch_call=lambda: (
+            calls.append("patch")
+            or json.dumps(
+                {
+                    "format": "easyicu.code_patch/1",
+                    "edits": [
+                        {
+                            "old": "import helper\n",
+                            "new": "",
+                            "expected_count": 1,
+                        }
+                    ],
+                }
+            )
+        ),
+        patch_candidate_rejection_reason=lambda candidate: (
+            "minimal patch left helper() unresolved"
+            if "helper()" in candidate and "import helper" not in candidate
+            else None
+        ),
+        full_rewrite_call=lambda reason: (
+            calls.append("rewrite"),
+            reasons.append(reason),
+            "import os\nvalue = object()\n",
+        )[-1],
+    )
+
+    assert calls == ["patch", "rewrite"]
+    assert reasons == ["minimal patch left helper() unresolved"]
+    assert result.mode == "full_rewrite"
+    assert result.code == "import os\nvalue = object()"
+    assert result.provider_calls == 2
+    assert provider.categories == (
+        "concept_repair_patch",
+        "concept_repair_full_rewrite",
     )
 
 

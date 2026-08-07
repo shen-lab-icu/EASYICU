@@ -49,6 +49,38 @@ def main():
 """
 
 
+_HELPER_SCRIPT = """
+import json
+import os
+from pathlib import Path
+
+def load_json(path):
+    with open(path, "r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+def resolve_bound_product(input_key, entry, evidence_dir):
+    relative_path = entry.get("relative_path")
+    path = Path(evidence_dir) / relative_path
+    return input_key, path
+
+def main():
+    resolved_path = Path(os.environ["EASYICU_RESOLVED_INPUTS_JSON"])
+    resolved_document = load_json(resolved_path)
+    manifest = resolved_document.get("manifest", resolved_document)
+    bound_inputs = manifest.get("inputs")
+    cohort_entry = bound_inputs["artifact:analysis_cohort"]
+    cluster_entry = bound_inputs["dataset:cluster_features"]
+    evidence_dir = Path(os.environ["EASYICU_EVIDENCE_DIR"])
+    cohort = resolve_bound_product(
+        "artifact:analysis_cohort", cohort_entry, evidence_dir
+    )
+    features = resolve_bound_product(
+        "dataset:cluster_features", cluster_entry, evidence_dir
+    )
+    return cohort, features
+"""
+
+
 def test_run_relative_binding_is_repaired_before_execution(ra) -> None:
     findings = _findings(_SCRIPT, ra)
 
@@ -188,6 +220,83 @@ def test_all_proven_wrong_roots_are_repaired_atomically(ra) -> None:
     assert names == ["resolved_input_run_root_v1"]
     assert "EASYICU_EVIDENCE_DIR" not in repaired
     assert repaired.count("EASYICU_RUN_DIR") == 2
+
+
+def test_helper_parameter_root_is_proven_and_repaired_once(ra) -> None:
+    findings = _findings(_HELPER_SCRIPT, ra)
+
+    assert len(findings) == 1
+    assert len(findings[0].detail["occurrences"]) == 1
+    assert findings[0].detail["occurrences"][0]["kind"] == "root_parameter"
+
+    repaired, names = deterministic_concept_audit_repair(
+        _HELPER_SCRIPT,
+        [findings[0].message],
+        repair_reasons=[RepairReason.TYPED_PRODUCT_BINDING_INVALID],
+        repair_findings=findings,
+    )
+
+    assert names == ["resolved_input_run_root_v1"]
+    assert "Path(evidence_dir) / relative_path" not in repaired
+    assert 'Path(os.environ["EASYICU_RUN_DIR"]) / relative_path' in repaired
+    assert _findings(repaired, ra) == []
+
+
+def test_helper_root_with_an_unrelated_use_is_not_claimed(ra) -> None:
+    script = _HELPER_SCRIPT.replace(
+        "    return input_key, path",
+        "    return input_key, path, evidence_dir",
+    )
+
+    assert _findings(script, ra) == []
+
+
+def test_helper_with_one_unproven_call_is_not_claimed(ra) -> None:
+    script = _HELPER_SCRIPT.replace(
+        "    return cohort, features",
+        "    other = resolve_bound_product('other', {}, evidence_dir)\n"
+        "    return cohort, features, other",
+    )
+
+    assert _findings(script, ra) == []
+
+
+def test_custom_json_loader_does_not_promote_an_untrusted_path(ra) -> None:
+    script = _HELPER_SCRIPT.replace(
+        'Path(os.environ["EASYICU_RESOLVED_INPUTS_JSON"])',
+        'Path("untrusted.json")',
+    )
+
+    assert _findings(script, ra) == []
+
+
+def test_custom_json_loader_with_path_reassignment_is_not_claimed(ra) -> None:
+    script = _HELPER_SCRIPT.replace(
+        "def load_json(path):\n",
+        'def load_json(path):\n    path = Path("untrusted.json")\n',
+    )
+
+    assert _findings(script, ra) == []
+
+
+def test_custom_json_loader_with_caller_path_reassignment_is_not_claimed(ra) -> None:
+    script = _HELPER_SCRIPT.replace(
+        "    resolved_document = load_json(resolved_path)",
+        '    resolved_path = Path("untrusted.json")\n'
+        "    resolved_document = load_json(resolved_path)",
+    )
+
+    assert _findings(script, ra) == []
+
+
+def test_helper_with_reassigned_root_alias_is_not_claimed(ra) -> None:
+    script = _HELPER_SCRIPT.replace(
+        "    cohort = resolve_bound_product(",
+        '    evidence_dir = Path("untrusted")\n'
+        "    cohort = resolve_bound_product(",
+    )
+
+    assert _findings(script, ra) == []
 
 
 def test_correct_run_root_and_unproven_dictionary_are_not_claimed(ra) -> None:

@@ -197,13 +197,19 @@
     return api.persist ? api.persist() : Promise.resolve(current);
   }
 
+  /* Returns null, or a typed refusal: {code, reason}. The code is what
+     gate-remedy.js turns into "what clears this" — the reason alone stated our
+     implementation limit and left the user with no next step. */
   function runBlocker(study) {
-    if (!study || !study.planOnly) return '';
+    if (!study || !study.planOnly) return null;
     const t = window.t || ((en) => en);
-    return t(
-      'This Cross-DB handoff is plan-only. The current Agent runner consumes one export and cannot execute the aggregate multi-database payload yet.',
-      '当前 Cross-DB 交接仅用于创建计划。Agent runner 目前只消费单个导出，尚不能执行跨库聚合载荷。',
-    );
+    return {
+      code: 'crossdb_plan_only',
+      reason: t(
+        'This Cross-DB handoff is plan-only. The current Agent runner consumes one export and cannot execute the aggregate multi-database payload yet.',
+        '当前 Cross-DB 交接仅用于创建计划。Agent runner 目前只消费单个导出，尚不能执行跨库聚合载荷。',
+      ),
+    };
   }
 
   function markContextStage(contextId, stage, activeJobId, expectedJobId, contextRevision) {

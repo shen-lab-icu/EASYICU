@@ -28,6 +28,7 @@ _REQUIRED_COLUMNS = frozenset(
         "nonmissing_n",
         "missing_n",
         "missing_pct",
+        "group_missing_excluded_n",
         "count",
         "percentage",
         "mean",
@@ -298,6 +299,85 @@ def _smd_rows_findings(
     return findings
 
 
+def _group_assignment_findings(
+    *,
+    step: AnalysisStep,
+    spec: Any,
+    table: pd.DataFrame,
+) -> list[ValidationFinding]:
+    """Check what the table left out, and that Overall left it out too.
+
+    Two facts a reader of ``table_one.csv`` cannot otherwise recover. First,
+    how many rows the grouping variable could not place: the table reports
+    ``denominator_n`` for the rows it kept and says nothing about the rest, so
+    an exclusion is invisible unless the count travels with it. Second, whether
+    Overall was taken over the same rows as the groups -- the check exists only
+    because excluding rows is now legal, and an executor that filtered the
+    groups while leaving Overall on the unfiltered frame would report a
+    denominator and its parts over two different row sets.
+    """
+
+    findings: list[ValidationFinding] = []
+    excluded = pd.to_numeric(table["group_missing_excluded_n"], errors="coerce")
+    if excluded.isna().any() or excluded.nunique(dropna=False) != 1:
+        return [
+            _error(
+                step,
+                "table_one_group_exclusion_inconsistent",
+                "Table 1 does not report one excluded-row count for the table.",
+            )
+        ]
+    excluded_n = float(excluded.iloc[0])
+    if excluded_n < 0 or excluded_n != int(excluded_n):
+        findings.append(
+            _error(
+                step,
+                "table_one_group_exclusion_invalid",
+                "Table 1 excluded-row count is not a non-negative whole number.",
+                group_missing_excluded_n=excluded_n,
+            )
+        )
+    elif excluded_n and spec.missing_group_policy == "fail_closed":
+        findings.append(
+            _error(
+                step,
+                "table_one_group_exclusion_undeclared",
+                "Table 1 excluded rows under a fail_closed grouping declaration.",
+                group_missing_excluded_n=int(excluded_n),
+                missing_group_policy=spec.missing_group_policy,
+            )
+        )
+    declared_groups = [str(value) for value in spec.group_levels]
+    for variable in spec.variables:
+        rows = table[table["variable"].astype(str).eq(variable.name)]
+        if rows.empty:
+            continue
+        per_group = rows.groupby(rows["group"].astype(str))["denominator_n"].first()
+        if "Overall" not in per_group or any(
+            name not in per_group for name in declared_groups
+        ):
+            continue
+        overall_n = pd.to_numeric(pd.Series([per_group["Overall"]]), errors="coerce")
+        parts = pd.to_numeric(
+            pd.Series([per_group[name] for name in declared_groups]), errors="coerce"
+        )
+        if overall_n.isna().any() or parts.isna().any():
+            continue
+        if float(overall_n.iloc[0]) != float(parts.sum()):
+            findings.append(
+                _error(
+                    step,
+                    "table_one_overall_denominator_mismatch",
+                    f"Table 1 Overall for {variable.name!r} is not the sum of its "
+                    "declared groups.",
+                    variable=variable.name,
+                    overall_denominator_n=float(overall_n.iloc[0]),
+                    group_denominator_sum=float(parts.sum()),
+                )
+            )
+    return findings
+
+
 def table_one_output_findings(
     *,
     step: AnalysisStep,
@@ -347,7 +427,7 @@ def table_one_output_findings(
         ]
     findings: list[ValidationFinding] = []
     observed_schema_versions = set(table["schema_version"].dropna().astype(str))
-    if observed_schema_versions != {"easyicu.table_one_result/2"}:
+    if observed_schema_versions != {"easyicu.table_one_result/3"}:
         findings.append(
             _error(
                 step,
@@ -355,6 +435,7 @@ def table_one_output_findings(
                 "The grouped Table 1 does not use the current result schema.",
             )
         )
+    findings.extend(_group_assignment_findings(step=step, spec=spec, table=table))
     expected_digest = table_one_spec_sha256(spec)
     observed_digests = set(table["contract_sha256"].dropna().astype(str))
     if observed_digests != {expected_digest}:

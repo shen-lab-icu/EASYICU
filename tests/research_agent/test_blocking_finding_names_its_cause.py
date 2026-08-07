@@ -135,3 +135,92 @@ def test_the_structured_detail_is_still_carried_for_deterministic_readers() -> N
     assert detail["mismatch_details"] == [_REAL_DETAIL]
     assert detail["mismatch_codes"] == ["normalization_error"]
     assert detail["canonical_shadow_blocked"] is True
+
+
+# --- one level deeper: the cause must name the cell, not just the code -------
+#
+# canary7, 2026-07-31, step ``02_feature_availability_audit``. The step ran
+# clean (returncode 0, all four promised tables present) and died reporting
+#
+#     Canonical normalization reported error 'invalid_registered_count'.
+#
+# The offending cell was one row of one emitted table: a reconciliation
+# difference of -93458 written under a column called ``n``, which the host
+# reads as a population count. ``NormalizationIssue`` carried the product and
+# ``row[4].n`` the whole time; ``compare_validator_shadow_inputs`` collapsed
+# the issues to a set of *codes* and dropped both. Finding it took a manual
+# scan of four CSVs.
+
+
+def _reconciliation_envelope(tmp_path, n_value: str):
+    """Normalize the exact table shape the real step emitted."""
+
+    from easyicu.research_agent.contracts.result_envelope import (
+        normalize_step_result_shadow,
+    )
+
+    (tmp_path / "cohort_input_reconciliation.csv").write_text(
+        "quantity,source,n,denominator_n,percent\n"
+        "loaded_cohort_rows,COHORT_PARQUET,1000,1000,100.0\n"
+        "observed_probe_denominator_minus_context_declared,"
+        f"COHORT_PARQUET_vs_ResearchContext,{n_value},94458,-98.94\n",
+        encoding="utf-8",
+    )
+    summary = {
+        "status": "completed",
+        "output_files": {
+            "table:cohort_input_reconciliation": "cohort_input_reconciliation.csv"
+        },
+    }
+    envelope = normalize_step_result_shadow(
+        step_id="02_feature_availability_audit",
+        step_summary=summary,
+        output_dir=tmp_path,
+        status="ok",
+    )
+    return summary, envelope
+
+
+def test_a_normalization_error_names_the_product_and_the_cell(tmp_path) -> None:
+    from easyicu.research_agent.audits.envelope_shadow import (
+        compare_validator_shadow_inputs,
+    )
+
+    summary, envelope = _reconciliation_envelope(tmp_path, "-93458")
+    comparison = compare_validator_shadow_inputs(
+        step_summary=summary, envelope=envelope, current_status="ok"
+    )
+    details = [
+        mismatch.detail
+        for mismatch in comparison.mismatches
+        if mismatch.code == "normalization_error"
+    ]
+
+    assert details, "the negative count did not reach the shadow comparison"
+    detail = details[0]
+    assert "invalid_registered_count" in detail
+    assert (
+        "table:cohort_input_reconciliation" in detail
+    ), "the finding does not say which registered product carried the cell"
+    assert (
+        "row[1].n" in detail
+    ), "the finding does not say which cell; the issue knew, the mismatch did not"
+
+
+def test_a_clean_reconciliation_raises_no_normalization_error(tmp_path) -> None:
+    """The same table with a plausible count must not be reported at all."""
+
+    from easyicu.research_agent.audits.envelope_shadow import (
+        compare_validator_shadow_inputs,
+    )
+
+    summary, envelope = _reconciliation_envelope(tmp_path, "93458")
+    comparison = compare_validator_shadow_inputs(
+        step_summary=summary, envelope=envelope, current_status="ok"
+    )
+
+    assert not [
+        mismatch
+        for mismatch in comparison.mismatches
+        if mismatch.code == "normalization_error"
+    ]

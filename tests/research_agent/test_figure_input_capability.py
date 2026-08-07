@@ -114,6 +114,10 @@ def test_a_blank_input_is_refused():
 # --------------------------------------------------------------------------
 
 
+def _contracts(keys):
+    return [ArtifactConsumptionContract(input_key=key, mode="all_rows") for key in keys]
+
+
 class _Step:
     """A step-shaped object that skipped schema validation."""
 
@@ -223,3 +227,140 @@ def test_every_figure_renderer_requires_each_of_its_inputs_today():
     for name, capability in capabilities.items():
         assert capability.required, name
         assert capability.optional == frozenset(), name
+
+
+# --------------------------------------------------------------------------
+# A product with no rows has no row-consumption decision to declare.
+#
+# Measured 2026-07-30 across today's plans: on visualization steps, 0 of 30
+# declared ``table:`` inputs lack a contract and 0 of 19 declared
+# ``statistic:`` inputs have one.  The Planner is entirely consistent; the
+# host's demand was the incoherent half, and it silently cost 7 of 21 figure
+# steps their deterministic owner.
+# --------------------------------------------------------------------------
+
+S = "statistic:primary_or"
+T = "statistic:complete_case_n"
+
+
+def test_a_statistic_input_needs_no_row_consumption_contract():
+    """``mode="all_rows"`` over one finite number is a category error."""
+
+    capability = TypedInputCapability(required=frozenset({A}), optional=frozenset({S}))
+
+    assert capability.admits_step(_step([A, S], contracts=[A]))
+
+
+def test_the_schema_is_the_authority_on_which_inputs_owe_a_contract():
+    """Not "optional to declare" -- a contract for a statistic is invalid.
+
+    ``AnalysisStep`` refuses it outright, so the capability agreeing with the
+    schema is the whole point: it must not accept a step the schema rejects
+    any more than it may reject one the schema accepts.
+    """
+
+    with pytest.raises(ValueError, match="cover every"):
+        _step([A, S], contracts=[A, S])
+
+    capability = TypedInputCapability(required=frozenset({A}), optional=frozenset({S}))
+    assert not capability.admits_step(_Step([A, S], _contracts([A, S])))
+
+
+def test_a_table_beside_an_exempt_statistic_still_needs_its_contract():
+    """The exemption is per input, not a licence to drop the whole check."""
+
+    capability = TypedInputCapability(
+        required=frozenset({A}), optional=frozenset({B, S})
+    )
+
+    assert not capability.admits_step(_Step([A, B, S], _contracts([A])))
+
+
+def test_the_real_recorded_figure_shape_is_admitted():
+    """Two tables with contracts, three statistics without -- 7 real steps."""
+
+    capability = TypedInputCapability(
+        required=frozenset({"table:robustness_matrix"}),
+        optional=frozenset(
+            {"table:robustness_summary", S, T, "statistic:robustness_summary"}
+        ),
+    )
+    step = _step(
+        [
+            "table:robustness_matrix",
+            "table:robustness_summary",
+            S,
+            T,
+            "statistic:robustness_summary",
+        ],
+        contracts=["table:robustness_matrix", "table:robustness_summary"],
+    )
+
+    assert capability.admits_step(step)
+
+
+def test_an_unfamiliar_kind_owes_no_contract_because_only_tables_do():
+    """The rule names what DOES owe one, so a new kind cannot silently owe it.
+
+    Stated positively on purpose: an exemption list would have to grow every
+    time a kind appears, and the one that was forgotten is the one that
+    silently costs a step its owner.
+    """
+
+    capability = TypedInputCapability(
+        required=frozenset({A}), optional=frozenset({"artifact:analysis_cohort"})
+    )
+
+    assert capability.admits_step(
+        _Step([A, "artifact:analysis_cohort"], _contracts([A]))
+    )
+
+
+def test_a_statistic_contract_pointing_at_an_undeclared_input_is_still_refused():
+    """Exempting the requirement must not also exempt the coherence check."""
+
+    capability = TypedInputCapability(required=frozenset({A}), optional=frozenset({S}))
+
+    assert not capability.admits_step(_Step([A, S], _contracts([A, "statistic:other"])))
+
+
+def test_a_duplicate_contract_key_is_still_refused():
+    """Two contracts for one input cannot both be the decision."""
+
+    capability = TypedInputCapability(required=frozenset({A}), optional=frozenset({S}))
+
+    assert not capability.admits_step(_Step([A, S], _contracts([A, A])))
+
+
+def test_a_statistic_carrying_a_contract_is_refused_whatever_its_shape():
+    """It owes none, so any contract for it is one contract too many."""
+
+    capability = TypedInputCapability(required=frozenset({A}), optional=frozenset({S}))
+    step = _Step(
+        [A, S],
+        [
+            *_contracts([A]),
+            ArtifactConsumptionContract(
+                input_key=S,
+                mode="one_per_role",
+                role_column="row_type",
+                expected_roles=["primary"],
+            ),
+        ],
+    )
+
+    assert not capability.admits_step(step)
+
+
+def test_a_table_with_no_contract_at_all_is_refused():
+    """The one shape that a "nobody owes a contract" rule would wave through.
+
+    Every other negative here has a non-empty contract set, so an empty
+    requirement still trips the equality check and the test passes for the
+    wrong reason.  This is the case that fails only if tables really do owe
+    one.
+    """
+
+    capability = TypedInputCapability(required=frozenset({A}))
+
+    assert not capability.admits_step(_Step([A], []))

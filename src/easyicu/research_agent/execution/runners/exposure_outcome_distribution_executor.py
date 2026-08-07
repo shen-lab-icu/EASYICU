@@ -32,13 +32,20 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 
+from ...authority.declared_levels import execution_distribution_spec
+from ...contracts.ownership_verdict import OwnershipVerdict
 from ...schema import AnalysisStep, ExposureOutcomeDistributionSpec, _typed_level_key
-from .typed_input_binding import load_typed_cohort, run_dir_from_env
+from .typed_input_binding import (
+    load_typed_cohort,
+    run_dir_from_env,
+    sole_typed_cohort_input,
+)
 
 __all__ = [
     "EXPOSURE_OUTCOME_DISTRIBUTION_COLUMNS",
     "EXPOSURE_OUTCOME_DISTRIBUTION_DESIGN_COLUMNS",
     "EXPOSURE_OUTCOME_DISTRIBUTION_OUTPUT",
+    "exposure_outcome_distribution_declaration_verdict",
     "exposure_outcome_distribution_executor_code",
     "exposure_outcome_distribution_executor_owns_step",
     "percentage",
@@ -64,6 +71,7 @@ EXPOSURE_OUTCOME_DISTRIBUTION_DESIGN_COLUMNS = (
     "outcome_positive_index",
     "level_match_policy",
     "denominator_policy",
+    "missing_exposure_policy",
     "missing_outcome_policy",
     "interval_method",
     "confidence_level",
@@ -85,6 +93,10 @@ EXPOSURE_OUTCOME_DISTRIBUTION_COLUMNS = (
     "outcome_rate_pct",
     "ci_low_pct",
     "ci_high_pct",
+    # How many rows the exposure could not place. Repeated on every row, the
+    # way Table 1 carries ``group_missing_excluded_n``: a denominator that
+    # silently shrank is a denominator a reader cannot check.
+    "missing_exposure_excluded_n",
 ) + EXPOSURE_OUTCOME_DISTRIBUTION_DESIGN_COLUMNS
 
 _OVERALL_ROLE = "overall"
@@ -99,24 +111,13 @@ def _typed_cohort_input(step: AnalysisStep) -> str:
     contract and no named producer for the rows it counted, so the table it
     would emit could not be bound to the plan that asked for it -- and calling
     that "deterministically owned" would be a claim the run cannot support.
+
+    Only that last policy is this owner's own: *which* keys name the closed
+    cohort product is one published vocabulary, so it is read from there rather
+    than spelled out again here.
     """
 
-    typed_inputs = {
-        str(value or "").strip()
-        for value in step.inputs
-        if ":" in str(value or "").strip()
-    }
-    if len(typed_inputs) != 1:
-        return ""
-    input_key = next(iter(typed_inputs))
-    kind, separator, product = input_key.partition(":")
-    if (
-        separator
-        and product
-        and (kind == "cohort" or input_key == "artifact:analysis_cohort")
-    ):
-        return input_key
-    return ""
+    return sole_typed_cohort_input(step) or ""
 
 
 def exposure_outcome_distribution_executor_owns_step(step: AnalysisStep) -> bool:
@@ -136,6 +137,114 @@ def exposure_outcome_distribution_executor_owns_step(step: AnalysisStep) -> bool
     )
 
 
+#: The analysis kind this owner reports, in selection and in its verdict.
+EXPOSURE_OUTCOME_DISTRIBUTION_ANALYSIS_KIND = "exposure_outcome_distribution"
+
+
+def exposure_outcome_distribution_declaration_verdict(
+    step: AnalysisStep,
+) -> OwnershipVerdict:
+    """Report what a step must declare for this owner to compute it.
+
+    Measured over every recorded run: 33 steps promise this owner's product, 29
+    declare the spec, 28 are claimed, and 29 of 33 pass (88 %).  The SAME
+    science planned under the Planner's own label --
+    ``table:absolute_risk_context``, 28 steps -- declares the spec 0 times, is
+    claimed 0 times, and was never asked.  Those 28 pass 82 % of the time, so
+    the Coder writes a table; a DIFFERENT table every run.  25 of the 26
+    recorded files have distinct headers, and every figure over them dies
+    (14 recorded, 0 ok).  Declining silently is what let an 82 %-passing step
+    emit an artifact with no contract, and the whole cost land on its consumer.
+
+    Both gaps are asked together because the spec alone cannot close it: this
+    executor writes its own filename and registers its own key, so a step
+    promising a different product would still go unclaimed with a perfect spec,
+    and a replan spent on half the answer is a replan wasted.  Neither is a
+    scientific choice -- the step keeps its exposure, outcome and cohort.
+
+    Guarded to steps this owner could really compute if they declared.  A step
+    that fits a model, promises two products, draws a figure, or already
+    carries another owner's typed spec is someone else's contract, and asking
+    it to declare this one would demand work that leaves it exactly as unowned.
+
+    NARROWED 2026-08-01 to steps that already promise this owner's product.
+    The first version asked every single-table descriptive auxiliary step, on
+    the reasoning that a spec alone could not close the gap for a step
+    promising a different name.  That reasoning was right about the mechanism
+    and wrong about the boundary: measured over every recorded run, it asked 48
+    distinct step shapes and only 1 promised this product -- 27 promised
+    ``table:cohort_summary``, 18 ``table:absolute_risk_context``, and one each
+    ``table:stage_stratified_outcome`` and ``table:ordinal_trend_audit``.
+    Demanding those rename their output is demanding they promise a different
+    table, which is a scientific choice this owner does not get to make.
+    canary33 proved the cost in a real run: ``04_absolute_risk_context``
+    executed fine one run earlier and was refused here, taking a figure with
+    it.  Whether the same science should be planned under this product's name
+    is a real question, but it belongs to the Planner directive, not to a
+    refusal raised at the step.
+    """
+
+    outputs = [str(value or "").strip() for value in step.expected_outputs or []]
+    if (
+        outputs != [EXPOSURE_OUTCOME_DISTRIBUTION_OUTPUT]
+        # A precondition of this owner running at all: it reads one typed
+        # cohort. Asking a step without one to declare the spec would demand
+        # work that leaves it exactly as unowned.
+        or not _typed_cohort_input(step)
+        # A step already carrying another owner's typed spec is that owner's
+        # contract. Only the two that can actually coexist with this product
+        # are listed: ``table_one_spec`` requires ``table:table_one`` as an
+        # expected output and ``robustness_replay_spec`` requires its products
+        # to be declared outputs, so the schema already makes both impossible
+        # here and guarding them was dead code. ``model_requirements`` is
+        # likewise unguarded -- the schema forces it onto
+        # ``method='adjusted_association_models'``.
+        or getattr(step, "measurement_audit_spec", None) is not None
+        or step.trajectory_stability_spec is not None
+    ):
+        # No ``method`` or ``planned_analysis_role`` clause. Both survived
+        # mutation once the promised product was pinned, and the corpus says
+        # why: of the 32 recorded shapes promising exactly this product, 32 are
+        # ``auxiliary``, so the role clause never discriminated, and the method
+        # allowlist turned away exactly one -- a step whose method string spelt
+        # the same descriptive intent in more words, promising this product
+        # with no spec, which is precisely the step this gap exists for. The
+        # promised product IS the claim; a two-string method allowlist beside
+        # it is the allowlist disease this owner already pays for elsewhere.
+        return OwnershipVerdict.wrong_shape(
+            EXPOSURE_OUTCOME_DISTRIBUTION_ANALYSIS_KIND,
+            reason=(
+                f"the step does not promise {EXPOSURE_OUTCOME_DISTRIBUTION_OUTPUT!r} "
+                "over a typed cohort free of another owner's spec, so this owner "
+                "could not compute it however it were declared"
+            ),
+        )
+    missing: List[str] = []
+    if step.exposure_outcome_distribution_spec is None:
+        missing.append("exposure_outcome_distribution_spec")
+    if not missing:
+        return OwnershipVerdict.wrong_shape(
+            EXPOSURE_OUTCOME_DISTRIBUTION_ANALYSIS_KIND,
+            reason=(
+                "the step declares this owner's spec and product yet is still "
+                "unclaimed, so the gap is not in this declaration"
+            ),
+        )
+    return OwnershipVerdict.incomplete_declaration(
+        EXPOSURE_OUTCOME_DISTRIBUTION_ANALYSIS_KIND,
+        missing=tuple(missing),
+        reason=(
+            "the host computes prevalence and outcome by exposure level against "
+            "a fixed contract, and this step promises that science without the "
+            "declaration it needs: declare exposure_outcome_distribution_spec "
+            f"and promise {EXPOSURE_OUTCOME_DISTRIBUTION_OUTPUT!r}, the product "
+            "this owner emits. Without both, the analysis is written by the "
+            "Coder and its table has a different shape every run, so no figure "
+            "over it can be drawn"
+        ),
+    )
+
+
 def exposure_outcome_distribution_executor_code(step: AnalysisStep) -> str:
     """Return the small sandbox entrypoint for the exact declared design."""
 
@@ -143,7 +252,11 @@ def exposure_outcome_distribution_executor_code(step: AnalysisStep) -> str:
         raise ValueError(
             "The step is not owned by the exposure-outcome distribution executor"
         )
-    spec = step.exposure_outcome_distribution_spec
+    # The design as it must EXECUTE.  The Planner declares levels in the
+    # host's own opaque placeholders whenever it was told a column's
+    # cardinality and not its values; two recorded runs died here and were
+    # rescued only by a replan that guessed ``[0, 1]``.
+    spec = execution_distribution_spec(step)
     assert spec is not None  # narrowed by owns_step
     return textwrap.dedent(
         f"""
@@ -369,6 +482,7 @@ def _design_fields(spec: ExposureOutcomeDistributionSpec) -> Dict[str, Any]:
         ].index(_typed_level_key(spec.outcome_positive_value)),
         "level_match_policy": spec.level_match_policy,
         "denominator_policy": spec.denominator_policy,
+        "missing_exposure_policy": spec.missing_exposure_policy,
         "missing_outcome_policy": spec.missing_outcome_policy,
         "interval_method": spec.interval_method,
         "confidence_level": spec.confidence_level,
@@ -391,20 +505,29 @@ def _distribution_rows(
     # described, the other means the study has rows it cannot group at all.
     # Reporting the second as the first sends someone hunting for a stray code
     # that does not exist.
-    if spec.missing_exposure_policy != "fail_closed":
-        raise RuntimeError(
-            "exposure_outcome_distribution only implements "
-            f"missing_exposure_policy='fail_closed', not "
-            f"{spec.missing_exposure_policy!r}"
-        )
     missing_exposure_rows = int((~observed_exposure).sum())
-    if missing_exposure_rows:
+    if missing_exposure_rows and spec.missing_exposure_policy == "fail_closed":
         raise RuntimeError(
             f"{missing_exposure_rows} rows have no observed value for "
             f"{spec.exposure!r}; the spec declares missing_exposure_policy="
             "'fail_closed', so they are neither dropped nor pooled into a "
             "declared exposure level"
         )
+    if missing_exposure_rows:
+        # Complete-case on the exposure. The rows leave the frame entirely --
+        # every denominator below is then taken over the same rows, which is
+        # the property a reader checks -- and the count they left behind
+        # travels in the product so the shrink is visible rather than inferred
+        # from a total that does not add up.
+        #
+        # canary13 is why this option exists at all: 8 of 1000 stays had no
+        # AKI stage, `fail_closed` was the ONLY value the field could take, and
+        # the step died with no result the Planner had any way to avoid.
+        frame = frame.loc[observed_exposure]
+        exposure_values = frame[spec.exposure]
+        outcome_values = frame[spec.outcome]
+        observed_outcome = outcome_values.notna()
+        observed_exposure = exposure_values.notna()
     exposure_masks = _closed_level_masks(
         exposure_values,
         spec.exposure_levels,
@@ -437,7 +560,12 @@ def _distribution_rows(
 
     total_rows = int(len(frame))
     exposure_denominator = total_rows
-    design = _design_fields(spec)
+    # Carried beside the declaration on every row, not merged into it: the
+    # policy is what the plan asked for, this is what the data cost.
+    design = {
+        **_design_fields(spec),
+        "missing_exposure_excluded_n": missing_exposure_rows,
+    }
 
     rows: List[Dict[str, Any]] = []
     for level in spec.exposure_levels:

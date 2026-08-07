@@ -88,12 +88,12 @@ def _identity_transforms(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         plan_authority,
         "augment_trajectory_plan_products",
-        lambda *, plan, context: (plan, []),
+        lambda *, plan, context, **_kwargs: (plan, []),
     )
     monkeypatch.setattr(
         plan_authority,
         "close_measurement_companion_inputs",
-        lambda *, plan, context: (plan, []),
+        lambda *, plan, context, **_kwargs: (plan, []),
     )
 
 

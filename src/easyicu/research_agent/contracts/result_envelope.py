@@ -20,6 +20,7 @@ import tempfile
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from pathlib import Path, PurePosixPath
+from types import MappingProxyType
 from typing import Any, Literal, Mapping, Sequence, Union
 
 from pydantic import (
@@ -81,6 +82,190 @@ _HIGH_KEYS = ("ci_high", "ci_95_high", "ci_upper", "upper")
 _P_VALUE_KEYS = ("p_value", "p")
 _NUMERATOR_KEYS = ("numerator", "positive_n", "event_n", "count")
 _DENOMINATOR_KEYS = ("denominator", "denominator_n", "n_total", "total_n")
+#: The reader for a registered ``statistic:<name>`` product, as data.
+#:
+#: A statistic file is refused unless it parses to a JSON object, and its
+#: fields are recovered by trying these aliases in order.  Generated code has
+#: to write a shape it was never shown otherwise: a real run wrote a
+#: one-element list of exactly the right object and was refused with
+#: ``invalid_statistic_shape`` after producing every other output correctly.
+#: The Coder directive renders this mapping rather than describing it, so a
+#: new alias here reaches the model instead of drifting away from it.
+STATISTIC_PAYLOAD_KEY_ALIASES: Mapping[str, tuple[str, ...]] = MappingProxyType(
+    {
+        "point estimate": _VALUE_KEYS,
+        "interval lower bound": _LOW_KEYS,
+        "interval upper bound": _HIGH_KEYS,
+        "p value": _P_VALUE_KEYS,
+        "numerator": _NUMERATOR_KEYS,
+        "denominator": _DENOMINATOR_KEYS,
+    }
+)
+
+#: Where a model step's summary names its term-level coefficient companion.
+#:
+#: The exact-replay path for robustness variants needs the fitted coefficients,
+#: not just the reported effect, and it finds them by this key.  It used to
+#: read ``diagnostic_companions.coefficients`` alone and fall back to a fixed
+#: ``coefficients.csv`` -- a filename no producer has ever written.  Measured
+#: over every recorded run: 334 step summaries, of which 23 carry
+#: ``model_contracts``; ``coefficient_table`` appears 10 times (the
+#: deterministic owner writes it), ``coefficient_file`` 3 times (a Coder-written
+#: summary), ``diagnostic_companions`` once, and ``coefficients.csv`` exists
+#: zero times.  So the reader resolved 1 of 23, and the replay path it guards
+#: was unreachable in every other run.
+#:
+#: Order is preference, not permission: a summary declaring more than one is
+#: read by the first, and any of them being unreadable is a refusal rather
+#: than a fall-through to the next.
+MODEL_SUMMARY_COEFFICIENT_TABLE_KEYS: tuple[str, ...] = (
+    "diagnostic_companions.coefficients",
+    "coefficient_table",
+    "coefficient_file",
+)
+
+
+def model_summary_coefficient_filename(summary: Mapping[str, Any]) -> str | None:
+    """Return the coefficient companion filename a model summary declares.
+
+    ``None`` means *this summary does not name one*, which is a refusal: the
+    caller must not guess a filename, because a guessed name that happens to
+    exist would bind the replay to a table nobody declared.
+    """
+
+    if not isinstance(summary, Mapping):
+        return None
+    for key in MODEL_SUMMARY_COEFFICIENT_TABLE_KEYS:
+        declared: Any = summary
+        for part in key.split("."):
+            if declared is None:
+                break
+            if not isinstance(declared, Mapping):
+                # The summary *has* this path and it is not navigable, which
+                # is a broken declaration.  Moving on to the next spelling
+                # would answer with a different table than the one it tried
+                # to name, and the substitution would be invisible.
+                return None
+            declared = declared.get(part)
+        if declared is None:
+            continue
+        if not isinstance(declared, str):
+            return None
+        filename = declared.strip()
+        if (
+            not filename
+            or PurePosixPath(filename).name != filename
+            or not filename.lower().endswith(".csv")
+        ):
+            return None
+        return filename
+    return None
+
+
+#: Where a model summary states the analysis its primary estimate came from.
+#:
+#: The complete-case equivalence proof needs the exposure, the outcome and the
+#: adjustment set, because a model fitted on one adjustment set and a
+#: complete-case restriction taken over a different one are different analyses.
+#: It read ``summary["analysis_definition"]`` and nothing else.
+#:
+#: Measured over every recorded run: 358 step summaries, 27 carry
+#: ``model_contracts``, 12 of those state exposure + outcome + covariates, and
+#: exactly **one** writes ``analysis_definition`` -- a one-off Coder summary. A
+#: repository-wide search for the name returns the reader and a single test
+#: fixture, both added in the same commit. The host published a contract only
+#: its own test could satisfy, so the proof was unreachable in production from
+#: the day it was written.
+#:
+#: The deterministic primary owner states the same three facts as flat keys, so
+#: they are published here rather than a second nested spelling being demanded
+#: of it. Order is preference, not permission.
+MODEL_SUMMARY_ANALYSIS_DEFINITION_KEY = "analysis_definition"
+MODEL_SUMMARY_EXPOSURE_KEYS: tuple[str, ...] = ("exposure", "exposure_source")
+MODEL_SUMMARY_OUTCOME_KEYS: tuple[str, ...] = ("outcome",)
+MODEL_SUMMARY_COVARIATE_KEYS: tuple[str, ...] = ("covariates", "adjustment_covariates")
+
+
+def _clean_name(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    name = value.strip()
+    return name or None
+
+
+def _clean_covariates(value: Any) -> list[str] | None:
+    if not isinstance(value, list):
+        return None
+    cleaned: list[str] = []
+    for item in value:
+        name = _clean_name(item)
+        if name is None:
+            return None
+        cleaned.append(name)
+    return cleaned
+
+
+def _first_declared(source: Mapping[str, Any], keys: Sequence[str]) -> tuple[bool, Any]:
+    for key in keys:
+        if key in source:
+            return True, source[key]
+    return False, None
+
+
+def model_summary_analysis_definition(
+    summary: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """Return the exposure/outcome/covariates a model summary states, or ``None``.
+
+    ``None`` means *this summary does not state its analysis*, which is a
+    refusal. The caller must not reconstruct the adjustment set from anywhere
+    else: a proof taken over a different set than the model used is a different
+    analysis reported under the same label, and no downstream check can see it.
+
+    An empty covariate list is a real answer -- an unadjusted primary model
+    states exactly that -- so it is returned rather than treated as absent.
+    """
+
+    if not isinstance(summary, Mapping):
+        return None
+
+    nested = summary.get(MODEL_SUMMARY_ANALYSIS_DEFINITION_KEY)
+    if nested is not None:
+        if not isinstance(nested, Mapping):
+            return None
+        source: Mapping[str, Any] = nested
+    else:
+        source = summary
+
+    has_exposure, raw_exposure = _first_declared(source, MODEL_SUMMARY_EXPOSURE_KEYS)
+    has_outcome, raw_outcome = _first_declared(source, MODEL_SUMMARY_OUTCOME_KEYS)
+    if not has_exposure or not has_outcome:
+        return None
+    exposure = _clean_name(raw_exposure)
+    outcome = _clean_name(raw_outcome)
+    if exposure is None or outcome is None:
+        return None
+
+    # Two spellings of the adjustment set that disagree is the one case where
+    # answering at all would be worse than refusing: whichever is picked, the
+    # summary itself says the other is also true, and the proof would silently
+    # be taken over a set the model may not have used.
+    declared: list[list[str]] = []
+    for key in MODEL_SUMMARY_COVARIATE_KEYS:
+        if key not in source:
+            continue
+        covariates = _clean_covariates(source[key])
+        if covariates is None:
+            return None
+        declared.append(covariates)
+    if not declared:
+        return None
+    if any(entry != declared[0] for entry in declared[1:]):
+        return None
+
+    return {"exposure": exposure, "outcome": outcome, "covariates": list(declared[0])}
+
+
 _MAX_SCALARS = 5_000
 _MAX_DEPTH = 12
 _MAX_TABLE_BYTES = 16 * 1024 * 1024
@@ -433,7 +618,9 @@ def _container_relative_scalar_path(
             relative = absolute.relative_to(root)
         except ValueError:
             continue
-        if not relative.parts or any(part in {"", ".", ".."} for part in relative.parts):
+        if not relative.parts or any(
+            part in {"", ".", ".."} for part in relative.parts
+        ):
             continue
         return relative.as_posix()
     return None
@@ -884,11 +1071,30 @@ def _first_finite_number(
     field_name: str,
     issues: list[NormalizationIssue],
 ) -> int | float | None:
+    declared_not_estimated = payload.get("estimated") is False
     values: list[int | float] = []
     for key in keys:
         if key not in payload:
             continue
         value = payload.get(key)
+        if value is None and declared_not_estimated:
+            # A statistic that says, in the same document, that it was NOT
+            # estimated is making a declaration, not emitting a malformed
+            # number. Absent-vs-null already means two different things to the
+            # figure layer -- "not bound" vs "bound and not estimated" -- and it
+            # requires the key to be present to tell them apart, so the producer
+            # cannot satisfy both readers by omitting it.
+            #
+            # MEASURED 2026-08-02: 25 of 64 recorded complete_case_n sidecars
+            # carry a null, across four different tasks, and every one of them
+            # blocked its step here. The commonest cause is a locked robustness
+            # grid with no complete_case specification -- there is no such N to
+            # report, and inventing one would be worse than saying so.
+            #
+            # Deliberately narrow: only an EXPLICIT ``estimated: false`` earns
+            # this. A bare null with no declaration is still a malformed numeric
+            # field and still fails, because that one really is a producer bug.
+            continue
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             issues.append(
                 NormalizationIssue(
@@ -1316,7 +1522,11 @@ def _table_semantic_roles(
         and all(
             not row.get("schema_version")
             or row["schema_version"].strip()
-            in {"easyicu.table_one_result/1", "easyicu.table_one_result/2"}
+            in {
+                "easyicu.table_one_result/1",
+                "easyicu.table_one_result/2",
+                "easyicu.table_one_result/3",
+            }
             for row in rows
         )
     ):
@@ -2396,6 +2606,11 @@ __all__ = [
     "CanonicalScalar",
     "CanonicalStatistic",
     "CanonicalTableProfile",
+    "MODEL_SUMMARY_ANALYSIS_DEFINITION_KEY",
+    "MODEL_SUMMARY_COEFFICIENT_TABLE_KEYS",
+    "MODEL_SUMMARY_COVARIATE_KEYS",
+    "MODEL_SUMMARY_EXPOSURE_KEYS",
+    "MODEL_SUMMARY_OUTCOME_KEYS",
     "NormalizationIssue",
     "NormalizationReceipt",
     "StepArtifactRef",
@@ -2403,8 +2618,11 @@ __all__ = [
     "StepMissingVariableResult",
     "StepModelDiagnostic",
     "StepPopulationResult",
+    "STATISTIC_PAYLOAD_KEY_ALIASES",
     "StepResultEnvelope",
     "StepVariableBindings",
+    "model_summary_analysis_definition",
+    "model_summary_coefficient_filename",
     "normalize_step_result_shadow",
     "rebind_step_result_status",
     "rebuild_observed_scalar_tree",

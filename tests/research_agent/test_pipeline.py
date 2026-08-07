@@ -58,7 +58,7 @@ def _disable_article_contract(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         pipeline_module,
         "_enforce_advanced_plan_contract",
-        lambda *, plan, context: (plan, []),
+        lambda *, plan, context, **_kwargs: (plan, []),
     )
     monkeypatch.setattr(
         pipeline_module,
@@ -68,7 +68,7 @@ def _disable_article_contract(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         pipeline_module,
         "_ensure_audit_panel_step_in_plan",
-        lambda *, plan, context: (plan, []),
+        lambda *, plan, context, **_kwargs: (plan, []),
     )
 
 
@@ -478,7 +478,7 @@ def test_pipeline_repairs_failed_generated_code(ra, tmp_path: Path, monkeypatch)
                     "step_id": "01_table_one",
                     "planned_analysis_role": "auxiliary",
                     "intent": "Write a compact cohort table.",
-                    "inputs": ["age", "death"],
+                    "inputs": ["death"],
                     "expected_outputs": ["table:table_one"],
                     "method": "descriptive",
                     "icu_rule_refs": ["aggregation_rule_for"],
@@ -562,6 +562,7 @@ def test_pipeline_repairs_cross_step_source_status_denominator_drift(
     """A later Table 1 must preserve a prior explicit source-status lock."""
 
     _disable_article_contract(monkeypatch)
+
     def source_lock_script() -> str:
         return """
 import json
@@ -710,6 +711,7 @@ def test_pipeline_repairs_fixed_cohort_drift_in_current_step(
     """An explicit fixed-cohort promise routes N drift to local code repair."""
 
     _disable_article_contract(monkeypatch)
+
     def summary_script(*, cohort_n: int, field: str) -> str:
         return f"""
 import json
@@ -730,7 +732,11 @@ print(json.dumps(summary))
                     "step_id": "01_cohort_lock",
                     "planned_analysis_role": "auxiliary",
                     "intent": "Record the completed analytic cohort.",
-                    "inputs": ["age"],
+                    # No ranged raw input: the script below only counts rows, so
+                    # declaring one would owe a plausibility receipt it never
+                    # computes -- and the step would be blocked before it ever
+                    # reached the fixed-cohort repair this test is about.
+                    "inputs": ["death"],
                     "expected_outputs": [],
                     "method": "descriptive",
                     "icu_rule_refs": [],
@@ -739,7 +745,7 @@ print(json.dumps(summary))
                     "step_id": "02_reconcile",
                     "planned_analysis_role": "auxiliary",
                     "intent": "Keep the completed cohort fixed while reconciling outputs.",
-                    "inputs": ["age"],
+                    "inputs": ["death"],
                     "expected_outputs": [],
                     "method": "data_quality_audit",
                     "icu_rule_refs": [],
@@ -829,7 +835,10 @@ def test_runtime_crash_after_contract_repair_gets_its_own_repair_budget(
                     "step_id": "05_primary_association",
                     "planned_analysis_role": "primary",
                     "intent": "Estimate the adjusted odds ratio for the exposure.",
-                    "inputs": ["age", "death"],
+                    # See 01_cohort_lock above: the scripts here fabricate the
+                    # estimate table outright, so a ranged input would block the
+                    # step before the crash-after-contract-repair path is reached.
+                    "inputs": ["death"],
                     "expected_outputs": ["statistic:primary_association"],
                     "method": "logistic_regression",
                     "icu_rule_refs": ["aggregation_rule_for"],
@@ -956,9 +965,17 @@ def test_method_substitution_contract_repair_is_blocked_when_budget_is_zero(
                     "intent": (
                         "Estimate the adjusted odds ratio for Sepsis-3 and mortality."
                     ),
-                    "inputs": ["sepsis3", "death", "age", "map_min"],
+                    # The overadjustment rule reads the *covariates the summary
+                    # reports*, not the declared inputs; the script fabricates its
+                    # table and reads no column, so declaring the ranged raw
+                    # inputs would only block it before the rule can fire.
+                    "inputs": ["sepsis3", "death"],
                     "expected_outputs": ["statistic:primary_association"],
-                    "method": "logistic",
+                    # `logistic` alone is not one of the effect-method heads that
+                    # grant effect authority, and without that authority the
+                    # overadjustment auditor never runs -- so the step would fail
+                    # the product contract instead of the rule under test.
+                    "method": "logistic_regression",
                     "icu_rule_refs": ["no_overadjustment_for_exposure_constituents"],
                 }
             ],
@@ -1085,7 +1102,7 @@ def test_generic_association_figure_coder_failure_fails_closed(
                     "step_id": "03_primary_association",
                     "planned_analysis_role": "primary",
                     "intent": "Estimate the adjusted odds ratio.",
-                    "inputs": ["sepsis3", "death", "age"],
+                    "inputs": ["sepsis3", "death"],
                     "expected_outputs": ["statistic:primary_or"],
                     "method": "logistic_regression",
                     "icu_rule_refs": [],
@@ -1232,6 +1249,8 @@ def test_initial_authority_checkpoint_io_failure_never_enters_code_fallback(
     expected_code_calls: int,
     error_pattern: str,
 ):
+    import re
+
     from easyicu.research_agent.execution import phase as pipeline_execute
     from easyicu.research_agent.authority.step_runtime import (
         StepAuthorityRuntimeError,
@@ -1306,14 +1325,42 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as hand
         enable_latex=False,
     )
 
-    with pytest.raises(StepAuthorityRuntimeError, match=error_pattern):
-        pipeline.run(
-            question="Summarize the locked ICU cohort.",
-            cohort=pd.DataFrame({"stay_id": [1, 2]}),
-            cohort_name="checkpoint_failure_test",
-            database="synthetic",
-            stop_after_analysis=True,
-        )
+    result = pipeline.run(
+        question="Summarize the locked ICU cohort.",
+        cohort=pd.DataFrame({"stay_id": [1, 2]}),
+        cohort_name="checkpoint_failure_test",
+        database="synthetic",
+        stop_after_analysis=True,
+    )
+
+    # ``run`` no longer re-raises: 89b04b1 made an unexpected step exception end
+    # the run fail-closed instead of escaping it, so the run stays sealable and
+    # the traceback is persisted. That retired the transport this test used, not
+    # the properties it protected, so both are asserted at their current owners.
+    #
+    # Property 1 -- the failure is *recorded*, with its typed reason, against the
+    # step that raised. A generic message here would mean the run is sealable but
+    # undiagnosable.
+    workdir = Path(str(result.workdir))
+    manifest = json.loads((workdir / "manifest.json").read_text(encoding="utf-8"))
+    records = {
+        record["step_id"]: record
+        for record in manifest["per_step_records"]
+        if isinstance(record, dict) and record.get("step_id")
+    }
+    assert records["01_summary"]["status"] == "execution_raised"
+    recorded_error = str(records["01_summary"].get("error") or "")
+    assert StepAuthorityRuntimeError.__name__ in recorded_error, recorded_error
+    assert re.search(error_pattern, recorded_error), recorded_error
+
+    # Property 2 -- the run is floored, so nothing downstream can read a
+    # checkpoint-failed run as a result. ``manuscript_path`` is still written
+    # (a scaffold always is); ``status`` is what says it carries no finding.
+    status = json.loads((workdir / "run_status.json").read_text(encoding="utf-8"))
+    assert status["status"] == "diagnostic_only"
+    assert status["strict_fail_closed"] is True
+    assert status["gates"]["execution_complete"] is False
+    assert status["gates"]["completed_step_count"] == 0
 
     code_calls = [
         messages
@@ -1480,6 +1527,14 @@ def test_pipeline_does_not_block_or_repair_advisory_ordinal_mean(
     otherwise-correct ordinal analysis down to ``diagnostic_only``.
     """
 
+    # `sofa2` carries a plausibility range, and unlike the fallback fixtures
+    # below both scripts here really do read it -- so the step genuinely owes a
+    # flag-only receipt.  Both drafts are wrapped in the host's own receipt
+    # block (the same one the offline mock provider appends) rather than a
+    # hand-copied literal, so the fixture cannot drift away from the contract it
+    # is meant to satisfy.
+    from easyicu.research_agent.providers.mocks import _with_mock_plausibility_receipt
+
     _disable_article_contract(monkeypatch)
     plan = json.dumps(
         {
@@ -1501,10 +1556,13 @@ def test_pipeline_does_not_block_or_repair_advisory_ordinal_mean(
     repaired_code = """
 import json
 import os
+from pathlib import Path
+
 import pandas as pd
 
 df = pd.read_parquet(os.environ["COHORT_PARQUET"])
 out = os.environ["STEP_OUT_DIR"]
+out_dir = Path(out)
 pd.DataFrame({
     "variable": ["sofa2"],
     "median": [float(df["sofa2"].median())],
@@ -1522,9 +1580,12 @@ print(json.dumps(summary))
     initial_code = """
 import json
 import os
+from pathlib import Path
+
 import pandas as pd
 df = pd.read_parquet(os.environ["COHORT_PARQUET"])
 out = os.environ["STEP_OUT_DIR"]
+out_dir = Path(out)
 
 levels = df["sofa2"].value_counts().sort_index()
 pd.DataFrame({
@@ -1542,6 +1603,8 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
     json.dump(summary, f)
 print(json.dumps(summary))
 """
+    initial_code = _with_mock_plausibility_receipt(initial_code)
+    repaired_code = _with_mock_plausibility_receipt(repaired_code)
     llm = PatternScriptedMockLLMClient(
         [
             *_stable_plan_rules(plan),
@@ -1619,7 +1682,11 @@ def test_pipeline_falls_back_to_deterministic_code_after_repair_failure(
                     "step_id": "01_table_one",
                     "planned_analysis_role": "auxiliary",
                     "intent": "Produce a Table 1 cohort summary.",
-                    "inputs": ["sofa2", "death"],
+                    # The draft below raises immediately and reads nothing, so a
+                    # ranged raw input here would be refused by the plausibility
+                    # preflight and the step would never reach the *runtime*
+                    # failure whose repair this test is about.
+                    "inputs": ["death"],
                     "expected_outputs": ["table:table_one"],
                     "method": "descriptive",
                     "icu_rule_refs": ["aggregation_rule_for"],
@@ -1691,7 +1758,7 @@ def test_pipeline_falls_back_when_repair_model_call_fails(
                     "step_id": "01_table_one",
                     "planned_analysis_role": "auxiliary",
                     "intent": "Produce a Table 1 cohort summary.",
-                    "inputs": ["sofa2", "death"],
+                    "inputs": ["death"],
                     "expected_outputs": ["table:table_one"],
                     "method": "descriptive",
                     "icu_rule_refs": ["aggregation_rule_for"],
@@ -1765,7 +1832,7 @@ def test_pipeline_falls_back_when_successful_script_writes_no_artefacts(
                     "step_id": "01_table_one",
                     "planned_analysis_role": "auxiliary",
                     "intent": "Produce a Table 1 cohort summary.",
-                    "inputs": ["sofa2", "death"],
+                    "inputs": ["death"],
                     "expected_outputs": ["table:table_one"],
                     "method": "descriptive",
                     "icu_rule_refs": ["aggregation_rule_for"],
@@ -9263,6 +9330,9 @@ def test_step_contract_repair_guidance_requires_figure_recording(ra):
 
     assert "figure output" in guidance
     assert "figure_path" in guidance
+    assert "never reconstruct source data from Matplotlib" in guidance
+    assert "panel title, reader-facing claim, role" in guidance
+    assert "actual plotted analytic rows" in guidance
 
 
 def test_step_contract_repair_guidance_for_clustering_contract(ra):
@@ -9406,6 +9476,67 @@ def test_semantic_aliases_include_clustering_aliases(ra, tmp_path: Path):
     assert "cluster_summary" in aliases
     assert "cluster_characteristics" in aliases
     assert "cluster_mortality" in aliases
+
+
+def test_clustering_bundle_assigns_each_semantic_alias_to_one_artifact(
+    ra,
+    tmp_path: Path,
+):
+    from easyicu.research_agent.pipeline import _semantic_aliases_for
+
+    step = ra.AnalysisStep(
+        step_id="04_primary_clustering",
+        intent="Fit and characterize candidate clusters.",
+        method="unsupervised_clustering",
+        expected_outputs=[
+            "statistic:cluster_count",
+            "manifest:cluster_selection",
+            "table:cluster_characteristics",
+            "log:clustering_algorithm_details",
+            "manifest:clustering_methodology",
+        ],
+    )
+    paths = [
+        tmp_path / "step_summary.json",
+        tmp_path / "cluster_characteristics.csv",
+        tmp_path / "clustering_algorithm_details.json",
+        tmp_path / "clustering_methodology.json",
+    ]
+    for path in paths:
+        path.write_text("{}", encoding="utf-8")
+
+    owners: dict[str, list[str]] = {}
+    for path in paths:
+        for alias in _semantic_aliases_for(step, path):
+            owners.setdefault(alias, []).append(path.name)
+
+    assert {alias: names for alias, names in owners.items() if len(names) > 1} == {}
+    assert owners["cluster_summary"] == ["cluster_characteristics.csv"]
+    assert owners["clustering_methodology"] == ["clustering_methodology.json"]
+    assert owners["clustering_algorithm_details"] == [
+        "clustering_algorithm_details.json"
+    ]
+
+
+def test_clustering_algorithm_details_keeps_methodology_fallback_alias(
+    ra,
+    tmp_path: Path,
+):
+    from easyicu.research_agent.pipeline import _semantic_aliases_for
+
+    step = ra.AnalysisStep(
+        step_id="04_primary_clustering",
+        intent="Fit candidate clusters.",
+        method="unsupervised_clustering",
+        expected_outputs=["log:clustering_algorithm_details"],
+    )
+    details = tmp_path / "clustering_algorithm_details.json"
+    details.write_text("{}", encoding="utf-8")
+
+    aliases = _semantic_aliases_for(step, details)
+
+    assert "clustering_algorithm_details" in aliases
+    assert "clustering_methodology" in aliases
 
 
 def test_semantic_aliases_bind_kdigo_sensitivity_to_primary_association(

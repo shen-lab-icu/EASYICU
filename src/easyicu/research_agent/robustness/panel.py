@@ -202,8 +202,24 @@ def default_robustness_specs() -> List[RobustnessSpec]:
         RobustnessSpec(
             spec_id="alt_missing_complete_case",
             axis="missing",
-            description="Restrict the model to complete cases for required variables.",
-            missing_override={"strategy": "complete_case"},
+            description=(
+                "Restrict the model to complete cases for the caller-defined "
+                "variables. Replace the placeholder names with the study's own "
+                "exposure, outcome and covariates before a paper-facing run; "
+                "the equivalence proof compares this exact list against the "
+                "primary model's analysis set."
+            ),
+            # A complete-case spec must name the variables whose completeness
+            # defines the set -- the host refuses to infer them. A fallback
+            # that omitted them looked case-neutral and was simply unrunnable:
+            # every run that reached it blocked.
+            missing_override={
+                "strategy": "complete_case",
+                "variables": [
+                    "author_defined_exposure",
+                    "author_defined_outcome",
+                ],
+            },
         ),
         RobustnessSpec(
             spec_id="alt_missing_median_impute",

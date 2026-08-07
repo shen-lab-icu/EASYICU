@@ -26,6 +26,7 @@ from ..authority.typed_binding import (
 from ..gates.plausibility_receipt import (
     render_plausibility_receipt_scope_guidance,
 )
+from ..contracts.method_kernels import CURATED_METHOD_KERNELS
 from ..contracts.method_packages import (
     BASELINE_PACKAGES,
     CURATED_METHOD_PACKAGES,
@@ -265,7 +266,96 @@ def _software_resources(
                 ),
             )
         )
+    # In-tree reviewed kernels. Unlike the packages above these need no runtime
+    # snapshot check: DockerRunner byte-verifies every .py under
+    # research_agent/ against the host tree before the step runs, so if the step
+    # runs at all these modules are present and identical. Offering them is what
+    # stops a Coder re-deriving a Schoenfeld test inside a generated script.
+    for kernel in CURATED_METHOD_KERNELS:
+        resources.append(
+            _descriptor(
+                resource_id=f"software:{_slug(kernel.import_path)}",
+                kind="software",
+                projection={
+                    "import_name": kernel.import_path,
+                    "entrypoints": list(kernel.entrypoints),
+                    "capability": kernel.capability,
+                    # The kernel's own imports travel INSIDE its projection
+                    # rather than competing for one of the three software
+                    # slots. Measured: without this, a Cox step selected
+                    # ph_schoenfeld / rmst / temporal_features and lifelines --
+                    # the library needed to fit the model at all -- was ranked
+                    # out. Offering a wrapper while hiding what it wraps is
+                    # worse than offering neither.
+                    "requires": list(kernel.requires),
+                    "fallback": kernel.fallback,
+                    "availability": "verified_in_runner_source_digest",
+                    "runtime_install_allowed": False,
+                },
+                analysis_families=kernel.families,
+                permissions=("coder_context", "sandbox_import"),
+                search_terms=(
+                    kernel.module,
+                    kernel.import_path,
+                    kernel.capability,
+                    *kernel.entrypoints,
+                    *kernel.families,
+                ),
+            )
+        )
     return resources
+
+
+#: Above this many columns the list stops being cheap to carry in every
+#: prompt.  It is then replaced by a count and a pointer -- never by a partial
+#: list, which would read as the whole schema and be wrong in the one way that
+#: matters.
+_MAX_PROJECTED_COLUMNS = 40
+
+
+def _declared_column_projection(
+    binding: Mapping[str, object],
+) -> dict[str, object]:
+    """Name the bound product's actual columns beside its digest.
+
+    MEASURED (e3, ``04_stage_stratified_outcome_figure``): the step consumed
+    ``table:absolute_risk_context``, whose bound contract declares a grouped
+    summary -- one row per group, with the stratum carried as a VALUE in
+    ``group_value`` and ``group_type`` naming what was grouped.  The generated
+    script assumed instead that the stratum was a column named after the
+    clinical variable and killed itself::
+
+        RuntimeError: Cannot render a stage-stratified outcome figure: the
+        bound typed product lacks the required stage coordinate or fields
+        ['aki_stage_max'].
+
+    Five of the six fields it wanted were present.  The real column list was
+    one lookup away in ``EASYICU_RESOLVED_INPUTS_JSON`` -- which this very
+    descriptor pointed at without ever saying what was in it.  The step was
+    9 of 10 in an otherwise complete run.
+
+    So say what is in it.  A column list is a fact about the bound artifact,
+    not a hint, and it costs one lookup the agent has repeatedly not made.
+    """
+
+    contract = binding.get("product_contract")
+    if not isinstance(contract, Mapping):
+        return {}
+    declared = contract.get("columns")
+    if not isinstance(declared, Sequence) or isinstance(declared, (str, bytes)):
+        return {}
+    columns = [str(item) for item in declared if str(item).strip()]
+    if not columns:
+        return {}
+    if len(columns) > _MAX_PROJECTED_COLUMNS:
+        return {
+            "column_count": len(columns),
+            "columns_note": (
+                "too many to list here; read them from "
+                "EASYICU_RESOLVED_INPUTS_JSON before naming any column"
+            ),
+        }
+    return {"columns": columns}
 
 
 def _data_resources(
@@ -296,6 +386,7 @@ def _data_resources(
                         "evidence_id": evidence_id,
                         "sha256": _binding_sha256(binding),
                         "access": "EASYICU_RESOLVED_INPUTS_JSON",
+                        **_declared_column_projection(binding),
                     }
                 ).decode("utf-8"),
             )
@@ -517,6 +608,14 @@ def bind_primary_cohort_role(
             "deterministically resolved the Planner-owned predicates against "
             "the sealed raw universe. Use every `resolved_column` and operation "
             "in order, and assert the recorded before/excluded/remaining counts. "
+            "A flow row whose `event_time_column` is not null was applied as a "
+            "windowed occurrence predicate: the host required BOTH the stated "
+            "op/value on `resolved_column` AND "
+            "`event_time_start_hours <= <event_time_column> <= "
+            "event_time_end_hours`, treating a missing event time as outside "
+            "the window. Reproducing such a row from the op and value alone "
+            "gives a different count, so apply the window whenever those fields "
+            "are present and ignore them when they are null. "
             "Before applying a predicate, enforce any host-proven closed domain "
             "in the matching ResearchContext variable descriptor; in particular, "
             "an observed binary column must fail closed unless every non-missing "
@@ -524,7 +623,18 @@ def bind_primary_cohort_role(
             "check. "
             "The counts and digests are integrity checks, not permission to "
             "select rows by position, truncate, sample, or copy an arbitrary "
-            "same-sized frame. The receipt's `resolved_column` entries are the "
+            "same-sized frame. The counts are plain integers you may compare "
+            "directly, but every `row_identity_sha256` is a host "
+            "canonicalisation you cannot infer from the value: reproduce it "
+            "ONLY with "
+            "`from easyicu.research_agent.intake.materialized_metadata import "
+            "cohort_row_identity_sha256`, passing the identity column in stored "
+            "order (for example "
+            "`cohort_row_identity_sha256(df[identity_column].tolist())`). A "
+            "hand-rolled digest -- joining the values, hashing the column "
+            "bytes, or hashing a repr -- computes a different string and "
+            "rejects a cohort that is exactly correct, so never write one. "
+            "The receipt's `resolved_column` entries are the "
             "only raw predicate coordinates authorized by this side channel. "
             "The host also places those exact coordinates in "
             "`manifest['raw_input_contracts']['contracts']`, even when they are "

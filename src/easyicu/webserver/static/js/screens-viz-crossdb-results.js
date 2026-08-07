@@ -236,9 +236,19 @@
         </div>
         <div class="nextbar accent mt-16">
           <div class="nb-ico">${h.icon('arrow', 16)}</div>
-          <div class="grow"><div class="nb-t">${h.t('Comparison checked — what’s next?', '跨库对比已检查 —— 下一步？')}</div><div class="nb-d">${h.t('Review one cohort in detail or carry this bounded comparison into an analysis plan.', '深入审阅一个队列，或把这次有界对比带入分析计划。')}</div></div>
+          <!-- State the scope limit here, where the choice is made, rather than
+               letting the Agent refuse the run later. The gate is the same one
+               either way; only the moment the user learns about it changes. -->
+          <div class="grow"><div class="nb-t">${h.t('Comparison checked — what’s next?', '跨库对比已检查 —— 下一步？')}</div><div class="nb-d">${h.t('Review one cohort in detail, or carry this bounded comparison into an analysis plan. A cross-DB plan stops at the plan: running it needs one reviewed cohort from a single export.', '深入审阅一个队列，或把这次有界对比带入分析计划。跨库计划止于计划本身：真正运行需要来自单个导出的、已审阅的队列。')}</div></div>
           <button class="btn" data-nav="cohort">${h.icon('cohort', 13)} ${h.t('Back to Cohort Statistics', '返回队列统计')}</button>
-          <button class="btn primary" data-nav="agent">${h.icon('agent', 13)} ${h.t('Create analysis plan', '创建分析计划')}</button>
+          <!-- Typed handoff, not a bare data-nav. screens-viz-study-context.js
+               maps route 'crossdb' to stage 'crossdb_plan_only', and the Agent
+               screen refuses to run an inferential study off a cross-DB
+               comparison on the strength of that flag. A plain hash navigation
+               carries no context, so nothing set the flag and the gate could
+               never fire — that is what this button degraded into when crossdb
+               moved out of screens-viz.js. -->
+          <button class="btn primary" data-study-handoff data-study-source="crossdb" data-study-target="agent">${h.icon('agent', 13)} ${h.t('Create cross-DB analysis plan', '创建跨库分析计划')}</button>
         </div>
       </section>`;
   }

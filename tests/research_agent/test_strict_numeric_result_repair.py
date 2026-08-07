@@ -1,3 +1,9 @@
+from easyicu.research_agent.execution.phase import _untrusted_runtime_repair_allowed
+from easyicu.research_agent.repair_registry import (
+    RepairClass,
+    automatic_repair_allowed,
+    repair_metadata_for,
+)
 from easyicu.research_agent.repairs.source import _deterministic_runner_repair
 from easyicu.research_agent.repairs.strict_numeric_result import (
     patch_strict_numeric_input_result_projection,
@@ -31,6 +37,22 @@ def test_routes_the_typed_result_repair_without_provider_help() -> None:
     repair_id, repaired = repair
     assert repair_id == "strict_numeric_input_result_projection_v1"
     assert "strict_numeric_input(frame[column]).values" in repaired
+
+
+def test_typed_result_projection_has_exact_syntactic_authority() -> None:
+    repair_id = "strict_numeric_input_result_projection_v1"
+
+    metadata = repair_metadata_for(repair_id)
+
+    assert metadata.classification_source == "exact"
+    assert metadata.repair_class is RepairClass.SYNTACTIC
+    assert metadata.introduces_numbers is False
+    assert metadata.requires_disclosure is False
+    assert automatic_repair_allowed(repair_id)
+    assert _untrusted_runtime_repair_allowed(
+        repair_id=repair_id,
+        source="deterministic_runner_repair",
+    )
 
 
 def test_direct_numeric_constructor_call_is_repaired() -> None:

@@ -173,6 +173,7 @@ def resolve_trajectory_bundle_plan_authority(
     *,
     plan: AnalysisPlan,
     context: ResearchContext,
+    long_trajectory_bound: bool = False,
 ) -> TrajectoryBundlePlanAuthority:
     """Bind canonical files to explicit declarations on their DAG-role owners.
 
@@ -184,7 +185,11 @@ def resolve_trajectory_bundle_plan_authority(
     still requires exactly one explicit typed declaration.
     """
 
-    evaluation = evaluate_trajectory_plan_dag(plan=plan, context=context)
+    evaluation = evaluate_trajectory_plan_dag(
+        plan=plan,
+        context=context,
+        long_trajectory_bound=long_trajectory_bound,
+    )
     if not evaluation.applies:
         finding = _finding(
             "trajectory_plan_dag_not_applicable",
@@ -398,6 +403,7 @@ def trajectory_bundle_findings(
     evidence: EvidenceStore,
     run_dir: Path,
     cohort_path: Path,
+    long_trajectory_bound: bool = False,
 ) -> list[ValidationFinding]:
     """Validate one current, registered trajectory bundle across plan steps.
 
@@ -409,6 +415,7 @@ def trajectory_bundle_findings(
     plan_authority = resolve_trajectory_bundle_plan_authority(
         plan=plan,
         context=context,
+        long_trajectory_bound=long_trajectory_bound,
     )
     if plan_authority.findings:
         return list(plan_authority.findings)

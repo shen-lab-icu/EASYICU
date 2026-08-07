@@ -6,9 +6,30 @@ from typing import Any, Dict
 
 from fastapi import APIRouter, HTTPException
 
-from easyicu.webserver import copilot_sessions
+from easyicu.webserver import copilot_sessions, study_intent
 
 router = APIRouter()
+
+
+@router.post("/api/copilot/study-intent")
+def post_copilot_study_intent(body: Dict[str, Any]) -> dict:
+    """Read a typed study-contract proposal from the user's own question.
+
+    Never rewrites the question and never fills a slot it could not read: the
+    response names every unread slot so the caller has to ask rather than
+    substitute a default.
+    """
+    payload = body or {}
+    try:
+        return study_intent.extract_study_intent(
+            payload.get("question"),
+            llm_provider=str(payload.get("llm_provider") or "offline"),
+            external_llm_opt_in=bool(payload.get("external_llm_opt_in")),
+            ai_enabled=bool(payload.get("ai_enabled")),
+            language=str(payload.get("language") or "en"),
+        )
+    except study_intent.StudyIntentError as exc:
+        raise HTTPException(status_code=400, detail=exc.detail) from exc
 
 
 @router.post("/api/copilot/sessions")

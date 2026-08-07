@@ -139,7 +139,16 @@ def test_the_entitlement_is_computed_from_the_policy_not_a_constant() -> None:
 
     Turning the concept auditor off must lower the requirement, or the check
     would demand budget for a call the run will never make.
+
+    The generation term is the same kind of thing and was a literal ``1``
+    until 2026-08-04, while ``coder_generation.py`` declared it may make two
+    attempts. Asserting the sum as a bare ``7`` here was itself the constant
+    this test's title objects to, so it is now written as the policy.
     """
+
+    from easyicu.research_agent.agents.coder_generation import (
+        MAX_INITIAL_GENERATION_ATTEMPTS,
+    )
 
     with_audit = step_provider_call_entitlement(
         max_code_repair_attempts=3,
@@ -151,7 +160,7 @@ def test_the_entitlement_is_computed_from_the_policy_not_a_constant() -> None:
         max_step_llm_repair_attempts=2,
         llm_concept_audit_enabled=False,
     )
-    assert with_audit == 7
+    assert with_audit == MAX_INITIAL_GENERATION_ATTEMPTS + 3 + 2 + 1
     assert without_audit == with_audit - 1
     assert (
         step_provider_call_entitlement(
@@ -247,9 +256,7 @@ def test_truncation_names_the_products_the_analysis_no_longer_has() -> None:
         detail["dropped_step_ids"]
     )
     assert {
-        output
-        for contract in step_products
-        for output in contract["expected_outputs"]
+        output for contract in step_products for output in contract["expected_outputs"]
     } == set(dropped_outputs)
     for contract in step_products:
         signature = contract["recovery_signature"]
@@ -409,7 +416,9 @@ def test_a_same_named_product_on_another_step_does_not_clear_the_block() -> None
     assert _authorized(plan_not_truncated=not status["plan_truncated"]) is False
 
 
-def test_reusing_a_step_id_for_another_scientific_role_does_not_clear_the_block() -> None:
+def test_reusing_a_step_id_for_another_scientific_role_does_not_clear_the_block() -> (
+    None
+):
     from easyicu.research_agent.reporting.readiness import _plan_truncation_status
 
     over_cap = _plan_with_products(4)

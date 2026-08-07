@@ -187,7 +187,14 @@ def _trajectory_plan() -> dict[str, Any]:
                     "Repeat the frozen characterization among stays with complete "
                     "values for the planner-selected trajectory inputs."
                 ),
-                "missing_override": {"strategy": "complete_case"},
+                # A complete-case spec must name the variables whose
+                # completeness defines the set; the host will not infer them.
+                # This fixture predates that requirement and was scripting a
+                # plan no real Planner emits any more.
+                "missing_override": {
+                    "strategy": "complete_case",
+                    "variables": ["sofa_max", "death"],
+                },
             }
         ],
         "rationale": "Exercise the typed supporting stability calculator.",

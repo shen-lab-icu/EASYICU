@@ -103,7 +103,7 @@ def _accepted_run(tmp_path: Path) -> Path:
 
     table_one = pd.DataFrame(
         {
-            "schema_version": ["easyicu.table_one_result/2"] * 2,
+            "schema_version": ["easyicu.table_one_result/3"] * 2,
             "variable": ["age", "charlson_max"],
             "absolute_standardized_mean_difference": [0.12, 0.08],
             "standardized_difference_status": ["computed", "computed"],

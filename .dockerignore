@@ -21,6 +21,7 @@ benchmarks
 docs
 examples
 scripts
+scratchpad
 sources
 tools
 *.parquet

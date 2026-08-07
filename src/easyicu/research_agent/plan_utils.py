@@ -30,7 +30,7 @@ import json
 import math
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence, Set, Tuple
 
 from pydantic import ValidationError
 
@@ -57,6 +57,7 @@ from .icu_rules import (
     overadjustment_caution,
     treatment_mediator_caution,
 )
+from .planning.analysis_types import required_endpoint_kind_for_family
 from .planning.cohort_contract import cohort_definition_has_explicit_selection
 from .contracts.ordered_stratified import (
     is_ordered_stratified_analysis_step,
@@ -83,6 +84,7 @@ from .trajectory.contract import (
     trajectory_phenotyping_contract_applies,
 )
 from .trajectory.plan_contract import trajectory_plan_contract_applies
+
 
 def _migrate_render_step_contract(
     child: AnalysisStep,
@@ -370,6 +372,82 @@ def _cohort_definition_contract_findings(
     ]
 
 
+def endpoint_contract_findings(
+    plan: AnalysisPlan,
+    *,
+    severity: Literal["info", "warning", "error"] = "warning",
+) -> List[ValidationFinding]:
+    """Report a plan whose family needs a declared endpoint and has none.
+
+    The sibling of :func:`_cohort_definition_contract_findings`, for the other
+    half of a study's identity. The cohort answers *who*; the endpoint answers
+    *what happened to them and when* -- and only the cohort half was ever typed.
+
+    MEASURED over 291 recorded runs: the endpoint was undeclared in all of them.
+    What the survival family got instead was the follow-up rule as prose in one
+    step's ``icu_rule_refs``, present in 3 of 13 h1 plans and absent from the
+    other 10; the generated code then reached for whatever time column it found,
+    producing seven distinct combinations across 11 runs with recovered source.
+    The concept auditor blocked steps for contradicting a "planner-required ICU
+    discharge time ``los_icu``" that appears in no plan -- the plans that said
+    anything said hospital discharge. Neither side was reading a declaration,
+    because there was none to read.
+
+    The requirement comes from the family's own registry entry, which is a
+    declaration the planner already stamped, not a second keyword pass over the
+    question prose. ``EndpointSpec`` then enforces its own field closure per
+    kind, so this function checks only that a declaration exists and is of the
+    required kind.
+    """
+
+    required_kind = required_endpoint_kind_for_family(plan.analysis_type)
+    if required_kind is None:
+        return []
+    endpoint = getattr(plan, "endpoint", None)
+    declared_kind = getattr(endpoint, "kind", None)
+    if declared_kind == required_kind:
+        return []
+    # MEASURED before choosing this severity: all 11 recorded runs carrying an
+    # error-severity plan-stage finding stopped with `completed_step_count: 1`
+    # and `failed_steps: []` -- an abort between the first and second step, not
+    # a step failure. An error here would therefore replace h1's death at step 4
+    # of 12 with a death at step 0 every time the Planner missed twice, which is
+    # a regression dressed as a gate.
+    #
+    # Warning is the plan-phase diagnostic: it keeps the initial miss retryable
+    # instead of aborting before the Planner gets a directed second chance. The
+    # execution preflight invokes this same rule with severity="error" after
+    # that retry. If the declaration is still absent, no scientific step runs.
+    # At neither stage may a consumer infer the endpoint from question prose,
+    # column names, dtypes, or step prose.
+    return [
+        ValidationFinding(
+            validator="endpoint_contract",
+            severity=severity,
+            message=(
+                f"The plan declares analysis_type='{plan.analysis_type}', whose "
+                f"registry entry requires a typed endpoint of kind "
+                f"'{required_kind}', but plan.endpoint "
+                + (
+                    "is absent"
+                    if endpoint is None
+                    else f"declares kind '{declared_kind}'"
+                )
+                + ". Follow-up time, its origin, and what censors it cannot be "
+                "recovered from a column name, a dtype, or step prose -- a step "
+                "that guesses produces a different study each run. Declare "
+                "plan.endpoint with kind, levels, event_column, time_column, "
+                "time_origin and censoring_rule."
+            ),
+            detail={
+                "analysis_type": plan.analysis_type,
+                "required_endpoint_kind": required_kind,
+                "declared_endpoint_kind": declared_kind,
+            },
+        )
+    ]
+
+
 # Contract "family" buckets this enforcer knows how to normalise. These are the
 # figure/metric-contract groupings, NOT the analysis_types registry keys — the
 # two vocabularies diverged historically. _normalise_contract_family bridges
@@ -501,6 +579,7 @@ _CLUSTERING_ANALYSIS_METHODS = frozenset(
         "k_means_clustering",
         "phenotyping",
         "phenotype_clustering",
+        "phenotype_clustering_and_structure",
         "unsupervised_clustering",
         "latent_class",
         "latent_class_analysis",
@@ -1017,6 +1096,7 @@ def _enforce_advanced_plan_contract(
     *,
     plan: AnalysisPlan,
     context: ResearchContext,
+    long_trajectory_bound: bool = False,
 ) -> tuple[AnalysisPlan, List[ValidationFinding]]:
     """Constrain advanced plan shape while leaving analysis code to the agent."""
 
@@ -1027,6 +1107,7 @@ def _enforce_advanced_plan_contract(
     if trajectory_plan_contract_applies(
         plan=plan,
         context=context,
+        long_trajectory_bound=long_trajectory_bound,
     ) and not any(
         trajectory_phenotyping_contract_applies(context=context, step=step)
         for step in (plan.steps or [])
@@ -1630,12 +1711,26 @@ def _effect_figure_source_authorized(
     is structurally linked to the latest successful direct parent through an
     exact typed effect-result input. Numeric summaries and non-figure effect
     products remain governed by the ordinary effect-method authorization.
+
+    Rendering is recognised by what the step declares, not by what it is
+    called.  The conditions below already say it exactly: every declared output
+    is ``figure:``/``log:``, and every input is a typed ``statistic:``/``table:``
+    bound by evidence id and sha256 to a successful effect parent -- a step
+    built that way has no cohort to re-analyse.  Requiring the *name* to match a
+    list of figure spellings on top of that refused legitimate render children:
+    ``forest_plot``, the standard name for this figure and one the Planner is
+    told it may use, was absent from the list.  What survives is the property
+    that veto was reaching for -- a render child may not claim to be the
+    analysis -- read from ``_EFFECT_CONTRACT_METHODS``, the same vocabulary
+    :func:`effect_output_authorized` uses to decide who owns an effect result,
+    rather than from a second private list that can drift away from it.
     """
 
     step_id = str(step.step_id or "")
     output_products = [typed_product(raw) for raw in (step.expected_outputs or [])]
     if (
-        _normalised_method_head(str(step.method or "")) not in _FIGURE_METHODS
+        _normalised_method_head(str(step.method or ""))
+        in (_EFFECT_CONTRACT_METHODS | _ROBUSTNESS_EFFECT_CONTRACT_METHODS)
         or not output_products
         or any(product is None for product in output_products)
         or not any(product[0] == "figure" for product in output_products if product)
@@ -4151,6 +4246,7 @@ def _step_contract_findings(
     completed_step_records: Optional[Sequence[Dict[str, Any]]] = None,
     resolved_input_bindings: Optional[Mapping[str, Mapping[str, Any]]] = None,
     out_dir: Optional[Path] = None,
+    trajectory_role_contract_applies: bool = True,
 ) -> List[ValidationFinding]:
     if not isinstance(step_summary, dict) or not step_summary:
         return [
@@ -4226,6 +4322,7 @@ def _step_contract_findings(
                 resolved_input_bindings=resolved_input_bindings,
             ),
             out_dir=out_dir,
+            trajectory_role_contract_applies=trajectory_role_contract_applies,
         )
     )
     from .figures.distribution_availability import (
@@ -4764,8 +4861,7 @@ def _step_contract_repair_guidance(
             guidance.append(
                 "Every step_summary.input_bindings receipt must use one of these "
                 "exact host-resolved typed input keys, with no aliases or raw-column "
-                "receipts: "
-                + json.dumps(exact_input_keys, ensure_ascii=False)
+                "receipts: " + json.dumps(exact_input_keys, ensure_ascii=False)
             )
         else:
             guidance.append(
@@ -4932,6 +5028,21 @@ def _step_contract_repair_guidance(
             "statistic, resampling stability, or silhouette when appropriate)."
         )
         guidance.append(
+            "Use one of these exact top-level step_summary JSON shapes, populated "
+            "with the values this script actually evaluated. Non-binding selection "
+            "example: `\"cluster_selection\": {\"criterion\": "
+            "\"silhouette_score\", \"selection_rule\": \"maximum\", "
+            "\"direction\": \"maximize\", \"selected_n_clusters\": 2, "
+            "\"candidates\": [{\"n_clusters\": 2, \"criterion_value\": 0.31}, "
+            "{\"n_clusters\": 3, \"criterion_value\": 0.27}], \"rationale\": "
+            "\"selected the evaluated maximum\"}`. Stability alternative: "
+            "`\"cluster_stability\": {\"selected_n_clusters\": 2, "
+            "\"n_resamples\": 3, \"mean_adjusted_rand_index\": 0.93}`. "
+            "Replace every example value with the truthful selected k, criterion "
+            "values, repeat count, and stability metric; do not leave only sibling "
+            "scalars such as `selected_silhouette` or `selected_stability_ari`."
+        )
+        guidance.append(
             "Keep clustering self-contained: create labels, cluster characteristics, "
             "method/selection metadata, and the clustering figure inside this "
             "script. Add descriptive outcomes only when the plan declares them; "
@@ -4942,17 +5053,47 @@ def _step_contract_repair_guidance(
             "the declared cluster-selection manifest so manuscript evidence aliases bind."
         )
     if "figure:" in expected:
+        declared_figure_stems = [
+            str(item).split(":", 1)[1].strip()
+            for item in (step.expected_outputs or [])
+            if str(item).strip().lower().startswith("figure:")
+            and str(item).split(":", 1)[1].strip()
+        ]
         guidance.append(
             "This step declares a figure output. Save a real figure file such as PNG/SVG/"
             "PDF/TIFF and record its path in step_summary.json using a key such as "
             "`figure_path`, `figure_file`, or `figure_files`."
         )
+        for stem in declared_figure_stems:
+            quoted_stem = json.dumps(stem, ensure_ascii=False)
+            guidance.append(
+                f"For declared `figure:{stem}`, call the host helper directly as "
+                "`saved = save_publication_figure(fig=fig, out_dir=out_dir, "
+                f"stem={quoted_stem}, contract=contract)`. It writes the canonical "
+                f"same-stem companion `{stem}.figure_contract.json`; record "
+                "`saved[\"contract\"]` in step_summary.json. Do not manually write, "
+                f"rename, or advertise the underscore alias "
+                f"`{stem}_figure_contract.json`; it must not replace the canonical "
+                "dot-suffix companion."
+            )
         guidance.append(
             "In every top-level FigureContract, `source_data` must be one local CSV "
             "basename string or a flat list of local CSV basename strings from the "
             "current step output directory. Never write a dict, list of dicts, "
             "evidence object, absolute path, or path metadata there; put evidence ids "
             "in panel `evidence_ids` and other provenance in step_summary metadata."
+        )
+        guidance.append(
+            "Build figure source-data CSVs from the actual plotted analytic rows "
+            "before rendering, preserving a host-verifiable source row/key and the "
+            "upstream value columns; never reconstruct source data from Matplotlib "
+            "Axes, collections, lines, patches, artist coordinates, or rendered "
+            "pixels: a canvas is not scientific provenance. Every panel contract "
+            "must declare a panel title, reader-facing claim, role, local "
+            "source-data basename(s), source columns, and the evidence ids that bind "
+            "those rows. Do not invent a synthetic source table such as a rendered "
+            "panel; if the plotted values cannot be traced to a declared analytic "
+            "table or statistic, fail closed instead of emitting the figure."
         )
     if not guidance:
         guidance.append(

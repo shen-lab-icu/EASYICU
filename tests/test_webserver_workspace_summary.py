@@ -440,12 +440,9 @@ def test_settings_update_and_reset_are_local_and_whitelisted(
         "/api/settings",
         json={
             "ai_enabled": True,
-            "demo_patients": "50",
-            "module_folder_mode": False,
-            "token_budget": "42000",
-            "working_dir": str(tmp_path / "work"),
+            "density": "compact",
+            "reduce_motion": True,
             "export_dir": "",
-            "unknown": "ignored",
         },
     )
     reset = client.post("/api/settings/reset", json={})
@@ -453,44 +450,34 @@ def test_settings_update_and_reset_are_local_and_whitelisted(
     assert updated.status_code == 200
     body = updated.json()
     assert body["ai_enabled"] is True
-    assert body["demo_patients"] == 50
-    assert body["module_folder_mode"] is False
-    assert body["token_budget"] == 42000
-    assert body["working_dir"] == str(tmp_path / "work")
+    assert body["density"] == "compact"
+    assert body["reduce_motion"] is True
     assert body["export_dir"] is None
-    assert "unknown" not in body
     assert "about" in body
 
     assert reset.status_code == 200
     reset_body = reset.json()
     assert reset_body["ai_enabled"] is False
-    assert reset_body["demo_patients"] == 20
-    assert reset_body["module_folder_mode"] is True
-    assert reset_body["token_budget"] == 120000
-    assert reset_body["working_dir"] is None
+    assert reset_body["density"] == "comfortable"
+    assert reset_body["reduce_motion"] is False
     assert reset_body["export_dir"] is None
-    assert "unknown" not in reset_body
     assert "about" in reset_body
 
+    # A patch the store cannot apply must fail loudly. The previous behaviour
+    # answered 200 with the *old* value, so the client could not tell a stored
+    # value from a silently discarded one.
     invalid = client.post(
         "/api/settings",
-        json={
-            "language": "fr",
-            "data_mode": "cloud",
-            "density": "microscopic",
-            "demo_duration": "999h",
-            "agent_model_mode": "surprise-provider",
-            "demo_patients": "500",
-        },
+        json={"language": "fr", "data_mode": "cloud", "density": "microscopic"},
     )
-    invalid_body = invalid.json()
-    assert invalid.status_code == 200
-    assert invalid_body["language"] == "en"
-    assert invalid_body["data_mode"] == "demo"
-    assert invalid_body["density"] == "comfortable"
-    assert invalid_body["demo_duration"] == "24h"
-    assert invalid_body["agent_model_mode"] == "local"
-    assert invalid_body["demo_patients"] == 50
+    assert invalid.status_code == 400
+    rejected = {item["key"] for item in invalid.json()["detail"]["rejected"]}
+    assert rejected == {"language", "data_mode", "density"}
+
+    unchanged = client.get("/api/settings").json()
+    assert unchanged["language"] == "en"
+    assert unchanged["data_mode"] == "demo"
+    assert unchanged["density"] == "comfortable"
 
 
 def test_settings_store_salvages_tail_corruption_and_rewrites_atomically(

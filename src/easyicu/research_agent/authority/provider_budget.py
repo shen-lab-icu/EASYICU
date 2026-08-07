@@ -32,9 +32,9 @@ from typing import (
 
 _T = TypeVar("_T")
 _RESERVATION_UNSPECIFIED = object()
-PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION = 7
-_SUPPORTED_RECEIPT_SCHEMA_VERSIONS = {1, 2, 3, 4, 5, 6, 7}
-_LOGICAL_REPAIR_RECEIPT_SCHEMA_VERSIONS = {3, 4, 5, 6, 7}
+PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION = 8
+_SUPPORTED_RECEIPT_SCHEMA_VERSIONS = {1, 2, 3, 4, 5, 6, 7, 8}
+_LOGICAL_REPAIR_RECEIPT_SCHEMA_VERSIONS = {3, 4, 5, 6, 7, 8}
 _LOGICAL_REPAIR_TRANSPORT_STATES = {
     "pending",
     "completed",
@@ -44,6 +44,7 @@ _LOGICAL_REPAIR_TRANSPORT_STATES = {
 _REPAIR_TRANSPORT_PROVIDER_SUFFIXES = ("patch", "full_rewrite")
 _REPAIR_AUTHORITY_BINDING_SCHEMA_V2 = "easyicu.repair_authority_binding/2"
 _INITIAL_GENERATION_TRANSPORT_STATES = {"pending", "completed", "failed"}
+_MAX_DETERMINISTIC_RESERVED_CATEGORY_EXTENSIONS = 3
 
 
 class ProviderCallBudgetError(RuntimeError):
@@ -95,6 +96,7 @@ class ProviderCallBudgetReceiptState:
     reservation_bound_provider_history_len: Optional[int]
     completed_reservation_token: Optional[str]
     reservation_released: bool
+    reserved_category_extensions: Tuple[Dict[str, object], ...]
 
     @property
     def initial_generation(self) -> Optional[Dict[str, object]]:
@@ -543,6 +545,79 @@ def _verified_logical_repairs(
     return tuple(verified)
 
 
+def _verified_reserved_category_extensions(
+    raw_extensions: object,
+    *,
+    base_limit: int,
+    categories: Sequence[str],
+    reserved_final_category: Optional[str],
+) -> Tuple[Dict[str, object], ...]:
+    """Verify bounded, audit-only calls beyond the ordinary step ceiling.
+
+    Each extension is authorized only after the base budget is exhausted and
+    funds exactly one call in the already-reserved final category.  Binding it
+    to the category-history digest makes the grant append-only and prevents a
+    resume from turning it into general repair or generation headroom.
+    """
+
+    if not isinstance(raw_extensions, list):
+        raise ProviderCallBudgetReceiptError(
+            "Provider-call receipt reserved-category extensions are invalid"
+        )
+    if len(raw_extensions) > _MAX_DETERMINISTIC_RESERVED_CATEGORY_EXTENSIONS:
+        raise ProviderCallBudgetReceiptError(
+            "Provider-call receipt has too many reserved-category extensions"
+        )
+    if raw_extensions and reserved_final_category is None:
+        raise ProviderCallBudgetReceiptError(
+            "Provider-call receipt extends a missing final reservation"
+        )
+
+    verified: list[Dict[str, object]] = []
+    seen_tokens: set[str] = set()
+    for index, raw_entry in enumerate(raw_extensions):
+        if not isinstance(raw_entry, Mapping):
+            raise ProviderCallBudgetReceiptError(
+                "Provider-call receipt reserved-category extension must be an object"
+            )
+        token = raw_entry.get("token")
+        history_len = raw_entry.get("provider_history_len")
+        history_sha256 = raw_entry.get("provider_history_sha256")
+        expected_history_len = base_limit + index
+        if (
+            not isinstance(token, str)
+            or not token.strip()
+            or token != token.strip()
+            or token in seen_tokens
+            or isinstance(history_len, bool)
+            or not isinstance(history_len, int)
+            or history_len != expected_history_len
+            or history_len > len(categories)
+            or not isinstance(history_sha256, str)
+            or history_sha256
+            != _category_history_digest(categories[:expected_history_len])
+        ):
+            raise ProviderCallBudgetReceiptError(
+                "Provider-call receipt reserved-category extension is inconsistent"
+            )
+        if (
+            history_len < len(categories)
+            and categories[history_len] != reserved_final_category
+        ):
+            raise ProviderCallBudgetReceiptError(
+                "Provider-call receipt spent a reserved-category extension elsewhere"
+            )
+        seen_tokens.add(token)
+        verified.append(
+            {
+                "token": token,
+                "provider_history_len": history_len,
+                "provider_history_sha256": history_sha256,
+            }
+        )
+    return tuple(verified)
+
+
 def load_provider_call_budget_state(
     path: Path,
     *,
@@ -586,11 +661,11 @@ def load_provider_call_budget_state(
             "Provider-call receipt has invalid limit or categories"
         )
     normalized = tuple(str(item).strip() for item in categories)
-    if any(not item for item in normalized) or len(normalized) > limit:
+    if any(not item for item in normalized):
         raise ProviderCallBudgetReceiptError("Provider-call receipt history is invalid")
 
     stored_reservation: Optional[str] = None
-    if schema_version in {2, 3, 4, 5, 6, 7}:
+    if schema_version in {2, 3, 4, 5, 6, 7, 8}:
         raw_reservation = payload.get("reserved_final_category")
         if raw_reservation is not None:
             if not isinstance(raw_reservation, str) or not raw_reservation.strip():
@@ -618,11 +693,37 @@ def load_provider_call_budget_state(
                 "Provider-call receipt final-audit policy changed on resume"
             )
 
+    if schema_version == 8:
+        reserved_category_extensions = _verified_reserved_category_extensions(
+            payload.get("reserved_category_extensions"),
+            base_limit=limit,
+            categories=normalized,
+            reserved_final_category=stored_reservation,
+        )
+    else:
+        if payload.get("reserved_category_extensions") is not None:
+            raise ProviderCallBudgetReceiptError(
+                "Legacy provider-call receipt unexpectedly declares "
+                "reserved-category extensions"
+            )
+        reserved_category_extensions = ()
+    effective_limit = limit + len(reserved_category_extensions)
+    if len(normalized) > effective_limit or (
+        len(normalized) > limit
+        and (
+            stored_reservation is None
+            or any(
+                category != stored_reservation for category in normalized[limit:]
+            )
+        )
+    ):
+        raise ProviderCallBudgetReceiptError("Provider-call receipt history is invalid")
+
     logical_repairs = (
         _verified_logical_repairs(
             payload.get("logical_repairs"),
             categories=normalized,
-            require_transport=(schema_version in {5, 6, 7}),
+            require_transport=(schema_version in {5, 6, 7, 8}),
             receipt_schema_version=int(schema_version),
         )
         if schema_version in _LOGICAL_REPAIR_RECEIPT_SCHEMA_VERSIONS
@@ -653,10 +754,10 @@ def load_provider_call_budget_state(
             if legacy_initial_generation is not None
             else ()
         )
-    elif schema_version == 7:
+    elif schema_version in {7, 8}:
         if payload.get("initial_generation") is not None:
             raise ProviderCallBudgetReceiptError(
-                "Schema-v7 provider-call receipt unexpectedly declares the "
+                "Current provider-call receipt unexpectedly declares the "
                 "legacy initial-generation field"
             )
         initial_generations = _verified_initial_generations(
@@ -665,7 +766,7 @@ def load_provider_call_budget_state(
         )
     else:
         initial_generations = ()
-    if schema_version not in {6, 7} and (
+    if schema_version not in {6, 7, 8} and (
         payload.get("initial_generation") is not None
         or payload.get("initial_generations") is not None
     ):
@@ -676,7 +777,7 @@ def load_provider_call_budget_state(
     reservation_bound_provider_history_len: Optional[int] = None
     completed_reservation_token: Optional[str] = None
     reservation_released = False
-    if schema_version in {4, 5, 6, 7}:
+    if schema_version in {4, 5, 6, 7, 8}:
         raw_state = payload.get("final_reservation_state")
         if not isinstance(raw_state, dict):
             raise ProviderCallBudgetReceiptError(
@@ -737,6 +838,7 @@ def load_provider_call_budget_state(
         reservation_bound_provider_history_len=(reservation_bound_provider_history_len),
         completed_reservation_token=completed_reservation_token,
         reservation_released=reservation_released,
+        reserved_category_extensions=reserved_category_extensions,
     )
 
 
@@ -775,6 +877,7 @@ class StepProviderCallBudget:
         reservation_bound_provider_history_len: Optional[int] = None,
         completed_reservation_token: Optional[str] = None,
         reservation_released: bool = False,
+        reserved_category_extensions: Sequence[Mapping[str, object]] = (),
     ) -> None:
         if isinstance(limit, bool) or not isinstance(limit, int):
             raise TypeError("provider-call budget limit must be an integer")
@@ -874,12 +977,32 @@ class StepProviderCallBudget:
         )
         self._completed_reservation_token = completed_token
         self._reservation_released = reservation_released
+        self._reserved_category_extensions: list[Dict[str, object]] = list(
+            _verified_reserved_category_extensions(
+                [dict(entry) for entry in reserved_category_extensions],
+                base_limit=self._limit,
+                categories=self._categories,
+                reserved_final_category=self._reserved_final_category,
+            )
+        )
         self._lock = Lock()
+
+    def _effective_limit_locked(self) -> int:
+        return self._limit + len(self._reserved_category_extensions)
 
     def _can_consume_locked(self, category: str) -> bool:
         used = len(self._categories)
-        if used >= self._limit:
+        if used >= self._effective_limit_locked():
             return False
+        if used >= self._limit:
+            extension_index = used - self._limit
+            extension = self._reserved_category_extensions[extension_index]
+            return bool(
+                category == self._reserved_final_category
+                and not self._reservation_released
+                and self._required_reservation_token == extension.get("token")
+                and extension.get("provider_history_len") == used
+            )
         if (
             self._reserved_final_category
             and not self._reservation_released
@@ -922,6 +1045,9 @@ class StepProviderCallBudget:
                 "completed_token": self._completed_reservation_token,
                 "released": self._reservation_released,
             },
+            "reserved_category_extensions": [
+                dict(entry) for entry in self._reserved_category_extensions
+            ],
         }
         payload["sha256"] = _receipt_digest(payload)
         path = self._receipt_path
@@ -967,7 +1093,7 @@ class StepProviderCallBudget:
                 )
                 raise ProviderCallBudgetExhausted(
                     category=normalized,
-                    limit=self._limit,
+                    limit=self._effective_limit_locked(),
                     used=used,
                     step_id=self._step_id,
                     reserved_for=reserved_for,
@@ -1649,6 +1775,72 @@ class StepProviderCallBudget:
                     ) = previous
                     raise
 
+    def authorize_deterministic_reserved_category_extension(
+        self,
+        category: str,
+        *,
+        token: str,
+    ) -> bool:
+        """Fund one digest-bound re-audit after a deterministic concept repair.
+
+        This is not general budget ratcheting. It is available only after the
+        ordinary ceiling is fully spent, only for the existing final reserved
+        category, only for its currently bound token, and at most three times.
+        The caller owns proof that an authorized deterministic repair produced
+        that token; this ledger owns the one-call, crash-safe spend boundary.
+        """
+
+        normalized = str(category).strip()
+        normalized_token = str(token).strip()
+        with self._lock:
+            if normalized != self._reserved_final_category:
+                raise ValueError("category does not own this provider reservation")
+            if (
+                not normalized_token
+                or normalized_token != self._required_reservation_token
+            ):
+                raise ValueError("extension token is not the current bound audit")
+            used = len(self._categories)
+            if used < self._limit:
+                return False
+            if any(
+                extension.get("token") == normalized_token
+                for extension in self._reserved_category_extensions
+            ):
+                # A provider attempt for this exact audit may already have
+                # failed after spending its extension.  Retrying with the same
+                # token would turn crash-safe accounting into an unbounded
+                # provider retry loop, so the append-only ledger refuses it.
+                return False
+            if used != self._effective_limit_locked():
+                raise ProviderCallBudgetReceiptError(
+                    "A reserved-category extension is already awaiting its provider call"
+                )
+            if (
+                len(self._reserved_category_extensions)
+                >= _MAX_DETERMINISTIC_RESERVED_CATEGORY_EXTENSIONS
+            ):
+                raise ProviderCallBudgetExhausted(
+                    category=normalized,
+                    limit=self._effective_limit_locked(),
+                    used=used,
+                    step_id=self._step_id,
+                )
+            entry: Dict[str, object] = {
+                "token": normalized_token,
+                "provider_history_len": used,
+                "provider_history_sha256": _category_history_digest(
+                    self._categories
+                ),
+            }
+            self._reserved_category_extensions.append(entry)
+            try:
+                self._persist_locked()
+            except Exception:
+                self._reserved_category_extensions.pop()
+                raise
+            return True
+
     def complete_reserved_category(self, category: str, *, token: str) -> None:
         """Record that the exact bound audit token passed its final gate."""
 
@@ -1715,6 +1907,11 @@ class StepProviderCallBudget:
 
     @property
     def limit(self) -> int:
+        with self._lock:
+            return self._effective_limit_locked()
+
+    @property
+    def base_limit(self) -> int:
         return self._limit
 
     @property
@@ -1729,12 +1926,12 @@ class StepProviderCallBudget:
     @property
     def remaining(self) -> int:
         with self._lock:
-            return max(0, self._limit - len(self._categories))
+            return max(0, self._effective_limit_locked() - len(self._categories))
 
     @property
     def exhausted(self) -> bool:
         with self._lock:
-            return len(self._categories) >= self._limit
+            return len(self._categories) >= self._effective_limit_locked()
 
     @property
     def categories(self) -> Tuple[str, ...]:
@@ -1795,12 +1992,14 @@ class StepProviderCallBudget:
         with self._lock:
             categories = tuple(self._categories)
             counts = dict(Counter(categories))
+            effective_limit = self._effective_limit_locked()
             return {
                 "step_id": self._step_id,
-                "limit": self._limit,
+                "limit": effective_limit,
+                "base_limit": self._limit,
                 "used": len(categories),
-                "remaining": max(0, self._limit - len(categories)),
-                "exhausted": len(categories) >= self._limit,
+                "remaining": max(0, effective_limit - len(categories)),
+                "exhausted": len(categories) >= effective_limit,
                 "categories": list(categories),
                 "category_counts": counts,
                 "logical_repair_attempts": len(self._logical_repairs),
@@ -1832,10 +2031,36 @@ class StepProviderCallBudget:
                 "reservation_bound_provider_history_len": (
                     self._reservation_bound_provider_history_len
                 ),
+                "reserved_category_extension_count": len(
+                    self._reserved_category_extensions
+                ),
             }
 
 
 class _ActiveProviderCall:
+    """The one logical call a scoped transport is currently serving.
+
+    Retrying the SAME request used to consume another slot of this step's
+    budget. That budget is funded in logical attempts -- ``config.py``
+    certifies "1 initial generation + N code repairs + M LLM repairs + 1
+    reserved concept audit" -- so an HTTP retry spent one of the repairs the
+    certificate had just promised. With ``--transport-max-attempts 8`` a single
+    flaky generation could take 8 of 9 before the script had run once, and the
+    step then failed the way a scientifically broken step fails, which is the
+    exact outcome the certificate beside it exists to prevent.
+
+    Removing that charge weakens no bound. Retries are limited by
+    ``providers/llm.py``'s own ``manual_attempts`` loop, and total spend by the
+    run/batch hard stop, which :func:`consume_active_transport_attempt`
+    reserves first and independently.
+
+    A *handoff* is the other thing that used to share this counter and is not
+    the same event: ``FallbackLLMClient`` moving the same question to a
+    DIFFERENT supplier is a new logical call, and still costs a slot. The two
+    were routed through one function, which is how one rule ended up governing
+    both.
+    """
+
     def __init__(
         self,
         *,
@@ -1844,15 +2069,19 @@ class _ActiveProviderCall:
     ) -> None:
         self.budget = budget
         self.category = category
-        self._transport_attempts = 0
+        self._suppliers = 0
         self._lock = Lock()
 
-    def consume_transport_attempt(self) -> None:
-        # The outer complete call reserves the first attempt before entering
-        # the scope. Every subsequent transport retry must reserve another.
+    def consume_provider_handoff(self) -> None:
+        """Charge a second supplier answering the question already paid for.
+
+        The outer complete call reserves the first supplier before entering the
+        scope; every further one must reserve its own.
+        """
+
         with self._lock:
-            self._transport_attempts += 1
-            already_reserved = self._transport_attempts == 1
+            self._suppliers += 1
+            already_reserved = self._suppliers == 1
         if not already_reserved:
             self.budget.consume(self.category)
 
@@ -1879,25 +2108,36 @@ def provider_call_scope(
 
 
 def consume_active_transport_attempt() -> Optional[float]:
-    """Charge retries for a budget-scoped transport call, if one is active."""
+    """Charge one real HTTP attempt of the SAME request to the stop-loss.
+
+    The per-step allowance is deliberately NOT charged here: it counts logical
+    asks, and a retry is the same ask. See :class:`_ActiveProviderCall`. Use
+    :func:`consume_active_provider_handoff` when a different supplier takes
+    the question over.
+    """
 
     # The run/batch stop-loss is independent from the per-step allowance.
     # Reserve it first so a paid transport cannot start unless the outer
     # ceilings were durably recorded.
     from .provider_hard_stop import consume_active_provider_hard_stop_attempt
 
+    return consume_active_provider_hard_stop_attempt()
+
+
+def consume_active_provider_handoff() -> Optional[float]:
+    """Charge a different supplier taking over the same question.
+
+    This is a new logical call, not a retry, so it costs the step a slot as
+    well as the run/batch stop-loss.
+    """
+
+    from .provider_hard_stop import consume_active_provider_hard_stop_attempt
+
     hard_stop_remaining = consume_active_provider_hard_stop_attempt()
     state = _ACTIVE_PROVIDER_CALL.get()
     if state is not None:
-        state.consume_transport_attempt()
+        state.consume_provider_handoff()
     return hard_stop_remaining
-
-
-def active_provider_retry_available() -> bool:
-    """Return whether a scoped transport call can afford another attempt."""
-
-    state = _ACTIVE_PROVIDER_CALL.get()
-    return state is None or state.budget.can_consume(state.category)
 
 
 def complete_with_provider_budget(

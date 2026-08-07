@@ -34,13 +34,16 @@ from ...figures.publication import (
     make_figure_contract,
     save_publication_figure,
 )
+from ...contracts.ownership_verdict import OwnershipVerdict
 from ...schema import AnalysisStep
 from .figure_input_capability import TypedInputCapability
 
 __all__ = [
     "MEASUREMENT_PROCESS_AUDIT_INPUT",
     "MISSINGNESS_MEASUREMENT_AUDIT_INPUT",
+    "MISSINGNESS_MEASUREMENT_FIGURE_ANALYSIS_KIND",
     "MISSINGNESS_MEASUREMENT_FIGURE_INPUTS",
+    "missingness_measurement_figure_declaration_verdict",
     "missingness_measurement_figure_executor_code",
     "missingness_measurement_figure_executor_owns_step",
     "run_missingness_measurement_figure",
@@ -53,6 +56,8 @@ MISSINGNESS_MEASUREMENT_FIGURE_INPUTS = (
     MISSINGNESS_MEASUREMENT_AUDIT_INPUT,
     MEASUREMENT_PROCESS_AUDIT_INPUT,
 )
+#: One stable name for this owner across the claim, the decline and the trace.
+MISSINGNESS_MEASUREMENT_FIGURE_ANALYSIS_KIND = "missingness_measurement_figure"
 #: A figure product id is a Planner-owned *label*, not a capability claim.  What
 #: this renderer can draw is fixed by its two required typed inputs and their
 #: verified schemas, both checked below; the id never selects a panel, a
@@ -151,32 +156,191 @@ MISSINGNESS_MEASUREMENT_FIGURE_CAPABILITY = TypedInputCapability(
 )
 
 
-def missingness_measurement_figure_executor_owns_step(step: AnalysisStep) -> bool:
+def _binding_carries_the_columns_read(binding: Any, input_key: str) -> bool:
+    """Whether the bound table really has the columns this renderer indexes.
+
+    The loader below already asks this and raises when the answer is no. Asking
+    it again HERE, before the claim, is the difference between declining a step
+    and killing it: claiming is a promise to produce the figure, so a renderer
+    that claims and then raises turns a step the Coder was drawing successfully
+    into a dead one.
+
+    Measured 2026-07-31 over the real files on disk: 23 recorded
+    ``missingness_measurement_audit`` tables carry 5 distinct headers and only
+    16 have every column this renderer reads; ``measurement_process_audit`` is
+    16 of 20. Those 11 files are steps this renderer would have claimed and
+    then failed. The same gap in the robustness renderer was worth 4 dead steps
+    before it was closed.
+    """
+
+    if not isinstance(binding, Mapping):
+        return False
+    contract = binding.get("product_contract")
+    if not isinstance(contract, Mapping):
+        return False
+    columns = contract.get("columns")
+    if not isinstance(columns, list) or not all(
+        isinstance(value, str) for value in columns
+    ):
+        return False
+    return set(_COLUMNS_BY_INPUT[input_key]).issubset(set(columns))
+
+
+def missingness_measurement_figure_executor_owns_step(
+    step: AnalysisStep,
+    *,
+    resolved_bindings: Mapping[str, Any] | None = None,
+) -> bool:
     """Return whether every scientific choice is fixed by the typed contract."""
 
     products = [_figure_product(value) for value in step.expected_outputs]
     if not MISSINGNESS_MEASUREMENT_FIGURE_CAPABILITY.admits_step(step):
         return False
-    return bool(
+    if not (
         step.planned_analysis_role == "auxiliary"
         and _method_head(step.method) == "visualization"
         and len(products) == 1
         and products[0] is not None
-        and not step.model_requirements
-        and step.table_one_spec is None
+        # ``model_requirements`` and ``table_one_spec`` are not checked here:
+        # ``AnalysisStep`` already refuses both on a visualization step whose
+        # sole output is one figure (verified 2026-07-31), so guarding them
+        # would read as protection while protecting nothing.
         and step.trajectory_stability_spec is None
+    ):
+        return False
+    if not isinstance(resolved_bindings, Mapping):
+        return False
+    return all(
+        _binding_carries_the_columns_read(resolved_bindings.get(key), key)
+        for key in MISSINGNESS_MEASUREMENT_FIGURE_INPUTS
+    )
+
+
+def missingness_measurement_figure_declaration_verdict(
+    step: AnalysisStep,
+    *,
+    plan: Any,
+) -> OwnershipVerdict:
+    """Report the one input a step must add for this owner to draw its figure.
+
+    This renderer needs both audit tables because it builds a panel from each.
+    A plan that names only one leaves it unclaimed, and the step falls to the
+    Coder -- which is how a figure the host can draw deterministically ends up
+    as a hand-written source-data table the traceability validator refuses.
+
+    MEASURED over every recorded run: 59 figure steps name at least one of the
+    two audit tables.  19 name both and this owner can claim them.  40 name one
+    -- and they split in two, which is the whole reason this function has a
+    guard rather than firing on all 40:
+
+    * 9 declare one table whose producing step ALSO produces the other.  The
+      plan can close the gap by adding one string to the figure step, and
+      nothing about the science changes: the same parent, the same digest, the
+      same two tables already on disk.  Those are what this reports.
+    * 31 name a table whose sibling no step in the plan produces at all.
+      Closing those means asking the parent for a different analysis, which is
+      a scientific choice this owner does not get to make -- the same boundary
+      the distribution owner had to be narrowed to after canary33.
+
+    m1's ``09_missingness_audit_figure`` is the first kind: its parent declares
+    both tables and writes both files, the figure step names one, and the
+    renderer sat idle while the Coder produced a source-data table whose
+    columns could not be traced back to any upstream vector.
+    """
+
+    products = [_figure_product(value) for value in step.expected_outputs or []]
+    if not (
+        len(products) == 1
+        and products[0] is not None
+        and step.planned_analysis_role == "auxiliary"
+        and _method_head(step.method) == "visualization"
+        and step.trajectory_stability_spec is None
+    ):
+        return OwnershipVerdict.wrong_shape(
+            MISSINGNESS_MEASUREMENT_FIGURE_ANALYSIS_KIND,
+            reason=(
+                "the step is not one auxiliary visualization promising a single "
+                "figure, so this owner could not draw it however it were declared"
+            ),
+        )
+
+    declared = {str(value or "").strip() for value in step.inputs or []}
+    named = [key for key in MISSINGNESS_MEASUREMENT_FIGURE_INPUTS if key in declared]
+    if len(named) != 1:
+        return OwnershipVerdict.wrong_shape(
+            MISSINGNESS_MEASUREMENT_FIGURE_ANALYSIS_KIND,
+            reason=(
+                "the step does not name exactly one of this owner's two audit "
+                "tables, so the gap is not a single missing input declaration"
+            ),
+        )
+    have = named[0]
+    missing = next(key for key in MISSINGNESS_MEASUREMENT_FIGURE_INPUTS if key != have)
+
+    # The gap is only reportable when the plan can close it here. If NO step
+    # produces the sibling table, adding it to this figure's inputs names an
+    # artifact nobody writes; asking a step to produce it is asking for a
+    # different analysis, and that belongs to the Planner directive rather than
+    # to a refusal raised at this step.
+    #
+    # WIDENED 2026-08-04 from "the same step produces both" to "any step
+    # produces it". The first version read the renderer's docstring, which
+    # speaks of "one direct parent" -- but no code requires that: ``owns_step``
+    # asks only that both keys resolve to bindings carrying the columns it
+    # reads, and each binding is digest-pinned to its own producer. The
+    # narrower rule was a restriction I introduced, not one the renderer has.
+    #
+    # It cost a real case immediately. e2/verify20 planned the two audits as
+    # SEPARATE steps (04 and 05), its figure named one, the verdict stayed
+    # silent, the step fell to the Coder and died on source-data traceability.
+    # Measured over every recorded plan, the split is 9 same-step, 1
+    # different-step, 31 produced-by-nobody -- so this widening reports exactly
+    # one more case and still refuses the 31 it must.
+    producer_of = {}
+    for candidate in getattr(plan, "steps", None) or []:
+        for output in getattr(candidate, "expected_outputs", None) or []:
+            producer_of.setdefault(str(output or "").strip(), candidate)
+    if producer_of.get(have) is None or producer_of.get(missing) is None:
+        return OwnershipVerdict.wrong_shape(
+            MISSINGNESS_MEASUREMENT_FIGURE_ANALYSIS_KIND,
+            reason=(
+                f"no step in this plan produces {missing!r}, so this owner "
+                "could not be given the second table however this step were "
+                "declared"
+            ),
+        )
+    parent = producer_of[missing]
+
+    return OwnershipVerdict.incomplete_declaration(
+        MISSINGNESS_MEASUREMENT_FIGURE_ANALYSIS_KIND,
+        missing=(missing,),
+        reason=(
+            f"the host draws this figure deterministically from {have!r} and "
+            f"{missing!r} together, and step "
+            f"{str(getattr(parent, 'step_id', '') or '')!r} already produces "
+            f"both. This step names only {have!r}, so the renderer cannot be "
+            f"given the second panel's table: declare {missing!r} beside it. "
+            "Without it the figure is written by the Coder, whose source-data "
+            "table renames the audited columns and cannot be traced back to "
+            "the parent it came from"
+        ),
     )
 
 
 def missingness_measurement_figure_executor_code(step: AnalysisStep) -> str:
     """Return the small sandbox entrypoint for the exact declared figure."""
 
-    if not missingness_measurement_figure_executor_owns_step(step):
+    # Ownership is NOT re-derived here. The selector consulted this owner with
+    # the step's resolved bindings; a second evaluation without them cannot see
+    # what the selector saw and would answer differently. What this builder
+    # checks is its own input: one canonical figure product to render.
+    product = (
+        _figure_product(step.expected_outputs[0]) if step.expected_outputs else None
+    )
+    if product is None:
         raise ValueError(
             "The step is not owned by the missingness/measurement renderer"
         )
-    product = _figure_product(step.expected_outputs[0])
-    assert product is not None
     return textwrap.dedent(
         f"""
         import os

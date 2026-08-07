@@ -30,7 +30,7 @@ def test_extraction_job_continuity_has_one_explicit_owner() -> None:
     i18n = _read("js/i18n.js")
     index = _read("index.html")
 
-    owner_src = "js/screens-extraction-job-continuity.js?v=20260712-job-state"
+    owner_src = "js/screens-extraction-job-continuity.js?v=20260802-job-404"
     assert owner_src in index
     assert index.index("js/screens-extraction.js?") < index.index(owner_src)
     assert index.index(owner_src) < index.index("js/screens-extraction-study-context.js?")

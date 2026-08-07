@@ -115,12 +115,17 @@ def _is_figure2_task_id(value: object) -> bool:
 
 
 def _operational_exposure_for_item(item: object) -> object:
-    """Resolve the execution exposure once without laundering falsey values."""
+    """Resolve the execution exposure once without laundering invalid values."""
 
     declared = getattr(item, "operational_exposure", None)
     if declared is not None:
         return declared
-    return getattr(item, "primary_predictor", None)
+    legacy_predictor = getattr(item, "primary_predictor", None)
+    # Historical multi-input rows encode an absent predictor as ``""``.  The
+    # run-input capsule and posthoc evaluator require that absence to be an
+    # explicit JSON null.  Preserve every other non-null value so whitespace,
+    # false booleans, and other malformed coordinates still fail closed.
+    return None if legacy_predictor == "" else legacy_predictor
 
 
 def _reject_jsonl_duplicate_pairs(
@@ -4046,6 +4051,7 @@ def main() -> int:
                 stream_enabled=bool(args.llm_stream),
                 provider_environment=provider_environment,
                 provider_base_url=str(args.provider_base_url),
+                items=args.items,
             )
 
         if n_repeat == 1:
@@ -4780,6 +4786,7 @@ def _run_ehrflowbench_jsonl(
     stream_enabled: bool = False,
     provider_environment: Optional[Mapping[str, str]] = None,
     provider_base_url: Optional[str] = None,
+    items: Optional[Sequence[str]] = None,
 ) -> int:
     """Run an external EHRFlowBench-style JSONL export when available."""
     pipeline_options = _bind_benchmark_cost_price_table(
@@ -4844,6 +4851,43 @@ def _run_ehrflowbench_jsonl(
                     "line": line_number,
                 }
             )
+    if items:
+        # ``--items`` is applied on the built-in bench path but was never
+        # threaded here, so it read as accepted and did nothing.  On
+        # 2026-07-30 a launch that asked for one canary task started all nine
+        # against a real provider; it was noticed only because the run folders
+        # named tasks nobody had asked for.  A selector that silently widens
+        # its own scope is worse than no selector, so an unknown key is fatal
+        # rather than an empty selection.
+        wanted = {str(value).strip() for value in items if str(value).strip()}
+        available = {
+            str(row.get("key") or row.get("id") or f"ehrflowbench_{idx:03d}")
+            for idx, row in enumerate(rows)
+        }
+        unknown = sorted(wanted - available)
+        if unknown:
+            raise SystemExit(
+                "--items names no row in this EHRFlowBench JSONL: "
+                + ", ".join(unknown)
+                + ". Available: "
+                + ", ".join(sorted(available))
+            )
+        kept: List[Dict[str, Any]] = []
+        kept_invalid: set[int] = set()
+        for index, row in enumerate(rows):
+            key = str(row.get("key") or row.get("id") or f"ehrflowbench_{index:03d}")
+            if key not in wanted:
+                continue
+            if index in invalid_row_indices:
+                kept_invalid.add(len(kept))
+            kept.append(row)
+        rows = kept
+        invalid_row_indices = kept_invalid
+        print(
+            f"[items] running {len(rows)} of {len(available)} rows: "
+            + ", ".join(sorted(wanted)),
+            flush=True,
+        )
     if resume_run_id and len(rows) != 1:
         raise SystemExit(
             "--resume-run-id requires a one-row EHRFlowBench JSONL file so the "
@@ -5249,17 +5293,20 @@ def _run_ehrflowbench_jsonl(
                     request_timeout=request_timeout,
                 )
             scores.append(score)
-            execution_failures = _score_execution_failures(score)
+            # An execution failure is NOT recorded in ``pending``.  ``pending``
+            # means one thing -- the item never entered the pipeline -- and the
+            # exit code says so out loud (5 vs 4), the printed line says so, and
+            # the offered waiver (``--allow-pending-import``) is an *import*
+            # waiver.  This item reached ``_run_one_item_from_cohort`` and came
+            # back with a score, so filing it here made the run report "never
+            # entered the pipeline" for something that ran, return 5 where 4 is
+            # true, count it as both runnable and pending, and tell the operator
+            # to accept an execution failure with an import flag.  The failure
+            # is already reported from ``scores`` through the same predicate
+            # (``incomplete``), which is where it belongs; this append was the
+            # earlier way of exiting non-zero and outlived the split.
             if task_hard_stop is not None:
                 _finish_task_on_execution_outcome(task_hard_stop, score)
-            if execution_failures:
-                pending.append(
-                    {
-                        "key": key,
-                        "status": "execution_incomplete",
-                        "error": "; ".join(execution_failures)[:300],
-                    }
-                )
             if formal_canary_task_id is not None and key == formal_canary_task_id:
                 canary_passed = _figure2_canary_passed(score)
                 _write_figure2_canary_gate(

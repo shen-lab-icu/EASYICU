@@ -32,6 +32,7 @@ from .base import (
 _PROFILE_NAMES = [
     "cluster_characteristics",
     "cluster_profiles",
+    "phenotype_profiles",
     "cluster_centroids",
     "phenotype_characteristics",
     "cluster_summary",
@@ -41,6 +42,7 @@ _METRIC_NAMES = [
     "cluster_metrics",
     "silhouette",
     "stability_metrics",
+    "cluster_stability",
     "cluster_validation",
 ]
 _SIZE_CANDIDATES = ["n", "size", "count", "n_stays", "cluster_size", "n_patients"]
@@ -101,17 +103,20 @@ def _feature_columns(
     return features
 
 
-def _silhouette_value(evidence: EvidenceStore, run_dir: Path) -> Optional[float]:
-    _, frame = load_table(evidence, run_dir, _METRIC_NAMES)
+def _silhouette_value(
+    evidence: EvidenceStore,
+    run_dir: Path,
+) -> Tuple[Optional[EvidenceRecord], Optional[float]]:
+    record, frame = load_table(evidence, run_dir, _METRIC_NAMES)
     if frame is None:
-        return None
+        return record, None
     col = resolve_column(
         frame,
         ["mean_silhouette", "overall_silhouette", "silhouette_score", "silhouette"],
     )
     if col is None:
         metric_col = resolve_column(frame, ["metric", "name"])
-        value_col = resolve_column(frame, ["value", "score"])
+        value_col = resolve_column(frame, ["value", "score", "estimate"])
         if metric_col and value_col:
             vals: List[float] = []
             for _, row in frame.iterrows():
@@ -121,8 +126,8 @@ def _silhouette_value(evidence: EvidenceStore, run_dir: Path) -> Optional[float]
                     except (TypeError, ValueError):
                         continue
             if vals:
-                return sum(vals) / len(vals)
-        return None
+                return record, sum(vals) / len(vals)
+        return record, None
     try:
         series = pd.to_numeric(frame[col], errors="coerce").dropna()
         if series.empty:
@@ -131,9 +136,10 @@ def _silhouette_value(evidence: EvidenceStore, run_dir: Path) -> Optional[float]
         # panel annotation reports the OVERALL silhouette, so average the rows
         # rather than take the first cluster's value (which would misstate
         # overall cluster quality).
-        return float(series.mean()) if len(series) > 1 else float(series.iloc[0])
+        value = float(series.mean()) if len(series) > 1 else float(series.iloc[0])
+        return record, value
     except (IndexError, ValueError):
-        return None
+        return record, None
 
 
 _SIZE_STRICT_NAMES = (
@@ -373,7 +379,7 @@ def render_phenotype_figure(
         range(len(cluster_labels)), [f"C{lbl}" for lbl in cluster_labels], fontsize=6.0
     )
     ax_stab.set_ylabel("Cluster size (n)" if size_col else "Clusters")
-    silhouette = _silhouette_value(evidence, run_dir)
+    stability_record, silhouette = _silhouette_value(evidence, run_dir)
     title = "Cluster stability"
     if silhouette is not None:
         ax_stab.text(
@@ -395,6 +401,10 @@ def render_phenotype_figure(
 
     def _ids(rec: Optional[EvidenceRecord]) -> List[str]:
         return [rec.evidence_id] if rec is not None else []
+
+    profile_and_stability_ids = list(
+        dict.fromkeys([*_ids(record), *_ids(stability_record)])
+    )
 
     panels = [
         {
@@ -421,7 +431,7 @@ def render_phenotype_figure(
             "role": "stability",
             "chart_type": "stability_grid",
             "claim": "Cluster sizes and the silhouette score guard against arbitrary cluster cuts.",
-            "evidence_ids": _ids(record),
+            "evidence_ids": profile_and_stability_ids,
             "review_risk": "A low silhouette or a tiny cluster warns that the partition may be unstable.",
         },
     ]
@@ -434,6 +444,6 @@ def render_phenotype_figure(
         core_claim=core_claim,
         generation_mode="phenotype_publication_figure",
         panels=panels,
-        source_evidence_ids=_ids(record),
+        source_evidence_ids=profile_and_stability_ids,
         source_frames=source_frames,
     )

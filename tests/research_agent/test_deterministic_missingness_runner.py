@@ -26,6 +26,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from easyicu.research_agent.authority.evidence_store import _walk_numeric_leaves
 from easyicu.research_agent.authority.plausibility import (
     FlagOnlyPlausibilityScope,
 )
@@ -604,6 +605,143 @@ def test_missingness_audit_counts_from_measured_indicator(tmp_path: Path):
         "measured_pct",
     ):
         assert col in audit.columns
+
+
+#: The tolerance the shipped missingness figure re-derives at, copied from the
+#: recorded ``analysis.py`` that raised on it: ``np.allclose(..., rtol=0.0,
+#: atol=1e-8)``. A published percentage has to survive THIS, not a friendlier
+#: number chosen here.
+_CONSUMER_ATOL = 1e-8
+
+
+def test_published_percentages_survive_the_consumer_rederiving_them(
+    tmp_path: Path,
+):
+    """Rounding a number a downstream contract re-derives is a broken contract.
+
+    e1 in the 2026-08-02 sweep ran 11 steps and lost exactly one:
+    ``11_missingness_figure`` died in 1.2 s with "missing_pct is inconsistent
+    with n_total and n_nonmissing", and that single death is what turned the
+    whole manuscript into a fail-closed placeholder.  Nothing was inconsistent.
+    The figure recomputes ``100 * (n_total - n_nonmissing) / n_total`` and
+    compares at ``atol=1e-8``; this executor published the same quantity
+    through ``round(..., 6)``.  On the real artifact 4 of 6 rows were off by
+    2e-7 to 4e-7 -- entirely the rounding, and far outside the tolerance.
+
+    Six decimals is a display decision.  The consumer of a machine-readable
+    table is doing arithmetic, not reading, so the rounding belongs at the
+    point of display and nowhere upstream of it.
+    """
+
+    cohort = _cohort(n=94458, seed=3)
+    _summary, out_dir = _exec_runner(tmp_path, cohort, {})
+
+    audit = pd.read_csv(out_dir / "missingness_measurement_audit.csv")
+    nonzero = audit["n_total"] != 0
+    assert nonzero.any(), "the probe needs at least one audited concept"
+
+    # Exactly the two checks the shipped renderer performs.
+    expected_missing = (
+        100.0
+        * (audit.loc[nonzero, "n_total"] - audit.loc[nonzero, "n_nonmissing"])
+        / audit.loc[nonzero, "n_total"]
+    )
+    expected_measured = (
+        100.0
+        * audit.loc[nonzero, "n_nonmissing"]
+        / audit.loc[nonzero, "n_total"]
+    )
+    assert np.allclose(
+        audit.loc[nonzero, "missing_pct"].to_numpy(dtype=float),
+        expected_missing.to_numpy(dtype=float),
+        rtol=0.0,
+        atol=_CONSUMER_ATOL,
+    ), "missing_pct cannot be re-derived at the tolerance its consumer uses"
+    assert np.allclose(
+        audit.loc[nonzero, "measured_pct"].to_numpy(dtype=float),
+        expected_measured.to_numpy(dtype=float),
+        rtol=0.0,
+        atol=_CONSUMER_ATOL,
+    ), "measured_pct cannot be re-derived at the tolerance its consumer uses"
+
+    # The same rule for the other rate this step publishes to a machine.
+    denominators = pd.read_csv(out_dir / "analytic_denominators.csv")
+    scoped = denominators[
+        denominators["n_total"].notna()
+        & (denominators["n_total"] != 0)
+        & denominators["n_complete"].notna()
+    ]
+    if len(scoped):
+        assert np.allclose(
+            scoped["complete_pct"].to_numpy(dtype=float),
+            (100.0 * scoped["n_complete"] / scoped["n_total"]).to_numpy(
+                dtype=float
+            ),
+            rtol=0.0,
+            atol=_CONSUMER_ATOL,
+        ), "complete_pct cannot be re-derived at the tolerance a consumer uses"
+
+
+def test_the_worst_concepts_summary_publishes_the_count_not_only_the_rate(
+    tmp_path: Path,
+):
+    """A rate whose numerator this step withholds cannot be cited.
+
+    Recorded 2026-08-02 in the nine-task sweep, on ``e3`` -- the only task
+    whose steps all passed, and therefore the only one that produced a
+    manuscript at all.  It said "The first-24-hour maximum KDIGO stage was
+    missing for 696 of 94,458 stays" and cited THIS step.  696 sat in five of
+    this step's own output CSVs, but ``worst_measured_concepts`` published
+    only ``value_missing_pct`` (0.736835 == 100 * 696 / 94,458), so the only
+    registered claims for 696 belonged to two OTHER steps.
+    ``_select_numeric_claim`` restricts candidates to the cited evidence
+    before anything else, found none of them there, and returned ambiguous --
+    three such markers, two distinct values, all the same shape.
+
+    The count and the rate are one fact and are asserted together, because
+    publishing half of it is the whole defect: dropping the count again
+    leaves the percentage looking perfectly well-formed.
+    """
+
+    cohort = _cohort(n=1000, seed=1)
+    summary, out_dir = _exec_runner(tmp_path, cohort, {})
+    assert summary["status"] == "ok"
+
+    worst = summary["worst_measured_concepts"]
+    assert worst, "the audit published no worst-measured concepts to cite"
+
+    audit = pd.read_csv(out_dir / "missingness_measurement_audit.csv")
+    n_total = int(summary["n_total"])
+
+    for record in worst:
+        concept = record["concept"]
+        assert "value_missing_n" in record, (
+            f"{concept!r} is published as a percentage with no numerator. A "
+            "manuscript states the count and cites this step; without the "
+            "count registered here, the cited step owns no claim for the "
+            "number in the sentence and the binder must refuse."
+        )
+        row = audit[audit["concept"] == concept].iloc[0]
+        assert record["value_missing_n"] == int(row["value_missing_n"])
+        assert (
+            abs(
+                record["value_missing_pct"]
+                - 100.0 * record["value_missing_n"] / n_total
+            )
+            < 1e-6
+        ), f"{concept!r}: the published rate and count disagree"
+
+    # The count has to survive as a registrable claim, not merely exist in the
+    # JSON: the binder can only reach what the leaf walker turns into a claim.
+    leaves = _walk_numeric_leaves(summary)
+    counts_by_path = {path: canonical for path, _literal, canonical in leaves}
+    for index, record in enumerate(worst):
+        path = f"worst_measured_concepts[{index}].value_missing_n"
+        assert path in counts_by_path, (
+            f"{path} never becomes a numeric claim, so a sentence citing this "
+            "step still cannot bind the count."
+        )
+        assert counts_by_path[path] == float(record["value_missing_n"])
 
 
 def test_missingness_and_source_outputs_are_distinct_declared_products(tmp_path: Path):

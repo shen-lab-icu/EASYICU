@@ -59,7 +59,7 @@ def _step() -> AnalysisStep:
 def test_grouped_table_one_has_overall_groups_tests_and_correct_missingness():
     table = build_grouped_table_one(_frame(), _spec())
 
-    assert set(table["schema_version"]) == {"easyicu.table_one_result/2"}
+    assert set(table["schema_version"]) == {"easyicu.table_one_result/3"}
     assert set(table["group"]) == {"Overall", "0", "1"}
     age_zero = table[(table["variable"] == "age") & (table["group"] == "0")]
     assert age_zero.iloc[0]["denominator_n"] == 3

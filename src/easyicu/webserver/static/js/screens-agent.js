@@ -22,7 +22,7 @@
   let agSel = null;
   let agTab = 'overview';
   let agEvOpen = -1;   // expanded evidence-gate check index
-  let agRun = { active: false, prog: 0, timer: null, es: null, jobId: null, step: null, error: null, result: null, warning: null };
+  let agRun = { active: false, prog: 0, timer: null, es: null, jobId: null, step: null, error: null, errorRemedies: '', result: null, warning: null };
   let agReview = { projectDir: null, loading: false, error: null, data: null, signing: false };
   let agHistory = { studyId: null, loading: false, error: null, data: null };
   let agArtifact = { projectDir: null, name: null, loading: false, error: null, data: null };
@@ -174,25 +174,39 @@
     if (s && s.ideaSeed && !gate) return true;
     return !!(gate && gate.agent_run_ready_after_human_confirmation === false);
   }
-  function gateBlockerLabel(raw) {
-    const text = String(raw || '');
-    if (/refresh Agent project/i.test(text)) return t('Refresh this project from Idea Mining', '回到 Idea Mining 刷新这个项目');
-    if (/prior-art/i.test(text)) return t('Run prior-art review before Agent execution', '在 Agent 执行前完成 prior-art 审阅');
-    if (/missing required concepts|re-extract/i.test(text)) return t('Re-extract or confirm missing required concepts', '重新抽取或确认缺失的必要概念');
-    if (/real EasyICU export|real export|select a real/i.test(text)) return t('Select a real EasyICU export', '选择真实 EasyICU 导出');
-    if (/idea feasibility/i.test(text)) return t('Resolve idea feasibility before execution', '先解决 idea 可行性问题');
-    if (/same active export/i.test(text)) return t('Select the same active export used by Idea Mining', '选择 Idea Mining 使用的同一个 active export');
-    // Plain text — callers escape at their own HTML insertion point.
-    // Returning esc() here double-escaped agRun.error, which is escaped again
-    // by the run-error nextbar.
-    return text;
+  /* The gate decides from typed conditions and now ships stable codes; this
+     used to run regular expressions over the backend's English prose to work
+     out what to tell the user, which meant a reworded sentence silently lost
+     its remedy. Codes only — an unknown one yields no remedy rather than a
+     guessed one. */
+  function remedyFor(code) {
+    const api = window.EU_GATE_REMEDY;
+    return api ? api.forCode(code) : null;
+  }
+  function gateRemedyHtml(remedies) {
+    const api = window.EU_GATE_REMEDY;
+    return api ? api.render(remedies) : '';
+  }
+  function seedGateCodes(s) {
+    const gate = seedExecutionGate(s);
+    if (s && s.ideaSeed && !gate) return ['seed_gate_missing'];
+    const codes = gate && Array.isArray(gate.blocker_codes) ? gate.blocker_codes : [];
+    return codes.filter(Boolean).map(String);
+  }
+  function seedGateRemedies(s) {
+    const api = window.EU_GATE_REMEDY;
+    if (!api) return [];
+    return seedGateCodes(s).map(api.forCode).filter(Boolean);
   }
   function seedGateBlockerText(s) {
     const gate = seedExecutionGate(s);
     if (s && s.ideaSeed && !gate) return t('Refresh this project from Idea Mining so the preflight checks are available.', '请回到 Idea Mining 刷新这个项目，让预检条件可用。');
+    // Plain text — callers escape at their own HTML insertion point.
+    // Returning esc() here double-escaped agRun.error, which is escaped again
+    // by the run-error nextbar.
     const blockers = gate && Array.isArray(gate.blockers) ? gate.blockers : [];
     return blockers.length
-      ? blockers.map(gateBlockerLabel).join(' · ')
+      ? blockers.join(' · ')
       : t('Confirm the Idea Mining preflight checks before running Agent preflight.', '运行 Agent 预检前先确认 Idea Mining 预检条件。');
   }
   function realMode() {
@@ -512,9 +526,22 @@
     const context = reviewPayload(live, 'run_context.json') || {};
     const cohort = reviewPayload(live, 'cohort_summary.json') || {};
     const score = reviewPayload(live, 'benchmark_scorecard.json') || {};
-    const questionText = [context.question, s.question && s.question[0], s.cohort, s.sourceArticle].filter(Boolean).join(' ');
-    const explicitScope = firstValue(s.ideaSeed && s.ideaSeed.cohort, context.source && context.source.database, score.database_scope);
-    const inferredScope = /mimic-iv/i.test(questionText) ? 'MIMIC-IV canonical benchmark universe' : (s.id === 'crossdb' ? 'Cross-DB comparison workspace' : explicitScope || t('Active export scope', '当前导出范围'));
+    /* This card exists to declare which data a run consumed — the one place
+       that must not guess. It used to test the user's own question text for
+       "mimic-iv" and, on a hit, announce the MIMIC-IV canonical universe: ask
+       "does this replicate the MIMIC-IV finding?" while your active export is
+       eICU and the provenance card would name the wrong database. The run
+       artifacts declare the scope; when they do not, say so rather than
+       infer it from prose. */
+    const crossScope = s.id === 'crossdb' || !!s.planOnly;
+    const declaredScope = firstValue(
+      s.ideaSeed && s.ideaSeed.cohort,
+      context.source && context.source.database,
+      score.database_scope,
+    );
+    const scopeDeclared = !!declaredScope || crossScope;
+    const inferredScope = declaredScope
+      || (crossScope ? t('Cross-DB comparison workspace', '跨库对比工作台') : t('Not declared by this run', '本次运行未声明'));
     const cohortSize = firstValue(score.cohort_size, context.summary && context.summary.stays, cohort.summary && cohort.summary.stays, cohort.cohort && cohort.cohort.entities, s.benchmark && s.benchmark.cohort_size);
     const modules = firstValue(context.summary && context.summary.modules, cohort.summary && cohort.summary.modules);
     let crossCount = null;
@@ -523,7 +550,10 @@
     } catch (_) {
       crossCount = null;
     }
-    const isCross = /cross|multi|six|database/i.test(String(inferredScope || '')) && !/mimic-iv canonical/i.test(String(inferredScope || ''));
+    // Was: regex the scope LABEL for "cross|multi|six|database", which made any
+    // single-database scope whose name contained the word "database" render as
+    // a multi-database context. The study itself knows.
+    const isCross = crossScope;
     return `
       <div class="ag-cap-card cross">
         <div class="ag-cap-head">
@@ -531,7 +561,7 @@
             <div class="eyebrow">${t('Cross-data scope', '跨数据范围')}</div>
             <div class="ag-cap-title">${isCross ? t('Multi-database analysis context', '多数据库分析上下文') : t('Data scope is declared before claims', '下结论前先声明数据范围')}</div>
           </div>
-          <span class="pill ${isCross ? 'ok' : 'info'}" style="height:22px;"><span class="dot"></span>${isCross ? t('cross-db', '跨库') : t('scoped', '已限定')}</span>
+          <span class="pill ${isCross ? 'ok' : (scopeDeclared ? 'info' : 'warn')}" style="height:22px;"><span class="dot"></span>${isCross ? t('cross-db', '跨库') : (scopeDeclared ? t('scoped', '已限定') : t('undeclared', '未声明'))}</span>
         </div>
         <div class="ag-cap-text">${t('The Agent module should show which data context a run consumed. Cross-DB comparisons are prepared in the Cross-DB workspace, then passed into the same evidence-bound Agent review path.', 'Agent 模块应该显示一次运行消费了哪个数据上下文。跨库比较先在 Cross-DB 工作台准备，再进入同一套证据绑定 Agent 审阅路径。')}</div>
         <div class="ag-cap-metrics">
@@ -743,6 +773,7 @@
         jobId: snapshot.id || (meta && meta.job_id),
         step: ev ? ev.label : t('Reconnected to running Agent job', '已重新连接正在运行的 Agent 任务'),
         error: null,
+        errorRemedies: '',
         result: null,
         warning: null,
         reconnectable: false,
@@ -845,7 +876,7 @@
           <h3>${t('No local projects yet', '还没有本地项目')}</h3>
           <p>${t('An Agent project is a local study folder — a question plus its runs, outputs, and an evidence-checked draft. Two ways to start one: turn a question into a plan in Idea Mining, or extract a cohort and hand it off from Data Extraction. Then it appears here.', 'Agent 项目就是一个本地研究文件夹 —— 一个问题加上它的运行、产出和经过证据核验的草稿。两种创建方式：在 Idea 挖掘里把问题变成计划，或先抽取队列再从数据抽取交接过来。之后它会出现在这里。')}</p>
           <div class="row gap-8 mt-12" style="justify-content:center;flex-wrap:wrap;">
-            <button class="btn primary sm" data-nav="ideas">${icon('target', 12)} ${t('Open Idea Mining', '打开 Idea Mining')}</button>
+            <button class="btn primary sm" data-nav="ideas">${icon('target', 12)} ${t('Open Idea Mining', '打开想法挖掘')}</button>
             <button class="btn sm" data-nav="extraction">${icon('extract', 12)} ${t('Extract data', '抽取数据')}</button>
             <button class="btn sm" data-ag-refresh-projects>${icon('refresh', 12)} ${t('Refresh', '刷新')}</button>
           </div>
@@ -906,7 +937,7 @@
             ${icon(listCollapsed ? 'list' : 'close', 13)} ${listCollapsed ? t('Show projects', '显示项目') : t('Focus view', '专注视图')}
           </button>
           <button class="btn sm" data-ag-tab="workflow">${icon('layers', 13)} ${t('Planning Blocks', '规划块')}</button>
-          ${s.projectKind === 'canonical9' ? '' : `<button class="btn sm" data-nav="ideas">${icon('target', 13)} ${t('Open Idea Mining', '打开 Idea 挖掘')}</button>`}
+          ${s.projectKind === 'canonical9' ? '' : `<button class="btn sm" data-nav="ideas">${icon('target', 13)} ${t('Open Idea Mining', '打开想法挖掘')}</button>`}
           <span class="pill ok"><span class="dot"></span>${t('Analysis workspace', '分析运行工作台')}</span>
         </div>
       </div>
@@ -1039,7 +1070,7 @@
     const src = exportSourceForStudy(study());
     const contextBlocker = window.EU_AGENT_STUDY_CONTEXT && window.EU_AGENT_STUDY_CONTEXT.runBlocker
       ? window.EU_AGENT_STUDY_CONTEXT.runBlocker(study())
-      : '';
+      : null;
     requestProviderStatus();
     const st = agProvider.status || {};
     const limits = st.limits || {};
@@ -1047,7 +1078,7 @@
     const missing = Array.isArray(st.missing) ? st.missing : [];
     const ready = !!st.ready;
     const canRun = !!(src && ready && agProvider.consent && !agRun.active && !contextBlocker);
-    const disabledReason = contextBlocker || (!src
+    const disabledReason = (contextBlocker && contextBlocker.reason) || (!src
       ? t('No active export source', '没有 active export 源')
       : !ready
       ? (missing.length ? missing.join(', ') : t('Provider not ready', 'provider 未就绪'))
@@ -1131,7 +1162,7 @@
       return `
       <div class="nextbar gate">
         <div class="nb-ico">${icon('shield', 16)}</div>
-        <div class="grow"><div class="nb-t">${agRun.result && agRun.result.cancelled ? t('Run cancelled safely', '运行已安全取消') : t('Run failed closed', '运行已 fail-closed')}</div><div class="nb-d">${esc(agRun.error)}</div></div>
+        <div class="grow"><div class="nb-t">${agRun.result && agRun.result.cancelled ? t('Run cancelled safely', '运行已安全取消') : t('Run failed closed', '运行已 fail-closed')}</div><div class="nb-d">${esc(agRun.error)}</div>${agRun.errorRemedies || ''}</div>
         ${canReconnect ? `<button class="btn" data-ag-reconnect>${icon('history', 13)} ${t('Resume stream', '恢复任务流')}</button>` : ''}
         <button class="btn primary" data-ag-runbtn>${icon('refresh', 13)} ${retryLabel}</button>
       </div>`;
@@ -1140,7 +1171,7 @@
       return `
       <div class="nextbar gate">
         <div class="nb-ico">${icon('shield', 16)}</div>
-        <div class="grow"><div class="nb-t">${t('Agent preflight checks are not ready', 'Agent 预检条件尚未就绪')}</div><div class="nb-d">${esc(seedGateBlockerText(s))}</div></div>
+        <div class="grow"><div class="nb-t">${t('Agent preflight checks are not ready', 'Agent 预检条件尚未就绪')}</div><div class="nb-d">${esc(seedGateBlockerText(s))}</div>${gateRemedyHtml(seedGateRemedies(s))}</div>
         <button class="btn" data-nav="ideas">${icon('spark', 13)} ${t('Review in Idea Mining', '回到 Idea Mining 审阅')}</button>
       </div>`;
     }
@@ -1491,7 +1522,7 @@
             <div class="ag-block-detail-desc">${bi(selected.desc)}</div>
             ${blockContract(selected)}
             <div class="row wrap gap-8 mt-12">
-              <button class="btn sm" data-nav="${selected.route || 'agent'}">${icon('arrow', 12)} ${selected.route === 'ideas' ? t('Open Idea Mining', '打开 Idea Mining') : t('Open Agent Projects', '打开研究项目')}</button>
+              <button class="btn sm" data-nav="${selected.route || 'agent'}">${icon('arrow', 12)} ${selected.route === 'ideas' ? t('Open Idea Mining', '打开想法挖掘') : t('Open Agent Projects', '打开研究项目')}</button>
               <span class="ag-block-note">${t('Selected step details. Execution remains gated by active export, provider consent, and evidence review.', '当前选中步骤详情。执行仍由 active export、provider 授权和证据审阅约束。')}</span>
             </div>
           </div>` : ''}
@@ -1959,19 +1990,22 @@
     }
     const contextBlocker = window.EU_AGENT_STUDY_CONTEXT && window.EU_AGENT_STUDY_CONTEXT.runBlocker
       ? window.EU_AGENT_STUDY_CONTEXT.runBlocker(s)
-      : '';
+      : null;
     if (contextBlocker) {
-      agRun.error = contextBlocker;
+      agRun.error = contextBlocker.reason;
+      agRun.errorRemedies = gateRemedyHtml(remedyFor(contextBlocker.code));
       repaintBody();
       return;
     }
     if (seedGateBlocksRun(s)) {
       agRun.error = seedGateBlockerText(s);
+      agRun.errorRemedies = gateRemedyHtml(seedGateRemedies(s));
       repaintBody();
       return;
     }
     const src = exportSourceForStudy(s);
     agRun.error = null;
+    agRun.errorRemedies = '';
     if (src && window.EU_API && window.EU_API.startAgentRun && window.EventSource) {
       startRealRun(src);
       return;
@@ -1989,9 +2023,10 @@
     const s = study();
     const contextBlocker = window.EU_AGENT_STUDY_CONTEXT && window.EU_AGENT_STUDY_CONTEXT.runBlocker
       ? window.EU_AGENT_STUDY_CONTEXT.runBlocker(s)
-      : '';
+      : null;
     if (contextBlocker) {
-      agRun.error = contextBlocker;
+      agRun.error = contextBlocker.reason;
+      agRun.errorRemedies = gateRemedyHtml(remedyFor(contextBlocker.code));
       repaintBody();
       return;
     }
@@ -2147,7 +2182,7 @@
     host.querySelectorAll('[data-ag-sel]').forEach(b => b.addEventListener('click', () => {
       closeRunStream();
       agRunChannel.clear();
-      agRun = { active: false, prog: 0, timer: null, es: null, jobId: null, step: null, error: null, result: null, warning: null };
+      agRun = { active: false, prog: 0, timer: null, es: null, jobId: null, step: null, error: null, errorRemedies: '', result: null, warning: null };
       agResumeProbe = { loading: false, checkedJobId: null };
       window.EU_AGENT_RUN_REVIEW = null;
       agSel = b.dataset.agSel;
@@ -2443,7 +2478,7 @@
       if (agSel && agSel !== context.id) {
         closeRunStream();
         agRunChannel.clear();
-        agRun = { active: false, prog: 0, timer: null, es: null, jobId: null, step: null, error: null, result: null, warning: null };
+        agRun = { active: false, prog: 0, timer: null, es: null, jobId: null, step: null, error: null, errorRemedies: '', result: null, warning: null };
         agResumeProbe = { loading: false, checkedJobId: null };
       }
       agSel = context.id;

@@ -17,6 +17,7 @@ import pytest
 from easyicu.research_agent.agents.core import (
     PlannerPromptBudgetError,
     ReplannerAgent,
+    _PLANNER_PROMPT_BYTE_LIMIT,
     _REPLANNER_STEP_SUMMARY_CHAR_BUDGET,
     _REPLANNER_TOTAL_RECORDS_CHAR_BUDGET,
     _clip_json,
@@ -123,11 +124,18 @@ def test_oversized_replanner_directive_fails_before_provider_call():
     plan = AnalysisPlan(research_question=context.research_question, steps=[])
     llm = PatternScriptedMockLLMClient([])
 
+    # Sized off the live ceiling, not a literal. This test used to pass
+    # "x" * 90_000 against a hard-coded 80,000 limit; when the ceiling moved to
+    # the reviewed transport envelope the payload silently became legal and the
+    # guard stopped being exercised at all. What is under test is "a directive
+    # past the ceiling is refused", so the payload has to be defined that way.
+    oversized = "x" * (_PLANNER_PROMPT_BYTE_LIMIT + 10_000)
+
     with pytest.raises(PlannerPromptBudgetError, match="Replanner prompt"):
         ReplannerAgent(llm).run(
             context=context,
             current_plan=plan,
-            directive="x" * 90_000,
+            directive=oversized,
         )
 
     assert llm.calls == []

@@ -1,6 +1,15 @@
 /* Executable contract for extract/convert refresh continuity. */
 'use strict';
 
+function missingJobError() {
+  // Exactly what api.js hands a caller for HTTP 404 detail="unknown job".
+  const err = new Error('unknown job');
+  err.technical = '/api/jobs/x -> HTTP 404';
+  err.status = 404;
+  err.code = 'unknown job';
+  return err;
+}
+
 const assert = require('node:assert/strict');
 const path = require('node:path');
 
@@ -133,7 +142,7 @@ require(path.resolve(process.argv[2]));
     job_id: 'missing_3', kind: 'convert',
     source: { path: '/data/old', database: 'miiv' }, config: {},
   }));
-  snapshots.set('missing_3', new Error('/api/jobs/missing_3 -> HTTP 404'));
+  snapshots.set('missing_3', missingJobError());
   await owner.restore();
   assert.equal(missing.at(-1).job_id, 'missing_3');
   assert.equal(storage.has(STORAGE_KEY), false, 'server restart/expired history clears the pointer');

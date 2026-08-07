@@ -69,6 +69,13 @@ STABILITY_EXECUTOR_INPUTS = frozenset(
 # claiming the calculator merely by declaring stability-shaped filenames.
 TRAJECTORY_STABILITY_METHOD_HEAD = "trajectory_cluster_stability"
 
+#: The method key a group-discovery study declares when it has no fixed-window
+#: trajectory. It is ``llm_coded`` with no runner in the method suite, which is
+#: the registry's own way of saying general cluster stability stays agent-coded.
+#: A contract test binds this to that registry entry so a rename cannot leave
+#: this guide naming a method the Planner is not allowed to use.
+_GENERAL_CLUSTER_STABILITY_METHOD = "cluster_stability"
+
 TRAJECTORY_REPRESENTATION_SCHEMA_VERSION = "easyicu.trajectory_representation_schema/1"
 TRAJECTORY_CANDIDATE_SOLUTION_SCHEMA_VERSION = (
     "easyicu.candidate_cluster_solution_schema/2"
@@ -750,19 +757,118 @@ def _trajectory_candidate_schema_findings(
     ]
 
 
+@dataclass(frozen=True)
+class TrajectoryRoleRequirement:
+    """What a step must declare to own one trajectory role.
+
+    ``_role_qualifies`` decides ownership from method-family tokens plus typed
+    products, and every one of those sets is a literal in this module.  The
+    refusal used to say only "missing one structured scientific role", which
+    names the gap without naming anything the Planner can declare -- and none
+    of the four role names appears anywhere in the Planner prompt, so the
+    contract was enforced without ever being stated.  Rendering the sets here
+    keeps the message and the predicate the same fact.
+    """
+
+    role: str
+    method_tokens: tuple[str, ...]
+    product_groups: tuple[frozenset[str], ...]
+
+    def sentence(self) -> str:
+        groups = "; and ".join(
+            "one of " + ", ".join(sorted(group)) for group in self.product_groups
+        )
+        return (
+            "An owner needs a method naming one of "
+            f"{', '.join(self.method_tokens)} and expected_outputs containing "
+            f"{groups}."
+        )
+
+
+def _spelled(products: frozenset[Tuple[str, str]]) -> frozenset[str]:
+    return frozenset(f"{kind}:{name}" for kind, name in products)
+
+
+def role_declaration_requirement(role: str) -> TrajectoryRoleRequirement:
+    """The canonical, unambiguous way to own ``role``.
+
+    Each role also has token-heuristic branches; those stay available but are
+    not published, because a published set has to be one a Planner can copy
+    exactly rather than a rule it has to re-derive.
+    """
+
+    if role == "representation":
+        return TrajectoryRoleRequirement(
+            role,
+            ("representation", "functional basis/features"),
+            (_spelled(_REPRESENTATION_PRODUCTS),),
+        )
+    if role == "candidate_selection":
+        return TrajectoryRoleRequirement(
+            role,
+            ("cluster", "clustering", "phenotyping", "kmeans", "latent class"),
+            (_spelled(_SELECTION_PRODUCTS), _spelled(_CANDIDATE_SOLUTION_PRODUCTS)),
+        )
+    if role == "stability_freeze":
+        return TrajectoryRoleRequirement(
+            role,
+            ("cluster stability", "consensus", "bootstrap", "resampling"),
+            (_spelled(_STABILITY_PRODUCTS), _spelled(_STABILITY_ASSIGNMENT_PRODUCTS)),
+        )
+    if role == "characterization":
+        return TrajectoryRoleRequirement(
+            role,
+            ("characterization", "descriptive profile/phenotype"),
+            (_spelled(_CHARACTERIZATION_PRODUCTS),),
+        )
+    raise ValueError(f"Unknown trajectory role: {role}")
+
+
 def trajectory_plan_contract_applies(
     *,
     plan: AnalysisPlan,
     context: ResearchContext,
+    long_trajectory_bound: bool = False,
 ) -> bool:
     """Return the non-heuristic trigger for the run-level trajectory contract.
 
     Once the agent stamps a fixed-window plan as ``trajectory_clustering``, a
     missing or artifact-only role cannot make the contract disappear.  The
     evaluator will instead return explicit plan-contract errors.
+
+    Trajectories reach this host in two representations.  ``ResearchContext``
+    only ever carries the wide one, because ``fixed_window_trajectory`` is
+    inferred by parsing a column name (``<family>_h<start>_<end>``).  The long
+    one -- ``stay_id, charttime, concept, value_num`` -- is materialised,
+    digested and bound as a typed run input, and has no column names to parse,
+    so a run holding 19,067,154 verified trajectory rows still presented zero
+    trajectory variables here and had its whole plan refused.  Callers that can
+    see the bound tier say so with ``long_trajectory_bound``; the default keeps
+    the wide-column behaviour exactly for callers that cannot.
     """
 
-    return _normalise_token(plan.analysis_type) == "trajectory_clustering" and any(
+    if _normalise_token(plan.analysis_type) != "trajectory_clustering":
+        return False
+    if long_trajectory_bound:
+        return True
+    return trajectory_context_is_bound(context)
+
+
+def trajectory_context_is_bound(context: ResearchContext) -> bool:
+    """Return whether the context carries a typed fixed-window trajectory.
+
+    This is the single context-side applicability boundary shared by prompts
+    and result gates.  A trajectory may be materialized as a typed long input
+    or represented by fixed-window wide variables; ordinary stay-level
+    clustering has neither and must not inherit the trajectory role contract.
+    """
+
+    materialized_trajectory = getattr(
+        getattr(context, "materialized_inputs", None), "trajectory", None
+    )
+    if materialized_trajectory is not None:
+        return True
+    return any(
         variable.fixed_window_trajectory is not None
         for variable in (context.variables or [])
     )
@@ -801,15 +907,27 @@ def evaluate_trajectory_plan_dag(
     *,
     plan: AnalysisPlan,
     context: ResearchContext,
+    long_trajectory_bound: bool = False,
 ) -> TrajectoryPlanDagEvaluation:
-    """Validate the agent-declared trajectory plan without rewriting it."""
+    """Validate the agent-declared trajectory plan without rewriting it.
+
+    This re-asks the applicability question itself, so a caller that threaded
+    ``long_trajectory_bound`` into its own guard but not into here still gets
+    the wide-column answer.  H3 was refused a second time for exactly that: the
+    outer guard had the flag, this call did not, and the run ended on the same
+    "no validated fixed-window trajectory contract" it started with.
+    """
 
     spec_steps = [
         step
         for step in (plan.steps or [])
         if step.trajectory_stability_spec is not None
     ]
-    if not trajectory_plan_contract_applies(plan=plan, context=context):
+    if not trajectory_plan_contract_applies(
+        plan=plan,
+        context=context,
+        long_trajectory_bound=long_trajectory_bound,
+    ):
         findings = (
             (
                 _finding(
@@ -859,11 +977,17 @@ def evaluate_trajectory_plan_dag(
         if len(candidates) == 1:
             role_owners[role] = candidates[0]
         elif not candidates:
+            requirement = role_declaration_requirement(role)
             findings.append(
                 _finding(
                     "trajectory_role_missing",
-                    "The trajectory plan is missing one structured scientific role.",
+                    "The trajectory plan declares no owner for the "
+                    f"{role!r} role. {requirement.sentence()}",
                     role=role,
+                    required_method_family_tokens=list(requirement.method_tokens),
+                    qualifying_products=[
+                        sorted(group) for group in requirement.product_groups
+                    ],
                 )
             )
         else:
@@ -1105,13 +1229,33 @@ def evaluate_trajectory_plan_dag(
                     if len(producers) == 1
                 }
             )
-            if not manifest_inputs:
+            # This branch presumes one of two topologies: the representation
+            # reads wide window columns directly, or it reads a panel someone
+            # else built and therefore must consume that producer's manifest.
+            # A LONG-bound run has a third: the representation reads the bound
+            # long trajectory (stay_id / charttime / concept / value_num) and
+            # emits the window manifest ITSELF, because it is the step that
+            # chooses the windows. Requiring it to consume a manifest from an
+            # upstream producer asks it to import provenance it is the source
+            # of -- the same wide-topology assumption as the window-family rule
+            # below, one rule over.
+            representation_emits_the_manifest = long_trajectory_bound and any(
+                _is_window_manifest_product(product)
+                for product in _step_products(representation_step)
+            )
+            if representation_emits_the_manifest:
+                # It IS the window source: it reads the bound long trajectory
+                # and declares the windows it chose. There is no upstream
+                # producer to resolve, and no panel lineage to import.
+                pass
+            elif not manifest_inputs:
                 findings.append(
                     _finding(
                         "trajectory_window_manifest_missing",
                         "A representation built from an upstream panel must consume "
                         "a typed trajectory-window manifest from that panel's producer.",
                         step_id=representation_owner,
+                        long_trajectory_bound=long_trajectory_bound,
                     )
                 )
             elif len(manifest_producers) != 1:
@@ -1167,7 +1311,31 @@ def evaluate_trajectory_plan_dag(
             for family, windows in selected_by_family.items()
             if len(windows) >= 2
         }
-        if not multi_window_families:
+        # The ONLY way this rule can be satisfied is a declared input whose
+        # variable carries ``fixed_window_trajectory`` -- metadata inferred by
+        # parsing a wide column name (``<family>_h<start>_<end>``).  A run whose
+        # trajectory is bound in the LONG tier has no such column to parse:
+        # this module's own applicability docstring records that a run holding
+        # 19,067,154 verified trajectory rows "still presented zero trajectory
+        # variables here".  So for a long-bound run the rule applies and cannot
+        # be satisfied by any plan -- h3 has never passed step 01 in any
+        # recorded run, and this is why.
+        #
+        # This is the THIRD time the tier flag was threaded to one decision in
+        # this file and not another; the docstring above already records two.
+        # The waiver is narrow: the plan must still declare the window manifest,
+        # which is where a long-bound run's windows are recorded and where they
+        # are verified after the representation step actually runs. A long-bound
+        # plan that declares no manifest still fails, one line below.
+        long_tier_defers_windows_to_the_manifest = long_trajectory_bound and any(
+            _is_window_manifest_product(product)
+            for step in (representation_step, window_source_step)
+            for product in (
+                *_step_typed_inputs(step),
+                *_step_products(step),
+            )
+        )
+        if not multi_window_families and not long_tier_defers_windows_to_the_manifest:
             findings.append(
                 _finding(
                     "trajectory_window_family_not_resolved",
@@ -1177,6 +1345,7 @@ def evaluate_trajectory_plan_dag(
                     step_id=representation_owner,
                     window_source_step_id=window_source_step.step_id,
                     selected_families=sorted(selected_by_family),
+                    long_trajectory_bound=long_trajectory_bound,
                 )
             )
         available_by_family: Dict[str, List[Tuple[float, float, str]]] = defaultdict(
@@ -1231,10 +1400,17 @@ def trajectory_plan_dag_findings(
     *,
     plan: AnalysisPlan,
     context: ResearchContext,
+    long_trajectory_bound: bool = False,
 ) -> List[ValidationFinding]:
     """Return plan-contract errors for a stamped fixed-window trajectory DAG."""
 
-    return list(evaluate_trajectory_plan_dag(plan=plan, context=context).findings)
+    return list(
+        evaluate_trajectory_plan_dag(
+            plan=plan,
+            context=context,
+            long_trajectory_bound=long_trajectory_bound,
+        ).findings
+    )
 
 
 def _normalise_redundant_split_role_outputs(
@@ -1515,12 +1691,28 @@ def trajectory_planner_contract_guide(
     *,
     context: ResearchContext,
     analysis_type: object,
+    long_trajectory_bound: bool = False,
 ) -> str:
-    """Return the case-neutral planning schema for trajectory DAGs."""
+    """Return the case-neutral planning schema for trajectory DAGs.
 
-    if _normalise_token(analysis_type) != "trajectory_clustering" or not any(
-        variable.fixed_window_trajectory is not None
-        for variable in (context.variables or [])
+    ``long_trajectory_bound`` mirrors the parameter
+    :func:`trajectory_plan_contract_applies` already takes, and for the same
+    reason: a trajectory reaches this host in two representations, and only
+    the wide one leaves ``fixed_window_trajectory`` on a variable to find.
+    The gate learned that; this guide did not, so a run holding a bound long
+    trajectory was judged against a contract it was never shown -- the
+    Planner wrote one combined clustering-and-stability step, the gate
+    demanded two typed owners, and the whole plan was refused before any
+    step ran. The default keeps the wide-column behaviour byte-identical
+    for callers that cannot see the bound tier.
+    """
+
+    if _normalise_token(analysis_type) != "trajectory_clustering" or not (
+        long_trajectory_bound
+        or any(
+            variable.fixed_window_trajectory is not None
+            for variable in (context.variables or [])
+        )
     ):
         return ""
     return (
@@ -1550,11 +1742,42 @@ def trajectory_planner_contract_guide(
         "fit/assignment artifacts; it must not repeat selection tables, cluster "
         "sizes, profiles, outcomes, or figures. Connect separate owners through "
         "explicit typed producer/consumer edges. "
-        "If representation reads raw fixed-window columns directly, list them in "
-        "its inputs. If it instead reads an upstream aligned panel, the panel "
-        "producer must list the raw fixed-window columns in its inputs, produce "
-        "both the panel and `manifest:trajectory_window_manifest`, and the "
-        "representation owner must consume both. The manifest records ordered "
+        + (
+            # The wide tier only. A long-bound run has no `<family>_h<start>_<end>`
+            # column to list, so telling it to list them describes work it cannot
+            # do -- and the contract then refuses it for not having done it.
+            (
+                "If representation reads raw fixed-window columns directly, list "
+                "them in its inputs. If it instead reads an upstream aligned "
+                "panel, the panel producer must list the raw fixed-window columns "
+                "in its inputs, produce both the panel and "
+                "`manifest:trajectory_window_manifest`, and the representation "
+                "owner must consume both. "
+            )
+            if not long_trajectory_bound
+            else (
+                # MEASURED: rendered for a long-bound run this guide mentioned the
+                # long tier ZERO times -- no charttime, no value_num, no stay_id --
+                # while the contract refused the plan for windows only a wide run
+                # can declare. h3 never passed step 01 in any recorded run. One
+                # recorded plan happened to declare the manifest and one did not;
+                # neither was ever told to.
+                "This run's trajectory is bound as the LONG representation, not "
+                "as wide columns: one row per stay per time per concept, with "
+                "the observation time on each row. There are no "
+                "`<family>_h<start>_<end>` columns to list, so do NOT plan "
+                "around them. The host hands that table to the step's CODE at "
+                "runtime, the same way it hands over the cohort -- it is NOT a "
+                "listable step input and has no name in the executable roster, "
+                "so do NOT put it in `inputs` and do not invent a name for it. "
+                "Plan the representation owner to derive at least two fixed "
+                "windows from one concept family out of that table, and it MUST "
+                "declare `manifest:trajectory_window_manifest` among its own "
+                "expected_outputs -- it is the window source, so there is no "
+                "upstream producer to consume one from. "
+            )
+        )
+        + "The manifest records ordered "
         "source columns with family and window boundaries; it is provenance, not "
         "permission for the framework to choose a horizon, method, k, threshold, "
         "or missing-data policy.\n"
@@ -1572,35 +1795,70 @@ def trajectory_planner_contract_guide(
         "manifest:trajectory_missingness_policy, table:cluster_assignments, "
         "table:cluster_stability, table:cluster_stability_assignments, and "
         "table:cluster_assignment_provenance. The spec is your "
-        "scientific decision packet: set resampling_method="
-        "subsample_without_replacement; n_resamples; exactly one of "
-        "sample_fraction (<1) or sample_size; sample_fraction_rounding=floor; "
-        "base_seed; seed_derivation=numpy_seedsequence_spawn_uint32_v1; "
-        "cross_resample_membership=distinct_membership_required; "
-        "stability_metric=adjusted_rand_index; stability_aggregation=mean; "
-        "metric_label_source=raw_refit_labels_label_invariant; "
-        "evaluation_scope=sampled_overlap; "
-        "label_alignment=hungarian_maximum_overlap; "
-        "label_alignment_reference=frozen_candidate_assignments; "
-        "label_alignment_tie_break="
-        "minimum_rank_distance_then_lexicographic_v1; "
-        "final_assignment_policy=copy_selected_candidate_labels; "
-        "minimum_successful_resamples equal to n_resamples; "
-        "failed_refit_policy=record_once_no_retry; "
-        "refit_engine=easyicu_observed_data_diag_gmm_v1; "
-        "refit_initialization=random_balanced_assignments; refit_max_iter; "
-        "refit_tolerance; refit_regularization; decision_mode; optional "
-        "minimum_mean_stability; and "
-        "threshold_failure_action=fail_closed_require_planner_revision. The refit controls are a "
-        "new Planner-owned stability-refit contract, not a claim that a legacy "
-        "candidate artifact recorded an identical implementation. Use "
-        "decision_mode=report_only with no threshold when no binary stability "
-        "claim is intended; use minimum_mean_threshold with a threshold when "
-        "stability must gate freezing. A failed threshold must request a new "
-        "planner revision and must never make the calculator choose a different k. Leave "
+        "scientific decision packet, and it asks you only for the decisions "
+        "that are yours: n_resamples, and exactly one of sample_fraction (<1) "
+        "or sample_size. Add minimum_mean_stability only when mean stability "
+        "must gate freezing; leaving it out reports stability without making a "
+        "binary accept/reject claim, and a failed threshold requests a new "
+        "planner revision and never makes the calculator choose a different k. "
+        "You may also override the recorded defaults for base_seed, "
+        "refit_max_iter, refit_tolerance and refit_regularization. Declare "
+        "nothing else in the spec. The v1 calculator has exactly one "
+        "resampling scheme, one comparison metric, one label-alignment rule "
+        "and one refit engine, so those fields have exactly one legal value; "
+        "the host fills them in and records them in the spec and its digest. "
+        "Retyping them can only misspell them, and any field name outside the "
+        "spec is rejected rather than ignored. Leave "
         "trajectory_stability_spec null for other fit families or any monolithic "
         "candidate+stability step; those remain agent-coded and fail closed if "
         "unsupported."
+    )
+
+
+def non_trajectory_clustering_stability_guide(
+    *,
+    context: ResearchContext,
+    analysis_type: object,
+    long_trajectory_bound: bool = False,
+) -> str:
+    """Tell a group-discovery study without a trajectory how to declare stability.
+
+    The converse of :func:`trajectory_planner_contract_guide`, and gated on the
+    same predicate so exactly one of the two ever speaks.
+
+    ``m3_sepsis_subphenotype`` asks to cluster first-24h summaries -- one row
+    per stay, no trajectory in either representation -- and its task requires a
+    cluster-stability audit.  ``trajectory_stability_spec`` is the only typed
+    stability field a Planner can see, so it declared that, and the plan was
+    refused for attaching a stability spec with no validated fixed-window
+    trajectory contract behind it.  The study was asked for something it had no
+    legal way to declare.
+
+    The method registry already separates the two: ``cluster_stability`` is
+    ``llm_coded`` with no runner, and the trajectory entry's own notes say
+    "general cluster stability remains agent-coded".  That answer simply never
+    reached the Planner.
+    """
+
+    if _normalise_token(analysis_type) != "trajectory_clustering":
+        return ""
+    if long_trajectory_bound or any(
+        variable.fixed_window_trajectory is not None
+        for variable in (context.variables or [])
+    ):
+        # The fixed-window contract applies; the other guide speaks instead.
+        return ""
+    return (
+        "CLUSTER STABILITY WITHOUT A FIXED-WINDOW TRAJECTORY:\n"
+        "This run has no fixed-window trajectory in either representation, so "
+        "the typed trajectory stability calculator does not apply to it. Leave "
+        "`trajectory_stability_spec` null on every step: attaching it without a "
+        "validated fixed-window trajectory contract is refused, and that "
+        "refusal stops the whole plan. Declare the stability work as an "
+        f"ordinary analysis step with method `{_GENERAL_CLUSTER_STABILITY_METHOD}` "
+        "(bootstrap / consensus / adjusted Rand). It is agent-coded, so state "
+        "the resampling scheme, the agreement metric and the decision rule in "
+        "the step intent rather than in a typed spec."
     )
 
 
@@ -1608,10 +1866,34 @@ def trajectory_role_code_contract(
     *,
     context: ResearchContext,
     step: AnalysisStep,
+    applies: bool = True,
 ) -> str:
     """Return role-local schemas for an agent-decomposed trajectory DAG."""
 
-    del context  # Schema is selected from typed products, never task prose.
+    if not applies:
+        return ""
+
+    # The SCHEMA is still selected from typed products, never task prose. What
+    # the context supplies here is not a schema choice but a VOCABULARY: the
+    # exact concept ids materialized in the bound trajectory.
+    #
+    # verify42 is why. The bound table held sofa2, sofa2_resp, sofa2_coag,
+    # sofa2_liver, sofa2_cardio, sofa2_cns, sofa2_renal and lact -- all eight
+    # present, none unavailable -- and the script queried sofa_resp, sofa_coag,
+    # sofa_liver: every name one character off, built from the question's phrase
+    # "SOFA components and lactate". Telling it to read the column helped
+    # (verify43 began using sofa2) but left it still assembling names. Naming
+    # them removes the guess.
+    materialized_concepts: Tuple[str, ...] = ()
+    trajectory_input = getattr(
+        getattr(context, "materialized_inputs", None), "trajectory", None
+    )
+    if trajectory_input is not None:
+        materialized_concepts = tuple(
+            str(item)
+            for item in (getattr(trajectory_input, "materialized_concepts", None) or ())
+            if str(item).strip()
+        )
     products = _step_products(step)
     declarations = {product for _kind, product in products}
     sections: List[str] = []
@@ -1628,13 +1910,24 @@ def trajectory_role_code_contract(
             "window_end_hours. Derive these fields from the declared source "
             "inputs. Do not silently omit an internal available bin."
         )
+    if materialized_concepts and (
+        window_manifests or "trajectory_membership" in declarations
+    ):
+        sections.append(
+            "BOUND TRAJECTORY VOCABULARY: the long trajectory input materializes "
+            "exactly these concept ids, and its `concept` column contains these "
+            f"values verbatim: {', '.join(sorted(materialized_concepts))}. Select "
+            "the families your role needs from THIS list by exact string; do not "
+            "derive a concept id from the research question's wording, and do not "
+            "report a family as absent without checking this list first."
+        )
     if "trajectory_membership" in declarations:
         sections.append(
             "REPRESENTATION ROLE: write trajectory_membership.csv with the "
             "agent-selected id column plus observed_window_count, "
             "meets_min_observed_windows, included_in_clustering, and "
             "exclusion_reason. In step_summary.json also declare "
-            "observation_family, ordered observation_columns, "
+            "observation_family, observation_columns (in model order), "
             "min_observed_windows, profile_columns, "
             "profile_summary_statistic (mean or median), time_axis='relative_hours', "
             "anchor, anchor_provenance, anchor_source, and trailing_na_policy. "
@@ -1690,11 +1983,14 @@ def trajectory_role_code_contract(
             "separate stability owner must also preserve the selected method "
             "family, exact representation_columns, selected_n_clusters (or the "
             "full cluster_selection object), id_column, and candidate assignment "
-            "labels. Copy id_column into the cluster-selection manifest and candidate "
-            "model metadata so a downstream stability owner never has to guess it. "
-            "Give every candidate model record a stable model_id and copy the chosen "
-            "record's id into cluster_selection.selected_model_id. Also copy the exact "
-            "clustering_method/model_family into the cluster-selection manifest. "
+            "labels. cluster_selection.json is a closed selection-only manifest: "
+            "write only criterion, selection_rule, direction, selected_n_clusters, "
+            "candidates, and rationale. Do not add role, id_column, "
+            "clustering_method, model_family, fit_method, or selected_model_id to "
+            "that manifest. Give every candidate model record a stable model_id; "
+            "the exact identifier, method, and selected-model metadata belong in "
+            "the candidate solution schema and candidate model metadata so a "
+            "downstream stability owner never has to guess them. "
             "Consume trajectory_representation_schema.json and write "
             "candidate_cluster_solution_schema.json with "
             "schema_version='easyicu.candidate_cluster_solution_schema/2', its exact id_column and "
@@ -1777,7 +2073,7 @@ def trajectory_role_code_contract(
             "unchanged packet to the current upstream evidence digests. The executor "
             "must not supply any missing resampling, seed, refit, comparison, "
             "alignment, or decision field. Write trajectory_missingness_policy.json "
-            "with id_column, observation_family, ordered observation_columns, "
+            "with id_column, observation_family, observation_columns (in model order), "
             "the exact model representation_columns, min_observed_windows, "
             "profile_columns, profile_summary_statistic, "
             "clustering_method, n_clusters, time_axis='relative_hours', anchor, "
@@ -1824,10 +2120,14 @@ __all__ = [
     "STABILITY_EXECUTOR_INPUTS",
     "STABILITY_EXECUTOR_OUTPUTS",
     "TRAJECTORY_STABILITY_METHOD_HEAD",
+    "non_trajectory_clustering_stability_guide",
     "TrajectoryPlanDagEvaluation",
     "augment_trajectory_plan_products",
     "evaluate_trajectory_plan_dag",
+    "TrajectoryRoleRequirement",
+    "role_declaration_requirement",
     "trajectory_plan_contract_applies",
+    "trajectory_context_is_bound",
     "trajectory_plan_dag_findings",
     "trajectory_planner_contract_guide",
     "trajectory_role_code_contract",

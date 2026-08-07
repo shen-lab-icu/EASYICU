@@ -59,11 +59,20 @@ from .plausibility_receipt import (
     CANONICAL_STEP_SUMMARY_FILENAME,
     HOST_OUTPUT_DIR_ENV_KEYS,
     POLICY_CONTRACT_KEY,
+    RECEIPT_ABOVE_FIELD,
+    RECEIPT_BELOW_FIELD,
     RECEIPT_CONTRACT_SENTENCE,
     RECEIPT_POLICY_VALUE,
     RECEIPT_SUMMARY_KEY,
+    RECEIPT_TOTAL_FIELD,
     REPAIR_RECEIPT_MARKER,
     step_is_under_the_flag_only_obligation,
+)
+
+#: The three counts the receipt owes for one column, imported from the module
+#: that defines the contract rather than restated here.
+_RECEIPT_COUNT_FIELDS: frozenset[str] = frozenset(
+    {RECEIPT_BELOW_FIELD, RECEIPT_ABOVE_FIELD, RECEIPT_TOTAL_FIELD}
 )
 
 #: The bound keys inside that contract, in both the sealed mapping spelling
@@ -188,7 +197,9 @@ class _RuntimeReachability:
         while True:
             grew = False
             for node in ast.walk(self.tree):
-                if id(node) not in self.active_node_ids or not isinstance(node, ast.Call):
+                if id(node) not in self.active_node_ids or not isinstance(
+                    node, ast.Call
+                ):
                     continue
                 callee = node.func
                 if isinstance(callee, ast.Name):
@@ -1102,6 +1113,52 @@ def _initialises_an_accumulator(node: ast.AST) -> bool:
     return False
 
 
+def _seeds_a_zero_receipt(node: ast.AST) -> bool:
+    """Whether a populated literal is the all-zero receipt, not a replacement.
+
+    ``_initialises_an_accumulator`` recognises ``audit = {}``; it refuses a
+    populated literal, and the reason it gives is sound -- rebinding a name to
+    a hand-written record after the real one was computed is the documented
+    payload bypass.
+
+    But the obligation's own message demands the counts "on every path,
+    including when every count is 0: a count of zero is a result, and its
+    absence cannot be told apart from never having looked."  The natural --
+    and instructed -- way to guarantee that is to seed the zero-valued receipt
+    up front and overwrite it once the range is read.  E3's
+    ``05_ordinal_trend_audit`` did exactly that, wrote a conforming
+    ``step_summary.json``, and was quarantined for it after two wasted repair
+    attempts: the seed is a populated literal, so the name was never certified
+    and the compliant write read as ``flag_evidence: local_only``.
+
+    So this recognises exactly one populated shape: a mapping whose every
+    value is a per-column record carrying all three counts as literal zero.  A
+    literal with any non-zero count is still a replacement, because that is
+    the fabrication the certification rule exists to catch.  Ordering does the
+    rest -- see :meth:`_FlagFlow._seeds_before_it_is_filled`; a zero receipt
+    written *after* the real one is still a replacement.
+    """
+
+    if not isinstance(node, ast.Dict) or not node.keys:
+        return False
+    for value in node.values:
+        if not isinstance(value, ast.Dict):
+            return False
+        counts = {
+            key.value: item
+            for key, item in zip(value.keys, value.values)
+            if isinstance(key, ast.Constant) and key.value in _RECEIPT_COUNT_FIELDS
+        }
+        if set(counts) != _RECEIPT_COUNT_FIELDS:
+            return False
+        if any(
+            not isinstance(item, ast.Constant) or item.value != 0
+            for item in counts.values()
+        ):
+            return False
+    return True
+
+
 def _writer_functions(
     tree: ast.AST,
     *,
@@ -1214,12 +1271,34 @@ def _expected_data_column_literals(
     }
 
 
+def _iteration_clauses(node: ast.AST) -> Optional[list[tuple[ast.AST, ast.AST]]]:
+    """The ``(target, iterable)`` pairs a loop-like construct binds, else ``None``.
+
+    A comprehension is a loop.  ``{c: receipt(frame[c], contracts[c]) for c in
+    SCOPE}`` and the ``for`` statement that builds the same dict are the same
+    program, and a check that credits one and refuses the other is refusing a
+    spelling, not a defect.  M3 lost step 03 on canary7 to exactly that: the
+    generated code declared a per-column helper, called it from a dict
+    comprehension over a seven-literal scope list, and was reported with
+    ``covered_columns=[]``.  Rewriting the comprehension as a ``for`` -- one
+    statement, same names, same helper -- took it to seven of seven.
+
+    A comprehension may bind more than once (``for a in X for b in Y``), so
+    every generator is returned rather than the first.
+    """
+
+    if isinstance(node, (ast.For, ast.AsyncFor)):
+        return [(node.target, node.iter)]
+    if isinstance(node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
+        return [(generator.target, generator.iter) for generator in node.generators]
+    return None
+
+
 def _target_names(node: ast.AST) -> Set[str]:
     return {
         inner.id
         for inner in ast.walk(node)
-        if isinstance(inner, ast.Name)
-        and isinstance(inner.ctx, (ast.Store, ast.Del))
+        if isinstance(inner, ast.Name) and isinstance(inner.ctx, (ast.Store, ast.Del))
     }
 
 
@@ -1324,8 +1403,7 @@ def _comparison_scope_coverage(
                 pending.extend(
                     inner.id
                     for inner in ast.walk(value)
-                    if isinstance(inner, ast.Name)
-                    and isinstance(inner.ctx, ast.Load)
+                    if isinstance(inner, ast.Name) and isinstance(inner.ctx, ast.Load)
                 )
         return seen_names
 
@@ -1353,10 +1431,9 @@ def _comparison_scope_coverage(
             return None
         return right if left_is_bound else comparison.left
 
-    def _loop_contract_key_names(loop: ast.For | ast.AsyncFor) -> Set[str]:
+    def _loop_contract_key_names(target: ast.AST, iterator: ast.AST) -> Set[str]:
         """Names that identify a contract key in this mapping iteration."""
 
-        iterator = loop.iter
         if isinstance(iterator, ast.Call) and isinstance(
             iterator.func,
             ast.Attribute,
@@ -1364,10 +1441,61 @@ def _comparison_scope_coverage(
             if iterator.func.attr == "values":
                 return set()
             if iterator.func.attr == "items":
-                if isinstance(loop.target, (ast.Tuple, ast.List)) and loop.target.elts:
-                    return _target_names(loop.target.elts[0])
+                if isinstance(target, (ast.Tuple, ast.List)) and target.elts:
+                    return _target_names(target.elts[0])
                 return set()
-        return _target_names(loop.target)
+        return _target_names(target)
+
+    def _credit_from_enclosing_loop(comparison: ast.Compare) -> Set[str]:
+        """Columns the loop this comparison sits in proves it covered.
+
+        Runs for a comparison written straight into a step body and for one
+        written inside a function.  It used to run only in the first case, and
+        M3 lost step 04 on canary6 to the difference: its loop is inside
+        ``main``, so ``_owner`` was not None and the loop was never looked at.
+        The code was::
+
+            for column in PLAUSIBILITY_SCOPE:      # six literals
+                contract = raw_contracts.get(column)
+                ... numeric < float(minimum) ...
+
+        which names every column *more* precisely than iterating the mapping,
+        and was reported with ``covered_columns=[]``.  ``column`` is a loop
+        target rather than an assignment, so the upstream walk could never
+        reach the literal list on its own.
+
+        No boundary parameter: a comparison inside a helper walks up to that
+        helper's ``FunctionDef`` and then to the module, never to the call
+        site, which lives elsewhere in the tree.  A stop-at-owner guard was
+        written here and deleted after mutation showed it could not change any
+        answer -- a per-column helper is still judged by its own call sites,
+        below, because that is a different walk.
+        """
+
+        found: Set[str] = set()
+        data_operand = _data_operand(comparison)
+        if data_operand is None:
+            return found
+        upstream = _upstream_names(data_operand)
+        current = parent.get(id(comparison))
+        while current is not None:
+            clauses = _iteration_clauses(current)
+            if clauses is not None:
+                for target, iterator in clauses:
+                    if _loop_contract_key_names(target, iterator).intersection(
+                        upstream
+                    ):
+                        found.update(_upstream_literals(iterator))
+                        if _reads_the_raw_contract_mapping(iterator, assignments):
+                            found.update(expected)
+                # Only a statement loop ends the walk, exactly as before a
+                # comprehension was recognised at all.  Breaking on the
+                # comprehension too would stop short of an enclosing ``for``
+                # that used to be credited, turning an addition into a loss.
+                if isinstance(current, (ast.For, ast.AsyncFor)):
+                    break
+            current = parent.get(id(current))
+        return found
 
     covered: Set[str] = set()
     for comparison in comparisons:
@@ -1380,24 +1508,10 @@ def _comparison_scope_coverage(
             if current is not None:
                 statement = current
             covered.update(_upstream_literals(statement))
-            data_operand = _data_operand(comparison)
-            current = parent.get(id(comparison))
-            while current is not None:
-                if isinstance(current, (ast.For, ast.AsyncFor)):
-                    key_names = _loop_contract_key_names(current)
-                    if (
-                        data_operand is not None
-                        and key_names.intersection(_upstream_names(data_operand))
-                        and _reads_the_raw_contract_mapping(
-                            current.iter,
-                            assignments,
-                        )
-                    ):
-                        covered.update(expected)
-                    break
-                current = parent.get(id(current))
+            covered.update(_credit_from_enclosing_loop(comparison))
             continue
 
+        covered.update(_credit_from_enclosing_loop(comparison))
         covered.update(_expected_data_column_literals(owner, expected))
         owner_calls = [
             call
@@ -1406,25 +1520,23 @@ def _comparison_scope_coverage(
         ]
         for call in owner_calls:
             covered.update(_expected_column_literals(call, expected))
+            call_names = {
+                inner.id
+                for argument in _call_arguments(call)
+                for inner in ast.walk(argument)
+                if isinstance(inner, ast.Name) and isinstance(inner.ctx, ast.Load)
+            }
             current = parent.get(id(call))
             while current is not None and current is not owner:
-                if isinstance(current, (ast.For, ast.AsyncFor)):
-                    loop_names = _target_names(current.target)
-                    call_names = {
-                        inner.id
-                        for argument in _call_arguments(call)
-                        for inner in ast.walk(argument)
-                        if isinstance(inner, ast.Name)
-                        and isinstance(inner.ctx, ast.Load)
-                    }
-                    if loop_names.intersection(call_names):
-                        covered.update(_upstream_literals(current.iter))
-                        if _reads_the_raw_contract_mapping(
-                            current.iter,
-                            assignments,
-                        ):
-                            covered.update(expected)
-                    break
+                clauses = _iteration_clauses(current)
+                if clauses is not None:
+                    for target, iterator in clauses:
+                        if _target_names(target).intersection(call_names):
+                            covered.update(_upstream_literals(iterator))
+                            if _reads_the_raw_contract_mapping(iterator, assignments):
+                                covered.update(expected)
+                    if isinstance(current, (ast.For, ast.AsyncFor)):
+                        break
                 current = parent.get(id(current))
     return covered
 
@@ -1610,10 +1722,48 @@ class _FlagFlow:
                 certified.add(key)
         return certified
 
+    def _seeds_before_it_is_filled(self, name: str, payload: ast.AST) -> bool:
+        """Whether an all-zero receipt literal is followed by the real record.
+
+        Order is the whole distinction, and it is why this is not simply
+        folded into :func:`_seeds_a_zero_receipt`.  Seed-then-fill::
+
+            audit = {col: {..., "out_of_range_n": 0}}   # every path covered
+            audit[col] = {..., "out_of_range_n": n}     # the real counts
+
+        is the shape the contract asks for.  The reverse::
+
+            audit = {col: {..., "out_of_range_n": n}}   # computed
+            audit = {col: {..., "out_of_range_n": 0}}   # fabricated zero
+
+        is the payload bypass the certification rule was written to catch, and
+        it must keep failing.  Both spell the same two literals; only which one
+        runs last decides whether the artifact holds a real count.
+        """
+
+        if not _seeds_a_zero_receipt(payload):
+            return False
+        seed = (getattr(payload, "lineno", 0), getattr(payload, "col_offset", 0))
+        for node in self._nodes():
+            if not isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
+                continue
+            value = getattr(node, "value", None)
+            if value is None or name not in self._assigned_names(node):
+                continue
+            if not self._carries(value):
+                continue
+            if (node.lineno, node.col_offset) > seed:
+                return True
+        return False
+
     def _binding_survives(self, name: str, binding: tuple) -> bool:
         kind, payload = binding
         if kind == "value":
-            return self._carries(payload) or _initialises_an_accumulator(payload)
+            return (
+                self._carries(payload)
+                or _initialises_an_accumulator(payload)
+                or self._seeds_before_it_is_filled(name, payload)
+            )
         if kind == "param":
             values = self.destinations.arguments.get((id(payload), name))
             return bool(values) and all(
@@ -2031,9 +2181,7 @@ def _tests_the_declared_action(
     if len(literal_positions) != 1:
         return None
     other = operands[1 - literal_positions[0]]
-    if not (
-        isinstance(other, ast.Name) and other.id in policy_action_names
-    ):
+    if not (isinstance(other, ast.Name) and other.id in policy_action_names):
         return None
     return isinstance(node.ops[0], ast.Eq)
 
@@ -2098,9 +2246,7 @@ def _query_expression_reads_a_declared_bound(
     ):
         return True
     for inner in ast.walk(node):
-        if not (
-            isinstance(inner, ast.Constant) and isinstance(inner.value, str)
-        ):
+        if not (isinstance(inner, ast.Constant) and isinstance(inner.value, str)):
             continue
         if any(
             re.search(
@@ -2149,30 +2295,20 @@ def _flag_only_range_transform(
     if operation == "drop":
         selectors = [
             *positional,
-            *(
-                value
-                for key, value in keywords.items()
-                if key in {"index", "labels"}
-            ),
+            *(value for key, value in keywords.items() if key in {"index", "labels"}),
         ]
         return operation if any(flow.rejects_on(value) for value in selectors) else None
 
     if operation in {"where", "mask"}:
         condition = positional[0] if positional else keywords.get("cond")
         return (
-            operation
-            if condition is not None and flow.rejects_on(condition)
-            else None
+            operation if condition is not None and flow.rejects_on(condition) else None
         )
 
     if operation == "clip":
         candidates = [
             *positional[:2],
-            *(
-                value
-                for key, value in keywords.items()
-                if key in {"lower", "upper"}
-            ),
+            *(value for key, value in keywords.items() if key in {"lower", "upper"}),
         ]
         return (
             operation
