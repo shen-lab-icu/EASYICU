@@ -1685,9 +1685,16 @@ def _urine_rate_window_avg_multi(
         )
     else:
         merged = urine[id_cols + [time_col, "urine"]].copy()
-        valid_weight = pd.to_numeric(weight["weight"], errors="coerce").dropna()
+        from easyicu.urine_weight_linkage import resolve_unkeyed_single_entity_weight
+
+        resolution = resolve_unkeyed_single_entity_weight(
+            urine,
+            weight,
+            urine_id_columns=id_cols,
+            weight_column="weight",
+        )
         merged["weight"] = (
-            valid_weight.iloc[0] if not valid_weight.empty else np.nan
+            resolution.weight if resolution.weight is not None else np.nan
         )
 
     merged["urine"] = pd.to_numeric(merged["urine"], errors="coerce")
@@ -1872,15 +1879,21 @@ def _urine_window_avg(
         if common_ids:
             merged = pd.merge(urine, weight, on=common_ids, how='left', suffixes=('', '_weight'))
         else:
-            # ID列不匹配，尝试广播weight（假设只有一个患者）
             merged = urine.copy()
-            if 'weight' in weight.columns and len(weight) > 0:
-                merged['weight'] = weight['weight'].iloc[0]
+            from easyicu.urine_weight_linkage import resolve_unkeyed_single_entity_weight
+
+            resolution = resolve_unkeyed_single_entity_weight(
+                urine,
+                weight,
+                urine_id_columns=id_cols,
+                weight_column="weight",
+            )
+            merged['weight'] = (
+                resolution.weight if resolution.weight is not None else np.nan
+            )
     else:
-        # 如果还是没有ID列，直接使用urine数据（假设只有一个患者）
         merged = urine.copy()
-        if 'weight' in weight.columns and len(weight) > 0:
-            merged['weight'] = weight['weight'].iloc[0]
+        merged['weight'] = np.nan
     
     # Handle weight time column
     if 'charttime_weight' in merged.columns:
@@ -1992,8 +2005,17 @@ def _urine_window_avg_multi(
         merged = pd.merge(urine, weight, on=common_ids, how='left', suffixes=('', '_weight'))
     else:
         merged = urine.copy()
-        if 'weight' in weight.columns and len(weight) > 0:
-            merged['weight'] = weight['weight'].iloc[0]
+        from easyicu.urine_weight_linkage import resolve_unkeyed_single_entity_weight
+
+        resolution = resolve_unkeyed_single_entity_weight(
+            urine,
+            weight,
+            urine_id_columns=id_cols,
+            weight_column="weight",
+        )
+        merged['weight'] = (
+            resolution.weight if resolution.weight is not None else np.nan
+        )
     
     if 'charttime_weight' in merged.columns:
         merged = merged.sort_values(id_cols + [time_col])

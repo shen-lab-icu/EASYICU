@@ -112,6 +112,26 @@ def test_hirid_rate_windows_apply_recorded_rate_to_preceding_interval():
     assert result["uo_12h"].loc[1, "uo_12h"] == pytest.approx(10.0)
 
 
+def test_rate_windows_refuse_first_weight_when_entities_are_not_joinable():
+    urine = pd.DataFrame(
+        {
+            "stay_id": [1] * 4 + [2] * 4,
+            "charttime": [pd.Timedelta(hours=h) for h in range(4)] * 2,
+            "urine": [50.0] * 8,
+        }
+    )
+    weight = pd.DataFrame({"patientid": [100, 200], "weight": [50.0, 100.0]})
+
+    result = _urine_rate_window_avg_multi(
+        urine,
+        weight,
+        windows=[(3, 3)],
+        interval=pd.Timedelta(hours=1),
+    )["uo_3h"]
+
+    assert result["uo_3h"].isna().all()
+
+
 def test_urine_window_avg_one_hour_window_returns_per_row_ml_per_kg_per_hour():
     urine = pd.DataFrame(
         {
