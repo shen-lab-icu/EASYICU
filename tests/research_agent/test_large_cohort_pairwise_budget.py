@@ -446,6 +446,65 @@ score = deterministic_silhouette(
     )
 
 
+def test_large_cohort_accepts_choice_sampler_with_default_cap() -> None:
+    code = f"""\
+import numpy as np
+from sklearn.metrics import silhouette_score
+
+MAX_SILHOUETTE_SAMPLE = {PAIRWISE_EVALUATION_MAX_SAMPLE_SIZE}
+
+def deterministic_silhouette(matrix, labels, seed, max_sample_size=MAX_SILHOUETTE_SAMPLE):
+    matrix = np.asarray(matrix, dtype=float)
+    labels = np.asarray(labels)
+    sample_size = min(int(max_sample_size), int(matrix.shape[0]))
+    if sample_size < matrix.shape[0]:
+        rng = np.random.default_rng(int(seed))
+        indices = np.sort(rng.choice(matrix.shape[0], size=sample_size, replace=False))
+        sampled_labels = labels[indices]
+    else:
+        indices = np.arange(matrix.shape[0])
+        sampled_labels = labels[indices]
+    if len(np.unique(sampled_labels)) < 2:
+        raise ValueError("sample contains fewer than two clusters")
+    return silhouette_score(matrix[indices], sampled_labels)
+
+score = deterministic_silhouette(feature_matrix, cluster_labels, seed=1729)
+"""
+
+    assert not _budget_violations(
+        code,
+        n_stays=PAIRWISE_EVALUATION_FULL_COHORT_MAX_ROWS + 50_000,
+    )
+
+
+def test_large_cohort_rejects_choice_sampler_overwritten_after_branch() -> None:
+    code = f"""\
+import numpy as np
+from sklearn.metrics import silhouette_score
+
+MAX_SILHOUETTE_SAMPLE = {PAIRWISE_EVALUATION_MAX_SAMPLE_SIZE}
+
+def deterministic_silhouette(matrix, labels, seed, max_sample_size=MAX_SILHOUETTE_SAMPLE):
+    sample_size = min(int(max_sample_size), int(matrix.shape[0]))
+    if sample_size < matrix.shape[0]:
+        rng = np.random.default_rng(int(seed))
+        indices = rng.choice(matrix.shape[0], size=sample_size, replace=False)
+    else:
+        indices = np.arange(matrix.shape[0])
+    indices = np.arange(matrix.shape[0])
+    return silhouette_score(matrix[indices], labels[indices])
+
+score = deterministic_silhouette(feature_matrix, cluster_labels, seed=1729)
+"""
+
+    violations = _budget_violations(
+        code,
+        n_stays=PAIRWISE_EVALUATION_FULL_COHORT_MAX_ROWS + 50_000,
+    )
+    assert len(violations) == 1
+    assert violations[0]["matched_patterns"] == ["sample_size", "random_state"]
+
+
 def test_large_cohort_rejects_unseeded_explicit_subset() -> None:
     code = f"""\
 import numpy as np

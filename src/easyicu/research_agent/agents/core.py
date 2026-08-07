@@ -4061,6 +4061,13 @@ def _repair_specialization(
             "standardized version of a value, export the upstream raw value "
             "row-aligned; the rescaling is a rendering choice reproducible from "
             "it and does not belong in the bundle as a second value column.\n"
+            "  SCALAR STATISTIC EXCEPTION: when a bound `statistic:<product>` "
+            "parent's exact JSON product contract declares the root keys "
+            "`name` and `value`, preserve those exact keys in its one-row source "
+            "CSV (with the bound product identity). The generic `value` name is "
+            "then the upstream schema, not an invented replacement column. Do "
+            "not rename it to `estimate`, `score`, or another guessed alias; do "
+            "not mix that scalar row with table-derived value vectors.\n"
         )
 
     if RepairRoute.STRUCTURAL_ACCOUNTING in repair_routes:

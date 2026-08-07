@@ -406,6 +406,84 @@ def main():
     ]
 
 
+def test_direct_bound_figure_repair_uses_frame_returned_by_typed_loader(
+    tmp_path: Path,
+) -> None:
+    parent_path = tmp_path / "feature_quality_scaling.csv"
+    pd.DataFrame({"feature": ["heart_rate"], "n_total": [10]}).to_csv(
+        parent_path, index=False
+    )
+    code = f"""
+from pathlib import Path
+import pandas as pd
+
+OUT_DIR = Path({str(tmp_path)!r})
+
+def _load_typed_table(manifest, input_key):
+    source_path = Path({str(parent_path)!r})
+    loaded_df = pd.read_csv(source_path)
+    return loaded_df, {{"input_key": input_key, "source_table": source_path.name}}
+
+def make_figure_contract(**kwargs):
+    return kwargs
+
+def save_publication_figure(*, fig, out_dir, stem, contract):
+    return None
+
+def main():
+    input_key = "table:feature_quality_scaling"
+    df, input_receipt = _load_typed_table({{}}, input_key)
+    source_name = "feature_quality_source_data.csv"
+    df.assign(value=df["n_total"] * 2).to_csv(OUT_DIR / source_name, index=False)
+    contract = make_figure_contract(
+        figure_id="figure:feature_quality",
+        source_data=source_name,
+    )
+    save_publication_figure(
+        fig=None,
+        out_dir=OUT_DIR,
+        stem="feature_quality",
+        contract=contract,
+    )
+    return contract
+"""
+    finding = {
+        "validator": "figure_source_data",
+        "severity": "error",
+        "detail": {
+            "best_mismatch": {
+                "reason": "no_verifiable_values",
+                "upstream_table": "feature_quality_scaling.csv",
+            }
+        },
+    }
+
+    repair = deterministic_contract_repair(code=code, findings=[finding])
+
+    assert repair is not None
+    repair_id, repaired = repair
+    assert repair_id == "direct_bound_figure_source_projection_v1"
+    # The loader's local ``loaded_df`` must not be used in the caller's
+    # projection; the tuple-returned ``df`` is the only frame in scope there.
+    assert "_easyicu_direct_bound_frame = df.copy(deep=True)" in repaired
+    assert "_easyicu_direct_bound_frame = loaded_df.copy(deep=True)" not in repaired
+    namespace: dict[str, object] = {}
+    exec(repaired, namespace)
+    contract = namespace["main"]()
+    assert contract["source_data"] == [
+        "bound_000_feature_quality_scaling_source_data.csv"
+    ]
+    projection = pd.read_csv(tmp_path / contract["source_data"][0])
+    assert projection.to_dict(orient="records") == [
+        {
+            "source_row_index": 0,
+            "source_table": "feature_quality_scaling.csv",
+            "feature": "heart_rate",
+            "n_total": 10,
+        }
+    ]
+
+
 def test_direct_bound_figure_repair_resolves_single_manual_tabular_loader(
     tmp_path: Path,
 ) -> None:

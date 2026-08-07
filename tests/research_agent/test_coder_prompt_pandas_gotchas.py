@@ -14,6 +14,18 @@ def test_coder_prompt_names_pandas_categorical_codes_gotcha() -> None:
     assert 'pd.Series(x).astype("category").cat.codes' in coder_prompt
 
 
+def test_coder_prompt_separates_cluster_artifact_and_seed_semantics() -> None:
+    from easyicu.research_agent.providers.prompts import load_prompt_pack
+
+    coder_prompt = load_prompt_pack()["coder"]
+
+    assert "upstream typed feature-matrix artifact" in coder_prompt
+    assert "do not refit, re-standardize" in coder_prompt
+    assert "estimator-fit seeds" in coder_prompt
+    assert "deterministic seed used to sample rows" in coder_prompt
+    assert "prespecified stability decision rule" in coder_prompt
+
+
 def test_coder_prompt_closes_categorical_distribution_denominators() -> None:
     from easyicu.research_agent.providers.prompts import load_prompt_pack
 
@@ -321,6 +333,17 @@ def test_coder_prompt_prevents_resume_evidence_polluting_figure_rendering() -> N
     assert "<figure_stem>_source_data.csv" in coder_prompt
     assert "matching PNG, SVG, PDF, and TIFF" in coder_prompt
     assert "one local CSV basename" in coder_prompt
+
+
+def test_coder_prompt_preserves_exact_scalar_statistic_source_schema() -> None:
+    from easyicu.research_agent.providers.prompts import load_prompt_pack
+
+    coder_prompt = load_prompt_pack()["coder"]
+
+    assert "scalar-statistic branch" in coder_prompt
+    assert "`value` is the upstream JSON schema key" in coder_prompt
+    normalized = " ".join(coder_prompt.split())
+    assert "do not reject, rename, or mix" in normalized
     assert "Never put a dict" in coder_prompt
     assert "absolute path, or path metadata" in coder_prompt
     assert "EASYICU_RUN_DIR" in coder_prompt
