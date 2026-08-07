@@ -591,10 +591,11 @@ def extract_study_intent(
         )
         return baseline
 
-    # Keep any slot the deterministic reader grounded in a real concept id when
-    # the model left it unread: reading more is allowed, reading less is not.
+    # A deterministic read is grounded directly in the user's own wording.
+    # The optional model may fill only unread slots; it may not reinterpret or
+    # overwrite a slot that the deterministic reader has already established.
     for name in SLOTS:
-        if slots[name]["value"] in (None, "") and baseline["slots"][name]["value"]:
+        if baseline["slots"][name]["value"] not in (None, ""):
             slots[name] = baseline["slots"][name]
 
     result = _finalize(question=text, slots=slots, source="llm", notes=[])

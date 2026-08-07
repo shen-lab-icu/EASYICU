@@ -260,10 +260,39 @@ def test_valid_llm_output_is_used_and_never_loses_a_deterministic_read(monkeypat
         ),
     )
     assert result["source"] == "llm"
-    assert result["slots"]["population"]["value"] == "Sepsis-3 adults"
+    assert result["slots"]["population"]["value"] == "Sepsis-3 patients"
     # The model left the window unread; the deterministic reader had nothing
     # either, so it must stay unread rather than acquire a default.
     assert "time_window_hours" in result["unread"]
+
+
+def test_llm_cannot_overwrite_a_deterministic_study_slot(monkeypatch):
+    monkeypatch.setattr(
+        study_intent.provider_adapter,
+        "_load_external_credentials",
+        lambda *a, **k: {"model": "m", "api_key": "k", "base_url": "https://x/v1/chat/completions"},
+    )
+    result = study_intent.extract_study_intent(
+        "Does early lactate predict in-hospital mortality?",
+        llm_provider="openai",
+        external_llm_opt_in=True,
+        ai_enabled=True,
+        transport=lambda req, hdr: _llm_response(
+            {
+                "population": "all admissions",
+                "exposure": "vasopressor dose",
+                "outcome": "ICU length of stay",
+                "outcome_type": "continuous",
+                "time_window_hours": None,
+                "comparator": None,
+                "analysis_family": "prediction",
+            }
+        ),
+    )
+
+    values = _values(result)
+    assert values["exposure"] == "lact"
+    assert values["outcome"] == "death"
 
 
 def test_llm_prompt_forbids_guessing(monkeypatch):
