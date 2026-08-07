@@ -30,7 +30,7 @@ Author: EasyICU Team
 Date: 2026-01-26
 """
 
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Mapping
 import pandas as pd
 import numpy as np
 import logging
@@ -39,6 +39,139 @@ from easyicu.io.ts_utils import _infer_numeric_time_unit
 from easyicu.urine_weight_linkage import resolve_unkeyed_single_entity_weight
 
 logger = logging.getLogger(__name__)
+
+
+KDIGO_ASCERTAINMENT_STATES = frozenset(
+    {
+        "positive",
+        "negative_complete",
+        "partial_no_observed_positive",
+        "indeterminate",
+    }
+)
+KDIGO_OBSERVATION_COVERAGE_STATES = frozenset(
+    {"complete", "partial", "indeterminate"}
+)
+
+
+class KDIGOComponentError(RuntimeError):
+    """A technical component failure that must not masquerade as missing data."""
+
+    def __init__(self, *, component: str, reason_code: str, message: str) -> None:
+        self.component = component
+        self.reason_code = reason_code
+        super().__init__(
+            f"{message} (component={component}, reason_code={reason_code})"
+        )
+
+
+class KDIGOComponentLoadError(KDIGOComponentError):
+    """A source could not be loaded reliably."""
+
+
+class KDIGOComponentSchemaError(KDIGOComponentError):
+    """A non-empty component did not satisfy the required table contract."""
+
+
+class KDIGOComponentCalculationError(KDIGOComponentError):
+    """A declared component failed while its phenotype was being calculated."""
+
+
+def _strict_numeric_component(
+    values: pd.Series,
+    *,
+    component: str,
+    reason_code: str,
+    field_name: str,
+) -> pd.Series:
+    """Convert declared numeric evidence without turning bad text into missingness."""
+
+    numeric = pd.to_numeric(values, errors="coerce")
+    conversion_loss = values.notna() & numeric.isna()
+    nonfinite = numeric.notna() & ~np.isfinite(numeric.astype(float))
+    if conversion_loss.any() or nonfinite.any():
+        raise KDIGOComponentSchemaError(
+            component=component,
+            reason_code=reason_code,
+            message=f"KDIGO {field_name} contains a non-numeric or non-finite value",
+        )
+    return numeric
+
+
+def _strict_time_component(
+    values: pd.Series,
+    *,
+    component: str,
+    reason_code: str,
+) -> pd.Series:
+    """Preserve a wholly numeric or wholly datetime time axis, never a mixed one."""
+
+    if pd.api.types.is_datetime64_any_dtype(
+        values
+    ) or pd.api.types.is_timedelta64_dtype(values):
+        return values
+    if pd.api.types.is_numeric_dtype(values):
+        return _strict_numeric_component(
+            values,
+            component=component,
+            reason_code=reason_code,
+            field_name="time axis",
+        )
+    nonmissing = values.notna()
+    numeric = pd.to_numeric(values, errors="coerce")
+    if bool(numeric.notna().eq(nonmissing).all()):
+        return _strict_numeric_component(
+            values,
+            component=component,
+            reason_code=reason_code,
+            field_name="time axis",
+        )
+    parsed = pd.to_datetime(values, errors="coerce")
+    if bool(parsed.notna().eq(nonmissing).all()):
+        return parsed
+    raise KDIGOComponentSchemaError(
+        component=component,
+        reason_code=reason_code,
+        message="KDIGO time axis contains an invalid or mixed encoding",
+    )
+
+
+def _valid_weight_patient_ids(
+    urine_df: pd.DataFrame,
+    weight_df: pd.DataFrame,
+    *,
+    urine_id_col: str,
+    weight_col: str,
+) -> set[Any]:
+    """Return patients with a valid keyed or proven single-entity weight."""
+
+    candidate = weight_col if weight_col in weight_df.columns else _detect_value_col(
+        weight_df, "weight"
+    )
+    if candidate is None:
+        return set()
+    numeric = _strict_numeric_component(
+        weight_df[candidate],
+        component="weight",
+        reason_code="kdigo_weight_numeric_encoding_invalid",
+        field_name="weight",
+    )
+    valid_weight = weight_df.loc[numeric.gt(0)].copy()
+    if valid_weight.empty:
+        return set()
+    weight_id_col = _detect_id_col(valid_weight, urine_id_col)
+    if weight_id_col is not None:
+        return set(valid_weight[weight_id_col].dropna().tolist())
+    resolution = resolve_unkeyed_single_entity_weight(
+        urine_df,
+        valid_weight,
+        urine_id_columns=[urine_id_col],
+        weight_column=candidate,
+    )
+    if resolution.weight is None:
+        return set()
+    patient_ids = urine_df[urine_id_col].dropna().unique().tolist()
+    return set(patient_ids) if len(patient_ids) == 1 else set()
 
 
 def kdigo_creatinine(
@@ -79,28 +212,50 @@ def kdigo_creatinine(
     time_col = _detect_time_col(crea_df, time_col)
     
     if id_col is None or time_col is None:
-        raise ValueError(f"Could not detect ID or time columns. Found columns: {crea_df.columns.tolist()}")
+        raise KDIGOComponentSchemaError(
+            component="creatinine",
+            reason_code="kdigo_creatinine_keys_unresolved",
+            message=(
+                "Could not detect creatinine ID/time columns; found "
+                f"{crea_df.columns.tolist()!r}"
+            ),
+        )
+    if value_col not in crea_df.columns:
+        raise KDIGOComponentSchemaError(
+            component="creatinine",
+            reason_code="kdigo_creatinine_value_column_missing",
+            message=f"Creatinine source is missing {value_col!r}",
+        )
     
     # Ensure numeric creatinine values
     df = crea_df.copy()
-    df[value_col] = pd.to_numeric(df[value_col], errors='coerce')
-    
-    # Remove invalid values
-    df = df[df[value_col].notna() & (df[value_col] > 0) & (df[value_col] <= 150)]
+    df[value_col] = _strict_numeric_component(
+        df[value_col],
+        component="creatinine",
+        reason_code="kdigo_creatinine_numeric_encoding_invalid",
+        field_name="creatinine",
+    )
+    invalid_range = df[value_col].notna() & (
+        (df[value_col] <= 0) | (df[value_col] > 150)
+    )
+    if invalid_range.any():
+        raise KDIGOComponentSchemaError(
+            component="creatinine",
+            reason_code="kdigo_creatinine_value_out_of_range",
+            message="Creatinine source contains a value outside (0, 150] mg/dL",
+        )
+    df[time_col] = _strict_time_component(
+        df[time_col],
+        component="creatinine",
+        reason_code="kdigo_creatinine_time_encoding_invalid",
+    )
+    df = df.dropna(subset=[id_col, time_col, value_col])
     
     if df.empty:
         return pd.DataFrame()
     
     # Sort by ID and time
     df = df.sort_values([id_col, time_col]).reset_index(drop=True)
-    
-    # Convert time to datetime if needed
-    if not pd.api.types.is_datetime64_any_dtype(df[time_col]):
-        if pd.api.types.is_numeric_dtype(df[time_col]):
-            # Assume minutes from admission
-            pass  # Keep as numeric
-        else:
-            df[time_col] = pd.to_datetime(df[time_col], errors='coerce')
     
     # Calculate rolling minimum creatinine for 48h and 7 days
     # Vectorized: use searchsorted for O(N log N) window boundaries per patient
@@ -112,6 +267,8 @@ def kdigo_creatinine(
     if time_unit == 'datetime':
         ref_time = df[time_col].min()
         df['_hours'] = (df[time_col] - ref_time) / pd.Timedelta(hours=1)
+    elif time_unit == 'timedelta':
+        df['_hours'] = df[time_col] / pd.Timedelta(hours=1)
     elif time_unit == 'seconds':
         df['_hours'] = df[time_col].astype(np.float64) / 3600.0
     elif time_unit == 'hours':
@@ -254,7 +411,11 @@ def kdigo_uo(
     time_col = _detect_time_col(urine_df, time_col)
     
     if id_col is None or time_col is None:
-        raise ValueError("Could not detect ID or time columns")
+        raise KDIGOComponentSchemaError(
+            component="urine_output",
+            reason_code="kdigo_urine_output_keys_unresolved",
+            message="Could not detect urine-output ID/time columns",
+        )
     
     # Calculate UO rates using simplified windowed average
     result = _calculate_uo_rates_simple(
@@ -276,12 +437,30 @@ def kdigo_uo(
         result.get('uo_rt_24hr')
     )
     result['uo_assessable'] = result['aki_stage_uo'].notna()
+    valid_weight_ids = _valid_weight_patient_ids(
+        urine_df,
+        weight_df,
+        urine_id_col=id_col,
+        weight_col=weight_col,
+    )
+    result['weight_available'] = result[id_col].isin(valid_weight_ids)
     result['uo_assessment_reason'] = pd.Series(
         pd.NA, index=result.index, dtype="string"
     )
     result.loc[
-        ~result['uo_assessable'], 'uo_assessment_reason'
-    ] = "uo_window_or_weight_unavailable"
+        ~result['uo_assessable'] & ~result['weight_available'],
+        'uo_assessment_reason',
+    ] = "missing_weight"
+    result.loc[
+        ~result['uo_assessable'] & result['weight_available'],
+        'uo_assessment_reason',
+    ] = "insufficient_window"
+    result.loc[result['aki_stage_uo'] == 0, 'uo_assessment_reason'] = (
+        "criterion_negative"
+    )
+    result.loc[result['aki_stage_uo'] > 0, 'uo_assessment_reason'] = (
+        "criterion_positive"
+    )
     
     # Rename columns for consistency
     result = result.rename(columns={
@@ -301,9 +480,12 @@ def _detect_time_unit(time_series: pd.Series, time_col: str | None = None) -> st
         'hours': Time values are already in hours
         'minutes': Time values are in minutes (e.g., MIIV, AUMC, eICU)
         'datetime': Time values are datetime objects
+        'timedelta': Time values are elapsed timedeltas
     """
     if pd.api.types.is_datetime64_any_dtype(time_series):
         return 'datetime'
+    if pd.api.types.is_timedelta64_dtype(time_series):
+        return 'timedelta'
 
     # KDIGO accepts both raw source offsets and normalized concept time axes.
     # Reuse ts_utils' inference, but do not let the generic "charttime" name
@@ -353,6 +535,59 @@ def _calculate_uo_rates_simple(
     if urine_df.empty or weight_df.empty:
         return pd.DataFrame()
 
+    urine = urine_df.copy()
+    weight = weight_df.copy()
+    if urine_col not in urine.columns:
+        urine_col = next(
+            (column for column in ("urine", "value", "valuenum") if column in urine),
+            "",
+        )
+    if not urine_col:
+        raise KDIGOComponentSchemaError(
+            component="urine_output",
+            reason_code="kdigo_urine_output_value_column_missing",
+            message="Urine-output source has no detectable value column",
+        )
+    urine[urine_col] = _strict_numeric_component(
+        urine[urine_col],
+        component="urine_output",
+        reason_code="kdigo_urine_output_numeric_encoding_invalid",
+        field_name="urine output",
+    )
+    if (urine[urine_col].dropna() < 0).any():
+        raise KDIGOComponentSchemaError(
+            component="urine_output",
+            reason_code="kdigo_urine_output_value_negative",
+            message="Urine-output source contains a negative value",
+        )
+    urine[time_col] = _strict_time_component(
+        urine[time_col],
+        component="urine_output",
+        reason_code="kdigo_urine_output_time_encoding_invalid",
+    )
+    urine = urine.dropna(subset=[id_col, time_col, urine_col])
+    if urine.empty:
+        return pd.DataFrame()
+
+    if weight_col not in weight.columns:
+        weight_col = next(
+            (column for column in ("weight", "value", "valuenum") if column in weight),
+            "",
+        )
+    if not weight_col:
+        raise KDIGOComponentSchemaError(
+            component="weight",
+            reason_code="kdigo_weight_value_column_missing",
+            message="Weight source has no detectable value column",
+        )
+    weight[weight_col] = _strict_numeric_component(
+        weight[weight_col],
+        component="weight",
+        reason_code="kdigo_weight_numeric_encoding_invalid",
+        field_name="weight",
+    )
+    weight_id_col = _detect_id_col(weight)
+
     if source_is_rate:
         # HiRID 10020000 is OUTurine/h (mL/h), whereas the other databases
         # expose voided volume events. Reusing the event-volume denominator
@@ -361,8 +596,8 @@ def _calculate_uo_rates_simple(
         # thresholds are stricter than the descriptive UO concepts.
         from easyicu.callbacks import _urine_rate_window_avg_multi
 
-        rate_urine = urine_df.copy()
-        rate_weight = weight_df.copy()
+        rate_urine = urine.copy()
+        rate_weight = weight.copy()
         if urine_col != "urine" and urine_col in rate_urine.columns:
             rate_urine = rate_urine.rename(columns={urine_col: "urine"})
         if weight_col != "weight" and weight_col in rate_weight.columns:
@@ -393,40 +628,15 @@ def _calculate_uo_rates_simple(
             }
         )
     
-    # Copy data
-    urine = urine_df.copy()
-    weight = weight_df.copy()
-    
-    # Ensure urine values are numeric
-    if urine_col in urine.columns:
-        urine[urine_col] = pd.to_numeric(urine[urine_col], errors='coerce')
-    else:
-        # Try to find urine column
-        for col in ['urine', 'value', 'valuenum']:
-            if col in urine.columns:
-                urine_col = col
-                urine[urine_col] = pd.to_numeric(urine[urine_col], errors='coerce')
-                break
-    
-    # Detect weight column in weight_df
-    _detect_time_col(weight_df)
-    weight_id_col = _detect_id_col(weight_df)
-    
-    if weight_col not in weight.columns:
-        for col in ['weight', 'value', 'valuenum']:
-            if col in weight.columns:
-                weight_col = col
-                break
-
-    if weight_col in weight.columns:
-        weight[weight_col] = pd.to_numeric(weight[weight_col], errors='coerce')
-    
     # Resolve weight only through a patient key.  The exceptional unkeyed
     # one-entity path is explicitly proved below; selecting ``iloc[0]`` from a
     # multi-patient table would silently apply one patient's weight to another.
     global_weight = np.nan
     if weight_id_col and weight_id_col in weight.columns:
-        weight_per_patient = weight.groupby(weight_id_col)[weight_col].first().to_dict()
+        valid_weight = weight.loc[weight[weight_col] > 0]
+        weight_per_patient = (
+            valid_weight.groupby(weight_id_col)[weight_col].first().to_dict()
+        )
     else:
         resolution = resolve_unkeyed_single_entity_weight(
             urine,
@@ -455,6 +665,8 @@ def _calculate_uo_rates_simple(
     if time_unit == 'datetime':
         _ref = urine[time_col].min()
         urine['_min'] = (urine[time_col] - _ref) / pd.Timedelta(minutes=1)
+    elif time_unit == 'timedelta':
+        urine['_min'] = urine[time_col] / pd.Timedelta(minutes=1)
     elif time_unit == 'seconds':
         urine['_min'] = urine[time_col].astype(np.float64) / 60.0
     elif time_unit == 'hours':
@@ -497,9 +709,9 @@ def _calculate_uo_rates_simple(
         if n > 1:
             hours_prev[1:] = np.maximum(np.diff(times_min) / 60.0, 0.0)
 
-        # Replace NaN with 0 for cumsum
-        u_clean = np.where(np.isnan(u_vals), 0.0, u_vals)
-        cum_u = np.concatenate([[0.0], np.cumsum(u_clean)])
+        # Missing urine values were removed before the timeline was built; no
+        # failed conversion or absent measurement can become zero output.
+        cum_u = np.concatenate([[0.0], np.cumsum(u_vals)])
         cum_h = np.concatenate([[0.0], np.cumsum(hours_prev)])
         idx_arr = np.arange(n)
         
@@ -588,6 +800,44 @@ def _calc_aki_stage_uo(
     return stage
 
 
+def _normalise_rrt_indicator(values: pd.Series) -> pd.Series:
+    """Return explicit RRT observations as nullable booleans.
+
+    Missing observations remain missing.  Unknown encodings are schema errors;
+    interpreting them as ``False`` would turn a decoding defect into negative
+    clinical evidence.
+    """
+
+    if pd.api.types.is_bool_dtype(values) or str(values.dtype) == "boolean":
+        return values.astype("boolean")
+    if pd.api.types.is_numeric_dtype(values):
+        numeric = pd.to_numeric(values, errors="coerce")
+        if (numeric.dropna() < 0).any():
+            raise KDIGOComponentSchemaError(
+                component="rrt",
+                reason_code="kdigo_rrt_indicator_invalid",
+                message="RRT indicator contains a negative numeric value",
+            )
+        result = pd.Series(pd.NA, index=values.index, dtype="boolean")
+        result.loc[numeric.notna()] = numeric.loc[numeric.notna()] > 0
+        return result
+
+    normalised = values.astype("string").str.strip().str.lower()
+    truthy = {"1", "true", "t", "yes", "y", "active"}
+    falsy = {"0", "false", "f", "no", "n", "inactive"}
+    unknown = normalised.notna() & ~normalised.isin(truthy | falsy)
+    if unknown.any():
+        raise KDIGOComponentSchemaError(
+            component="rrt",
+            reason_code="kdigo_rrt_indicator_invalid",
+            message="RRT indicator contains an unrecognised value",
+        )
+    result = pd.Series(pd.NA, index=values.index, dtype="boolean")
+    result.loc[normalised.isin(truthy)] = True
+    result.loc[normalised.isin(falsy)] = False
+    return result
+
+
 def _rrt_active_from_initiation(
     result: pd.DataFrame,
     rrt_view: pd.DataFrame,
@@ -600,21 +850,10 @@ def _rrt_active_from_initiation(
         return active
 
     rrt = rrt_view.copy()
-    if pd.api.types.is_bool_dtype(rrt["rrt"]) or str(rrt["rrt"].dtype) == "boolean":
-        rrt["_rrt_active"] = rrt["rrt"].fillna(False).astype(bool)
-    elif pd.api.types.is_numeric_dtype(rrt["rrt"]):
-        rrt["_rrt_active"] = pd.to_numeric(rrt["rrt"], errors="coerce").fillna(0) > 0
-    else:
-        rrt["_rrt_active"] = (
-            rrt["rrt"]
-            .astype(str)
-            .str.strip()
-            .str.lower()
-            .isin({"1", "true", "t", "yes", "y", "active"})
-        )
+    rrt["_rrt_active"] = _normalise_rrt_indicator(rrt["rrt"])
 
     starts = (
-        rrt.loc[rrt["_rrt_active"], [id_col, time_col]]
+        rrt.loc[rrt["_rrt_active"].fillna(False), [id_col, time_col]]
         .dropna(subset=[id_col, time_col])
         .groupby(id_col, sort=False)[time_col]
         .min()
@@ -626,6 +865,40 @@ def _rrt_active_from_initiation(
         row_mask = result[id_col] == pid
         active.loc[row_mask] = result.loc[row_mask, time_col] >= start_time
     return active
+
+
+def _rrt_ascertainment_from_observations(
+    result: pd.DataFrame,
+    rrt_view: pd.DataFrame,
+    id_col: str,
+    time_col: str,
+) -> pd.Series:
+    """Classify only explicit RRT observations; absence is indeterminate."""
+
+    ascertainment = pd.Series(
+        "indeterminate", index=result.index, dtype="string"
+    )
+    if result.empty or rrt_view.empty:
+        return ascertainment
+
+    rrt = rrt_view.copy().dropna(subset=[id_col, time_col])
+    rrt["_rrt_active"] = _normalise_rrt_indicator(rrt["rrt"])
+    for patient_id, observations in rrt.groupby(id_col, sort=False):
+        patient_rows = result[id_col] == patient_id
+        if not patient_rows.any():
+            continue
+        active_times = observations.loc[
+            observations["_rrt_active"].fillna(False), time_col
+        ].tolist()
+        negative_times = observations.loc[
+            observations["_rrt_active"].eq(False).fillna(False), time_col
+        ].tolist()
+        for row_index, row_time in result.loc[patient_rows, time_col].items():
+            if any(observed_time <= row_time for observed_time in active_times):
+                ascertainment.loc[row_index] = "positive"
+            elif any(observed_time <= row_time for observed_time in negative_times):
+                ascertainment.loc[row_index] = "negative"
+    return ascertainment
 
 
 def kdigo_stages(
@@ -640,6 +913,7 @@ def kdigo_stages(
     weight_col: str = 'weight',
     urine_source_is_rate: bool = False,
     interval: Optional[pd.Timedelta] = None,
+    observation_window_coverage: Optional[Mapping[Any, str]] = None,
 ) -> pd.DataFrame:
     """Calculate component-neutral KDIGO AKI staging.
     
@@ -664,6 +938,10 @@ def kdigo_stages(
         weight_col: Column name for weight values
         urine_source_is_rate: Treat urine as a direct rate source (HiRID).
         interval: Extraction-bin width represented by each rate-source value.
+        observation_window_coverage: Explicit patient-level coverage receipt.
+            Values are ``complete``, ``partial``, or ``indeterminate``.  In the
+            absence of this receipt the function will never infer that a
+            component-negative row completely excludes AKI.
         
     Returns:
         DataFrame with combined AKI staging including:
@@ -671,9 +949,22 @@ def kdigo_stages(
         - aki_stage_uo: Urine output-based stage (0-3)
         - aki_stage: Final combined stage (0-3, or ``<NA>`` when indeterminate)
         - aki: Boolean indicator (True if aki_stage > 0)
-        - creat_assessable, uo_assessable, rrt_observed, aki_assessable,
-          aki_assessment_reason: component/overall ascertainment receipt
+        - creatinine_ascertainment, urine_ascertainment, rrt_ascertainment
+        - observation_window_coverage, aki_ascertainment
+        - aki_assessable, aki_assessment_reason: compatibility/diagnostic fields
     """
+    for component, frame in (
+        ("creatinine", crea_df),
+        ("urine", urine_df),
+        ("weight", weight_df),
+        ("rrt", rrt_df),
+    ):
+        if frame is not None and not isinstance(frame, pd.DataFrame):
+            raise KDIGOComponentSchemaError(
+                component=component,
+                reason_code=f"kdigo_{component}_source_not_dataframe",
+                message=f"{component} source must be a pandas DataFrame when supplied",
+            )
     source_frames = tuple(
         frame
         for frame in (crea_df, urine_df, rrt_df)
@@ -693,17 +984,48 @@ def kdigo_stages(
     id_col = _detect_id_col(anchor, id_col)
     time_col = _detect_time_col(anchor, time_col)
     if id_col is None or time_col is None:
-        raise ValueError(
-            "Could not detect a KDIGO ID/time key from available components. "
-            f"Found columns: {list(anchor.columns)}"
+        raise KDIGOComponentSchemaError(
+            component="combined_aki",
+            reason_code="kdigo_combined_timeline_keys_unresolved",
+            message=(
+                "Could not detect a KDIGO ID/time key from available components; "
+                f"found columns {list(anchor.columns)!r}"
+            ),
         )
+    anchor_keys = anchor[[id_col, time_col]].copy()
+    anchor_keys[time_col] = _strict_time_component(
+        anchor_keys[time_col],
+        component="combined_aki",
+        reason_code="kdigo_combined_time_encoding_invalid",
+    )
+    anchor_keys = anchor_keys.dropna(subset=[id_col, time_col])
 
     crea_staging = pd.DataFrame()
     if isinstance(crea_df, pd.DataFrame) and not crea_df.empty:
-        crea_staging = kdigo_creatinine(crea_df, id_col, time_col, crea_col)
+        missing = [
+            column
+            for column in (id_col, time_col, crea_col)
+            if column not in crea_df.columns
+        ]
+        if missing:
+            raise KDIGOComponentSchemaError(
+                component="creatinine",
+                reason_code="kdigo_creatinine_schema_invalid",
+                message=f"Non-empty creatinine source is missing {missing!r}",
+            )
+        try:
+            crea_staging = kdigo_creatinine(crea_df, id_col, time_col, crea_col)
+        except KDIGOComponentError:
+            raise
+        except Exception as exc:
+            raise KDIGOComponentCalculationError(
+                component="creatinine",
+                reason_code="kdigo_creatinine_calculation_failed",
+                message="Creatinine KDIGO staging failed",
+            ) from exc
 
     if crea_staging.empty:
-        result = anchor[[id_col, time_col]].copy()
+        result = anchor_keys
         result['aki_stage_creat'] = pd.Series(
             pd.NA, index=result.index, dtype="Int64"
         )
@@ -712,7 +1034,12 @@ def kdigo_stages(
     result['creat_assessable'] = result['aki_stage_creat'].notna()
     
     # Calculate urine output-based staging if data available
-    if urine_df is not None and weight_df is not None and not urine_df.empty:
+    if (
+        urine_df is not None
+        and weight_df is not None
+        and not urine_df.empty
+        and not weight_df.empty
+    ):
         try:
             uo_staging = kdigo_uo(
                 urine_df,
@@ -755,80 +1082,146 @@ def kdigo_stages(
                         'aki_stage_uo',
                         'uo_assessable',
                         'uo_assessment_reason',
+                        'weight_available',
                     ]],
                     on=[id_col, time_col],
                     how='outer'
                 )
-        except Exception as e:
-            logger.warning(f"Failed to calculate UO-based AKI staging: {e}")
-            result['aki_stage_uo'] = pd.Series(pd.NA, index=result.index, dtype="Int64")
-            result['uo_assessable'] = False
-            result['uo_assessment_reason'] = "uo_calculation_error"
+            else:
+                result['aki_stage_uo'] = pd.Series(
+                    pd.NA, index=result.index, dtype="Int64"
+                )
+                result['uo_assessable'] = False
+                result['uo_assessment_reason'] = "patient_data_absent"
+                result['weight_available'] = False
+        except KDIGOComponentError:
+            raise
+        except Exception as exc:
+            raise KDIGOComponentCalculationError(
+                component="urine_output",
+                reason_code="kdigo_urine_output_calculation_failed",
+                message="Urine-output KDIGO staging failed",
+            ) from exc
     else:
         result['aki_stage_uo'] = pd.Series(pd.NA, index=result.index, dtype="Int64")
         result['uo_assessable'] = False
-        result['uo_assessment_reason'] = "urine_or_weight_unavailable"
+        if urine_df is None or urine_df.empty:
+            result['uo_assessment_reason'] = "source_absent"
+        else:
+            result['uo_assessment_reason'] = "missing_weight"
+        result['weight_available'] = False
 
-    def _component_timeline(frame: Optional[pd.DataFrame]) -> pd.DataFrame:
+    def _component_timeline(
+        frame: Optional[pd.DataFrame], *, component: str
+    ) -> pd.DataFrame:
         if frame is None or frame.empty:
             return pd.DataFrame(columns=[id_col, time_col])
         source_id = _detect_id_col(frame, id_col)
         source_time = _detect_time_col(frame, time_col)
         if source_id is None or source_time is None:
-            return pd.DataFrame(columns=[id_col, time_col])
-        return (
+            raise KDIGOComponentSchemaError(
+                component=component,
+                reason_code=f"kdigo_{component}_timeline_schema_invalid",
+                message=(
+                    "Non-empty KDIGO component has no detectable ID/time keys; "
+                    f"available columns are {list(frame.columns)!r}"
+                ),
+            )
+        timeline = (
             frame[[source_id, source_time]]
             .rename(columns={source_id: id_col, source_time: time_col})
             .dropna(subset=[id_col, time_col])
         )
+        timeline[time_col] = _strict_time_component(
+            timeline[time_col],
+            component=component,
+            reason_code=f"kdigo_{component}_time_encoding_invalid",
+        )
+        return timeline
 
     # Retain rows from every observed KDIGO component.  In particular, an RRT
     # initiation must survive even when no contemporaneous creatinine exists.
-    spine = (
-        pd.concat(
-            [
-                result[[id_col, time_col]],
-                _component_timeline(urine_df),
-                _component_timeline(rrt_df),
-            ],
-            ignore_index=True,
+    try:
+        spine = (
+            pd.concat(
+                [
+                    result[[id_col, time_col]],
+                    _component_timeline(urine_df, component="urine"),
+                    _component_timeline(rrt_df, component="rrt"),
+                ],
+                ignore_index=True,
+            )
+            .dropna(subset=[id_col, time_col])
+            .drop_duplicates()
+            .sort_values([id_col, time_col], kind="stable")
+            .reset_index(drop=True)
         )
-        .dropna(subset=[id_col, time_col])
-        .drop_duplicates()
-        .sort_values([id_col, time_col], kind="stable")
-        .reset_index(drop=True)
-    )
+    except KDIGOComponentError:
+        raise
+    except Exception as exc:
+        raise KDIGOComponentSchemaError(
+            component="combined_aki",
+            reason_code="kdigo_component_time_axes_incompatible",
+            message="KDIGO component ID/time axes cannot form one timeline",
+        ) from exc
     result = spine.merge(result, on=[id_col, time_col], how='left', sort=False)
 
     # An outer UO merge can add times that have no creatinine row.  Preserve
     # the distinction between an unavailable baseline and a proven negative.
     result['creat_assessable'] = result['aki_stage_creat'].notna()
     result['uo_assessable'] = result['uo_assessable'].fillna(False).astype(bool)
+    result['weight_available'] = result['weight_available'].fillna(False).astype(bool)
     result['uo_assessment_reason'] = result['uo_assessment_reason'].astype("string")
     result.loc[
         ~result['uo_assessable'] & result['uo_assessment_reason'].isna(),
         'uo_assessment_reason',
-    ] = "uo_window_or_weight_unavailable"
+    ] = "patient_data_absent"
     
     # Handle RRT - automatic Stage 3
     result['aki_stage_rrt'] = pd.Series(0, index=result.index, dtype="Int64")
+    rrt_ascertainment = pd.Series(
+        "indeterminate", index=result.index, dtype="string"
+    )
+    rrt_id_col: Optional[str] = None
     if rrt_df is not None and not rrt_df.empty:
-        rrt_id_col = _detect_id_col(rrt_df, id_col)
-        rrt_time_col = _detect_time_col(rrt_df, time_col)
-        rrt_col = _detect_value_col(rrt_df, 'rrt')
-        if rrt_id_col and rrt_time_col and rrt_col:
+        try:
+            rrt_id_col = _detect_id_col(rrt_df, id_col)
+            rrt_time_col = _detect_time_col(rrt_df, time_col)
+            rrt_col = _detect_value_col(rrt_df, 'rrt')
+            if not (rrt_id_col and rrt_time_col and rrt_col):
+                raise KDIGOComponentSchemaError(
+                    component="rrt",
+                    reason_code="kdigo_rrt_schema_invalid",
+                    message=(
+                        "Non-empty RRT source has no detectable ID/time/value contract; "
+                        f"available columns are {list(rrt_df.columns)!r}"
+                    ),
+                )
             rrt_view = rrt_df[[rrt_id_col, rrt_time_col, rrt_col]].rename(
                 columns={rrt_id_col: id_col, rrt_time_col: time_col, rrt_col: 'rrt'}
             )
-            rrt_mask = _rrt_active_from_initiation(result, rrt_view, id_col, time_col)
+            rrt_view[time_col] = _strict_time_component(
+                rrt_view[time_col],
+                component="rrt",
+                reason_code="kdigo_rrt_time_encoding_invalid",
+            )
+            rrt_mask = _rrt_active_from_initiation(
+                result, rrt_view, id_col, time_col
+            )
+            rrt_ascertainment = _rrt_ascertainment_from_observations(
+                result, rrt_view, id_col, time_col
+            )
             result["rrt"] = rrt_mask
             # RRT is its own component; do not rewrite the creatinine stage.
             result.loc[rrt_mask, 'aki_stage_rrt'] = 3
-        else:
-            logger.warning(
-                "Skipping RRT merge because ID/time/value columns could not be detected: %s",
-                list(rrt_df.columns),
-            )
+        except KDIGOComponentError:
+            raise
+        except Exception as exc:
+            raise KDIGOComponentCalculationError(
+                component="rrt",
+                reason_code="kdigo_rrt_calculation_failed",
+                message="RRT KDIGO staging failed",
+            ) from exc
     
     # Calculate combined AKI stage.  Inactive/undocumented RRT is deliberately
     # excluded as negative evidence: a zero placeholder must not turn a row
@@ -837,6 +1230,63 @@ def kdigo_stages(
     result['aki_stage_uo'] = result['aki_stage_uo'].astype("Int64")
     result['aki_stage_rrt'] = result['aki_stage_rrt'].astype("Int64")
     result['rrt_observed'] = (result['aki_stage_rrt'] > 0).astype("boolean")
+    result['creatinine_ascertainment'] = pd.Series(
+        "indeterminate", index=result.index, dtype="string"
+    )
+    result.loc[
+        result['aki_stage_creat'] == 0, 'creatinine_ascertainment'
+    ] = "negative"
+    result.loc[
+        result['aki_stage_creat'] > 0, 'creatinine_ascertainment'
+    ] = "positive"
+    result['creatinine_ascertainment_reason'] = pd.Series(
+        "source_absent", index=result.index, dtype="string"
+    )
+    if crea_df is not None and not crea_df.empty:
+        creat_patients = set(crea_df[id_col].dropna().tolist())
+        creat_present = result[id_col].isin(creat_patients)
+        result.loc[creat_present, 'creatinine_ascertainment_reason'] = (
+            "insufficient_baseline"
+        )
+        result.loc[
+            result['aki_stage_creat'] == 0, 'creatinine_ascertainment_reason'
+        ] = "criterion_negative"
+        result.loc[
+            result['aki_stage_creat'] > 0, 'creatinine_ascertainment_reason'
+        ] = "criterion_positive"
+        result.loc[
+            ~creat_present, 'creatinine_ascertainment_reason'
+        ] = "patient_data_absent"
+    result['urine_ascertainment'] = pd.Series(
+        "indeterminate", index=result.index, dtype="string"
+    )
+    result.loc[result['aki_stage_uo'] == 0, 'urine_ascertainment'] = "negative"
+    result.loc[result['aki_stage_uo'] > 0, 'urine_ascertainment'] = "positive"
+    result['urine_ascertainment_reason'] = result[
+        'uo_assessment_reason'
+    ].astype("string")
+    result['rrt_ascertainment'] = rrt_ascertainment
+    result['rrt_ascertainment_reason'] = pd.Series(
+        "source_absent", index=result.index, dtype="string"
+    )
+    if rrt_df is not None and not rrt_df.empty:
+        assert rrt_id_col is not None
+        rrt_patients = set(rrt_df[rrt_id_col].dropna().tolist())
+        rrt_present = result[id_col].isin(rrt_patients)
+        result.loc[rrt_present, 'rrt_ascertainment_reason'] = (
+            "no_observation_at_or_before_time"
+        )
+        result.loc[
+            result['rrt_ascertainment'] == "negative",
+            'rrt_ascertainment_reason',
+        ] = "criterion_negative"
+        result.loc[
+            result['rrt_ascertainment'] == "positive",
+            'rrt_ascertainment_reason',
+        ] = "criterion_positive"
+        result.loc[~rrt_present, 'rrt_ascertainment_reason'] = (
+            "patient_data_absent"
+        )
     rrt_positive = result['aki_stage_rrt'].where(
         result['aki_stage_rrt'] > 0, pd.NA
     )
@@ -845,18 +1295,71 @@ def kdigo_stages(
         axis=1,
     )
     result['aki_stage'] = components.max(axis=1, skipna=True).astype("Int64")
-    result['aki'] = (result['aki_stage'] > 0).astype("boolean")
-    result['aki_assessable'] = result['aki_stage'].notna()
-    result['aki_assessment_reason'] = pd.Series(
-        pd.NA, index=result.index, dtype="string"
+
+    supplied_coverage = dict(observation_window_coverage or {})
+    invalid_coverage = sorted(
+        {
+            str(value)
+            for value in supplied_coverage.values()
+            if str(value) not in KDIGO_OBSERVATION_COVERAGE_STATES
+        }
     )
-    result.loc[result['aki_stage'] > 0, 'aki_assessment_reason'] = "positive_component"
-    result.loc[result['aki_stage'] == 0, 'aki_assessment_reason'] = (
-        "assessable_components_negative"
+    if invalid_coverage:
+        raise KDIGOComponentSchemaError(
+            component="observation_window",
+            reason_code="kdigo_observation_window_coverage_invalid",
+            message=f"Unknown observation-window coverage states: {invalid_coverage!r}",
+        )
+    any_component_observed = pd.concat(
+        [
+            result['creatinine_ascertainment'],
+            result['urine_ascertainment'],
+            result['rrt_ascertainment'],
+        ],
+        axis=1,
+    ).ne("indeterminate").any(axis=1)
+    result['observation_window_coverage'] = result[id_col].map(
+        supplied_coverage
+    ).astype("string")
+    result.loc[
+        result['observation_window_coverage'].isna() & any_component_observed,
+        'observation_window_coverage',
+    ] = "partial"
+    result.loc[
+        result['observation_window_coverage'].isna(),
+        'observation_window_coverage',
+    ] = "indeterminate"
+
+    component_states = result[
+        [
+            'creatinine_ascertainment',
+            'urine_ascertainment',
+            'rrt_ascertainment',
+        ]
+    ]
+    any_positive = component_states.eq("positive").any(axis=1)
+    all_negative = component_states.eq("negative").all(axis=1)
+    any_negative = component_states.eq("negative").any(axis=1)
+    complete_negative = all_negative & result['observation_window_coverage'].eq(
+        "complete"
+    )
+
+    result['aki_ascertainment'] = pd.Series(
+        "indeterminate", index=result.index, dtype="string"
     )
     result.loc[
-        ~result['aki_assessable'], 'aki_assessment_reason'
-    ] = "no_assessable_component"
+        any_negative & ~any_positive, 'aki_ascertainment'
+    ] = "partial_no_observed_positive"
+    result.loc[complete_negative, 'aki_ascertainment'] = "negative_complete"
+    result.loc[any_positive, 'aki_ascertainment'] = "positive"
+
+    result['aki'] = pd.Series(pd.NA, index=result.index, dtype="boolean")
+    result.loc[result['aki_ascertainment'] == "positive", 'aki'] = True
+    result.loc[result['aki_ascertainment'] == "negative_complete", 'aki'] = False
+    result['aki_assessable'] = result['aki_ascertainment'].isin(
+        {"positive", "negative_complete"}
+    )
+    result['aki_assessment_reason'] = result['aki_ascertainment'].copy()
     
     return result
 
@@ -868,6 +1371,7 @@ def load_kdigo_aki(
     max_patients: Optional[int] = None,
     verbose: bool = True,
     preloaded_data: Optional[Dict[str, pd.DataFrame]] = None,
+    observation_window_coverage: Optional[Mapping[Any, str]] = None,
 ) -> pd.DataFrame:
     """Load KDIGO AKI staging for a given database using EasyICU concepts.
     
@@ -883,6 +1387,9 @@ def load_kdigo_aki(
         max_patients: Maximum number of patients to load
         verbose: Print progress messages
         preloaded_data: Optional dict of {concept_name: DataFrame} to skip re-loading
+        observation_window_coverage: Explicit patient-level complete/partial/
+            indeterminate coverage receipt.  Without it, component-negative
+            rows remain partial rather than being promoted to complete negatives.
         
     Returns:
         DataFrame with KDIGO AKI staging including:
@@ -901,16 +1408,25 @@ def load_kdigo_aki(
     _pre = preloaded_data or {}
     
     def _load_or_reuse(concept):
-        if concept in _pre and isinstance(_pre[concept], pd.DataFrame):
+        if concept in _pre:
+            if not isinstance(_pre[concept], pd.DataFrame):
+                raise KDIGOComponentSchemaError(
+                    component=concept,
+                    reason_code="kdigo_preloaded_component_not_dataframe",
+                    message=f"Preloaded {concept} source is not a pandas DataFrame",
+                )
             return _pre[concept]
         try:
             return load_concepts(
                 concepts=[concept], database=database, data_path=data_path,
                 patient_ids=patient_ids, max_patients=max_patients, verbose=verbose
             )
-        except Exception as e:
-            logger.warning(f"Failed to load {concept}: {e}")
-            return None
+        except Exception as exc:
+            raise KDIGOComponentLoadError(
+                component=concept,
+                reason_code="kdigo_component_load_failed",
+                message=f"Failed to load KDIGO component {concept!r}",
+            ) from exc
     
     if verbose:
         logger.info(f"Loading KDIGO AKI data for {database}...")
@@ -940,6 +1456,7 @@ def load_kdigo_aki(
         weight_col='weight',
         urine_source_is_rate=str(database).lower() == 'hirid',
         interval=pd.Timedelta(hours=1),
+        observation_window_coverage=observation_window_coverage,
     )
     
     if verbose and not result.empty:
@@ -947,7 +1464,12 @@ def load_kdigo_aki(
         n_assessable = int(result['aki_assessable'].sum())
         n_positive = int(result['aki'].eq(True).fillna(False).sum())
         n_negative = int(result['aki'].eq(False).fillna(False).sum())
-        n_indeterminate = n_total - n_assessable
+        n_partial = int(
+            result['aki_ascertainment']
+            .eq("partial_no_observed_positive")
+            .sum()
+        )
+        n_indeterminate = int(result['aki_ascertainment'].eq("indeterminate").sum())
         prevalence = (
             100.0 * n_positive / n_assessable if n_assessable else float("nan")
         )
@@ -955,7 +1477,8 @@ def load_kdigo_aki(
         logger.info(f"KDIGO AKI Results for {database}:")
         logger.info(f"  Total rows: {n_total:,}")
         logger.info(f"  AKI positive: {n_positive:,}")
-        logger.info(f"  AKI negative (assessable): {n_negative:,}")
+        logger.info(f"  AKI negative (complete ascertainment): {n_negative:,}")
+        logger.info(f"  AKI partial, no observed positive: {n_partial:,}")
         logger.info(f"  AKI indeterminate: {n_indeterminate:,}")
         logger.info(
             "  Prevalence among assessable: %.1f%% (coverage: %d/%d, %.1f%%)",
@@ -1056,9 +1579,22 @@ def get_aki_incidence(
     
     id_col = _detect_id_col(aki_df, id_col)
     time_col = _detect_time_col(aki_df)
+    if id_col is None or time_col is None:
+        raise KDIGOComponentSchemaError(
+            component="combined_aki",
+            reason_code="kdigo_public_api_keys_unresolved",
+            message="Could not detect patient ID/time columns for AKI incidence",
+        )
+    missing = [column for column in ("aki", "aki_stage") if column not in aki_df]
+    if missing:
+        raise KDIGOComponentSchemaError(
+            component="combined_aki",
+            reason_code="kdigo_public_api_schema_invalid",
+            message=f"AKI incidence input is missing {missing!r}",
+        )
     
     # Get first AKI occurrence
-    aki_only = aki_df[aki_df['aki']].copy()
+    aki_only = aki_df.loc[aki_df['aki'].eq(True).fillna(False)].copy()
     
     if aki_only.empty:
         return pd.DataFrame()
@@ -1079,9 +1615,9 @@ def get_aki_incidence(
 def summarize_aki(aki_df: pd.DataFrame, id_col: Optional[str] = None) -> Dict[str, Any]:
     """Generate explicit patient-level AKI ascertainment statistics.
 
-    The prevalence denominator is patients with at least one assessable KDIGO
-    component.  Indeterminate patients remain visible rather than being
-    silently counted as non-AKI.
+    Prevalence is reported only among definitive phenotypes (positive or
+    complete negative).  Partial ascertainment and indeterminate patients are
+    separate patient-level strata and never silently enter the negative group.
     
     Args:
         aki_df: DataFrame from kdigo_stages or load_kdigo_aki
@@ -1094,35 +1630,65 @@ def summarize_aki(aki_df: pd.DataFrame, id_col: Optional[str] = None) -> Dict[st
         return {'error': 'Empty DataFrame'}
     
     id_col = _detect_id_col(aki_df, id_col)
-    
-    n_patients = aki_df[id_col].nunique()
-    n_measurements = len(aki_df)
-    
     if id_col is None:
-        return {'error': 'Could not detect patient ID column'}
+        raise KDIGOComponentSchemaError(
+            component="combined_aki",
+            reason_code="kdigo_public_api_id_unresolved",
+            message="Could not detect patient ID column for AKI summary",
+        )
+    required = {"aki_stage", "aki_ascertainment"}
+    missing = sorted(required - set(aki_df.columns))
+    if missing:
+        raise KDIGOComponentSchemaError(
+            component="combined_aki",
+            reason_code="kdigo_ascertainment_receipt_missing",
+            message=f"AKI summary input is missing {missing!r}",
+        )
 
-    assessable_rows = (
-        aki_df['aki_assessable']
-        if 'aki_assessable' in aki_df.columns
-        else aki_df['aki'].notna()
+    invalid_states = sorted(
+        set(aki_df['aki_ascertainment'].dropna().astype(str))
+        - KDIGO_ASCERTAINMENT_STATES
     )
-    per_patient = pd.DataFrame(
+    if invalid_states:
+        raise KDIGOComponentSchemaError(
+            component="combined_aki",
+            reason_code="kdigo_ascertainment_state_invalid",
+            message=f"AKI summary input has unknown states {invalid_states!r}",
+        )
+
+    n_patients = int(aki_df[id_col].nunique())
+    n_measurements = len(aki_df)
+    patient_flags = pd.DataFrame(
         {
             id_col: aki_df[id_col],
-            'positive': aki_df['aki'].eq(True).fillna(False),
-            'assessable': assessable_rows.fillna(False),
+            "positive": aki_df['aki_ascertainment'].eq("positive"),
+            "negative_complete": aki_df['aki_ascertainment'].eq(
+                "negative_complete"
+            ),
+            "partial": aki_df['aki_ascertainment'].eq(
+                "partial_no_observed_positive"
+            ),
         }
-    ).groupby(id_col, dropna=True, sort=False).agg(
-        positive=('positive', 'any'),
-        assessable=('assessable', 'any'),
+    ).groupby(id_col, dropna=True, sort=False).any()
+    patient_state = pd.Series(
+        "indeterminate", index=patient_flags.index, dtype="string"
     )
-    n_aki_patients = int(per_patient['positive'].sum())
-    n_assessable_patients = int(per_patient['assessable'].sum())
-    n_indeterminate_patients = int((~per_patient['assessable']).sum())
-    n_negative_patients = n_assessable_patients - n_aki_patients
-    prevalence_among_assessable = (
-        float(n_aki_patients / n_assessable_patients)
-        if n_assessable_patients > 0
+    patient_state.loc[patient_flags["partial"]] = (
+        "partial_no_observed_positive"
+    )
+    patient_state.loc[patient_flags["negative_complete"]] = "negative_complete"
+    patient_state.loc[patient_flags["positive"]] = "positive"
+
+    n_aki_patients = int(patient_state.eq("positive").sum())
+    n_negative_patients = int(patient_state.eq("negative_complete").sum())
+    n_partial_patients = int(
+        patient_state.eq("partial_no_observed_positive").sum()
+    )
+    n_indeterminate_patients = int(patient_state.eq("indeterminate").sum())
+    n_definitive_patients = n_aki_patients + n_negative_patients
+    prevalence_definitive = (
+        float(n_aki_patients / n_definitive_patients)
+        if n_definitive_patients > 0
         else None
     )
     
@@ -1137,17 +1703,27 @@ def summarize_aki(aki_df: pd.DataFrame, id_col: Optional[str] = None) -> Dict[st
         'n_patients': n_patients,
         'n_measurements': n_measurements,
         'aki_positive_patients': n_aki_patients,
-        'aki_negative_assessable_patients': n_negative_patients,
+        'aki_negative_complete_patients': n_negative_patients,
+        'aki_partial_no_observed_positive_patients': n_partial_patients,
         'aki_indeterminate_patients': n_indeterminate_patients,
-        'n_assessable_patients': n_assessable_patients,
-        'aki_prevalence_among_assessable': prevalence_among_assessable,
-        'ascertainment_coverage': (
-            float(n_assessable_patients / n_patients) if n_patients > 0 else None
+        'n_definitive_phenotype_patients': n_definitive_patients,
+        'aki_prevalence_among_definitive_phenotypes': prevalence_definitive,
+        'definitive_phenotype_coverage': (
+            float(n_definitive_patients / n_patients) if n_patients > 0 else None
         ),
-        # Retained for callers that used the historical key; its denominator
-        # is now explicit above and is never the whole cohort by implication.
-        'aki_rate': prevalence_among_assessable,
-        'aki_rate_denominator': 'assessable_patients',
+        'partial_ascertainment_fraction': (
+            float(n_partial_patients / n_patients) if n_patients > 0 else None
+        ),
+        # Compatibility aliases now point only to definitive phenotypes.  They
+        # do not recreate the old "any component available" denominator.
+        'aki_negative_assessable_patients': n_negative_patients,
+        'n_assessable_patients': n_definitive_patients,
+        'aki_prevalence_among_assessable': prevalence_definitive,
+        'ascertainment_coverage': (
+            float(n_definitive_patients / n_patients) if n_patients > 0 else None
+        ),
+        'aki_rate': prevalence_definitive,
+        'aki_rate_denominator': 'definitive_phenotype_patients',
         'stage_distribution_measurements': stage_dist,
         'max_stage_distribution_patients': max_stage_dist,
     }
