@@ -8,13 +8,23 @@ table named by that contract, never a chart artist or a free-text summary.
 from __future__ import annotations
 
 import csv
+import json
 import math
 import re
 from pathlib import Path
 from typing import Any, List, Mapping
 
+from pydantic import ValidationError
+
 from ..contracts.runtime import ValidationFinding
-from ..schema import AnalysisPlan, AnalysisStep, ResearchContext
+from ..schema import (
+    SURVIVAL_ANALYSIS_RECEIPT_PRODUCT,
+    AnalysisPlan,
+    AnalysisStep,
+    FamilyPrimaryResultRequirement,
+    ResearchContext,
+    SurvivalAnalysisReceipt,
+)
 
 
 _EFFECT_COLUMNS = (
@@ -53,6 +63,132 @@ def _finding(step: AnalysisStep, issue: str, **detail: Any) -> ValidationFinding
         ),
         detail={"issue": issue, "step_id": step.step_id, **detail},
     )
+
+
+def _materialised_path(
+    *,
+    out_dir: Path,
+    raw_path: Any,
+    expected_suffix: str,
+) -> Path | None:
+    """Return one registered child path without allowing output-dir escape."""
+
+    if not isinstance(raw_path, str) or not raw_path.strip():
+        return None
+    try:
+        candidate = (Path(out_dir) / raw_path).resolve()
+        candidate.relative_to(Path(out_dir).resolve())
+    except ValueError:
+        return None
+    if not candidate.is_file() or candidate.suffix.lower() != expected_suffix:
+        return None
+    return candidate
+
+
+def _survival_receipt_findings(
+    *,
+    step: AnalysisStep,
+    requirement: FamilyPrimaryResultRequirement,
+    context: ResearchContext,
+    output_files: Mapping[str, Any],
+    out_dir: Path,
+) -> List[ValidationFinding]:
+    """Reconcile execution-owned survival design with plan and endpoint."""
+
+    endpoint = context.endpoint
+    if endpoint is None or endpoint.kind != "time_to_event":
+        return [_finding(step, "survival_endpoint_not_declared")]
+    if (
+        requirement.time_origin != endpoint.time_origin
+        or requirement.time_column != endpoint.time_column
+        or requirement.event_column != endpoint.event_column
+    ):
+        return [
+            _finding(
+                step,
+                "survival_requirement_endpoint_mismatch",
+                requirement_time_origin=requirement.time_origin,
+                requirement_time_column=requirement.time_column,
+                requirement_event_column=requirement.event_column,
+                endpoint_time_origin=endpoint.time_origin,
+                endpoint_time_column=endpoint.time_column,
+                endpoint_event_column=endpoint.event_column,
+            )
+        ]
+
+    raw_path = output_files.get(SURVIVAL_ANALYSIS_RECEIPT_PRODUCT)
+    if not isinstance(raw_path, str) or not raw_path.strip():
+        return [
+            _finding(
+                step,
+                "survival_execution_receipt_unregistered",
+                expected_receipt_product=SURVIVAL_ANALYSIS_RECEIPT_PRODUCT,
+            )
+        ]
+    receipt_path = _materialised_path(
+        out_dir=out_dir,
+        raw_path=raw_path,
+        expected_suffix=".json",
+    )
+    if receipt_path is None:
+        return [
+            _finding(
+                step,
+                "survival_execution_receipt_not_a_materialised_json",
+                path=str(raw_path),
+            )
+        ]
+    try:
+        receipt = SurvivalAnalysisReceipt.model_validate_json(
+            receipt_path.read_text(encoding="utf-8")
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError, ValidationError) as exc:
+        return [
+            _finding(
+                step,
+                "survival_execution_receipt_invalid",
+                error=type(exc).__name__,
+            )
+        ]
+
+    expected_values = {
+        "result_product": requirement.expected_result_product,
+        "exposure_source": requirement.exposure_source,
+        "outcome": requirement.outcome,
+        "effect_scale": requirement.effect_scale,
+        "analysis_population": requirement.population,
+        "time_origin": requirement.time_origin,
+        "time_column": requirement.time_column,
+        "event_column": requirement.event_column,
+        "event_definition": requirement.event_definition,
+        "censoring_strategy": requirement.censoring_strategy,
+        "competing_risk_strategy": requirement.competing_risk_strategy,
+        "time_horizon": requirement.time_horizon,
+        "estimator": requirement.estimator,
+        "effect_measure": requirement.effect_measure,
+    }
+    mismatches = {
+        field: {"expected": expected, "reported": getattr(receipt, field)}
+        for field, expected in expected_values.items()
+        if getattr(receipt, field) != expected
+    }
+    if requirement.proportional_hazards_diagnostic is not None and (
+        receipt.proportional_hazards_diagnostic
+        != requirement.proportional_hazards_diagnostic
+    ):
+        mismatches["proportional_hazards_diagnostic"] = {
+            "expected": requirement.proportional_hazards_diagnostic,
+            "reported": receipt.proportional_hazards_diagnostic,
+        }
+    if mismatches:
+        return [
+            _finding(
+                step,
+                "survival_execution_receipt_contract_mismatch",
+                mismatches=mismatches,
+            )
+        ]
+    return []
 
 
 def family_primary_result_reconciliation_findings(
@@ -103,12 +239,17 @@ def family_primary_result_reconciliation_findings(
                 expected_result_product=requirement.expected_result_product,
             )
         ]
-    try:
-        result_path = (Path(out_dir) / raw_path).resolve()
-        result_path.relative_to(Path(out_dir).resolve())
-    except ValueError:
-        return [_finding(step, "result_table_path_escapes_step_output")]
-    if not result_path.is_file() or result_path.suffix.lower() != ".csv":
+    result_path = _materialised_path(
+        out_dir=out_dir,
+        raw_path=raw_path,
+        expected_suffix=".csv",
+    )
+    if result_path is None:
+        try:
+            candidate = (Path(out_dir) / raw_path).resolve()
+            candidate.relative_to(Path(out_dir).resolve())
+        except ValueError:
+            return [_finding(step, "result_table_path_escapes_step_output")]
         return [
             _finding(
                 step,
@@ -155,6 +296,14 @@ def family_primary_result_reconciliation_findings(
         has_interval = _finite(row.get("ci_low")) and _finite(row.get("ci_high"))
         has_standard_error = _finite(row.get("standard_error"))
         if has_effect and (has_interval or has_standard_error):
+            if requirement.analysis_family == "survival":
+                return _survival_receipt_findings(
+                    step=step,
+                    requirement=requirement,
+                    context=context,
+                    output_files=output_files,
+                    out_dir=out_dir,
+                )
             return []
     return [
         _finding(

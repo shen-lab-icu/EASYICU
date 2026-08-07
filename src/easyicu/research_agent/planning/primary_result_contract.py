@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import re
 
-from ..schema import AnalysisPlan, AnalysisStep, ResearchContext
+from ..schema import (
+    SURVIVAL_ANALYSIS_RECEIPT_PRODUCT,
+    AnalysisPlan,
+    AnalysisStep,
+    ResearchContext,
+)
 from .analysis_types import infer_analysis_type
 
 
@@ -94,6 +99,29 @@ def validate_required_primary_result(
                 "The primary family-result contract must name a result product "
                 "declared by its primary step"
             )
+        if declared_family == "survival":
+            endpoint = context.endpoint
+            if endpoint is None or endpoint.kind != "time_to_event":
+                raise ValueError(
+                    "A survival primary-result contract requires a declared "
+                    "time_to_event EndpointSpec; time/event columns are never "
+                    "inferred from names or dtypes"
+                )
+            if (
+                requirement.time_column != endpoint.time_column
+                or requirement.event_column != endpoint.event_column
+                or requirement.time_origin != endpoint.time_origin
+            ):
+                raise ValueError(
+                    "The survival primary-result contract must use the exact "
+                    "EndpointSpec time_origin, time_column, and event_column"
+                )
+            if SURVIVAL_ANALYSIS_RECEIPT_PRODUCT not in primary.expected_outputs:
+                raise ValueError(
+                    "A survival primary step must declare "
+                    f"{SURVIVAL_ANALYSIS_RECEIPT_PRODUCT!r} so execution can "
+                    "record the applied time/event/censoring design"
+                )
         return
 
     method = re.sub(r"[^a-z0-9]+", "_", str(primary.method or "").lower()).strip("_")
@@ -152,6 +180,17 @@ def family_primary_result_execution_guide(step: AnalysisStep) -> str:
         f"outcome={requirement.outcome!r}, and effect_scale={requirement.effect_scale!r}. "
         "Do not substitute chart geometry, prose, or an unregistered side file "
         "for this evidence table.\n"
+        + (
+            "- Also materialise `log:survival_analysis_receipt` as JSON inside "
+            "OUTPUT_DIR and register it in `summary['output_files']`. It must "
+            "validate as `SurvivalAnalysisReceipt`, repeat the exact declared "
+            "time origin, time/event columns, event definition, censoring, "
+            "competing-risk strategy, horizon, estimator, effect measure, "
+            "population and result product, and record n_analysis_rows/n_events. "
+            "For Cox, it MUST record the executed PH diagnostic and its p value.\n"
+            if requirement.analysis_family == "survival"
+            else ""
+        )
     )
 
 

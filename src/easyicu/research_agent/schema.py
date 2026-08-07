@@ -1189,6 +1189,8 @@ class FamilyPrimaryResultRequirement(BaseModel):
     adjustment_strategy: Optional[str] = None
     overlap_diagnostic: Optional[str] = None
     time_origin: Optional[str] = None
+    time_column: Optional[str] = None
+    event_column: Optional[str] = None
     event_definition: Optional[str] = None
     censoring_strategy: Optional[str] = None
     competing_risk_strategy: Optional[str] = None
@@ -1243,6 +1245,8 @@ class FamilyPrimaryResultRequirement(BaseModel):
                 name
                 for name in (
                     "time_origin",
+                    "time_column",
+                    "event_column",
                     "event_definition",
                     "censoring_strategy",
                     "competing_risk_strategy",
@@ -1263,6 +1267,101 @@ class FamilyPrimaryResultRequirement(BaseModel):
                     "a Cox primary-result contract requires "
                     "proportional_hazards_diagnostic"
                 )
+        return self
+
+
+SURVIVAL_ANALYSIS_RECEIPT_PRODUCT = "log:survival_analysis_receipt"
+"""Typed execution receipt required beside a survival headline result table."""
+
+
+class SurvivalAnalysisReceipt(BaseModel):
+    """Execution-owned record of the survival analysis behind one headline.
+
+    A survival plan can state a time origin and censoring policy without the
+    generated analysis ever applying them.  This receipt is deliberately a
+    separate, typed output: the execution gate can compare it with both the
+    Planner-owned requirement and the declared endpoint before the headline
+    table becomes reportable evidence.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    result_product: str
+    exposure_source: str
+    outcome: str
+    effect_scale: str
+    analysis_population: str
+    n_analysis_rows: int = Field(ge=1)
+    n_events: int = Field(ge=0)
+    time_origin: str
+    time_column: str
+    event_column: str
+    event_definition: str
+    censoring_strategy: str
+    competing_risk_strategy: str
+    time_horizon: str
+    estimator: str
+    effect_measure: str
+    proportional_hazards_diagnostic: Optional[str] = None
+    proportional_hazards_tested: Optional[bool] = None
+    proportional_hazards_p_value: Optional[float] = Field(default=None, ge=0, le=1)
+
+    @field_validator(
+        "result_product",
+        "exposure_source",
+        "outcome",
+        "effect_scale",
+        "analysis_population",
+        "time_origin",
+        "time_column",
+        "event_column",
+        "event_definition",
+        "censoring_strategy",
+        "competing_risk_strategy",
+        "time_horizon",
+        "estimator",
+        "effect_measure",
+    )
+    @classmethod
+    def _require_nonblank_receipt_text(cls, value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError("survival analysis receipt text fields must be non-empty")
+        return text
+
+    @model_validator(mode="after")
+    def _require_cox_execution_diagnostic(self) -> "SurvivalAnalysisReceipt":
+        if self.n_events > self.n_analysis_rows:
+            raise ValueError("n_events cannot exceed n_analysis_rows")
+        if not self.result_product.startswith("table:"):
+            raise ValueError("result_product must name the materialised result table")
+
+        is_cox = "cox" in _normalise_model_contract_token(self.estimator)
+        ph_fields = {
+            "proportional_hazards_diagnostic": self.proportional_hazards_diagnostic,
+            "proportional_hazards_tested": self.proportional_hazards_tested,
+            "proportional_hazards_p_value": self.proportional_hazards_p_value,
+        }
+        if is_cox:
+            missing = [
+                name
+                for name, value in ph_fields.items()
+                if value is None or (isinstance(value, str) and not value.strip())
+            ]
+            if missing:
+                raise ValueError(
+                    "a Cox survival analysis receipt requires " + ", ".join(missing)
+                )
+            if self.proportional_hazards_tested is not True:
+                raise ValueError(
+                    "a Cox survival analysis receipt must record that the "
+                    "proportional-hazards diagnostic was executed"
+                )
+        elif any(value is not None for value in ph_fields.values()):
+            raise ValueError(
+                "non-Cox survival analysis receipts must not claim a "
+                "proportional-hazards diagnostic"
+            )
         return self
 
 _DEFAULT_STABILITY_BASE_SEED = 1729
@@ -3359,6 +3458,9 @@ __all__ = [
     "CohortDescriptor",
     "ResearchContext",
     "HypothesisBlueprint",
+    "FamilyPrimaryResultRequirement",
+    "SURVIVAL_ANALYSIS_RECEIPT_PRODUCT",
+    "SurvivalAnalysisReceipt",
     "AnalysisStep",
     "AnalysisPlan",
     "EvidenceRef",
