@@ -6,6 +6,8 @@ from easyicu.scores.kdigo_aki import (
     _calculate_uo_rates_simple,
     kdigo_stages,
     kdigo_uo,
+    load_kdigo_aki,
+    summarize_aki,
 )
 
 
@@ -124,7 +126,97 @@ def test_kdigo_missing_baseline_is_unknown_not_stage_zero():
     assert pd.isna(result["aki_stage_uo"].iloc[0])
     assert pd.isna(result["aki_stage"].iloc[0])
     assert pd.isna(result["aki"].iloc[0])
+    assert not bool(result["aki_assessable"].iloc[0])
+    assert result["aki_assessment_reason"].iloc[0] == "no_assessable_component"
     assert result["uo_assessment_reason"].iloc[0] == "urine_or_weight_unavailable"
+
+
+def test_kdigo_uses_urine_timeline_when_creatinine_is_unavailable():
+    urine = pd.DataFrame(
+        {
+            "stay_id": [1, 1, 1, 1, 1, 1],
+            "charttime": [0, 60, 120, 180, 240, 300],
+            "urine": [10.0] * 6,
+        }
+    )
+    weight = pd.DataFrame({"stay_id": [1], "weight": [100.0]})
+
+    result = kdigo_stages(
+        None,
+        urine_df=urine,
+        weight_df=weight,
+        id_col="stay_id",
+        time_col="charttime",
+    )
+
+    assert len(result) == len(urine)
+    assert result["aki_stage_creat"].isna().all()
+    assert result["aki_stage_uo"].iloc[-1] == 1
+    assert bool(result["aki_assessable"].iloc[-1]) is True
+    assert bool(result["aki"].iloc[-1]) is True
+
+
+def test_kdigo_uses_rrt_timeline_when_no_laboratory_or_urine_exists():
+    rrt = pd.DataFrame({"stay_id": [1], "charttime": [180], "rrt": [1]})
+
+    result = kdigo_stages(
+        None,
+        rrt_df=rrt,
+        id_col="stay_id",
+        time_col="charttime",
+    )
+
+    assert result[["stay_id", "charttime"]].to_dict("records") == [
+        {"stay_id": 1, "charttime": 180}
+    ]
+    assert result["aki_stage"].iloc[0] == 3
+    assert bool(result["rrt_observed"].iloc[0]) is True
+    assert bool(result["aki_assessable"].iloc[0]) is True
+
+
+def test_load_kdigo_keeps_urine_only_patients_in_the_public_api():
+    urine = pd.DataFrame(
+        {
+            "stay_id": [1, 1, 1, 1, 1, 1],
+            "charttime": [0, 60, 120, 180, 240, 300],
+            "urine": [10.0] * 6,
+        }
+    )
+    result = load_kdigo_aki(
+        "synthetic",
+        verbose=False,
+        preloaded_data={
+            "crea": pd.DataFrame(),
+            "urine": urine,
+            "weight": pd.DataFrame({"stay_id": [1], "weight": [100.0]}),
+            "rrt": pd.DataFrame(),
+        },
+    )
+
+    assert not result.empty
+    assert result["aki_stage_creat"].isna().all()
+    assert result["aki_assessable"].any()
+
+
+def test_summarize_aki_exposes_the_assessable_denominator():
+    frame = pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3],
+            "aki": pd.Series([True, False, pd.NA], dtype="boolean"),
+            "aki_stage": pd.Series([1, 0, pd.NA], dtype="Int64"),
+            "aki_assessable": [True, True, False],
+        }
+    )
+
+    summary = summarize_aki(frame, id_col="stay_id")
+
+    assert summary["aki_positive_patients"] == 1
+    assert summary["aki_negative_assessable_patients"] == 1
+    assert summary["aki_indeterminate_patients"] == 1
+    assert summary["n_assessable_patients"] == 2
+    assert summary["aki_prevalence_among_assessable"] == pytest.approx(0.5)
+    assert summary["ascertainment_coverage"] == pytest.approx(2 / 3)
+    assert summary["aki_rate_denominator"] == "assessable_patients"
 
 
 def test_kdigo_uo_calculation_error_is_unknown_not_stage_zero(monkeypatch):
@@ -260,15 +352,20 @@ def test_kdigo_rrt_stage_applies_from_first_active_rrt_time():
 
     result = kdigo_stages(creatinine, rrt_df=rrt, id_col="stay_id", time_col="charttime")
 
-    assert result["aki_stage_rrt"].tolist() == [0, 0, 3]
+    # The component-neutral spine retains the RRT initiation itself instead
+    # of waiting for the next creatinine measurement.
+    assert result["charttime"].tolist() == [0, 120, 180, 240]
+    assert result["aki_stage_rrt"].tolist() == [0, 0, 3, 3]
     # Before a comparison baseline exists, the documented creatinine values do
     # not prove no AKI.  RRT still establishes stage 3 from its initiation.
     assert pd.isna(result["aki_stage"].iloc[0])
     assert result["aki_stage"].iloc[1] == 0
     assert result["aki_stage"].iloc[2] == 3
+    assert result["aki_stage"].iloc[3] == 3
     assert pd.isna(result["aki"].iloc[0])
     assert bool(result["aki"].iloc[1]) is False
     assert bool(result["aki"].iloc[2]) is True
+    assert bool(result["aki"].iloc[3]) is True
 
 
 def test_kdigo_rrt_exact_timestamp_match_is_not_required():
