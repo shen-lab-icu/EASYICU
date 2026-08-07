@@ -135,11 +135,24 @@ def test_hosted_relay_reports_the_actual_model_after_a_fallback(
     payload = response.json()
     assert payload["model"] == "provider/served-model"
     assert payload["easyicu_model_provenance"] == {
-        "schema_version": "easyicu.hosted_model_provenance/1",
+        "schema_version": "easyicu.hosted_model_provenance/2",
         "requested_model": "configured-model",
         "attempted_model": "fallback-model",
         "upstream_reported_model": "provider/served-model",
         "fallback_used": True,
+        "attempts": [
+            {
+                "model": "configured-model",
+                "status_code": 503,
+                "outcome": "retry",
+                "retry_reason": "retryable_upstream_response",
+            },
+            {
+                "model": "fallback-model",
+                "status_code": 200,
+                "outcome": "success",
+            },
+        ],
     }
 
 

@@ -2386,29 +2386,7 @@ def write_readiness_artifacts(
     # — a run that took 4 writer passes is more fragile than one that took 1.
     gates["writer_attempt_count"] = count_writer_attempts(run_dir)
     gates["forced_diagnostic_only"] = bool(force_diagnostic_only)
-    status = (
-        "diagnostic_only"
-        if force_diagnostic_only
-        else (
-            # Fail-closed floor: a run that exhausted its replan budget without
-            # converging is diagnostic_only regardless of what limped through.
-            "diagnostic_only"
-            if gates.get("replan_budget_exhausted")
-            else (
-                "publication_ready"
-                if gates["publication_ready"]
-                else (
-                    "manuscript_ready"
-                    if gates["manuscript_ready"]
-                    else (
-                        "analysis_only"
-                        if gates["execution_complete"]
-                        else "diagnostic_only"
-                    )
-                )
-            )
-        )
-    )
+    status = _readiness_status(gates)
 
     # The content gate and execution authority answer different questions.
     # Preserve the former under an explicit name, then bind final paper
@@ -3019,6 +2997,28 @@ def _render_author_review_note(
 # ---------------------------------------------------------------------------
 
 
+def _readiness_status(gates: Mapping[str, Any]) -> str:
+    """Return the one fail-closed status ladder shared by artifacts and reports."""
+
+    if gates.get("forced_diagnostic_only") or gates.get("replan_budget_exhausted"):
+        return "diagnostic_only"
+    if gates.get("publication_ready"):
+        return "publication_ready"
+    if gates.get("manuscript_ready"):
+        return "manuscript_ready"
+    if gates.get("execution_complete"):
+        return "analysis_only"
+    return "diagnostic_only"
+
+
+_READINESS_STATUS_LABELS = {
+    "publication_ready": "PUBLICATION READY",
+    "manuscript_ready": "MANUSCRIPT READY",
+    "analysis_only": "ANALYSIS ONLY",
+    "diagnostic_only": "DIAGNOSTIC ONLY",
+}
+
+
 def render_report(
     *,
     context: ResearchContext,
@@ -3059,15 +3059,7 @@ def render_report(
         )
         parts.append("")
     elif readiness:
-        status = (
-            "PUBLICATION READY"
-            if readiness.get("publication_ready")
-            else (
-                "MANUSCRIPT READY"
-                if readiness.get("manuscript_ready")
-                else "DIAGNOSTIC ONLY"
-            )
-        )
+        status = _READINESS_STATUS_LABELS[_readiness_status(readiness)]
         parts.append(f"## Status: {status}")
         parts.append("")
         parts.append(

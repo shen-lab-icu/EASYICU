@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Annotated, Any, Dict
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, ConfigDict, StrictBool
+from pydantic import BaseModel, ConfigDict, StrictBool, StringConstraints
 
 from easyicu.webserver import copilot_sessions, study_intent
 from easyicu.webserver import settings as settings_store
@@ -16,9 +16,12 @@ router = APIRouter()
 class StudyIntentRequest(BaseModel):
     """Bounded wire contract for optional Copilot intent extraction."""
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
-    question: Any = None
+    question: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=3, max_length=1200),
+    ]
     llm_provider: str = "offline"
     external_llm_opt_in: StrictBool = False
     language: str = "en"

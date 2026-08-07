@@ -544,7 +544,7 @@ def test_p0_3_a_number_is_not_bound_to_a_step_the_sentence_did_not_cite(ra, tmp_
 
     assert "0.85" in untraced
     assert not binding_map
-    assert "AMBIGUOUS:0.85" in bound
+    assert "MISCITED:0.85:cited=[primary_model]:owned_by=[02_sensitivity]" in bound
 
 
 def test_p0_3_the_cited_step_own_value_still_binds(ra, tmp_path):
@@ -1104,6 +1104,12 @@ def test_p1_5_debug_dump_is_owner_only_on_disk(tmp_path, monkeypatch):
     response = SimpleNamespace(
         choices=[SimpleNamespace(message=message, finish_reason="stop")],
         usage=None,
+        model="provider/served-model",
+        easyicu_model_provenance={
+            "requested_model": "gpt-test",
+            "attempted_model": "fallback-model",
+            "fallback_used": True,
+        },
     )
 
     class _Completions:
@@ -1116,6 +1122,8 @@ def test_p1_5_debug_dump_is_owner_only_on_disk(tmp_path, monkeypatch):
     client._model = "gpt-test"
     client._timeout = 1.0
     client._extra_body = {}
+    client._completion_token_parameter = "max_tokens"
+    client._stream_enabled = False
     client._max_retries = 0
     monkeypatch.setattr(
         OpenAIClient, "_require_outbound_authorization", lambda self: None
@@ -1139,6 +1147,10 @@ def test_p1_5_debug_dump_is_owner_only_on_disk(tmp_path, monkeypatch):
     assert stat.S_IMODE(debug_dir.stat().st_mode) == 0o700
 
     payload = json.loads(dumps[0].read_text(encoding="utf-8"))
+    assert payload["requested_model"] == "gpt-test"
+    assert payload["actual_model"] == "provider/served-model"
+    assert payload["model_provenance"]["attempted_model"] == "fallback-model"
+    assert "model" not in payload
     assert "raw_message" not in payload
     assert len(json.dumps(payload["prompt_messages"])) < 20_000
     encoded = json.dumps(payload)

@@ -31,7 +31,6 @@ def test_study_intent_route_uses_server_ai_setting_not_request_body(monkeypatch)
             "question": "Does lactate predict mortality?",
             "llm_provider": "openai",
             "external_llm_opt_in": True,
-            "ai_enabled": True,
         },
     )
 
@@ -39,3 +38,17 @@ def test_study_intent_route_uses_server_ai_setting_not_request_body(monkeypatch)
     payload = response.json()
     assert payload["source"] == "deterministic"
     assert payload["provider_block"]["error"] == "external_llm_opt_in_required"
+
+
+def test_study_intent_route_rejects_unknown_request_fields() -> None:
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/copilot/study-intent",
+        json={
+            "question": "Does lactate predict mortality?",
+            "ai_enabled": True,
+        },
+    )
+
+    assert response.status_code == 422
