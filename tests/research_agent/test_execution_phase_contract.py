@@ -1395,6 +1395,7 @@ def test_final_gate_evaluator_preserves_group_order_and_attempt_binding(
         FlagOnlyPlausibilityScope,
     )
     from easyicu.research_agent.execution import phase as pipeline_execute
+    from easyicu.research_agent.execution import final_validation
     from easyicu.research_agent.gates import contract as contract_gate
     from easyicu.research_agent.contracts.runtime import ValidationFinding
     from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
@@ -1466,16 +1467,16 @@ def test_final_gate_evaluator_preserves_group_order_and_attempt_binding(
         return _demote
 
     monkeypatch.setattr(
-        pipeline_execute,
+        final_validation,
         "_demote_step_contract_for_primary_runner",
         preserve_demotions("primary_runner_demotion"),
     )
     monkeypatch.setattr(
-        pipeline_execute,
+        final_validation,
         "_demote_result_figure_shape_for_family_renderer",
         preserve_demotions("figure_shape_demotion"),
     )
-    original_compile = pipeline_execute.compile_sealed_step_result_shadow
+    original_compile = final_validation.compile_sealed_step_result_shadow
     compiler_calls = []
 
     def compile_once(**kwargs):
@@ -1483,7 +1484,7 @@ def test_final_gate_evaluator_preserves_group_order_and_attempt_binding(
         return original_compile(**kwargs)
 
     monkeypatch.setattr(
-        pipeline_execute,
+        final_validation,
         "compile_sealed_step_result_shadow",
         compile_once,
     )
@@ -1493,7 +1494,7 @@ def test_final_gate_evaluator_preserves_group_order_and_attempt_binding(
             return list(legacy_findings)
 
     monkeypatch.setattr(
-        pipeline_execute,
+        final_validation,
         "StepSummaryFractionEnvelopeDualReader",
         PassthroughFractionEnvelopeValidator,
     )
@@ -1607,6 +1608,7 @@ def test_final_fraction_consumer_fails_closed_when_sealed_compile_fails(
         FlagOnlyPlausibilityScope,
     )
     from easyicu.research_agent.execution import phase as pipeline_execute
+    from easyicu.research_agent.execution import final_validation
     from easyicu.research_agent.execution.envelope_sealing import (
         SealedStepResultEnvelopeSnapshot,
     )
@@ -1621,27 +1623,27 @@ def test_final_fraction_consumer_fails_closed_when_sealed_compile_fails(
         error_code="sealed_envelope_compile_failed",
     )
     monkeypatch.setattr(
-        pipeline_execute,
+        final_validation,
         "compile_sealed_step_result_shadow",
         lambda **_kwargs: failed_snapshot,
     )
     monkeypatch.setattr(
-        pipeline_execute,
+        final_validation,
         "_step_execution_cohort_path",
         lambda **_kwargs: tmp_path / "cohort.parquet",
     )
     monkeypatch.setattr(
-        pipeline_execute,
+        final_validation,
         "_bound_step_execution_cohort_path",
         lambda **_kwargs: tmp_path / "cohort.parquet",
     )
     monkeypatch.setattr(
-        pipeline_execute,
+        final_validation,
         "_demote_step_contract_for_primary_runner",
         lambda _record, _summary, findings: list(findings),
     )
     monkeypatch.setattr(
-        pipeline_execute,
+        final_validation,
         "_demote_result_figure_shape_for_family_renderer",
         lambda _context, findings: list(findings),
     )
@@ -1656,7 +1658,7 @@ def test_final_fraction_consumer_fails_closed_when_sealed_compile_fails(
         )
 
     monkeypatch.setattr(
-        pipeline_execute,
+        final_validation,
         "_step_deterministic_contract_findings",
         fraction_only_contract_findings,
     )
