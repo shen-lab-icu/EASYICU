@@ -46,6 +46,7 @@ missing during the move.
 
 from __future__ import annotations
 
+import logging
 import operator
 import re
 from dataclasses import replace
@@ -73,6 +74,7 @@ if TYPE_CHECKING:
     from . import ConceptResolver
 
 DEBUG_MODE = False
+logger = logging.getLogger(__name__)
 
 
 def _duckdb_sql_path_literal(path) -> str:
@@ -223,6 +225,249 @@ def _preserve_callback_dur_var_unit(
     return after
 
 
+def _load_mimic_icu_outtimes(
+    data_source: Optional["ICUDataSource"],
+    frame: pd.DataFrame,
+    id_cols: Optional[List[str]],
+) -> Optional[pd.DataFrame]:
+    """Load the small ICU-discharge lookup required by duration callbacks."""
+
+    if data_source is None:
+        return None
+    id_col = id_cols[0] if id_cols else None
+    if not id_col or id_col not in frame.columns:
+        raise ValueError("MIMIC duration callback requires an ICU stay identifier")
+    try:
+        table = data_source.load_table(
+            "icustays",
+            columns=[id_col, "intime", "outtime", "los"],
+            verbose=False,
+        )
+        bounds = table.data if hasattr(table, "data") else table
+    except Exception as exc:
+        raise ValueError(
+            "MIMIC duration callback could not load ICU outtime for clipping"
+        ) from exc
+    if not isinstance(bounds, pd.DataFrame):
+        bounds = pd.DataFrame(bounds)
+    if id_col not in bounds.columns or "outtime" not in bounds.columns:
+        raise ValueError(
+            "MIMIC icustays must expose the stay identifier and outtime"
+        )
+    stay_ids = frame[id_col].dropna().unique()
+    bounds = bounds.loc[bounds[id_col].isin(stay_ids)].copy()
+    missing_outtime = bounds["outtime"].isna()
+    if missing_outtime.any() and {"intime", "los"}.issubset(bounds.columns):
+        fallback = pd.to_datetime(
+            bounds.loc[missing_outtime, "intime"], errors="coerce"
+        ) + pd.to_timedelta(
+            pd.to_numeric(bounds.loc[missing_outtime, "los"], errors="coerce"),
+            unit="D",
+        )
+        bounds.loc[missing_outtime, "outtime"] = fallback
+    unresolved = set(stay_ids) - set(
+        bounds.loc[bounds["outtime"].notna(), id_col].unique()
+    )
+    # Keep unresolved stays out of the lookup.  The clipping utility drops all
+    # their duration episodes fail-closed and logs the affected count; it must
+    # never infer discharge from a medication event.
+    if unresolved:
+        bounds = bounds.loc[~bounds[id_col].isin(unresolved)].copy()
+    keep_columns = [id_col]
+    if "intime" in bounds.columns:
+        keep_columns.append("intime")
+    keep_columns.append("outtime")
+    return bounds.loc[
+        bounds["outtime"].notna(), keep_columns
+    ].drop_duplicates()
+
+
+def _parse_eicu_age(values: pd.Series) -> pd.Series:
+    """Parse eICU's numeric strings and ``> 89`` sentinel onto years."""
+
+    text = values.astype("string").str.strip()
+    age = pd.to_numeric(text.str.extract(r"(\d+(?:\.\d+)?)", expand=False), errors="coerce")
+    over_89 = text.str.startswith(">").fillna(False) & age.eq(89).fillna(False)
+    return age.mask(over_89, 90.0)
+
+
+def _load_eicu_tidal_volume_ages(
+    frame: pd.DataFrame,
+    *,
+    id_column: str,
+    data_source: Optional["ICUDataSource"],
+) -> pd.Series:
+    """Return age aligned to a respiratoryCharting source frame.
+
+    The lookup is restricted to the current extraction batch.  Failure is
+    represented by missing age rather than an assumed adult age; the caller
+    then quarantines unit-ambiguous values instead of guessing their scale.
+    """
+
+    if "age" in frame.columns:
+        return _parse_eicu_age(frame["age"])
+    result = pd.Series(np.nan, index=frame.index, dtype="float64")
+    if data_source is None or id_column not in frame.columns:
+        return result
+
+    stay_ids = frame[id_column].dropna().unique().tolist()
+    if not stay_ids:
+        return result
+    try:
+        from ..datasource import FilterOp, FilterSpec
+
+        patient = data_source.load_table(
+            "patient",
+            columns=[id_column, "age"],
+            filters=[FilterSpec(column=id_column, op=FilterOp.IN, value=stay_ids)],
+            verbose=False,
+        )
+        demographics = patient.data if hasattr(patient, "data") else patient
+        if not isinstance(demographics, pd.DataFrame):
+            demographics = pd.DataFrame(demographics)
+        if id_column not in demographics.columns or "age" not in demographics.columns:
+            raise KeyError(f"patient table lacks {id_column!r} or 'age'")
+        demographics = demographics[[id_column, "age"]].drop_duplicates(
+            subset=[id_column], keep="first"
+        )
+        age_lookup = pd.Series(
+            _parse_eicu_age(demographics["age"]).to_numpy(),
+            index=demographics[id_column],
+        )
+        return pd.to_numeric(frame[id_column].map(age_lookup), errors="coerce")
+    except Exception as exc:
+        logger.warning(
+            "eICU tidal-volume age lookup failed; ambiguous values will be "
+            "quarantined (stays=%d, error=%s)",
+            len(stay_ids),
+            exc,
+        )
+        return result
+
+
+def _normalize_eicu_tidal_volume_frame(
+    frame: pd.DataFrame,
+    *,
+    concept_name: str,
+    value_column: Optional[str] = None,
+    id_column: Optional[str] = None,
+    label_column: Optional[str] = None,
+    ages: Optional[pd.Series] = None,
+    force_liters: bool = False,
+    force_milliliters: bool = False,
+) -> pd.DataFrame:
+    """Normalize eICU respiratory tidal volume to mL before aggregation.
+
+    ``respiratoryCharting`` has no unit column.  Most tidal-volume labels are
+    recorded in mL, but some interfaces emit L-scale decimals under the same
+    label; ``Set Vt (Drager)`` is a separately identified L-scale source.  The
+    mixed-label rule therefore uses within-stay evidence first, then adult age,
+    and fails closed for ambiguous paediatric/unknown-age values.  The eICU
+    ``lab.TV`` source declares mL semantics but contains a sparse implausible
+    low-value tail; ``force_milliliters`` preserves credible values without
+    interpreting those entries as litres.  Zero is a valid ventilator setting
+    and is deliberately never rescaled.
+    """
+
+    out = frame.copy()
+    value_column = value_column or (
+        concept_name if concept_name in out.columns else None
+    )
+    if value_column is None or value_column not in out.columns:
+        raise ValueError(
+            f"eICU tidal-volume callback requires value column for {concept_name!r}"
+        )
+    id_column = id_column or next(
+        (
+            candidate
+            for candidate in ("patientunitstayid", "stay_id")
+            if candidate in out.columns
+        ),
+        None,
+    )
+    label_column = label_column or next(
+        (
+            candidate
+            for candidate in ("respchartvaluelabel", "respChartValueLabel")
+            if candidate in out.columns
+        ),
+        None,
+    )
+
+    raw = pd.to_numeric(out[value_column], errors="coerce")
+    normalized = raw.copy()
+    if ages is None:
+        ages = pd.Series(np.nan, index=out.index, dtype="float64")
+    else:
+        ages = pd.to_numeric(ages.reindex(out.index), errors="coerce")
+    adult = ages.ge(18)
+
+    if label_column and label_column in out.columns:
+        labels = out[label_column].astype("string").str.strip()
+    else:
+        labels = pd.Series(pd.NA, index=out.index, dtype="string")
+    explicit_ml = labels.eq("Vt Spontaneous (mL)").fillna(False)
+    if force_milliliters:
+        explicit_ml = pd.Series(True, index=out.index)
+    drager = labels.eq("Set Vt (Drager)").fillna(False)
+    if force_liters:
+        drager = pd.Series(True, index=out.index)
+
+    positive = raw.gt(0)
+    low = positive & raw.le(2)
+    if id_column and id_column in out.columns:
+        has_ml_reference = raw.ge(100).groupby(out[id_column], dropna=False).transform(
+            "any"
+        )
+    else:
+        has_ml_reference = pd.Series(False, index=out.index)
+
+    # Drager is predominantly L-scale below 2, but a tiny tail is already mL
+    # (250--650 in the real source).  Convert only the evidenced L range.
+    drager_convert = drager & low
+    contextual_convert = low & ~drager & ~explicit_ml & has_ml_reference
+    adult_pure_convert = low & ~drager & ~explicit_ml & ~has_ml_reference & adult
+    convert = drager_convert | contextual_convert | adult_pure_convert
+    normalized.loc[convert] = raw.loc[convert] * 1000.0
+
+    # A low value with neither an explicit unit nor contextual/adult evidence
+    # cannot safely be interpreted as L or mL.  Preserve only explicit mL.
+    ambiguous_low = low & ~drager & ~explicit_ml & ~contextual_convert & ~adult_pure_convert
+    normalized.loc[ambiguous_low] = np.nan
+
+    # Values between 2 and 50 are not credible adult tidal volumes.  For an
+    # unlabelled paediatric/unknown-age record they are equally unit-ambiguous,
+    # while an explicitly mL-labelled paediatric record remains admissible.
+    raw_mid = raw.gt(2) & raw.lt(50)
+    ambiguous_mid = raw_mid & ~explicit_ml
+    normalized.loc[ambiguous_mid] = np.nan
+    adult_small_ml = adult & normalized.gt(0) & normalized.lt(50)
+    normalized.loc[adult_small_ml] = np.nan
+    unknown_small_ml = ages.isna() & explicit_ml & normalized.gt(0) & normalized.lt(50)
+    normalized.loc[unknown_small_ml] = np.nan
+
+    out[value_column] = normalized
+    audit = {
+        "rows": int(len(out)),
+        "zero_rows_preserved": int(raw.eq(0).sum()),
+        "drager_l_to_ml_rows": int(drager_convert.sum()),
+        "same_stay_l_to_ml_rows": int(contextual_convert.sum()),
+        "adult_pure_low_l_to_ml_rows": int(adult_pure_convert.sum()),
+        "ambiguous_low_quarantined_rows": int(ambiguous_low.sum()),
+        "ambiguous_mid_quarantined_rows": int(ambiguous_mid.sum()),
+        "adult_small_ml_quarantined_rows": int(adult_small_ml.sum()),
+        "unknown_small_ml_quarantined_rows": int(unknown_small_ml.sum()),
+        "age_missing_rows": int(ages.isna().sum()),
+    }
+    out.attrs["eicu_tidal_volume_unit_audit"] = audit
+    logger.info(
+        "eICU tidal-volume normalization concept=%s audit=%s",
+        concept_name,
+        audit,
+    )
+    return out
+
+
 def _apply_callback(
     frame: pd.DataFrame,
     source: ConceptSource,
@@ -241,6 +486,53 @@ def _apply_callback(
 
     if expr == "identity_callback":
         return frame
+
+    if expr in {
+        "eicu_tidal_volume_mixed_scale",
+        "eicu_tidal_volume_drager_l_to_ml",
+        "eicu_tidal_volume_explicit_ml",
+    }:
+        value_column = (
+            concept_name
+            if concept_name in frame.columns
+            else source.value_var
+            if source.value_var and source.value_var in frame.columns
+            else None
+        )
+        id_column = next(
+            (
+                candidate
+                for candidate in ("patientunitstayid", "stay_id")
+                if candidate in frame.columns
+            ),
+            None,
+        )
+        if id_column is None:
+            ages = pd.Series(np.nan, index=frame.index, dtype="float64")
+        else:
+            ages = _load_eicu_tidal_volume_ages(
+                frame,
+                id_column=id_column,
+                data_source=data_source,
+            )
+        result = _normalize_eicu_tidal_volume_frame(
+            frame,
+            concept_name=concept_name,
+            value_column=value_column,
+            id_column=id_column,
+            label_column=source.sub_var,
+            ages=ages,
+            force_liters=expr == "eicu_tidal_volume_drager_l_to_ml",
+            force_milliliters=expr == "eicu_tidal_volume_explicit_ml",
+        )
+        # The deprecated ConceptLoader invokes callbacks before its standard
+        # value/time projection.  Preserve that compatibility route without
+        # changing the main resolver, which already presents concept_name.
+        if concept_name not in frame.columns and value_column in result.columns:
+            result = result.rename(columns={value_column: "value"})
+            if "respchartoffset" in result.columns and "time" not in result.columns:
+                result = result.rename(columns={"respchartoffset": "time"})
+        return result
 
     if expr in ("vent_mode_control", "vent_mode_seq"):
         # Harmonise a native ventilator-mode label/code onto one axis (control | seq)
@@ -809,7 +1101,12 @@ def _apply_callback(
     # 匹配 mimic_sampling (R ricu callback-itm.R)
     # mimic_sampling(x, val_var, aux_time, ...)
     # 功能：1) combine_date_time(x, aux_time, hours(12L))
-    #      2) set(x, j = val_var, value = !is.na(x[[val_var]]))
+    #      2) 将每个 microbiology row 标记为一次采样事件。
+    #
+    # ``org_itemid`` 是否缺失描述培养结果是否检出微生物，而不是标本是否
+    # 已采集。把 ``!is.na(org_itemid)`` 暴露为 ``samp`` 会使 MIMIC 的阴性
+    # 培养变成 False，但 eICU/AUMC 的同一概念仍为 True，破坏跨库语义。
+    # 阳性结果由独立的 culture_positive 输出承担。
     if expr == "mimic_sampling":
         frame = frame.copy()
         val_var = source.value_var or concept_name
@@ -838,14 +1135,14 @@ def _apply_callback(
                     frame[index_col] = pd.to_datetime(frame[aux_time], errors='coerce')
                     frame = frame.drop(columns=[aux_time])
         
-        # 2. 将val_var转换为布尔值（非NA为True）
+        # 2. microbiologyevents 中每一行都来自一个已采集标本。即使
+        # org_itemid 为空（阴性培养），也必须是 samp=True。
         if val_var in frame.columns:
-            frame[concept_name] = frame[val_var].notna().astype(bool)
+            frame[concept_name] = True
             if val_var != concept_name:
                 frame = frame.drop(columns=[val_var])
         else:
-            # 如果val_var不存在，创建concept_name列（全False）
-            frame[concept_name] = False
+            frame[concept_name] = True
         
         return frame
     
@@ -975,161 +1272,182 @@ def _apply_callback(
     # Format: dex_to_10(ids, factors) or dex_to_10(c(...), c(...)) or dex_to_10(list(...), c(...))
     match = re.fullmatch(r"dex_to_10\((.+)\)", expr, flags=re.DOTALL)
     if match:
+        if frame.empty:
+            return frame
         args = _split_arguments(match.group(1))
-        if len(args) >= 2:
-            # Parse itemids and factors using _parse_r_value which handles nested list/c structures
-            id_arg = args[0].strip()
-            factor_arg = args[1].strip()
-            
-            try:
-                itemids = _parse_r_value(id_arg)    # e.g., list(7255L, 7256L, c(8940L, 9571L)) -> [7255, 7256, [8940, 9571]]
-                factors = _parse_r_value(factor_arg)  # e.g., c(2, 3, 4) -> [2, 3, 4]
-                
-                # 🔧 FIX: Ensure itemids and factors are always lists (handle single-value case)
-                # e.g., dex_to_10(30017L, c(0.5)) → itemids=30017 (int), factors=[0.5]
-                if not isinstance(itemids, (list, tuple)):
-                    itemids = [itemids]
-                if not isinstance(factors, (list, tuple)):
-                    factors = [factors]
-                
-                # Flatten itemids if needed for simple structure, or handle nested mapping
-                # Nested structure means: itemids[i] can be a list, all items in that list get factors[i]
-                
-                # Apply conversion factors
-                sub_var = source.sub_var if hasattr(source, 'sub_var') else 'itemid'
-                # 🔧 FIX: 确定值列
-                # 对于 MIIV: mimv_rate 会将计算结果写入 rate 列
-                # 对于 AUMC drugitems: 默认值列是 dose（不是 rate）
-                # 策略：优先使用 source 配置的 val_var，然后 concept_name，最后回退到 dose/rate
-                val_col = None
-                # 1. 优先使用 source 配置的 value_var
-                if hasattr(source, 'value_var') and source.value_var and source.value_var in frame.columns:
-                    val_col = source.value_var
-                # 2. 使用 concept_name 列（如果已创建）
-                elif concept_name in frame.columns:
-                    val_col = concept_name
-                # 3. AUMC drugitems 默认用 dose 列
-                elif 'dose' in frame.columns and frame['dose'].notna().any():
-                    val_col = 'dose'
-                # 4. 回退到 rate 列（MIIV inputevents）
-                elif 'rate' in frame.columns and frame['rate'].notna().any():
-                    val_col = 'rate'
-                # 5. 其他常见值列
-                elif 'amount' in frame.columns:
-                    val_col = 'amount'
-                elif 'valuenum' in frame.columns:
-                    val_col = 'valuenum'
-                
-                if sub_var in frame.columns and val_col:
-                    frame = frame.copy()
-                    for ids_item, factor in zip(itemids, factors):
-                        # ids_item can be a single value or a list
-                        if isinstance(ids_item, (list, tuple)):
-                            ids_to_check = ids_item
-                        else:
-                            ids_to_check = [ids_item]
-                        
-                        for itemid in ids_to_check:
-                            mask = frame[sub_var] == itemid
-                            if mask.any():
-                                frame.loc[mask, val_col] = frame.loc[mask, val_col] * factor
-            except Exception as e:
-                # Log warning but continue
-                import logging
-                logging.warning(f"dex_to_10 parsing failed: {e}")
-        return frame
+        if len(args) < 2:
+            raise ValueError("dex_to_10 requires item IDs and conversion factors")
+
+        try:
+            itemids = _parse_r_value(args[0].strip())
+            factors = _parse_r_value(args[1].strip())
+            if not isinstance(itemids, (list, tuple)):
+                itemids = [itemids]
+            if not isinstance(factors, (list, tuple)):
+                factors = [factors]
+
+            sub_var = source.sub_var
+            if not sub_var or sub_var not in frame.columns:
+                raise ValueError(
+                    "dex_to_10 requires the configured sub_var to survive "
+                    "upstream aggregation"
+                )
+
+            val_col = None
+            candidates = [
+                source.value_var,
+                concept_name,
+                "dose",
+                "rate",
+                "amount",
+                "givendose",
+                "pharmavalue",
+                "valuenum",
+            ]
+            for candidate in candidates:
+                if (
+                    candidate
+                    and candidate in frame.columns
+                    and frame[candidate].notna().any()
+                ):
+                    val_col = candidate
+                    break
+            if val_col is None:
+                raise ValueError("dex_to_10 could not identify a value column")
+
+            from ..utils.callback_utils import dex_to_10 as dex_to_10_fn
+
+            return dex_to_10_fn(itemids, factors)(
+                frame,
+                sub_var=sub_var,
+                val_col=val_col,
+            )
+        except Exception as exc:
+            raise ValueError(f"dex_to_10 conversion failed: {exc}") from exc
     
     # Handle grp_mount_to_rate callback (convert grouped amounts to rates)
     # Format: grp_mount_to_rate(mins(1L), hours(1L)) or similar
     match = re.fullmatch(r"grp_mount_to_rate\((.+)\)", expr, flags=re.DOTALL)
     if match:
         args = _split_arguments(match.group(1))
-        if len(args) >= 2:
-            try:
-                # Parse min_dur and extra_dur
-                min_dur_expr = args[0].strip()
-                extra_dur_expr = args[1].strip()
-                
-                def _parse_duration_expr(dur_expr: str) -> pd.Timedelta:
-                    """Parse R duration expression like mins(1L), hours(1L)."""
-                    if 'mins(' in dur_expr:
-                        mins_match = re.search(r'mins\((\d+)', dur_expr)
-                        if mins_match:
-                            return pd.Timedelta(minutes=int(mins_match.group(1)))
-                    elif 'hours(' in dur_expr:
-                        hours_match = re.search(r'hours\((\d+)', dur_expr)
-                        if hours_match:
-                            return pd.Timedelta(hours=int(hours_match.group(1)))
-                    elif 'secs(' in dur_expr:
-                        secs_match = re.search(r'secs\((\d+)', dur_expr)
-                        if secs_match:
-                            return pd.Timedelta(seconds=int(secs_match.group(1)))
-                    # Default to 1 minute
-                    return pd.Timedelta(minutes=1)
-                
-                min_dur = _parse_duration_expr(min_dur_expr)
-                extra_dur = _parse_duration_expr(extra_dur_expr)
-                
-                # Get group variable from source
-                # 🔧 FIX: grp_var 可能在 source.grp_var 或 source.params['grp_var'] 中
-                grp_var = None
-                if hasattr(source, 'grp_var') and source.grp_var:
-                    grp_var = source.grp_var
-                elif hasattr(source, 'params') and source.params and 'grp_var' in source.params:
-                    grp_var = source.params['grp_var']
-                
-                # Get value and unit columns
-                val_col = source.value_var if hasattr(source, 'value_var') and source.value_var else None
-                if not val_col:
-                    # Try common value columns
-                    for candidate in ['val', 'value', 'amount', 'dose', 'givendose', 'pharmavalue']:
-                        if candidate in frame.columns:
-                            val_col = candidate
-                            break
-                if not val_col:
-                    val_col = concept_name
-                
-                unit_col = source.unit_var if hasattr(source, 'unit_var') and source.unit_var else None
-                if not unit_col:
-                    for candidate in ['unit', 'unit_var', 'amountuom', 'doserateunit', 'doseunit']:
-                        if candidate in frame.columns:
-                            unit_col = candidate
-                            break
-                
-                # Get index_var (time column)
-                index_var = source.index_var if hasattr(source, 'index_var') and source.index_var else None
-                if not index_var:
-                    for candidate in ['datetime', 'givenat', 'starttime', 'charttime', 'time']:
-                        if candidate in frame.columns:
-                            index_var = candidate
-                            break
-                
-                # Get ID columns - only use standard patient/stay ID columns
-                # 🔧 FIX: Don't use "id" substring matching - it incorrectly includes columns like
-                # 'fluidamount_calc', 'typeid', 'subtypeid' which contain "id" but are not patient IDs
-                standard_id_cols = ['patientid', 'stay_id', 'admissionid', 'patientunitstayid', 'subject_id', 'hadm_id', 'icustay_id']
-                id_cols = [col for col in standard_id_cols if col in frame.columns]
-                
-                from ..utils.callback_utils import grp_mount_to_rate as grp_mount_fn
-                callback_fn = grp_mount_fn(
-                    min_dur=min_dur,
-                    extra_dur=extra_dur,
-                    grp_var=grp_var
+        if len(args) < 2:
+            raise ValueError(
+                "grp_mount_to_rate requires minimum and extra durations"
+            )
+        try:
+            min_dur_expr = args[0].strip()
+            extra_dur_expr = args[1].strip()
+
+            def _parse_duration_expr(dur_expr: str) -> pd.Timedelta:
+                """Parse R duration expressions such as ``mins(1L)``."""
+                duration_match = re.fullmatch(
+                    r"(mins|hours|secs)\(\s*(\d+)L?\s*\)",
+                    dur_expr,
                 )
-                
-                result = callback_fn(
-                    frame,
-                    val_col=val_col if val_col in frame.columns else (concept_name if concept_name in frame.columns else 'value'),
-                    unit_col=unit_col if unit_col and unit_col in frame.columns else 'unit',
-                    index_var=index_var,
-                    id_cols=id_cols
-                )
-                
-                return result
-            except Exception as e:
-                import logging
-                logging.warning(f"grp_mount_to_rate parsing failed: {e}")
-        return frame
+                if duration_match is None:
+                    raise ValueError(
+                        f"unsupported duration expression {dur_expr!r}"
+                    )
+                amount = int(duration_match.group(2))
+                unit = {
+                    "mins": "minutes",
+                    "hours": "hours",
+                    "secs": "seconds",
+                }[duration_match.group(1)]
+                return pd.Timedelta(**{unit: amount})
+
+            min_dur = _parse_duration_expr(min_dur_expr)
+            extra_dur = _parse_duration_expr(extra_dur_expr)
+
+            grp_var = None
+            if getattr(source, "grp_var", None):
+                grp_var = source.grp_var
+            elif source.params and "grp_var" in source.params:
+                grp_var = source.params["grp_var"]
+
+            val_col = source.value_var
+            if not val_col:
+                for candidate in [
+                    "val",
+                    "value",
+                    "amount",
+                    "dose",
+                    "givendose",
+                    "pharmavalue",
+                ]:
+                    if candidate in frame.columns:
+                        val_col = candidate
+                        break
+            if not val_col:
+                val_col = concept_name
+
+            unit_col = source.unit_var
+            if not unit_col:
+                for candidate in [
+                    "unit",
+                    "unit_var",
+                    "amountuom",
+                    "doserateunit",
+                    "doseunit",
+                ]:
+                    if candidate in frame.columns:
+                        unit_col = candidate
+                        break
+
+            index_var = source.index_var
+            if not index_var:
+                for candidate in [
+                    "datetime",
+                    "givenat",
+                    "starttime",
+                    "charttime",
+                    "time",
+                ]:
+                    if candidate in frame.columns:
+                        index_var = candidate
+                        break
+
+            standard_id_cols = [
+                "patientid",
+                "stay_id",
+                "admissionid",
+                "patientunitstayid",
+                "subject_id",
+                "hadm_id",
+                "icustay_id",
+            ]
+            id_cols = [col for col in standard_id_cols if col in frame.columns]
+
+            from ..utils.callback_utils import grp_mount_to_rate as grp_mount_fn
+
+            callback_fn = grp_mount_fn(
+                min_dur=min_dur,
+                extra_dur=extra_dur,
+                grp_var=grp_var,
+            )
+            resolved_val_col = (
+                val_col
+                if val_col in frame.columns
+                else concept_name
+                if concept_name in frame.columns
+                else "value"
+            )
+            return callback_fn(
+                frame,
+                val_col=resolved_val_col,
+                unit_col=(
+                    unit_col
+                    if unit_col and unit_col in frame.columns
+                    else "unit"
+                ),
+                index_var=index_var,
+                id_cols=id_cols,
+                sub_var=source.sub_var,
+            )
+        except Exception as exc:
+            raise ValueError(
+                f"grp_mount_to_rate conversion failed: {exc}"
+            ) from exc
     
     # Handle ts_to_win_tbl callback
     match = re.fullmatch(r"ts_to_win_tbl\((.+)\)", expr, flags=re.DOTALL)
@@ -1252,31 +1570,18 @@ def _apply_callback(
         # stop_var and grp_var are stored in params dict
         stop_var = source.params.get('stop_var', None) if source.params else None
         grp_var = source.params.get('grp_var', None) if source.params else None
-        # Use unit_column from parent context or source.unit_var
-        unit_col = unit_column or (source.unit_var if hasattr(source, 'unit_var') else None)
+        # ``rateuom`` describes the input rate, not the derived elapsed time.
+        # The concept dictionary owns the canonical output unit (hours), so do
+        # not propagate a medication-rate unit onto a duration value.
+        unit_col = None
         val_col = concept_name
         
-        # Load admission times for proper floor(end_h) - floor(start_h) calculation
-        # R ricu uses: duration = floor(end_hours) - floor(start_hours)
-        # where hours are relative to intime
-        admission_times = None
-        if data_source is not None:
-            try:
-                icustays_result = data_source.load_table('icustays')
-                # ICUTable has .data attribute for the underlying DataFrame
-                if hasattr(icustays_result, 'data'):
-                    icustays_table = icustays_result.data
-                else:
-                    icustays_table = icustays_result
-                if icustays_table is not None and not icustays_table.empty:
-                    # Find the id column and intime column
-                    id_col_name = id_cols[0] if id_cols else 'stay_id'
-                    if id_col_name in icustays_table.columns:
-                        # Keep the original id column name (e.g., 'stay_id') instead of renaming to 'id'
-                        admission_times = icustays_table[[id_col_name, 'intime']].copy()
-            except Exception:
-                pass  # Fallback to floor(duration) if icustays not available
-        
+        icu_stays = _load_mimic_icu_outtimes(data_source, frame, id_cols)
+        status_var = source.params.get("status_var", "statusdescription")
+        cancel_var = source.params.get("cancel_var")
+        excluded_statuses = source.params.get("excluded_statuses")
+        merge_gap_minutes = source.params.get("merge_gap_minutes", 5.0)
+
         return mimic_dur_inmv(
             frame,
             val_col=val_col,
@@ -1284,7 +1589,11 @@ def _apply_callback(
             stop_var=stop_var,
             id_cols=id_cols,
             unit_col=unit_col,
-            admission_times=admission_times,
+            icu_stays=icu_stays,
+            status_var=str(status_var),
+            cancel_var=str(cancel_var) if cancel_var else None,
+            excluded_statuses=excluded_statuses,
+            merge_gap_minutes=merge_gap_minutes,
         )
     
     # Handle mimic_dur_incv callback (for CareVue durations)
@@ -1300,16 +1609,24 @@ def _apply_callback(
                 break
         # grp_var is stored in params dict
         grp_var = source.params.get('grp_var', None) if source.params else None
-        # Use unit_column from parent context or source.unit_var
-        unit_col = unit_column or (source.unit_var if hasattr(source, 'unit_var') else None)
+        # CareVue's source unit is likewise the rate unit, not a duration unit.
+        unit_col = None
         val_col = concept_name
-        
+        icu_stays = _load_mimic_icu_outtimes(data_source, frame, id_cols)
+        boundary_var = source.params.get("boundary_var", "stopped")
+        merge_gap_hours = source.params.get("merge_gap_hours", 5.0)
+        rate_var = source.params.get("rate_var", "rate")
+
         return mimic_dur_incv(
             frame,
             val_col=val_col,
             grp_var=grp_var,
             id_cols=id_cols,
-            unit_col=unit_col
+            unit_col=unit_col,
+            icu_stays=icu_stays,
+            boundary_var=str(boundary_var),
+            merge_gap_hours=merge_gap_hours,
+            rate_var=str(rate_var),
         )
     
     # Handle mimic_rate_cv callback (for CareVue infusion rates)
@@ -1878,6 +2195,21 @@ def _apply_callback(
         if not grp_var and source.params:
             grp_var = source.params.get("grp_var")
         index_var = source.index_var
+        continuous_var = (
+            source.params.get("continuous_var", "iscontinuous")
+            if source.params
+            else "iscontinuous"
+        )
+        action_var = (
+            source.params.get("action_var", "action")
+            if source.params
+            else "action"
+        )
+        merge_gap_minutes = (
+            source.params.get("merge_gap_minutes", 5.0)
+            if source.params
+            else 5.0
+        )
 
         return aumc_dur(
             frame,
@@ -1886,6 +2218,9 @@ def _apply_callback(
             grp_var=grp_var,
             index_var=index_var,
             concept_name=concept_name,
+            continuous_var=continuous_var,
+            action_var=action_var,
+            merge_gap_minutes=merge_gap_minutes,
         )
 
     # Handle aumc_bxs callback - negate values where direction is '-'
@@ -2368,6 +2703,115 @@ def _apply_callback(
             admission_times=admission_times,  # 🔧 Pass admission times for proper floor behavior
         )
 
+    if expr.strip() == "distribute_volume_hourly":
+        from ..utils.callback_utils import (
+            distribute_volume_hourly,
+            normalize_volume_to_ml,
+        )
+
+        params = source.params or {}
+        end_col = params.get("end_var")
+        if not end_col:
+            end_col = "endtime" if "endtime" in frame.columns else "stop"
+        index_col = source.index_var
+        if not index_col:
+            index_col = next(
+                (
+                    candidate
+                    for candidate in ("starttime", "start", "charttime")
+                    if candidate in frame.columns
+                ),
+                None,
+            )
+        if not index_col or index_col not in frame.columns:
+            return frame
+
+        db_name = ""
+        if data_source is not None:
+            db_name = getattr(getattr(data_source, "config", None), "name", "")
+        id_preferences = {
+            "aumc": ("admissionid",),
+            "mimic": ("icustay_id",),
+            "mimic_demo": ("icustay_id",),
+            "miiv": ("stay_id",),
+        }.get(db_name, ("stay_id", "icustay_id", "admissionid"))
+        id_col = next((column for column in id_preferences if column in frame.columns), None)
+        if id_col is None:
+            raise ValueError(
+                f"{db_name or 'unknown database'} total-input allocation has no "
+                "stay-level identifier"
+            )
+
+        alternate_value_col = params.get("alternate_value_var")
+        if alternate_value_col and alternate_value_col in frame.columns:
+            frame = frame.copy()
+            frame[concept_name] = pd.concat(
+                [
+                    pd.to_numeric(frame[concept_name], errors="coerce"),
+                    pd.to_numeric(frame[alternate_value_col], errors="coerce"),
+                ],
+                axis=1,
+            ).max(axis=1, skipna=True)
+
+        volume_unit_col = source.unit_var or unit_column
+        if volume_unit_col and volume_unit_col in frame.columns:
+            frame = frame.copy()
+            frame[concept_name] = normalize_volume_to_ml(
+                frame[concept_name], frame[volume_unit_col]
+            )
+
+        origin_times = None
+        origin_col = None
+        numeric_time_unit = "hours"
+        output_time_unit = "relative_hours"
+        if db_name == "aumc":
+            if data_source is None:
+                raise ValueError("AUMC volume allocation requires admissions.admittedat")
+            origin_col = "admittedat"
+            origin_result = data_source.load_table(
+                "admissions",
+                columns=[id_col, origin_col],
+                verbose=False,
+            )
+            origin_times = (
+                origin_result.data
+                if hasattr(origin_result, "data")
+                else origin_result
+            )
+            numeric_time_unit = "minutes"
+            output_time_unit = "absolute_minutes"
+        elif not pd.api.types.is_numeric_dtype(frame[index_col]):
+            if data_source is None:
+                raise ValueError(
+                    "datetime volume allocation requires icustays.intime"
+                )
+            origin_col = "intime"
+            origin_result = data_source.load_table(
+                "icustays",
+                columns=[id_col, origin_col],
+                verbose=False,
+            )
+            origin_times = (
+                origin_result.data
+                if hasattr(origin_result, "data")
+                else origin_result
+            )
+
+        result = distribute_volume_hourly(
+            frame,
+            val_col=concept_name,
+            end_col=end_col,
+            index_col=index_col,
+            id_col=id_col,
+            origin_times=origin_times,
+            origin_col=origin_col,
+            numeric_time_unit=numeric_time_unit,
+            output_time_unit=output_time_unit,
+        )
+        if index_col != "charttime" and index_col in result.columns:
+            result = result.rename(columns={index_col: "charttime"})
+        return result
+
     if expr.strip() == "mimv_rate":
         from ..utils.callback_utils import mimv_rate
         duration_col = None
@@ -2824,4 +3268,4 @@ def _apply_callback(
         f"Callback '{callback}' is not yet supported."
     )
 
-__all__ = ["_apply_callback"]
+__all__ = ["_apply_callback", "_normalize_eicu_tidal_volume_frame"]

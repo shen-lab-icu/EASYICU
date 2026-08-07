@@ -1,9 +1,9 @@
 {
   "finalized": false,
-  "finalized_note": "2026-08-03 待 AUMC/eICU 全量纠正重跑 — 逐值审计发现 AUMC 曾在按 ICU 入科时间归零前对绝对时间取整，且部分宽表合并曾把浮点 charttime 截断为整数；eICU suspected infection 则曾误用 diagnosisoffset 而非抗菌药事件时间。根因分别已在 7e35f2c1、7a75f1cf 和 497cc5fc 修复。旧 a9f8464e 发布仅保留历史证据，不得进入论文派生链；只有基于 f5da6d92 或其后继提交重跑、质控并封存的新六库发布才可提升为 current。",
-  "locked_for_extraction_run": "pending_aumc_eicu_time_semantics_rerun_f5da6d92_20260803",
-  "concept_dict_sha256": "f1a3cfa5c5e3c09f4f167a9cb95450844e47641ba662c53a13e1e1d31f22509c",
-  "sofa2_dict_sha256": "ab39bdcf03ad481dd65bbd5f6e63bdc71612a2267539aa76cc9fb415e19a0fca",
+  "finalized_note": "2026-08-06 待 AUMC RRT 区间纠正重跑 — AUMC rrt 改用官方 processitems 治疗过程 12465=CVVH、16363=Hemodialyse 的 start/stop 区间并展开为逐小时在治状态；不再把 CVVH stoppen 医嘱映射为 TRUE，也不再用设备压力/流量记录代替治疗区间。透析导管/通路项目明确排除。旧发布仅保留历史证据，不得进入论文派生链；只有基于该修复提交重提取、质控并封存的新六库发布才可提升为 current。",
+  "locked_for_extraction_run": "pending_aumc_rrt_process_interval_rerun_20260806",
+  "concept_dict_sha256": "14ae7e89487e51e37ddab219af9b135c4b783ca50d59c64379a6033a0ebac773",
+  "sofa2_dict_sha256": "b653e6dec054abdd4db9d178acbad3a4cde4d272693b0cdca66067bcca8e822e",
   "total_concepts": 251,
   "own_concepts_not_in_ricu": 130,
   "new_this_round": [

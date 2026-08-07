@@ -6234,6 +6234,15 @@ def _callback_susp_inf(
     positive_cultures = _callback_bool(kwargs.get("positive_cultures"), False)
     keep_components = _callback_bool(kwargs.get("keep_components"), False)
 
+    if positive_cultures:
+        raise ValueError(
+            "positive_cultures=True requires event-level culture-result timing, "
+            "which the harmonized `samp` concept intentionally does not encode; "
+            "use the separate admission-level `culture_positive` endpoint for "
+            "stratification, or provide an explicitly time-indexed positive-"
+            "culture component"
+        )
+
     result = susp_inf_detector(
         abx=abx_data,
         samp=samp_data,
@@ -6706,6 +6715,39 @@ def _callback_rrt_criteria(
     
     # Meets RRT criteria = base injury + crisis - NOT on RRT
     meets_criteria = base_injury & crisis & (~rrt_active)
+
+    # ``_merge_tables(..., how="outer")`` can retain an admission-level
+    # dependency row without an event time.  Comparisons against its missing
+    # measurements evaluate to False, which previously published one synthetic
+    # ``rrt_criteria=False`` row at charttime=NULL.  A time-dependent criterion
+    # cannot be asserted at an unknown time: discard negative merge artifacts
+    # and fail loudly if a future path ever computes a positive untimed event.
+    if index_column and index_column in data.columns:
+        missing_time = data[index_column].isna()
+        positive_missing_time = missing_time & meets_criteria
+        if bool(positive_missing_time.any()):
+            sample_ids = (
+                data.loc[positive_missing_time, id_columns]
+                .drop_duplicates()
+                .head(5)
+                .to_dict(orient="records")
+            )
+            raise ValueError(
+                "rrt_criteria produced positive rows without an event time; "
+                f"sample identifiers={sample_ids}"
+            )
+        data = data.loc[~missing_time].copy()
+        meets_criteria = meets_criteria.loc[~missing_time]
+    elif bool(meets_criteria.any()):
+        raise ValueError("rrt_criteria produced positive rows without a time axis")
+    else:
+        cols = id_columns + ["rrt_criteria"]
+        return _as_icutbl(
+            pd.DataFrame(columns=cols),
+            id_columns=id_columns,
+            index_column=None,
+            value_column="rrt_criteria",
+        )
     
     data["rrt_criteria"] = meets_criteria
     cols = id_columns + ([index_column] if index_column else []) + ["rrt_criteria"]
@@ -7691,7 +7733,12 @@ def _callback_fluid_balance_cumulative(
     tables: Dict[str, "ICUTable"],
     ctx: "ConceptCallbackContext",
 ) -> "ICUTable":
-    """Cumulative fluid balance = running sum of hourly fluid_balance per stay."""
+    """Cumulative fluid balance since ICU admission (hour zero).
+
+    Native exports may retain observations up to 24 hours before admission.
+    Those rows can remain useful point measurements, but they must not become a
+    hidden offset in a variable described as cumulative *since admission*.
+    """
     fb_tbl = tables.get("fluid_balance")
     if fb_tbl is None or fb_tbl.data.empty:
         return _as_icutbl(
@@ -7722,7 +7769,13 @@ def _callback_fluid_balance_cumulative(
         if non_meta:
             val_col = non_meta[0]
 
-    df[val_col] = pd.to_numeric(df[val_col], errors="coerce").fillna(0)
+    df[time_col] = pd.to_numeric(df[time_col], errors="coerce")
+    df[val_col] = pd.to_numeric(df[val_col], errors="coerce")
+    df = df.loc[
+        df[time_col].notna()
+        & df[val_col].notna()
+        & df[time_col].ge(0)
+    ].copy()
     df = df.sort_values([id_col, time_col])
     df["fluid_balance_cumulative"] = df.groupby(id_col)[val_col].cumsum()
     result = df[[id_col, time_col, "fluid_balance_cumulative"]].copy()

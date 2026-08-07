@@ -449,14 +449,22 @@ all_features = load_concepts(
 > case a worker hangs.
 > For disk exports, `extract_database(..., stream_output_batches=True)`
 > additionally chooses its default batch from **currently available** memory,
-> not nominal RAM. The planner reserves 25% (at least 2 GiB), converts the
-> remaining working set to a batch continuously, and rounds down to 5k stays.
-> With 8 GiB available the default is therefore 40k stays, not a fixed 10k
-> low-memory tier. After the first automatic batch, later batches are resized
-> from the measured process-tree working set (up to 67k stays); module and
-> batch peak-RSS telemetry is written to the export manifests. Sepsis label
-> derivation reuses the same outer batch instead of imposing a hidden 2k
-> sub-batch. Explicit `batch_size` values remain authoritative.
+> not nominal RAM. It reserves 25% (at least 2 GiB), combines a continuous
+> capacity estimate with conservative full-six release measurements, and then
+> resizes every module's later batches from its first measured process-tree
+> working set (up to 67k stays). This is not a fixed 10k low-memory tier: with
+> 8 GiB available the current initial pilots are approximately 20k for
+> MIMIC-III, 37k for MIMIC-IV, 25k for eICU, and 5k for the unusually dense
+> AUMC source. Below 24 GiB, MIMIC-III, MIMIC-IV and AUMC must provide a
+> measured pilot before one-shot execution is admitted; lower-risk calibrated
+> cohorts remain one-shot when their conservative peak fits the reserved
+> budget. When that high-risk guard alone requires a split, it starts from an
+> even half rather than creating a tiny residual batch. This guard follows the
+> 2026-08-03 observations that MIMIC-III one-shot reached about 16.83 GiB,
+> AUMC one-shot reached about 29.31 GiB, and a 67k eICU `other_scores` batch
+> reached about 15.6 GiB. Module/batch peak-RSS telemetry is written to the
+> manifests, and Sepsis derivation reuses the same outer batch instead of a
+> hidden 2k sub-batch. Explicit `batch_size` values remain authoritative.
 
 ### Domain-Specific Loaders
 

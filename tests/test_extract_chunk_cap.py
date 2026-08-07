@@ -97,17 +97,24 @@ def test_cap_constant_is_three():
     ("database", "total", "available_gb", "expected"),
     [
         ("eicu", 200_859, 32, 67_000),
-        ("eicu", 200_859, 16, 67_000),
-        ("eicu", 200_859, 14, 67_000),
-        ("eicu", 200_859, 11, 55_000),
-        ("eicu", 200_859, 8, 40_000),
-        ("eicu", 200_859, 6, 25_000),
-        ("eicu", 200_859, 4, 10_000),
-        ("miiv", 94_458, 16, 94_458),
-        ("miiv", 94_458, 8, 40_000),
-        ("mimic", 61_532, 8, 40_000),
-        ("hirid", 33_000, 8, 33_000),
-        ("aumc", 23_000, 8, 23_000),
+        ("eicu", 200_859, 16, 50_000),
+        ("eicu", 200_859, 14, 43_000),
+        ("eicu", 200_859, 11, 34_000),
+        ("eicu", 200_859, 8, 25_000),
+        ("eicu", 200_859, 6, 16_000),
+        ("eicu", 200_859, 4, 8_000),
+        ("miiv", 94_458, 24, 94_458),
+        ("miiv", 94_458, 16, 67_000),
+        ("miiv", 94_458, 8, 37_000),
+        ("mimic", 61_532, 24, 61_532),
+        ("mimic", 61_532, 16, 41_000),
+        ("mimic", 61_532, 8, 20_000),
+        ("hirid", 33_905, 16, 29_000),
+        ("hirid", 33_905, 8, 14_000),
+        ("aumc", 23_106, 24, 13_000),
+        ("aumc", 23_106, 16, 9_000),
+        ("aumc", 23_106, 8, 5_000),
+        ("sic", 27_386, 16, 27_386),
     ],
 )
 def test_stream_batch_uses_current_available_memory(
@@ -121,6 +128,70 @@ def test_stream_batch_uses_current_available_memory(
         )
         == expected
     )
+
+
+@pytest.mark.parametrize("available_gb", [8, 16])
+@pytest.mark.parametrize(
+    "database,total",
+    [(database, _DB_SIZES[database]) for database in ("mimic", "miiv", "aumc")],
+)
+def test_sub24gb_high_risk_cohorts_require_a_measured_pilot(
+    database, total, available_gb
+):
+    batch_size = _resolve_stream_batch_size(
+        database,
+        total,
+        available_memory_mb=available_gb * 1024,
+    )
+
+    assert 5_000 <= batch_size < total
+
+
+def test_lower_risk_cohort_stays_one_shot_when_calibrated_peak_fits():
+    assert (
+        _resolve_stream_batch_size(
+            "sic",
+            _DB_SIZES["sic"],
+            available_memory_mb=16 * 1024,
+        )
+        == _DB_SIZES["sic"]
+    )
+    assert (
+        _resolve_stream_batch_size(
+            "hirid",
+            _DB_SIZES["hirid"],
+            available_memory_mb=20 * 1024,
+        )
+        == _DB_SIZES["hirid"]
+    )
+
+
+def test_guarded_one_shot_is_split_evenly_not_into_a_tiny_tail():
+    assert _resolve_stream_batch_size(
+        "mimic",
+        60_000,
+        available_memory_mb=24_500,
+    ) == 30_000
+
+
+def test_low_memory_initial_batches_are_calibrated_not_a_fixed_10k_tier():
+    planned = {
+        database: _resolve_stream_batch_size(
+            database,
+            total,
+            available_memory_mb=8 * 1024,
+        )
+        for database, total in _DB_SIZES.items()
+    }
+
+    assert planned == {
+        "eicu": 25_000,
+        "miiv": 37_000,
+        "mimic": 20_000,
+        "hirid": 14_000,
+        "sic": 16_000,
+        "aumc": 5_000,
+    }
 
 
 @pytest.mark.parametrize(

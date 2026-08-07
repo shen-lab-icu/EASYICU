@@ -62,6 +62,16 @@ def test_eicu_sampling_means_specimen_collected_not_positive_culture() -> None:
         assert source["callback"] == "transform_fun(set_val(TRUE))"
 
 
+def test_mimic_sampling_keeps_negative_cultures_as_collection_events() -> None:
+    concept = _load_json("concept-dict.json")
+    for database in ("miiv", "mimic", "mimic_demo"):
+        source = concept["samp"]["sources"][database][0]
+        assert source["table"] == "microbiologyevents"
+        assert source["callback"] == "mimic_sampling"
+        assert "negative" in source["_comment"]
+        assert "specimen" in source["_comment"]
+
+
 def _data_source_tables() -> dict[str, dict]:
     data_sources = _load_json("data-sources.json")
     return {source["name"]: source["tables"] for source in data_sources}
@@ -758,26 +768,18 @@ def test_rrt_uses_active_treatment_evidence_not_access_placement() -> None:
         assert miiv_only_active_setting_ids.issubset(chartevent_ids)
         assert {224135, 225126, 225128, 225954}.isdisjoint(chartevent_ids)
 
-        aumc_numeric_ids = set(
-            source_id
-            for source in dictionary["rrt"]["sources"]["aumc"]
-            if source.get("table") == "numericitems"
-            for source_id in source["ids"]
-        )
-        assert {8805, 7666, 7667, 7668, 10736, 12444, 6684, 8806, 8808, 12091}.issubset(
-            aumc_numeric_ids
-        )
-        aumc_procedure_regex = next(
-            source["regex"]
-            for source in dictionary["rrt"]["sources"]["aumc"]
-            if source.get("table") == "procedureorderitems"
-        )
-        assert re.search(aumc_procedure_regex, "CVVH starten", re.I)
-        assert re.search(aumc_procedure_regex, "CVVH stoppen", re.I)
-        assert not re.search(aumc_procedure_regex, "CVVH-lab. afnemen", re.I)
-        assert not re.search(aumc_procedure_regex, "Filter CVVH wisselen", re.I)
-        assert not re.search(aumc_procedure_regex, "Resetten CVVH", re.I)
-        assert not re.search(aumc_procedure_regex, "Citraat-CVVH urine 24 uur", re.I)
+        # AmsterdamUMCdb's official treatment episode source is processitems.
+        # Device pressure/flow measurements and start/stop orders are not the
+        # treatment interval, and mapping a stop order to TRUE reverses its
+        # meaning.  Access-line process items are also not active dialysis.
+        aumc_sources = dictionary["rrt"]["sources"]["aumc"]
+        assert len(aumc_sources) == 1
+        aumc_process = aumc_sources[0]
+        assert aumc_process["table"] == "processitems"
+        assert set(aumc_process["ids"]) == {12465, 16363}
+        assert aumc_process["index_var"] == "start"
+        assert aumc_process["dur_var"] == "stop"
+        assert {9161, 9162, 9163, 16352}.isdisjoint(aumc_process["ids"])
 
         mimic_procedure_ids = set(
             source_id

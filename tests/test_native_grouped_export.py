@@ -57,6 +57,121 @@ def test_native_time_axis_uses_los_and_normalises_stay_level_outcomes() -> None:
     assert stay_audit["normalized_stay_level_rows"] == 2
 
 
+def test_native_renal_publication_drops_untimed_negative_rrt_merge_artifact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        api,
+        "EXTRACT_MODULES",
+        {"renal": ["urine", "rrt_criteria"]},
+    )
+    pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3],
+            "charttime": [0.0, None, None],
+            "urine": [100.0, None, None],
+            "rrt_criteria": [False, False, None],
+        }
+    ).to_parquet(tmp_path / "renal.parquet", index=False)
+
+    api._publish_native_export_v2(
+        database="aumc",
+        data_path="/raw/source-must-not-be-read",
+        output_dir=str(tmp_path),
+        modules=["renal"],
+        max_patients=None,
+        result=_completed_result("renal"),
+    )
+
+    exported = pd.read_parquet(tmp_path / "renal.parquet")
+    assert exported[["stay_id", "charttime"]].to_dict("records") == [
+        {"stay_id": 1, "charttime": 0.0}
+    ]
+    manifest = json.loads((tmp_path / "_manifest.json").read_text())
+    audit = manifest["files"][0]["time_axis_audit"]
+    assert audit["excluded_untimed_negative_rrt_criteria_rows"] == 1
+    assert audit["excluded_untimed_empty_rows"] == 1
+    assert manifest["files"][0]["row_grain_audit"][
+        "null_charttime_rows_after"
+    ] == 0
+
+
+def test_native_renal_publication_rejects_positive_untimed_rrt_criteria(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(api, "EXTRACT_MODULES", {"renal": ["rrt_criteria"]})
+    pd.DataFrame(
+        {
+            "stay_id": [1],
+            "charttime": [None],
+            "rrt_criteria": [True],
+        }
+    ).to_parquet(tmp_path / "renal.parquet", index=False)
+
+    with pytest.raises(ValueError, match="positive rrt_criteria rows"):
+        api._publish_native_export_v2(
+            database="aumc",
+            data_path="/raw/source-must-not-be-read",
+            output_dir=str(tmp_path),
+            modules=["renal"],
+            max_patients=None,
+            result=_completed_result("renal"),
+        )
+
+    assert not (tmp_path / "_manifest.json").exists()
+
+
+def test_eicu_native_publication_quarantines_adult_and_unknown_small_tidal_volume(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        api,
+        "EXTRACT_MODULES",
+        {"ventilator": ["tidal_vol", "tidal_vol_set"]},
+    )
+    pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3, 4, 5, 6],
+            "age": [60.0, 60.0, 8.0, None, 60.0, 60.0],
+        }
+    ).to_parquet(tmp_path / "demographics.parquet", index=False)
+    pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3, 4, 5, 6],
+            "charttime": [0.0] * 6,
+            "tidal_vol": [0.5, 8.0, 8.0, 8.0, 500.0, 0.0],
+            "tidal_vol_set": [500.0, 500.0, 0.5, 8.0, 8.0, 0.0],
+        }
+    ).to_parquet(tmp_path / "ventilator.parquet", index=False)
+
+    api._publish_native_export_v2(
+        database="eicu",
+        data_path="/raw/source-must-not-be-read",
+        output_dir=str(tmp_path),
+        modules=["ventilator"],
+        max_patients=None,
+        result=_completed_result("ventilator"),
+    )
+
+    exported = pd.read_parquet(tmp_path / "ventilator.parquet").set_index("stay_id")
+    assert pd.isna(exported.loc[1, "tidal_vol"])
+    assert pd.isna(exported.loc[2, "tidal_vol"])
+    assert exported.loc[3, "tidal_vol"] == 8.0
+    assert pd.isna(exported.loc[4, "tidal_vol"])
+    assert exported.loc[5, "tidal_vol"] == 500.0
+    assert exported.loc[6, "tidal_vol"] == 0.0
+    assert exported.loc[1, "tidal_vol_set"] == 500.0
+    assert pd.isna(exported.loc[3, "tidal_vol_set"])
+    assert pd.isna(exported.loc[4, "tidal_vol_set"])
+    assert pd.isna(exported.loc[5, "tidal_vol_set"])
+    assert exported.loc[6, "tidal_vol_set"] == 0.0
+
+    manifest = json.loads((tmp_path / "_manifest.json").read_text())
+    audit = manifest["files"][0]["semantic_audit"]
+    assert audit["tidal_vol"]["excluded_semantically_invalid"] == 3
+    assert audit["tidal_vol_set"]["excluded_semantically_invalid"] == 3
+
+
 def test_grouped_output_is_sealed_without_accessing_the_raw_data_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -495,10 +610,13 @@ def test_longitudinal_null_time_boolean_conflicts_use_any_and_are_unique(
     manifest = json.loads((tmp_path / "_manifest.json").read_text())
     audit = manifest["files"][0]["row_grain_audit"]
     assert audit["null_key_equality"] == "nulls_equal"
-    assert audit["null_charttime_rows_before"] == 4
+    assert audit["null_charttime_rows_before"] == 3
     assert audit["null_charttime_rows_after"] == 2
     assert audit["duplicate_key_groups_before"] == 1
-    assert audit["rows_consolidated"] == 2
+    assert audit["rows_consolidated"] == 1
+    assert manifest["files"][0]["time_axis_audit"][
+        "excluded_untimed_empty_rows"
+    ] == 1
 
 
 def test_longitudinal_conflicting_strings_fail_closed() -> None:
@@ -726,7 +844,7 @@ def test_arrow_publication_matches_legacy_canonical_values_order_and_schema(
     } == expected_bounds_audit
 
 
-def test_large_duplicate_grain_fails_closed_before_unbounded_pandas_fallback(
+def test_large_duplicate_grain_uses_bounded_duckdb_consolidation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(api, "EXTRACT_MODULES", {"sepsis_shared": ["samp"]})
@@ -740,18 +858,174 @@ def test_large_duplicate_grain_fails_closed_before_unbounded_pandas_fallback(
     )
     path = tmp_path / "sepsis_shared.parquet"
     source.to_parquet(path, index=False)
+
+    api._publish_native_export_v2(
+        database="eicu",
+        data_path="/raw/source-must-not-be-read",
+        output_dir=str(tmp_path),
+        modules=["sepsis_shared"],
+        max_patients=None,
+        result=_completed_result("sepsis_shared"),
+    )
+
+    exported = pd.read_parquet(path)
+    assert exported["stay_id"].tolist() == [1]
+    assert exported["charttime"].isna().tolist() == [True]
+    assert exported["samp"].tolist() == [True]
+    manifest = json.loads((tmp_path / "_manifest.json").read_text())
+    audit = manifest["files"][0]["row_grain_audit"]
+    assert audit["source_rows"] == 2
+    assert audit["published_rows"] == 1
+    assert audit["duplicate_excess_rows_before"] == 1
+    assert audit["rows_consolidated"] == 1
+    assert audit["duplicate_excess_rows_after"] == 0
+    assert audit["publication_backend"] == (
+        "duckdb_bounded_spillable_row_grain_consolidation"
+    )
+    assert not (tmp_path / ".sepsis_shared.native-v2.tmp.parquet").exists()
+    assert not (
+        tmp_path / ".sepsis_shared.native-v2.duckdb.tmp.parquet"
+    ).exists()
+    assert not (
+        tmp_path / ".sepsis_shared.native-v2.arrow.tmp.parquet"
+    ).exists()
+
+
+def test_duckdb_consolidation_matches_pandas_type_family_semantics(
+    tmp_path: Path,
+) -> None:
+    dictionary = api.load_dictionary(include_sofa2=True)
+    concepts = ["rrt", "creat", "avpu"]
+    canonical = api._canonicalise_native_export_frame(
+        pd.DataFrame(
+            {
+                "stay_id": [1, 1, 2, 2],
+                "charttime": [0.0, 0.0, None, None],
+                "rrt": [False, True, None, None],
+                "creat": [1.0, 3.0, None, None],
+                "avpu": ["A", None, None, None],
+            }
+        ),
+        module="renal",
+        requested_concepts=concepts,
+        dictionary=dictionary,
+    )
+    expected, _ = api._consolidate_native_export_row_grain(
+        canonical.copy(),
+        module="renal",
+        requested_concepts=concepts,
+        dictionary=dictionary,
+    )
+    path = tmp_path / ".renal.native-v2.tmp.parquet"
+    canonical.to_parquet(path, index=False)
+    before = api._native_export_arrow_row_grain_audit(path, module="renal")
+
+    audit, non_null = api._native_export_duckdb_consolidate_row_grain(
+        path,
+        module="renal",
+        requested_concepts=concepts,
+        dictionary=dictionary,
+        before_audit=before,
+    )
+
+    observed = pd.read_parquet(path)
+    pd.testing.assert_frame_equal(observed, expected)
+    assert non_null == {"rrt": 1, "creat": 1, "avpu": 1}
+    assert audit["source_rows"] == 4
+    assert audit["published_rows"] == 2
+    assert audit["duplicate_excess_rows_after"] == 0
+
+
+def test_large_duplicate_duckdb_path_is_streamed_and_preserves_schema_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        api,
+        "EXTRACT_MODULES",
+        {"neurological": ["gcs", "delirium_positive", "avpu"]},
+    )
+    monkeypatch.setattr(api, "_NATIVE_EXPORT_PANDAS_FALLBACK_MAX_ROWS", 1)
+    path = tmp_path / "neurological.parquet"
+    pd.DataFrame(
+        {
+            # Deliberately not key-sorted: keep the first source-row order.
+            "stay_id": [20, 20, 10, 10],
+            "charttime": [1.0, 1.0, 0.0, 0.0],
+            "gcs": [10.0, 14.0, None, None],
+            "delirium_positive": [None, None, False, True],
+            "avpu": ["A", "A", None, None],
+        }
+    ).to_parquet(path, index=False)
+    real_read_parquet = pd.read_parquet
+
+    def forbid_full_pandas_read(*_args, **_kwargs):
+        raise AssertionError("large duplicate module entered full pandas fallback")
+
+    monkeypatch.setattr(pd, "read_parquet", forbid_full_pandas_read)
+    api._publish_native_export_v2(
+        database="eicu",
+        data_path="/raw/source-must-not-be-read",
+        output_dir=str(tmp_path),
+        modules=["neurological"],
+        max_patients=None,
+        result=_completed_result("neurological"),
+    )
+
+    exported = real_read_parquet(path)
+    assert exported["stay_id"].tolist() == [20, 10]
+    assert exported["gcs"].iloc[0] == 12.0
+    assert pd.isna(exported["gcs"].iloc[1])
+    assert pd.isna(exported["delirium_positive"].iloc[0])
+    assert bool(exported["delirium_positive"].iloc[1]) is True
+    assert exported["avpu"].iloc[0] == "A"
+    assert pd.isna(exported["avpu"].iloc[1])
+
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    dictionary = api.load_dictionary(include_sofa2=True)
+    expected_schema = pa.Table.from_pandas(
+        api._native_export_empty_schema_frame(
+            module="neurological",
+            requested_concepts=["gcs", "delirium_positive", "avpu"],
+            dictionary=dictionary,
+        ),
+        preserve_index=False,
+    ).schema
+    assert pq.read_schema(path).equals(expected_schema, check_metadata=True)
+
+
+def test_large_duplicate_grain_duckdb_path_rejects_string_conflicts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(api, "EXTRACT_MODULES", {"neurological": ["avpu"]})
+    monkeypatch.setattr(api, "_NATIVE_EXPORT_PANDAS_FALLBACK_MAX_ROWS", 1)
+    path = tmp_path / "neurological.parquet"
+    pd.DataFrame(
+        {
+            "stay_id": [1, 1],
+            "charttime": [0.0, 0.0],
+            "avpu": ["A", "V"],
+        }
+    ).to_parquet(path, index=False)
     original_digest = hashlib.sha256(path.read_bytes()).hexdigest()
 
-    with pytest.raises(ValueError, match="exceeds the bounded pandas fallback"):
+    with pytest.raises(ValueError, match="conflicting string concept 'avpu'"):
         api._publish_native_export_v2(
             database="eicu",
             data_path="/raw/source-must-not-be-read",
             output_dir=str(tmp_path),
-            modules=["sepsis_shared"],
+            modules=["neurological"],
             max_patients=None,
-            result=_completed_result("sepsis_shared"),
+            result=_completed_result("neurological"),
         )
 
     assert hashlib.sha256(path.read_bytes()).hexdigest() == original_digest
     assert not (tmp_path / "_manifest.json").exists()
-    assert not (tmp_path / ".sepsis_shared.native-v2.tmp.parquet").exists()
+    assert not (tmp_path / ".neurological.native-v2.tmp.parquet").exists()
+    assert not (
+        tmp_path / ".neurological.native-v2.duckdb.tmp.parquet"
+    ).exists()
+    assert not (
+        tmp_path / ".neurological.native-v2.arrow.tmp.parquet"
+    ).exists()
