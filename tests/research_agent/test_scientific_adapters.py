@@ -25,6 +25,11 @@ def _available(adapter_id: str, version: str) -> ExternalAdapterRuntime:
         adapter_id=adapter_id,
         package_name=spec[0],
         import_name=spec[1],
+        expected_version_spec={
+            "pandera_dataframe_contract_v1": ">=0.28,<0.33",
+            "dowhy_identification_v1": ">=0.13,<0.14",
+            "sksurv_competing_risks_cif_v1": ">=0.28,<0.29",
+        }[adapter_id],
         status="available",
         installed_version=version,
         issue_code=None,
@@ -63,7 +68,29 @@ def test_unavailable_adapter_is_observed_without_becoming_a_runtime_capability(
 
     assert receipt.status == "unavailable"
     assert receipt.issue_code == "external_adapter_dependency_unavailable"
-    assert receipt.to_dict()["schema_version"] == "easyicu.external_adapter_runtime/1"
+    assert receipt.to_dict()["schema_version"] == "easyicu.external_adapter_runtime/2"
+
+
+def test_importable_adapter_with_incompatible_version_is_unavailable(
+    monkeypatch,
+) -> None:
+    from easyicu.research_agent.scientific_adapters import runtime
+
+    monkeypatch.setattr(runtime.importlib.util, "find_spec", lambda _name: object())
+    monkeypatch.setattr(
+        runtime.importlib.metadata,
+        "version",
+        lambda _name: "0.27.9",
+    )
+
+    receipt = runtime.probe_external_adapter(
+        "sksurv_competing_risks_cif_v1"
+    )
+
+    assert receipt.status == "incompatible_version"
+    assert receipt.installed_version == "0.27.9"
+    assert receipt.expected_version_spec == ">=0.28,<0.29"
+    assert receipt.issue_code == "external_adapter_version_incompatible"
 
 
 def test_pandera_adapter_builds_a_strict_non_coercing_schema(monkeypatch) -> None:
@@ -199,13 +226,26 @@ def test_dowhy_adapter_only_records_identification(monkeypatch) -> None:
 
     captured: dict[str, object] = {}
 
+    class IdentifiedEstimand:
+        estimands = {
+            "backdoor": {
+                "assumptions": {
+                    "unconfoundedness": "U affects neither treatment nor outcome"
+                }
+            },
+            "iv": None,
+        }
+
+        def __str__(self):
+            return "Estimand: backdoor\nAssumption: unconfoundedness"
+
     class CausalModel:
         def __init__(self, **kwargs):
             captured.update(kwargs)
 
         def identify_effect(self, **kwargs):
             captured["identify_kwargs"] = kwargs
-            return object()
+            return IdentifiedEstimand()
 
     monkeypatch.setattr(
         dowhy,
@@ -231,7 +271,14 @@ def test_dowhy_adapter_only_records_identification(monkeypatch) -> None:
     )
 
     assert receipt.status == "identified"
-    assert receipt.to_dict()["effect_estimate_present"] is False
+    payload = receipt.to_dict()
+    assert payload["effect_estimate_present"] is False
+    assert payload["schema_version"] == "easyicu.dowhy_identification_receipt/2"
+    assert payload["identified_estimand_type"] == "IdentifiedEstimand"
+    assert len(payload["identified_estimand_sha256"]) == 64
+    assert payload["identification_routes"] == ["backdoor"]
+    assert len(payload["assumption_fingerprints"]) == 1
+    assert len(payload["declared_assumptions_sha256"]) == 64
     assert captured["common_causes"] == ["age"]
     assert captured["identify_kwargs"] == {"method_name": "id-algorithm"}
 
@@ -295,6 +342,37 @@ def test_sksurv_adapter_never_converts_an_invalid_event_code_to_censoring() -> N
 
     assert result.status == "input_contract_failed"
     assert result.issue_code == "competing_risk_event_codes_invalid"
+
+
+def test_sksurv_adapter_distinguishes_unexpected_codes_from_missing_support() -> None:
+    from easyicu.research_agent.scientific_adapters import sksurv
+
+    contract = sksurv.CompetingRisksCIFContract(
+        time_column="days",
+        event_column="event_type",
+        event_of_interest=8,
+        competing_event_codes=(2,),
+    )
+    unexpected = sksurv.estimate_declared_cumulative_incidence(
+        pd.DataFrame({"days": [1.0, 2.0, 3.0], "event_type": [0, 8, 9]}),
+        contract,
+    )
+    missing = sksurv.estimate_declared_cumulative_incidence(
+        pd.DataFrame({"days": [1.0, 2.0, 3.0], "event_type": [0, 0, 2]}),
+        contract,
+    )
+
+    assert unexpected.status == "input_contract_failed"
+    assert unexpected.issue_code == "competing_risk_event_codes_unexpected"
+    assert unexpected.unexpected_event_codes == (9,)
+    assert missing.status == "data_support_insufficient"
+    assert missing.issue_code == "competing_risk_declared_event_unobserved"
+    assert missing.unobserved_declared_event_codes == (8,)
+    assert missing.n_observations == 3
+    assert missing.n_events_of_interest == 0
+    assert missing.to_dict()["schema_version"] == (
+        "easyicu.sksurv_competing_risks_cif/2"
+    )
 
 
 def test_adapters_do_not_upgrade_current_scientific_capabilities() -> None:

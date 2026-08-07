@@ -100,7 +100,7 @@ def validate_dataframe_contract(
         return PanderaValidationReceipt(
             contract_id=contract.contract_id,
             status="adapter_unavailable",
-            adapter_version=None,
+            adapter_version=runtime.installed_version,
             issue_code=runtime.issue_code,
             validated_columns=column_names,
         )
