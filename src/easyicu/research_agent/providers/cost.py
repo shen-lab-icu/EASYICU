@@ -277,6 +277,7 @@ class CostMeter:
             "role": role,
             "consumer": active_prompt_consumer.get(),
             "model": model,
+            "executed_model": None,
             "request_sha256": request_hasher.hexdigest(),
             "prompt_bytes": prompt_bytes,
             "max_tokens": int(max_tokens),
@@ -298,7 +299,8 @@ class CostMeter:
         *,
         state: str,
         error_type: Optional[str] = None,
-        usage: Optional[Dict[str, int]] = None,
+        usage: Optional[Dict[str, Any]] = None,
+        executed_model: Optional[str] = None,
         response: Optional[str] = None,
     ) -> None:
         """Terminalize a transport receipt without persisting prompt/response."""
@@ -313,6 +315,7 @@ class CostMeter:
                 "finished_at": datetime.now(timezone.utc).isoformat(),
                 "error_type": str(error_type) if error_type else None,
                 "usage": dict(usage) if usage is not None else None,
+                "executed_model": str(executed_model) if executed_model else None,
                 "response_sha256": (
                     hashlib.sha256(str(response).encode("utf-8")).hexdigest()
                     if response is not None
@@ -380,7 +383,9 @@ class CostMeter:
         conservative_cost = 0.0
         for payload in self._transport_receipt_payloads():
             usage = payload.get("usage")
-            model = str(payload.get("model") or "unknown")
+            model = str(
+                payload.get("executed_model") or payload.get("model") or "unknown"
+            )
             if isinstance(usage, dict):
                 prompt = max(0, int(usage.get("prompt_tokens") or 0))
                 completion = max(0, int(usage.get("completion_tokens") or 0))
@@ -532,6 +537,17 @@ class MeteredClient:
     def complete(
         self, messages, *, max_tokens: int = 2048, temperature: float = 0.2
     ) -> str:
+        result, _usage = self.complete_with_usage(
+            messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+        return result
+
+    def complete_with_usage(
+        self, messages, *, max_tokens: int = 2048, temperature: float = 0.2
+    ) -> tuple[str, Dict[str, Any]]:
+        """Meter one call while preserving its call-scoped model provenance."""
         model = self._model_override or _identify_model(self._inner)
         receipt = self._meter.begin_transport(
             role=self._role,
@@ -580,13 +596,29 @@ class MeteredClient:
             completion_tokens = max(1, completion_chars // _CHARS_PER_TOKEN)
             is_heuristic = True
 
+        executed_model = (
+            str(usage.get("actual_model")).strip()
+            if isinstance(usage, dict) and usage.get("actual_model")
+            else model
+        )
+
         self._meter.record(
             role=self._role,
-            model=model,
+            model=executed_model,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             is_heuristic=is_heuristic,
         )
+        recorded_usage: Dict[str, Any] = {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+            "is_heuristic": is_heuristic,
+            "actual_model": executed_model,
+        }
+        if isinstance(usage, dict) and isinstance(usage.get("model_provenance"), dict):
+            recorded_usage["model_provenance"] = dict(usage["model_provenance"])
+        self.last_usage = dict(recorded_usage)
         self._meter.finish_transport(
             receipt,
             state="completed",
@@ -596,9 +628,10 @@ class MeteredClient:
                 "total_tokens": prompt_tokens + completion_tokens,
                 "is_heuristic": is_heuristic,
             },
+            executed_model=executed_model,
             response=result,
         )
-        return result
+        return result, recorded_usage
 
     # Mirror commonly-touched attributes so existing duck-typing keeps
     # working (e.g. MockLLMClient.context).

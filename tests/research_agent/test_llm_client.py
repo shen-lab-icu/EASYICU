@@ -349,6 +349,12 @@ def test_openai_client_supports_local_noauth_proxy_mode(monkeypatch, ra):
                     "completion_tokens": 4,
                     "total_tokens": 16,
                 },
+                "model": "provider/served-model",
+                "easyicu_model_provenance": {
+                    "requested_model": "configured-model",
+                    "attempted_model": "fallback-model",
+                    "fallback_used": True,
+                },
             }
 
     class _HttpClient:
@@ -389,6 +395,12 @@ def test_openai_client_supports_local_noauth_proxy_mode(monkeypatch, ra):
         "prompt_tokens": 12,
         "completion_tokens": 4,
         "total_tokens": 16,
+        "actual_model": "provider/served-model",
+        "model_provenance": {
+            "requested_model": "configured-model",
+            "attempted_model": "fallback-model",
+            "fallback_used": True,
+        },
     }
 
 

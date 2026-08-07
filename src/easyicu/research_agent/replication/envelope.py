@@ -52,7 +52,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
-ENVELOPE_SCHEMA_VERSION = "easyicu.reproducibility_envelope/3"
+ENVELOPE_SCHEMA_VERSION = "easyicu.reproducibility_envelope/4"
 
 
 # ---------------------------------------------------------------------------
@@ -156,6 +156,9 @@ class ReproCallRecord:
     response_chars: int
     reasoning_effort: Optional[str] = None
     elapsed_ms: Optional[float] = None
+    requested_model: Optional[str] = None
+    actual_model: Optional[str] = None
+    model_provenance: Optional[Dict[str, Any]] = None
     # Envelope schema /2: requested_top_p records the top_p value the
     # caller asked for. ``None`` means the caller did not set top_p and
     # the provider's default applies (typically 1.0 for OpenAI-compatible
@@ -171,6 +174,9 @@ class ReproCallRecord:
             "role": self.role,
             "client_name": self.client_name,
             "model": self.model,
+            "requested_model": self.requested_model,
+            "actual_model": self.actual_model,
+            "model_provenance": self.model_provenance,
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
             "requested_seed": self.requested_seed,
@@ -222,6 +228,9 @@ class ReproEnvelope:
         requested_seed: Optional[int],
         messages: Sequence[Any],
         response: str,
+        requested_model: Optional[str] = None,
+        actual_model: Optional[str] = None,
+        model_provenance: Optional[Dict[str, Any]] = None,
         requested_top_p: Optional[float] = None,
         reasoning_effort: Optional[str] = None,
         elapsed_ms: Optional[float] = None,
@@ -237,6 +246,9 @@ class ReproEnvelope:
             role=role,
             client_name=client_name,
             model=model,
+            requested_model=requested_model,
+            actual_model=actual_model,
+            model_provenance=(dict(model_provenance) if model_provenance else None),
             temperature=float(temperature),
             max_tokens=int(max_tokens),
             requested_seed=int(requested_seed) if requested_seed is not None else None,
@@ -438,12 +450,12 @@ class ReproRecordingClient:
         max_tokens: int = 2048,
         temperature: float = 0.2,
         top_p: Optional[float] = None,
-    ) -> tuple[str, Optional[Dict[str, int]]]:
+    ) -> tuple[str, Optional[Dict[str, Any]]]:
         """Record one response and return usage owned by that exact call."""
         import inspect
 
         complete_with_usage = getattr(self._inner, "complete_with_usage", None)
-        usage: Optional[Dict[str, int]] = None
+        usage: Optional[Dict[str, Any]] = None
         started = time.monotonic()
         if callable(complete_with_usage):
             try:
@@ -463,11 +475,7 @@ class ReproRecordingClient:
                 kwargs["top_p"] = top_p
             response, raw_usage = complete_with_usage(messages, **kwargs)
             if isinstance(raw_usage, dict):
-                usage = {
-                    str(key): int(value)
-                    for key, value in raw_usage.items()
-                    if isinstance(value, (int, float))
-                }
+                usage = dict(raw_usage)
         else:
             response = self._forward_complete(
                 messages,
@@ -476,10 +484,24 @@ class ReproRecordingClient:
                 top_p=top_p,
             )
         elapsed_ms = (time.monotonic() - started) * 1000.0
+        requested_model = self._resolve_model()
+        actual_model = (
+            str(usage.get("actual_model")).strip()
+            if isinstance(usage, dict) and usage.get("actual_model")
+            else None
+        )
+        model_provenance = (
+            usage.get("model_provenance")
+            if isinstance(usage, dict) and isinstance(usage.get("model_provenance"), dict)
+            else None
+        )
         self._envelope.record(
             role=self._role,
             client_name=getattr(self._inner, "name", type(self._inner).__name__),
-            model=self._resolve_model(),
+            model=actual_model or requested_model,
+            requested_model=requested_model,
+            actual_model=actual_model,
+            model_provenance=model_provenance,
             temperature=float(temperature),
             max_tokens=int(max_tokens),
             requested_seed=self._seed,

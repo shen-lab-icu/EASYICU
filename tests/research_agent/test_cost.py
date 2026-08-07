@@ -55,6 +55,34 @@ def test_meter_records_authoritative_usage_when_inner_exposes_it(ra):
     assert rec.model == "stub-with-usage"
 
 
+def test_meter_prices_the_actual_model_and_persists_the_requested_model(ra, tmp_path):
+    from easyicu.research_agent.providers.llm import LLMMessage
+
+    class _HostedFallback:
+        name = "hosted-configured"
+
+        def complete_with_usage(self, messages, **_kwargs):  # noqa: ANN003
+            return "OK", {
+                "prompt_tokens": 10,
+                "completion_tokens": 2,
+                "actual_model": "provider/served-model",
+            }
+
+    meter = ra.CostMeter(
+        runtime_dir=tmp_path / ".runtime",
+        price_table={"provider/served-model": (1.0, 2.0)},
+    )
+    ra.MeteredClient(_HostedFallback(), role="planner", meter=meter).complete(
+        [LLMMessage(role="user", content="hi")]
+    )
+
+    assert meter.records[0].model == "provider/served-model"
+    receipt = next((tmp_path / ".runtime" / "provider_transport_receipts").glob("*.json"))
+    payload = json.loads(receipt.read_text())
+    assert payload["model"] == "hosted-configured"
+    assert payload["executed_model"] == "provider/served-model"
+
+
 def test_meter_falls_back_to_heuristic_when_no_last_usage(ra):
     from easyicu.research_agent.providers.llm import LLMMessage
 
