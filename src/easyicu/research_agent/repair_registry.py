@@ -314,6 +314,7 @@ _STRUCTURAL_REPAIRS = {
     "binary_domain_authored_feasibility_v1",
     "bound_figure_source_projection_v1",
     "bound_figure_source_projection_v2",
+    "bound_panel_measurement_status_alias_v1",
     "bound_percentage_identity_guard_v1",
     "cohort_csv_to_parquet_v1",
     "complete_bound_figure_source_bundle_v1",

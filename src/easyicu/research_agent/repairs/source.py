@@ -124,6 +124,7 @@ from .preflight import patch_preflight_repairs
 from .reasons import RepairReason
 from .typed_input import (
     patch_all_rows_outcome_coordinate_filter,
+    patch_bound_panel_measurement_status_alias,
     patch_missing_typed_input_receipt,
     patch_resolved_input_cohort_env_shadow,
     patch_resolved_input_consumption_contract_owner,
@@ -6331,6 +6332,16 @@ def _deterministic_runner_repair(
         repaired = patch_strict_numeric_input_result_projection(code, run_log)
         if repaired != code:
             return strict_numeric_result_repair, repaired
+
+    measurement_status_alias_repair = "bound_panel_measurement_status_alias_v1"
+    if previous_repair != measurement_status_alias_repair:
+        repaired = patch_bound_panel_measurement_status_alias(
+            code,
+            run_log,
+            resolved_input_bindings=resolved_input_bindings,
+        )
+        if repaired != code:
+            return measurement_status_alias_repair, repaired
 
     host_helper_import_repair = "relocate_known_host_helper_import_v1"
     if previous_repair != host_helper_import_repair:

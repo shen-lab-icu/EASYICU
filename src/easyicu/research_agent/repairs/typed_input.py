@@ -10,6 +10,180 @@ from ..gates.typed_input import resolved_input_shadowed_by_cohort_env_findings
 from ..schema import ValidationFinding
 
 
+def patch_bound_panel_measurement_status_alias(
+    code: str,
+    run_log: str,
+    *,
+    resolved_input_bindings: Mapping[str, Any] | None,
+) -> str:
+    """Use the exact measurement-status spelling declared by a bound panel.
+
+    Generated clustering code occasionally derives ``<feature>_measured``
+    from feature names that already end in ``_first``, yielding the impossible
+    ``<feature>_first_measured``.  This repair is allowed only when the runner
+    reported that exact missing-column family, the script names one literal
+    ``PANEL_KEY``, and that binding's typed product contract contains every
+    corresponding ``<feature>_measured`` column.  It never invents a column or
+    falls back to a different input.
+    """
+
+    missing_match = re.search(
+        r"Required (?:measurement-status|declared panel) columns are unavailable"
+        r"[^\[]*\[(?P<columns>[^\]]+)\]",
+        str(run_log or ""),
+    )
+    if missing_match is None or not isinstance(resolved_input_bindings, Mapping):
+        return code
+    missing_columns = re.findall(
+        r"['\"]([^'\"]+)['\"]", missing_match.group("columns")
+    )
+    if not missing_columns or any(
+        not column.endswith("_first_measured") for column in missing_columns
+    ):
+        return code
+
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+
+    panel_key_candidates: list[str] = []
+    feature_assignment_candidates: list[tuple[str, tuple[str, ...]]] = []
+    status_assignment_candidates: list[tuple[ast.Assign, str]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        target = node.targets[0]
+        if not isinstance(target, ast.Name):
+            continue
+        if (
+            isinstance(node.value, ast.Constant)
+            and target.id == "PANEL_KEY"
+            and isinstance(node.value.value, str)
+        ):
+            panel_key_candidates.append(node.value.value)
+        if target.id in {"FEATURE_NAMES", "feature_names"} and isinstance(
+            node.value, (ast.List, ast.Tuple)
+        ):
+            values = tuple(
+                element.value
+                for element in node.value.elts
+                if isinstance(element, ast.Constant)
+                and isinstance(element.value, str)
+            )
+            if len(values) == len(node.value.elts):
+                feature_assignment_candidates.append((target.id, values))
+        if target.id not in {"registered_status_columns", "status_columns"}:
+            continue
+        value = node.value
+        if (
+            isinstance(value, ast.Call)
+            and isinstance(value.func, ast.Name)
+            and value.func.id == "tuple"
+            and len(value.args) == 1
+            and isinstance(value.args[0], ast.GeneratorExp)
+        ):
+            generator = value.args[0]
+            container = "tuple"
+        elif isinstance(value, ast.ListComp):
+            generator = value
+            container = "list"
+        else:
+            continue
+        if len(generator.generators) != 1:
+            continue
+        comprehension = generator.generators[0]
+        if not (
+            isinstance(comprehension.target, ast.Name)
+            and isinstance(comprehension.iter, ast.Name)
+            and isinstance(generator.elt, ast.JoinedStr)
+            and len(generator.elt.values) == 2
+            and isinstance(generator.elt.values[0], ast.FormattedValue)
+            and isinstance(generator.elt.values[0].value, ast.Name)
+            and generator.elt.values[0].value.id == comprehension.target.id
+            and isinstance(generator.elt.values[1], ast.Constant)
+            and generator.elt.values[1].value == "_measured"
+        ):
+            continue
+        status_assignment_candidates.append((node, container))
+
+    if (
+        len(panel_key_candidates) != 1
+        or len(feature_assignment_candidates) != 1
+        or len(status_assignment_candidates) != 1
+    ):
+        return code
+    panel_key = panel_key_candidates[0]
+    feature_name, feature_names = feature_assignment_candidates[0]
+    if not feature_names or any(not value.endswith("_first") for value in feature_names):
+        return code
+    expected_missing = {f"{value}_measured" for value in feature_names}
+    if set(missing_columns) != expected_missing:
+        return code
+    expected_bound_columns = {
+        f"{value.removesuffix('_first')}_measured" for value in feature_names
+    }
+    binding = resolved_input_bindings.get(panel_key)
+    if not isinstance(binding, Mapping):
+        return code
+    product_contract = binding.get("product_contract")
+    bound_columns = product_contract.get("columns") if isinstance(product_contract, Mapping) else None
+    if not isinstance(bound_columns, list) or any(
+        not isinstance(column, str) for column in bound_columns
+    ):
+        return code
+    if not expected_bound_columns.issubset(set(bound_columns)):
+        return code
+
+    status_assignment, container = status_assignment_candidates[0]
+    value = status_assignment.value
+    if (
+        container == "tuple"
+        and (
+            not isinstance(value, ast.Call)
+            or not isinstance(value.args[0], ast.GeneratorExp)
+        )
+    ) or (container == "list" and not isinstance(value, ast.ListComp)):
+        return code
+    generator = value.args[0] if container == "tuple" else value
+    if (
+        len(generator.generators) != 1
+        or not isinstance(generator.generators[0].iter, ast.Name)
+        or generator.generators[0].iter.id != feature_name
+    ):
+        return code
+    lines = code.splitlines(keepends=True)
+    if status_assignment.value.end_lineno is None or status_assignment.value.end_col_offset is None:
+        return code
+    line_starts: list[int] = []
+    offset = 0
+    for line in lines:
+        line_starts.append(offset)
+        offset += len(line)
+
+    def absolute_offset(lineno: int, utf8_column: int) -> int:
+        line = lines[lineno - 1]
+        character_column = len(line.encode("utf-8")[:utf8_column].decode("utf-8"))
+        return line_starts[lineno - 1] + character_column
+
+    start = absolute_offset(value.lineno, value.col_offset)
+    end = absolute_offset(value.end_lineno, value.end_col_offset)
+    element_name = generator.generators[0].target.id
+    replacement = (
+        f"tuple(f\"{{{element_name}.removesuffix('_first')}}_measured\" "
+        f"for {element_name} in {feature_name})"
+        if container == "tuple"
+        else f"[f\"{{{element_name}.removesuffix('_first')}}_measured\" "
+        f"for {element_name} in {feature_name}]"
+    )
+    repaired = code[:start] + replacement + code[end:]
+    try:
+        ast.parse(repaired)
+    except SyntaxError:
+        return code
+    return repaired
+
+
 def patch_resolved_input_consumption_contract_owner(
     code: str,
     run_log: str,
@@ -1169,6 +1343,7 @@ def patch_resolved_input_cohort_env_shadow(
 
 __all__ = [
     "patch_all_rows_outcome_coordinate_filter",
+    "patch_bound_panel_measurement_status_alias",
     "patch_missing_typed_input_receipt",
     "patch_resolved_input_consumption_contract_owner",
     "patch_resolved_input_manifest_env",
