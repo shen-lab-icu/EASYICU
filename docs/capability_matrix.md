@@ -14,6 +14,20 @@ _Generated from `easyicu.research_agent.planning.capability_registry`. Do not ed
 | Phenotyping / clustering | LLM-coded ⚠️ | Agent-planned cluster solution; outcome-by-cluster kept descriptive (not causal) | — | deterministic ✅ (`phenotyping`) | figure_strategy anti-pattern blocks 'clusters are causal entities'; an LLM failure fails closed to diagnostic_only. |
 | Descriptive / measurement audit | LLM-coded ⚠️ | LLM-coded descriptive summaries / Table One / measurement-process audits | — | deterministic ✅ (`base_association_skill`) | Evidence STRICT mode blocks unbound sentences; the plausibility gate flags implausible descriptives before they reach the manuscript. |
 
+## Scientific claim readiness
+
+A capability can execute an analysis without having a sufficient scientific validator for a publication claim. `analysis_only` is an explicit fail-closed boundary, not an error the Agent may write around.
+
+| Capability | Result contract | Required diagnostics | Claim status |
+| --- | --- | --- | --- |
+| `survival_time_to_event_v1` | family_primary_result_requirement + registered primary CSV | event/censoring closure; time-origin binding; proportional-hazards diagnostic when Cox is declared | reportable ✅ |
+| `causal_target_trial_v1` | family_primary_result_requirement + registered primary CSV | target-trial time-zero and treatment-strategy protocol; identification/refutation; positivity and balance | analysis_only ⚠️ |
+| `association_ordinal_trend_v1` | planned_model_requirement + registered adjusted estimate | declared levels; primary contrast; model contract | reportable ✅ |
+| `association_adjusted_v1` | planned_model_requirement + registered adjusted estimate | primary model contract; effect/interval reconciliation | reportable ✅ |
+| `prediction_risk_model_v1` | registered discrimination and calibration products | split/leakage; discrimination; calibration | reportable ✅ |
+| `phenotyping_cluster_v1` | registered clustering, profile, and stability products | representation; cluster stability; descriptive outcome use | reportable ✅ |
+| `descriptive_measurement_v1` | registered summary/source-data products | denominators; measurement availability | reportable ✅ |
+
 ## Auxiliary deterministic runners (support, not family-primary)
 
 | Runner | Purpose | Fail-closed |
