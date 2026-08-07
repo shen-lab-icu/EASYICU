@@ -325,13 +325,19 @@ def patch_missing_typed_input_receipt(
     *,
     findings: Sequence[Any],
 ) -> str:
-    """Project one script-verified typed input into ``step_summary``.
+    """Decline legacy script-side typed-input receipt projection.
 
-    This repair does not let the host attest on behalf of generated code.  It
-    only adds a receipt when the generated script itself already selects the
-    exact binding, reads its evidence id and digest, verifies that digest, and
-    loads the bound table.  Ambiguous or partially verified shapes decline.
+    A receipt must be issued atomically by the host-owned typed-input SDK when
+    it opens the exact bound artifact.  AST evidence that generated code has a
+    manifest path, digest check, and dataframe variable cannot prove that the
+    same runtime path was taken, so it must not be converted into a receipt.
+
+    The historical implementation remains below temporarily for source-history
+    readability, but this early return makes both direct and routed calls
+    fail closed until a runner consumes ``LoadedTypedInput`` end to end.
     """
+
+    return code
 
     missing_details: list[Mapping[str, Any]] = []
     coverage_details: list[Mapping[str, Any]] = []

@@ -1,17 +1,10 @@
 from __future__ import annotations
 
 import hashlib
-import json
-import os
 from pathlib import Path
 
 import pandas as pd
 
-from easyicu.research_agent.repair_registry import (
-    RepairClass,
-    automatic_repair_allowed,
-    repair_metadata_for,
-)
 from easyicu.research_agent.repairs.source import deterministic_contract_repair
 
 
@@ -90,40 +83,14 @@ with open(out_dir / "step_summary.json", "w", encoding="utf-8") as handle:
 """
 
 
-def test_missing_typed_input_receipt_reuses_script_verified_identity(
+def test_missing_typed_input_receipt_fails_closed_without_host_sdk_execution(
     tmp_path: Path,
 ) -> None:
     code = _code(tmp_path)
 
     repair = deterministic_contract_repair(code=code, findings=_findings())
 
-    assert repair is not None
-    repair_id, repaired = repair
-    assert repair_id == "complete_typed_input_receipt_v1"
-    namespace: dict[str, object] = {}
-    resolved_path = tmp_path / "resolved_inputs.json"
-    resolved_path.write_text("{}")
-    previous = os.environ.get("EASYICU_RESOLVED_INPUTS_JSON")
-    os.environ["EASYICU_RESOLVED_INPUTS_JSON"] = str(resolved_path)
-    try:
-        exec(repaired, namespace)
-    finally:
-        if previous is None:
-            os.environ.pop("EASYICU_RESOLVED_INPUTS_JSON", None)
-        else:
-            os.environ["EASYICU_RESOLVED_INPUTS_JSON"] = previous
-    summary = json.loads((tmp_path / "step_summary.json").read_text())
-    assert summary["input_bindings"] == [
-        {
-            "input_key": "artifact:analysis_cohort",
-            "evidence_id": "cohort-evidence",
-            "sha256": hashlib.sha256(
-                (tmp_path / "analysis_cohort.parquet").read_bytes()
-            ).hexdigest(),
-            "loaded": True,
-            "row_count": 2,
-        }
-    ]
+    assert repair is None
 
 
 def test_missing_typed_input_receipt_requires_digest_guard(tmp_path: Path) -> None:
@@ -166,11 +133,3 @@ def test_missing_typed_input_receipt_declines_untrusted_inputs_mapping(
     )
 
     assert deterministic_contract_repair(code=code, findings=_findings()) is None
-
-
-def test_complete_typed_input_receipt_is_structural_and_automatic() -> None:
-    metadata = repair_metadata_for("complete_typed_input_receipt_v1")
-
-    assert metadata.repair_class is RepairClass.STRUCTURAL
-    assert metadata.introduces_numbers is False
-    assert automatic_repair_allowed(metadata.repair_id)

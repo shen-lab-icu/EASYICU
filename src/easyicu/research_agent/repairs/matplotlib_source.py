@@ -49,15 +49,15 @@ def _enumerated_attribute(
 
 
 def patch_matplotlib_patch_source_rows(code: str, run_log: str) -> str:
-    """Serialize bar heights already rendered as Matplotlib ``patches``.
+    """Decline artist-to-source-data projection.
 
-    Generated figure-contract repairs sometimes enumerate ``collections`` and
-    ``lines`` but omit ``Axes.patches``.  A bar-only panel then trips the
-    script's own empty-panel guard even though the plotted values already
-    exist.  This patch only adds a third representation extractor immediately
-    before one uniquely attributable guard.  It does not create or alter any
-    artist, scientific value, row, method, or selection rule.
+    Matplotlib artists are a rendering output, not scientific source evidence.
+    Recovering bar heights after the fact would make a figure validate without
+    its table-level lineage, so this repair intentionally leaves the run at its
+    fail-closed source-data gate.
     """
+
+    return code
 
     if _EMPTY_PANEL_ERROR not in str(run_log or ""):
         return code

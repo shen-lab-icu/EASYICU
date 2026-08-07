@@ -180,6 +180,38 @@ def test_renderer_on_long_table_uses_clinical_variables(tmp_path: Path):
     plt.close(fig.fig)
 
 
+def test_renderer_does_not_draw_unit_height_bars_when_sizes_are_missing(tmp_path: Path):
+    import matplotlib.pyplot as plt
+
+    evidence = EvidenceStore(tmp_path)
+    no_sizes = _wide_profiles().drop(columns=["n"])
+    _register(evidence, tmp_path, _PROFILE_NAMES[0], no_sizes)
+    rendered = render_phenotype_figure(
+        context=ResearchContext(
+            research_question="Identify sepsis subphenotypes by clustering.",
+            cohort={
+                "cohort_name": "c",
+                "database": "miiv",
+                "n_patients": 3,
+                "n_stays": 3,
+            },
+            variables=[],
+        ),
+        plan=AnalysisPlan(research_question="q", steps=[]),
+        evidence=evidence,
+        run_dir=tmp_path,
+    )
+
+    assert rendered is not None
+    stability_axis = rendered.fig.axes[2]
+    assert not stability_axis.patches
+    assert any(
+        text.get_text() == "Cluster sizes unavailable"
+        for text in stability_axis.texts
+    )
+    plt.close(rendered.fig)
+
+
 def test_renderer_accepts_canonical_phenotype_product_names(tmp_path: Path):
     """The typed M3 products must reach the phenotyping renderer by exact name."""
 
