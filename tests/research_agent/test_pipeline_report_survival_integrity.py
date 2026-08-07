@@ -8,9 +8,11 @@ case-neutral and ignores non-survival or prep-only steps.
 from __future__ import annotations
 
 import json
+import inspect
 from pathlib import Path
 from types import SimpleNamespace
 
+from easyicu.research_agent.reporting import readiness, result_integrity
 from easyicu.research_agent.reporting.readiness import (
     primary_survival_estimate_integrity_errors,
 )
@@ -37,6 +39,17 @@ def _summary(run_dir: Path, step_id: str, payload: dict) -> None:
 
 
 _DET = {"fit_engine": "statsmodels.PHReg", "adjustment_source": "config"}
+
+
+def test_survival_integrity_gate_is_owned_by_the_result_integrity_module() -> None:
+    """Readiness preserves its public import without duplicating gate policy."""
+
+    assert primary_survival_estimate_integrity_errors is (
+        result_integrity.primary_survival_estimate_integrity_errors
+    )
+    assert "def primary_survival_estimate_integrity_errors" not in inspect.getsource(
+        readiness
+    )
 
 
 def test_impossible_event_count_is_flagged(tmp_path: Path):
