@@ -1,40 +1,10 @@
-"""Characterization: which families the typed headline contract actually covers.
+"""The typed headline requirement covers every currently result-bearing family.
 
-Written BEFORE extending it, to record what is true now and to make the scope a
-single editable list rather than something a reader has to re-derive.
-
-MEASURED over the recorded plans of every result-bearing task, counting primary
-steps that carry a required primary ``model_requirements`` entry:
-
-    association_study   e1 112/115   e3 38/38   m1 13/13   e2 17/17   = 180/183
-    survival            h1   0/13
-    causal_inference    h2    0/9
-
-The four tasks that have ever produced a verified manuscript are exactly the four
-whose family carries this obligation. 183 against 22, no overlap. That is
-correlational -- those families differ in other ways too -- but the obligation is
-the difference the code can act on, and it is absent from both result-bearing
-families that have never produced a manuscript.
-
-The chain has three links and all three are keyed to one family:
-
-* ``validate_required_primary_result`` returns early unless the family is
-  ``association_study``;
-* the typed roster ``PlannedModelRequirement`` says in its own docstring that
-  "this v1 schema does not represent survival, prediction, mixed-effects, or
-  clustering contracts";
-* the execution-side reconciliation activates on ``_CLOSED_EFFECT_METHODS`` and
-  ``_CLOSED_EFFECT_PRODUCTS``, each a single-element set built from one constant,
-  with the comment "only for the adjusted-association families this validator
-  implements".
-
-So a causal step can name its output ``primary_causal_contrast``, emit
-arm-specific weighted risks with no between-arm contrast, and pass every
-deterministic gate -- which is what three recorded auditor findings say happened.
-Only the LLM auditor noticed.
-
-These tests do not endorse that scope. They pin it, so extending it is a
-deliberate edit to the lists below and not a silent widening.
+Association studies keep their model-roster contract. Causal and survival
+studies instead use a family-specific primary-result packet plus a reconciliation
+gate that binds an exact registered CSV row to that packet. The narrow roster
+validator below deliberately remains association-only: a hazard ratio or causal
+estimand is not a logistic-model contract.
 """
 
 from __future__ import annotations
@@ -60,11 +30,15 @@ from easyicu.research_agent.schema import (
 #: Families whose plans this contract currently refuses when the typed headline
 #: obligation is missing. Extending the contract means adding to this list in the
 #: same commit that extends the code.
-FAMILIES_WITH_A_TYPED_HEADLINE_OBLIGATION = ("association_study",)
+FAMILIES_WITH_A_TYPED_HEADLINE_OBLIGATION = (
+    "association_study",
+    "causal_inference",
+    "survival",
+)
 
-#: Result-bearing families it is currently silent for. Each entry is a family
-#: whose primary step may declare nothing and still be accepted.
-FAMILIES_WITHOUT_ONE = ("causal_inference", "survival")
+#: Result-bearing families it is currently silent for. This is intentionally
+#: empty; introducing another family requires a corresponding typed contract.
+FAMILIES_WITHOUT_ONE = ()
 
 
 def _context(question: str) -> ResearchContext:
@@ -119,25 +93,10 @@ def _plan_with_no_typed_obligation(family: str) -> AnalysisPlan:
 @pytest.mark.parametrize("family", FAMILIES_WITH_A_TYPED_HEADLINE_OBLIGATION)
 def test_a_covered_family_is_refused_without_the_typed_obligation(family: str) -> None:
     plan = _plan_with_no_typed_obligation(family)
-    with pytest.raises(ValueError, match="model_requirements"):
+    with pytest.raises(ValueError, match="model_requirements|family_primary_result"):
         validate_required_primary_result(
             plan=plan, context=_context(plan.research_question)
         )
-
-
-@pytest.mark.parametrize("family", FAMILIES_WITHOUT_ONE)
-def test_an_uncovered_family_is_accepted_with_nothing_declared(family: str) -> None:
-    """The gap, recorded rather than asserted to be correct.
-
-    When this test starts failing because the contract was extended, that is the
-    intended outcome: move the family from FAMILIES_WITHOUT_ONE to the covered
-    list above in the same commit.
-    """
-
-    plan = _plan_with_no_typed_obligation(family)
-    validate_required_primary_result(
-        plan=plan, context=_context(plan.research_question)
-    )
 
 
 def test_the_two_lists_are_disjoint_and_name_real_families() -> None:
@@ -152,12 +111,12 @@ def test_the_two_lists_are_disjoint_and_name_real_families() -> None:
         assert canonical_analysis_family(family) == family, family
 
 
-def test_the_execution_side_reconciliation_is_keyed_to_one_method_and_product() -> None:
+def test_the_adjusted_association_model_reconciliation_remains_narrow() -> None:
     """The third link, and the reason the first two cannot be extended alone.
 
-    Even a causal plan that declared a typed obligation would not have it
-    reconciled against the emitted model contract: this validator activates only
-    on the single association method and the single association product.
+    The association validator stays scoped to its own model roster. Causal and
+    survival primary results use the separate family-primary reconciliation
+    gate, rather than pretending their estimands are logistic-model contracts.
     """
 
     assert PrimaryModelContractValidator._CLOSED_EFFECT_METHODS == {
