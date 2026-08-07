@@ -24,6 +24,7 @@ from ..plan_utils import (
 from ..schema import (
     PLANNED_MODEL_REQUIREMENTS_STEP_METHOD,
     AnalysisStep,
+    ClusterSelectionManifest,
     ConceptDescriptor,
     ResearchContext,
 )
@@ -165,6 +166,68 @@ _COMPACT_SERIALIZATION_GUIDANCE = """OUTPUT SERIALIZATION CONTRACT:
 - Every CSV cell must be one scalar. Emit separate columns for median, quartiles, counts, and percentages; emit one row per categorical level.
 - Never assign the result of an inplace pandas operation, and prefer stable `.agg`/`.transform` over mixed-shape `groupby.apply`."""
 
+
+#: Clustering execution guidance, moved out of the always-sent ``coder.txt``.
+#:
+#: MEASURED: as a paragraph in the base prompt file it cost 627 bytes on EVERY
+#: step, and the file had 152 bytes of headroom on the tightest measured case.
+#: The widest trajectory-representation generation prompt went to 42,802 against
+#: a hard 42,000-byte transport gate -- and that step is not a clustering step at
+#: all, so every one of those bytes was clustering advice sent to a step that
+#: could not use it, in place of the step's own typed context.
+#:
+#: It sits beside the schema-compiled manifest contract because they address the
+#: same reader on the same steps. The compiled one is authoritative for the
+#: manifest's shape; this one covers the execution choices the schema does not
+#: describe (feature selection, imputation, scaling, and the not-feasible exit).
+_CLUSTERING_EXECUTION_GUIDANCE = (
+    "CLUSTERING EXECUTION:\n"
+    "- Use numeric physiologic features, impute medians, scale before "
+    "KMeans/AgglomerativeClustering, and write `n_clusters`/`cluster_count` "
+    "plus method-appropriate selection evidence when at least two non-empty "
+    "clusters exist. At the top level of step_summary.json, record either a "
+    'replayable `"cluster_selection"` mapping with exact fields '
+    '`"criterion"`, `"selection_rule"`, `"direction"`, '
+    '`"selected_n_clusters"`, and `"candidates"` (at least two objects with '
+    '`"n_clusters"` and finite `"criterion_value"`), or a substantive '
+    '`"cluster_stability"` mapping with exact fields `"selected_n_clusters"`, '
+    '`"n_resamples"` (at least 2), and a finite metric such as '
+    '`"mean_adjusted_rand_index"`. Standalone scalars such as '
+    "`silhouette_score`, `selected_silhouette`, or `selected_stability_ari` do "
+    "not replace one of those nested evidence mappings. If clustering is not "
+    "feasible, write a precise skipped reason and exit normally."
+)
+
+
+def _cluster_selection_manifest_guidance(*, declared_manifest: bool) -> str:
+    """Render the Coder contract from the validator-owned public schema."""
+
+    schema = json.dumps(
+        ClusterSelectionManifest.model_json_schema(),
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    artifact_contract = (
+        " Because this step declares `manifest:cluster_selection`, write the "
+        "same closed object both to `cluster_selection.json` and to the top-level "
+        "`step_summary.json` key `cluster_selection`; put method, model, role, "
+        "identifier, and other methodology metadata in a separate declared "
+        "artifact rather than adding keys to this manifest."
+        if declared_manifest
+        else ""
+    )
+    return (
+        "AUTHORITATIVE CLUSTER-SELECTION MANIFEST CONTRACT "
+        "(generated from ClusterSelectionManifest; copy literal values exactly):\n"
+        f"{schema}\n"
+        "Candidate `n_clusters` values must be unique and the selected value must "
+        "be one of them. Pair `minimum` only with `minimize` and `maximum` only "
+        "with `maximize`; `elbow` or `multi_criteria` requires a non-empty "
+        "rationale. The manifest is closed and rejects extra keys."
+        + artifact_contract
+    )
+
 _COMPACT_RENDER_ONLY_GUIDANCE = """RENDER-ONLY PUBLICATION FIGURE CONTRACT:
 - Use only the exact digest-bound typed inputs in `EASYICU_RESOLVED_INPUTS_JSON`. Read that environment value as a JSON-file path, verify each declared evidence id/path/digest and product schema, and never scan the run/evidence directory, reuse an earlier figure, rank historical records, or choose columns by dtype/position.
 - A verified `consumption_contract.mode="all_rows"` binds the complete producer table. Consume every row and do not filter a reader-facing role/label column by a ResearchContext source-coordinate name unless the product contract explicitly binds that mapping.
@@ -172,11 +235,11 @@ _COMPACT_RENDER_ONLY_GUIDANCE = """RENDER-ONLY PUBLICATION FIGURE CONTRACT:
 - Typed upstream products have already crossed the host's raw-row validation boundary. Do not call `measurement_provenance_receipt` or any other raw-cohort provenance helper on an aggregate render table; verify the bound digest and exact product schema instead.
 - Write `<stem>_source_data.csv` or multiple source-data CSVs containing every plotted value, denominator, source table, and row/key needed for exact reconciliation. Every loaded digest-bound typed parent must be independently value-verifiable: preserve its original value-column names in a separate exact/subset CSV rather than renaming unrelated measures into generic `value`, `numerator`, or `denominator` columns. Do not add unplotted helper masks, duplicated rounded values, or unauthorised derived columns. For positional tracing use the exact columns `source_row_index` and `source_table`.
 - Verify every count-derived rate/risk/fraction/percentage from a finite numerator and denominator > 0. Keep unavailable confidence limits null or omit the error bar; never substitute the point estimate. Disclose every excluded invalid result row and reason. Structural accounting figures must fail closed rather than drop a required row.
-- Use matplotlib `Agg` and editable SVG text. Build every export from the same figure and source data with `make_figure_contract`, `apply_publication_style`, `add_panel_label`, `save_publication_figure`, and `audit_publication_exports_json` from `easyicu.research_agent.figures.publication`. Call `save_publication_figure(fig=fig, out_dir=out_dir, stem=stem, contract=contract)` directly and save matching PNG, SVG, PDF, and TIFF files.
+- Use matplotlib `Agg` and editable SVG text. Build every export from the same figure and source data with `make_figure_contract`, `apply_publication_style`, `add_panel_label`, `save_publication_figure`, and `audit_publication_exports_json` from `easyicu.research_agent.figures.publication`. Call `save_publication_figure(fig=fig, out_dir=out_dir, stem=stem, contract=contract)` directly and save matching PNG, SVG, PDF, and TIFF files. That call also writes `<stem>.figure_contract.json` itself, from the typed contract; never write that file yourself. `FigureContract` is a pydantic model, so a hand-rolled `json.dump(contract, ...)` is both redundant and fatal: a `default=` converter that returns an unrecognised value unchanged raises `Circular reference detected` after the file handle is already open, leaving a 0-byte contract that fails the step before this call ever runs.
 - Use the stable FigureContract fields `figure_id`, `core_claim`, `panels`, and `source_data`; each panel uses `panel_id`, `role`, `claim`, `evidence_ids`, plus `chart_type` or `visual_form`. `source_data` is one local CSV basename or a flat list of basenames; evidence ids belong on panels.
 - Follow the host-bound ARTICLE FIGURE STRATEGY when present. Give the reader-facing result visual priority, use distinct panel roles/chart families where required, keep incompatible effect scales on separate axes/panels, and never use a generic chart to impersonate an absolute-risk, calibration, survival, robustness, or data-quality role.
 - Keep labels reader-facing and compact. Use `constrained_layout=True` or explicit GridSpec spacing; keep labels, legends, and value text within their panels. Use compact unique panel labels, no duplicated label in a title, and no figure-level title, caption, long provenance note, or process note on the canvas.
-- Save the generated `.figure_contract.json`, the export-QA findings returned by `audit_publication_exports_json(paths=...)`, all `figure_files`, input bindings, and every quotable numeric statistic in `step_summary.json`. JSON values must be Python primitives; that helper already returns primitives, so do not write a `json.dump(default=...)` converter for host types; fraction fields stay in [0,1], percentage fields in [0,100], and probability/absolute-risk/prevalence confidence bounds stay in [0,1]."""
+- Record the host-written `.figure_contract.json` filename, the export-QA findings returned by `audit_publication_exports_json(paths=...)`, all `figure_files`, input bindings, and every quotable numeric statistic in `step_summary.json`. JSON values must be Python primitives; that helper already returns primitives, so do not write a `json.dump(default=...)` converter for host types; fraction fields stay in [0,1], percentage fields in [0,100], and probability/absolute-risk/prevalence confidence bounds stay in [0,1]."""
 
 _TABLE_ONE_SDK_GUIDANCE = """GROUPED TABLE 1 CONTRACT:
 - `table_one_spec` is the sole authority for grouping, closed levels, summaries, and tests.
@@ -451,9 +514,10 @@ def coder_guide_for_step(
     is_cohort_change = cohort_change_contract_applies(step)
     is_robustness = _robustness_contract_applies(step)
     is_reporting = _reporting_contract_applies(step)
+    is_clustering = clustering_contract_applies(step)
     is_trajectory = bool(
         trajectory_step_roles(step)
-        or clustering_contract_applies(step)
+        or is_clustering
         or step.trajectory_stability_spec is not None
     )
 
@@ -586,6 +650,13 @@ def coder_guide_for_step(
         parts.append(_COMPACT_MECHANICAL_GUIDANCE)
     if "serialization" not in _exclude_sections:
         parts.append(_COMPACT_SERIALIZATION_GUIDANCE)
+    if is_clustering:
+        parts.append(_CLUSTERING_EXECUTION_GUIDANCE)
+        parts.append(
+            _cluster_selection_manifest_guidance(
+                declared_manifest="cluster_selection" in output_names,
+            )
+        )
     if step.table_one_spec is not None:
         parts.append(_TABLE_ONE_SDK_GUIDANCE)
     if compact_adjusted_clinical:
@@ -658,9 +729,7 @@ def compact_quality_audit_coder_guide_for_step(
     base = coder_guide_for_step(
         full_guide,
         step,
-        _exclude_sections=frozenset(
-            {"source", "table", "clinical", "clinical_tail"}
-        ),
+        _exclude_sections=frozenset({"source", "table", "clinical", "clinical_tail"}),
     )
     return "\n\n".join((base, _COMPACT_QUALITY_AUDIT_GUIDANCE)).strip()
 
@@ -1023,9 +1092,9 @@ def planner_variable_catalog(
                 separators=(",", ":"),
             )
             for variable in omitted
-            if (
-                domain := project_observed_domain(variable.observed_domain)
-            ).get("opaque_levels")
+            if (domain := project_observed_domain(variable.observed_domain)).get(
+                "opaque_levels"
+            )
         )
     )
     caveats = list(
@@ -1150,8 +1219,7 @@ def scoped_reporting_context(
             continue
         if _is_automatically_required_source_companion(variable) and (
             _variable_family(variable.name) in selected_families
-            or str(variable.source_concept or "").strip().lower()
-            in selected_sources
+            or str(variable.source_concept or "").strip().lower() in selected_sources
         ):
             selected.append(variable)
             selected_names.add(variable.name.lower())
@@ -1221,9 +1289,7 @@ def scoped_coder_context(
     # columns through a separate host execution receipt while declaring no raw
     # measured/count pair at all.
     companion_seed_names = declared | code_referenced
-    companion_families = {
-        _variable_family(value) for value in companion_seed_names
-    }
+    companion_families = {_variable_family(value) for value in companion_seed_names}
     companion_source_concepts = {
         str(variable.source_concept).strip().lower()
         for variable in context.variables
@@ -1242,10 +1308,7 @@ def scoped_coder_context(
                 _is_automatically_required_source_companion(variable)
                 and (
                     _variable_family(name) in companion_families
-                    or (
-                        source_concept
-                        and source_concept in companion_source_concepts
-                    )
+                    or (source_concept and source_concept in companion_source_concepts)
                 )
             )
         ):

@@ -213,6 +213,36 @@ def _load_bridge(
     }, contract_sha256
 
 
+def _panel_grid(spec: Canonical9MaterializationSpec):
+    """Compile the task's declared grid, or None when it declares none.
+
+    The horizon is the task's own trajectory window rather than a second
+    declaration, so a grid can never describe hours the long table does not
+    contain.
+    """
+
+    if not spec.emit_trajectory or spec.trajectory_panel_width_hours is None:
+        return None
+    if spec.trajectory_window is None:
+        raise ValueError(
+            f"{spec.task_id}: a fixed-window panel needs a trajectory window to "
+            "take its horizon from"
+        )
+    from easyicu.research_agent.trajectory.panel import FixedWindowGrid
+
+    start_hours, end_hours = spec.trajectory_window
+    if float(start_hours) != 0.0:
+        raise ValueError(
+            f"{spec.task_id}: the panel grid starts at the trajectory anchor, so "
+            f"a window starting at {start_hours} h cannot be gridded"
+        )
+    return FixedWindowGrid(
+        width_hours=float(spec.trajectory_panel_width_hours),
+        horizon_hours=float(end_hours),
+        aggregate=spec.trajectory_panel_aggregate,  # type: ignore[arg-type]
+    )
+
+
 def _select_materialization_specs(
     task_ids: object,
 ) -> tuple[Canonical9MaterializationSpec, ...]:
@@ -395,6 +425,7 @@ def materialize(args: argparse.Namespace) -> Path:
                     emit_trajectory=spec.emit_trajectory,
                     trajectory_concepts=spec.trajectory_concepts or None,
                     trajectory_window=spec.trajectory_window,
+                    trajectory_panel_grid=_panel_grid(spec),
                     source_package=package,
                     feature_concepts=spec.feature_concepts,
                     database="miiv",

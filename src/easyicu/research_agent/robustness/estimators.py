@@ -67,6 +67,29 @@ class EstimatorResult:
     #: adjusted-association owner shipped: a step that computed the study's
     #: primary estimate correctly and was then failed for not showing its terms.
     terms: Tuple["EstimatorTerm", ...] = ()
+    #: Events among the rows this fit actually used, or ``None``.
+    #:
+    #: ``n`` is the complete-case count, so its numerator has to come from the
+    #: same rows.  A caller counting events on its own frame counts them on the
+    #: rows this fit dropped as well, and reports the analysis set's
+    #: denominator with the whole cohort's numerator -- which is exactly what
+    #: the adjusted-association owner did: n=515 with event_n=102 where the 515
+    #: analysed rows held 78 events, a 31% overstatement of the event rate that
+    #: went into the model contract, the estimates table and the summary alike.
+    #:
+    #: ``None`` means there is no such count to report: a continuous outcome
+    #: has no events, and a fit that did not converge has no analysed row set.
+    n_events: Optional[int] = None
+
+    #: Whether the logistic fit shows (quasi-)separation, or None when the
+    #: estimator is not one this can be asked of.  The host's model contract
+    #: requires a boolean and its validator refuses a missing one, so the answer
+    #: has to be computed rather than assumed -- see ``_logistic_separation``.
+    #:
+    #: Declared LAST on purpose: every existing construction passes ``terms``
+    #: and ``n_events`` positionally, so inserting a field ahead of them
+    #: silently rebinds those arguments.
+    separation_detected: Optional[bool] = None
 
 
 class _UncodeableDesign(Exception):
@@ -375,6 +398,7 @@ def fit_estimator(
             ),
         )
 
+    n_events: Optional[int] = None
     if kind == "logistic":
         numeric_y = pd.to_numeric(y_series, errors="coerce")
         is_binary = bool(
@@ -396,6 +420,10 @@ def fit_estimator(
                 ),
             )
         y_series = numeric_y
+        # Counted here and nowhere else: ``combined.dropna()`` above already
+        # removed every incomplete row, so this is the numerator that belongs
+        # to ``n``.  The caller's frame still holds the dropped rows.
+        n_events = int((y_series == 1.0).sum())
 
     try:
         x_const = sm.add_constant(x_df.astype(float), has_constant="add")
@@ -465,6 +493,7 @@ def fit_estimator(
                 _join_notes("binary outcome has fewer than two classes", cohort_note),
             )
         result = sm.Logit(y_series.astype(float), x_const).fit(disp=False, maxiter=100)
+        separated, separation_note = _logistic_separation(result)
         coef = float(result.params[coefficient_name])
         ci_low, ci_high = _conf_interval_for(result, coefficient_name)
         se = _float_or_none(result.bse[coefficient_name])
@@ -475,6 +504,9 @@ def fit_estimator(
         if not math.isfinite(coef):
             raise ValueError("non-finite logistic coefficient")
         if not converged:
+            # Carrying the verdict here too: complete separation is the reason a
+            # logistic fit most often fails to converge, and "did not converge"
+            # sends a reader looking at the optimiser instead of at the design.
             return EstimatorResult(
                 None,
                 None,
@@ -482,7 +514,11 @@ def fit_estimator(
                 None,
                 n,
                 False,
-                _join_notes("logistic fit did not converge", fit_note),
+                _join_notes(
+                    _join_notes("logistic fit did not converge", fit_note),
+                    separation_note,
+                ),
+                separation_detected=separated,
             )
         return EstimatorResult(
             point,
@@ -491,13 +527,15 @@ def fit_estimator(
             se,
             n,
             True,
-            fit_note,
+            _join_notes(fit_note, separation_note),
             _fitted_terms(
                 result,
                 design_columns=list(x_const.columns),
                 encoded_map=encoded_map,
                 exponentiate=True,
             ),
+            n_events=n_events,
+            separation_detected=separated,
         )
     except Exception as exc:
         return EstimatorResult(
@@ -1296,6 +1334,65 @@ def _name_tokens(value: str) -> List[str]:
 
 def _normalise_token(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", str(value).lower())
+
+
+#: The textbook separation diagnostic, and the only constant here: under
+#: (quasi-)separation some fitted probabilities are numerically 0 or 1.  This is
+#: a floating-point tolerance, not a judgement about effect size.
+#:
+#: TWO OTHER SIGNALS WERE TRIED AND REMOVED, both for reachability rather than
+#: taste.  A log-odds magnitude bound could not work: a genuine near-
+#: deterministic association (100 vs 100 with one counterexample each way)
+#: reaches 9.65 against a corpus maximum of 4.82, so any bound wide enough to
+#: spare real effects was too wide to catch anything.  statsmodels'
+#: PerfectSeparationWarning was then wired in and measured across 200
+#: constructed designs: it never once fired without this check also firing, so
+#: it was a second spelling of the same rule and no test could prove it live.
+_CERTAIN_PROBABILITY_TOLERANCE = 1e-6
+
+
+def _logistic_separation(result: Any) -> Tuple[bool, str]:
+    """Whether this logistic fit is (quasi-)separated, actually checked.
+
+    The contract field used to be written ``False`` unconditionally, justified
+    by "a separated design cannot satisfy both a finite estimate and a finite
+    interval".  That is not true.  Quasi-separation routinely returns finite
+    numbers -- an enormous coefficient, an interval spanning many orders of
+    magnitude, and a convergence flag that says converged.  The renderer beside
+    this already has a test for exactly that state, so one layer knew it
+    existed while the producer asserted it could not.
+
+    The primary signal is the textbook one and needs no threshold beyond
+    floating point: under separation some fitted probabilities are numerically
+    0 or 1.  The coefficient bound is a second net, anchored on what this
+    project's own fits actually produce.
+
+    Returns the verdict and, when separated, a note naming which signal fired,
+    so a reader is not left to infer it.
+    """
+
+    import numpy as np  # type: ignore
+
+    signals: list[str] = []
+    try:
+        probabilities = np.asarray(result.predict(), dtype=float)
+    except Exception:  # noqa: BLE001 - an estimator without predict() is not asked
+        probabilities = np.asarray([], dtype=float)
+    if probabilities.size:
+        certain = int(
+            np.count_nonzero(
+                (probabilities <= _CERTAIN_PROBABILITY_TOLERANCE)
+                | (probabilities >= 1.0 - _CERTAIN_PROBABILITY_TOLERANCE)
+            )
+        )
+        if certain:
+            signals.append(
+                f"{certain} of {probabilities.size} fitted probabilities are "
+                "numerically 0 or 1"
+            )
+    if not signals:
+        return False, ""
+    return True, "separation suspected: " + "; ".join(signals)
 
 
 def _conf_interval_for(

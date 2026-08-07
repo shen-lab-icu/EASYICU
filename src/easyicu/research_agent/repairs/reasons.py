@@ -556,6 +556,10 @@ _DETAIL_REASON_CODES = {
     "render_only_raw_provenance_helper": RepairReason.INVALID_HELPER_SIGNATURE,
     "closed_counts_table_index_used_as_levels": (RepairReason.INVALID_HELPER_SIGNATURE),
     "table_one_spec_not_planner_owned": RepairReason.INVALID_HELPER_SIGNATURE,
+    # Omitting the required argument entirely is the same class of defect as
+    # passing the wrong one; without this line it fell through to the generic
+    # output-contract bucket and the ledger would blame the wrong layer.
+    "table_one_spec_not_passed": RepairReason.INVALID_HELPER_SIGNATURE,
     "local_helper_unpack_arity_mismatch": RepairReason.INVALID_HELPER_SIGNATURE,
     "host_helper_runtime_introspection": RepairReason.INVALID_HELPER_SIGNATURE,
     "measurement_provenance_pair_undeclared": (

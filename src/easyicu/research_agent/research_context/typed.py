@@ -37,6 +37,7 @@ from ..intake.materialized_trajectory import (
     TrajectoryConceptBinding,
     VerifiedMaterializedTrajectoryAuthority,
 )
+from ..contracts.cohort_receipt import COHORT_RECEIPT_COLUMN_FIELDS
 from ..icu_rules import ICU_RULES
 from .implementation_identity import metadata_implementation_identity
 from ..schema import ConceptDescriptor, ResearchContext
@@ -909,11 +910,130 @@ def _legacy_raw_input_contract(variable: ConceptDescriptor) -> Dict[str, Any]:
             "range_policy": "flag_only",
             "out_of_range_action": "retain_and_flag",
         }
-    levels = _closed_observed_levels(variable.observed_domain)
-    if levels is not None:
-        fact["allowed_values"] = levels
-        fact["allowed_values_basis"] = "sealed_research_context_observed_domain"
+    _apply_domain(fact, variable)
     return fact
+
+
+def _apply_domain(fact: Dict[str, Any], variable: ConceptDescriptor) -> None:
+    """Publish a DECLARED domain when one exists, an observed one otherwise.
+
+    ``ordinal_levels`` is a declaration: ``icu_rules`` fixes SOFA components at
+    0-4 and KDIGO stage at 0-3 by construction, and 687 of 4,318 recorded
+    context variables already carry it.  This layer ignored it and re-derived a
+    level set from whatever the cohort happened to contain -- so the host held
+    the codebook and published a guess.
+
+    The difference is not cosmetic.  An observed set cannot contain a level with
+    zero cases, which is exactly what a stage-stratified table has to show; the
+    2026-07-30 note that introduced the observed fallback names "not displaying
+    the zero-count one" as part of the defect it was fixing, and deriving the
+    levels from data structurally cannot deliver it.  Measured on the recorded
+    runs: 327 contracts published an ordinal-score domain taken from
+    observation, and every one of those concepts has a declaration available.
+
+    The concept dictionary is the second declaration.  A ``fct_cncpt`` states
+    its own closed factor -- ``adm`` is ``['med','surg','other']`` -- and that
+    is a codebook, not a sample.  Reading it also makes a mapping defect
+    visible instead of blessing it: MIMIC-IV's service table contains ``EYE``,
+    the dictionary's own ``apply_map`` for ``adm`` has no entry for it, and the
+    raw code passed straight through.  All 201 recorded contexts observed
+    ``['EYE','med','other','surg']`` on a concept that declares three levels,
+    and publishing the observation labelled the leak legal.  Whether ``EYE``
+    belongs in ``surg`` or ``other`` is a clinical mapping decision and is NOT
+    made here; this only stops the host asserting it is already legal.
+
+    The observed fallback stays for concepts with neither declaration -- 702
+    binary 0/1 flags on the recorded runs -- and keeps saying so in
+    ``allowed_values_basis``.
+    """
+
+    observed = _closed_observed_levels(variable.observed_domain)
+    declared, basis = _declared_domain(variable)
+    if declared is not None:
+        fact["allowed_values"] = list(declared)
+        fact["allowed_values_basis"] = basis
+        if observed is not None:
+            # Keep the observation visible rather than replacing it: a declared
+            # level this cohort never saw, and an observed value the codebook
+            # does not declare, are both real reportable facts, and a consumer
+            # can only see either by comparing the two.
+            fact["observed_values"] = observed
+        return
+    if observed is not None:
+        fact["allowed_values"] = observed
+        fact["allowed_values_basis"] = "sealed_research_context_observed_domain"
+
+
+_CONCEPT_LEVELS_CACHE: Dict[str, Optional[List[Any]]] = {}
+
+
+def _dictionary_declared_levels(source_concept: Optional[str]) -> Optional[List[Any]]:
+    """Return the concept dictionary's own closed factor levels, if it has one."""
+
+    if not source_concept:
+        return None
+    if source_concept in _CONCEPT_LEVELS_CACHE:
+        return _CONCEPT_LEVELS_CACHE[source_concept]
+    levels: Optional[List[Any]] = None
+    try:  # local import to avoid import-time cost / cycles, as icu_rules does
+        from ...concept.loader import load_dictionary
+
+        definition = load_dictionary().get(source_concept)
+        raw = getattr(definition, "levels", None)
+        if isinstance(raw, (list, tuple)) and raw:
+            levels = list(raw)
+    except Exception:
+        levels = None
+    _CONCEPT_LEVELS_CACHE[source_concept] = levels
+    return levels
+
+
+#: Representation transforms whose column still holds the SOURCE CONCEPT'S OWN
+#: VALUES, and is therefore described by that concept's declared levels.
+#:
+#: Everything else is a different quantity derived from those values -- a count
+#: of them, a flag that any were seen, the time of the first one, a numeric
+#: summary -- and the concept's level set says nothing about its domain.
+#:
+#: MEASURED over every recorded resolved-input contract, which is where this
+#: enumeration comes from rather than from judgement: 13 distinct
+#: (physical_role, representation_transform) pairs exist, and exactly one --
+#: ``stay_level_unique_value`` -- carries the value itself. The rest are
+#: ``window_nonnull_count`` (a count), ``window_measurement_status`` /
+#: ``window_presence_max`` / ``whole_stay_any_truthy`` (0-1 flags),
+#: ``window_first_time`` / ``window_last_time`` / ``first_truthy_event_time``
+#: (timestamps) and ``window_numeric_first|max|mean|min`` (numeric summaries).
+_VALUE_PRESERVING_TRANSFORMS = frozenset({"stay_level_unique_value"})
+
+
+def _transform_preserves_concept_values(transform: Any) -> bool:
+    """Whether a column under this transform still holds the concept's values.
+
+    An unknown transform answers False. A new derived representation must say
+    it preserves the value domain before it inherits one -- the failure this
+    guards is a contract nothing can satisfy, so ambiguity fails closed.
+    """
+
+    return str(transform or "") in _VALUE_PRESERVING_TRANSFORMS
+
+
+def _declared_domain(
+    variable: ConceptDescriptor,
+) -> tuple[Optional[List[Any]], Optional[str]]:
+    """Return the highest-authority declared domain for one descriptor.
+
+    Order is authority, not convenience: the host's own ICU rules fix a score's
+    range by construction, so they outrank the dictionary; the dictionary
+    outranks anything derived from this cohort's rows.
+    """
+
+    ordinal = getattr(variable, "ordinal_levels", None)
+    if ordinal:
+        return list(ordinal), "declared_ordinal_levels"
+    levels = _dictionary_declared_levels(getattr(variable, "source_concept", None))
+    if levels:
+        return levels, "declared_concept_dictionary_levels"
+    return None, None
 
 
 def resolved_raw_input_contracts(
@@ -995,7 +1115,44 @@ def resolved_raw_input_contracts(
             else None
         )
         observed_levels = _closed_observed_levels(domain)
-        if "allowed_values" not in fact and observed_levels is not None:
+        # Same order of authority as ``_apply_domain``: a declaration outranks
+        # an observation, and outranks it here too -- this is the manifest the
+        # sandbox actually executes against, so a guess winning on this path
+        # would undo the fix on the other one.
+        declared_levels, declared_basis = (
+            _declared_domain(variable) if variable is not None else (None, None)
+        )
+        if declared_basis == "declared_concept_dictionary_levels" and not (
+            _transform_preserves_concept_values(fact.get("representation_transform"))
+        ):
+            # A CONCEPT'S LEVELS DESCRIBE ITS VALUES, NOT A COUNT OF THEM.
+            #
+            # This fallback borrows the source concept's declared levels when
+            # nothing else fixed a domain. For the concept's own column that is
+            # right; for a companion derived from it, it publishes a contract
+            # the column cannot satisfy. h1 (2026-08-03) died on exactly that:
+            # ``mech_vent_n`` is ``physical_role=count`` /
+            # ``window_nonnull_count`` / int64, holding 20-25 observations per
+            # stay, and it was handed ``['invasive', 'noninvasive']`` --
+            # 92,398 of 92,398 rows outside their own declared domain, and the
+            # generated code raised, correctly, on what it had been told.
+            #
+            # The sibling ``mech_vent_measured`` escaped only by accident: its
+            # metadata already declared ``[0, 1]``, so this fallback never ran
+            # for it. The count had no metadata domain, so it took the
+            # concept's.
+            #
+            # Only the ORDINAL branch is left alone: those levels come from the
+            # host's own ICU rules, and a max over ordinal stages is still a
+            # stage. The dictionary branch is the one that borrows a
+            # categorical value domain, so it is the one gated.
+            declared_levels, declared_basis = None, None
+        if "allowed_values" not in fact and declared_levels:
+            fact["allowed_values"] = list(declared_levels)
+            fact["allowed_values_basis"] = declared_basis
+            if observed_levels is not None:
+                fact["observed_values"] = observed_levels
+        elif "allowed_values" not in fact and observed_levels is not None:
             fact["allowed_values"] = observed_levels
             fact["allowed_values_basis"] = "sealed_research_context_observed_domain"
         if binding.analysis_plausibility_range is not None:
@@ -1031,7 +1188,15 @@ def raw_contract_inputs_for_step(
     planner_declared_inputs: Sequence[str],
     primary_cohort_execution_receipt: Optional[Mapping[str, Any]],
 ) -> tuple[str, ...]:
-    """Add only host-resolved cohort predicates to exact Planner inputs."""
+    """Add only host-resolved cohort predicates to exact Planner inputs.
+
+    A predicate coordinate is whichever column the host's mask actually read.
+    For a predicate the host narrowed to an event-time window that is two
+    columns, not one, so the event-time column is authorized on the same
+    footing as ``resolved_column``: the Coder is asked to reproduce that
+    predicate's counts, and it cannot do so from a column it has no contract
+    for. Rows without the field are unrefined and add nothing.
+    """
 
     names = [str(value) for value in planner_declared_inputs]
     if primary_cohort_execution_receipt is None:
@@ -1046,19 +1211,16 @@ def raw_contract_inputs_for_step(
             raise MaterializedMetadataError(
                 "primary cohort execution receipt contains an invalid predicate"
             )
-        resolved_column = row.get("resolved_column")
-        if resolved_column is None:
-            continue
-        if not (
-            isinstance(resolved_column, str)
-            and resolved_column.strip()
-            and ":" not in resolved_column
-        ):
-            raise MaterializedMetadataError(
-                "primary cohort execution receipt has an invalid resolved column"
-            )
-        if resolved_column not in names:
-            names.append(resolved_column)
+        for field, reason in COHORT_RECEIPT_COLUMN_FIELDS:
+            column = row.get(field)
+            if column is None:
+                continue
+            if not (isinstance(column, str) and column.strip() and ":" not in column):
+                raise MaterializedMetadataError(
+                    f"primary cohort execution receipt has an invalid {reason}"
+                )
+            if column not in names:
+                names.append(column)
     return tuple(names)
 
 

@@ -46,17 +46,24 @@ from ..scalar_utils import (
     _first_present_scalar,
     _flatten_scalar_dict,
 )
+from .availability_fraction import patch_availability_fraction_component_denominator
 from .attrition import patch_attrition_rule_id_canonicalization
 from .categorical import patch_categorical_declared_order_check
 from .figure_distribution import (
     patch_categorical_distribution_clinical_bin_role,
     patch_text_distribution_denominator_from_counts,
 )
+from .figure_source_bundle import (
+    find_figure_contract_source_assignment as _figure_contract_source_assignment,
+    patch_complete_bound_figure_source_bundle as _patch_complete_bound_figure_source_bundle,
+)
 from .lossy_coercion import (
     patch_lossy_numeric_coercion_guard as _patch_lossy_numeric_coercion_guard,
     patch_returned_coercion_loss_guard as _patch_returned_coercion_loss_guard,
 )
 from .merge_collision import patch_pandas_merge_dynamic_column_collision
+from .matplotlib_source import patch_matplotlib_patch_source_rows
+from .cluster_summary import patch_cluster_count_summary_alias
 from .model_contract import patch_penalized_convergence_contract
 from .name_alias import patch_undefined_mapping_near_match_alias
 from .nonfinite_audit import (
@@ -73,6 +80,7 @@ from .plausibility import (
     patch_flag_only_plausibility_range_rejection,
     patch_plausibility_range_schema_keys,
 )
+from .profile_roles import patch_all_rows_profile_roles_display
 from .provenance_summary import (
     patch_audit_only_companion_value_selector,
     patch_closed_provenance_envelope_alias,
@@ -116,7 +124,9 @@ from .preflight import patch_preflight_repairs
 from .reasons import RepairReason
 from .typed_input import (
     patch_all_rows_outcome_coordinate_filter,
+    patch_missing_typed_input_receipt,
     patch_resolved_input_cohort_env_shadow,
+    patch_resolved_input_consumption_contract_owner,
     patch_resolved_input_manifest_env,
     patch_resolved_input_relative_path_root,
 )
@@ -2640,6 +2650,7 @@ def deterministic_concept_audit_repair(
     *,
     repair_reasons: Sequence[RepairReason] = (),
     repair_findings: Sequence[ValidationFinding] = (),
+    step: Any = None,
 ) -> tuple[str, List[str]]:
     """Apply narrow, science-neutral repairs named by concept-audit errors.
 
@@ -2662,6 +2673,32 @@ def deterministic_concept_audit_repair(
     )
     repaired = code
     repair_names: List[str] = []
+
+    repaired_profile_roles, profile_roles_repair_name = (
+        patch_all_rows_profile_roles_display(
+            repaired,
+            step=step,
+            audit_messages=audit_messages,
+            repair_findings=repair_findings,
+        )
+    )
+    if (
+        profile_roles_repair_name is not None
+        and repaired_profile_roles != repaired
+    ):
+        repaired = repaired_profile_roles
+        repair_names.append(profile_roles_repair_name)
+
+    repaired_availability, availability_repair_name = (
+        patch_availability_fraction_component_denominator(
+            repaired,
+            audit_messages=audit_messages,
+            repair_findings=repair_findings,
+        )
+    )
+    if availability_repair_name is not None and repaired_availability != repaired:
+        repaired = repaired_availability
+        repair_names.append(availability_repair_name)
 
     repaired, preflight_repair_names = patch_preflight_repairs(
         repaired,
@@ -5222,12 +5259,46 @@ def _materialize_direct_bound_source_frames(
         source_keyword.value.end_col_offset,
     )
     insert_at = line_starts[contract_statement.lineno - 1]
+    summary_source_values: List[ast.AST] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Dict):
+            continue
+        literal_keys = {
+            key.value
+            for key in node.keys
+            if isinstance(key, ast.Constant) and isinstance(key.value, str)
+        }
+        if not literal_keys.intersection(
+            {"figure_files", "figure_contract", "output_files"}
+        ):
+            continue
+        for key, value in zip(node.keys, node.values, strict=True):
+            if isinstance(key, ast.Constant) and key.value in {
+                "source_data",
+                "source_data_files",
+            }:
+                summary_source_values.append(value)
+    if len(summary_source_values) > 1:
+        return code
+    replacements = [
+        (source_start, source_end, marker),
+        (insert_at, insert_at, projection),
+    ]
+    if summary_source_values:
+        summary_value = summary_source_values[0]
+        replacements.append(
+            (
+                absolute_offset(summary_value.lineno, summary_value.col_offset),
+                absolute_offset(
+                    summary_value.end_lineno,
+                    summary_value.end_col_offset,
+                ),
+                marker,
+            )
+        )
     repaired = code
     for start, end, replacement in sorted(
-        [
-            (source_start, source_end, marker),
-            (insert_at, insert_at, projection),
-        ],
+        replacements,
         key=lambda item: item[0],
         reverse=True,
     ):
@@ -5237,41 +5308,6 @@ def _materialize_direct_bound_source_frames(
     except SyntaxError:
         return code
     return repaired
-
-
-def _figure_contract_source_assignment(
-    tree: ast.AST,
-    *,
-    source_value_type: type[ast.AST] | tuple[type[ast.AST], ...],
-) -> tuple[ast.Assign, ast.keyword] | None:
-    candidates: List[tuple[ast.Assign, ast.keyword]] = []
-    for node in ast.walk(tree):
-        if not (
-            isinstance(node, ast.Assign)
-            and len(node.targets) == 1
-            and isinstance(node.targets[0], ast.Name)
-            and isinstance(node.value, ast.Call)
-            and (
-                (
-                    isinstance(node.value.func, ast.Name)
-                    and node.value.func.id == "make_figure_contract"
-                )
-                or (
-                    isinstance(node.value.func, ast.Attribute)
-                    and node.value.func.attr == "make_figure_contract"
-                )
-            )
-        ):
-            continue
-        source_keywords = [
-            keyword
-            for keyword in node.value.keywords
-            if keyword.arg == "source_data"
-            and isinstance(keyword.value, source_value_type)
-        ]
-        if len(source_keywords) == 1:
-            candidates.append((node, source_keywords[0]))
-    return candidates[0] if len(candidates) == 1 else None
 
 
 def _patch_direct_bound_figure_source_projection(
@@ -5300,6 +5336,49 @@ def _patch_direct_bound_figure_source_projection(
     duplicate_products: Set[str] = set()
     unkeyed_loaded_frames: List[str] = []
 
+    source_table_path_names: Set[str] = set()
+    source_table_name_variables: Set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target = node.targets[0]
+            value = node.value
+            if (
+                isinstance(target, ast.Name)
+                and "source_table" in target.id
+                and isinstance(value, ast.Attribute)
+                and value.attr == "name"
+                and isinstance(value.value, ast.Name)
+            ):
+                source_table_name_variables.add(target.id)
+                source_table_path_names.add(value.value.id)
+        if not isinstance(node, ast.Dict):
+            continue
+        for key, value in zip(node.keys, node.values, strict=True):
+            if not (isinstance(key, ast.Constant) and key.value == "source_table"):
+                continue
+            if (
+                isinstance(value, ast.Attribute)
+                and value.attr == "name"
+                and isinstance(value.value, ast.Name)
+            ):
+                source_table_path_names.add(value.value.id)
+            elif isinstance(value, ast.Name):
+                source_table_name_variables.add(value.id)
+
+    if source_table_name_variables:
+        for node in ast.walk(tree):
+            if not (
+                isinstance(node, ast.Assign)
+                and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and node.targets[0].id in source_table_name_variables
+                and isinstance(node.value, ast.Attribute)
+                and node.value.attr == "name"
+                and isinstance(node.value.value, ast.Name)
+            ):
+                continue
+            source_table_path_names.add(node.value.value.id)
+
     def _register_loaded_table(*, input_key: str, frame_name: str) -> None:
         if not input_key.startswith("table:"):
             return
@@ -5314,6 +5393,19 @@ def _patch_direct_bound_figure_source_projection(
             continue
         target = node.targets[0]
         value = node.value
+        if (
+            isinstance(target, ast.Name)
+            and isinstance(value, ast.Call)
+            and isinstance(value.func, ast.Attribute)
+            and value.func.attr in {"read_csv", "read_parquet"}
+            and isinstance(value.func.value, ast.Name)
+            and value.func.value.id == "pd"
+            and value.args
+            and isinstance(value.args[0], ast.Name)
+            and value.args[0].id in source_table_path_names
+        ):
+            unkeyed_loaded_frames.append(target.id)
+            continue
         if (
             isinstance(target, ast.Name)
             and isinstance(value, ast.Call)
@@ -5386,6 +5478,7 @@ def _patch_direct_bound_figure_source_projection(
         )
     if duplicate_products:
         return code
+    unkeyed_loaded_frames = list(dict.fromkeys(unkeyed_loaded_frames))
     missing_products = [Path(name).stem for name in plain_missing_names]
     unresolved_products = [
         product for product in missing_products if product not in loaded_tables
@@ -5398,7 +5491,7 @@ def _patch_direct_bound_figure_source_projection(
         return code
     source_assignment = _figure_contract_source_assignment(
         tree,
-        source_value_type=(ast.Constant, ast.Attribute, ast.Name),
+        source_value_type=(ast.Constant, ast.Attribute, ast.List, ast.Name),
     )
     if source_assignment is None:
         return code
@@ -5609,11 +5702,23 @@ def deterministic_contract_repair(
 ) -> Optional[tuple[str, str]]:
     """Patch objective contract/audit failures before asking the LLM to repair."""
 
+    cluster_count_repair_name = "cluster_count_summary_alias_v1"
+    if previous_repair != cluster_count_repair_name:
+        repaired = patch_cluster_count_summary_alias(code, findings)
+        if repaired != code:
+            return cluster_count_repair_name, repaired
+
     unresolved_receipt_repair_name = "unresolved_input_binding_receipts_v1"
     if previous_repair != unresolved_receipt_repair_name:
         repaired = _patch_unresolved_input_binding_receipts(code, findings=findings)
         if repaired != code:
             return unresolved_receipt_repair_name, repaired
+
+    missing_receipt_repair_name = "complete_typed_input_receipt_v1"
+    if previous_repair != missing_receipt_repair_name:
+        repaired = patch_missing_typed_input_receipt(code, findings=findings)
+        if repaired != code:
+            return missing_receipt_repair_name, repaired
 
     render_echo_repair_name = "render_only_effect_echo_suppression_v1"
     if previous_repair != render_echo_repair_name:
@@ -5670,20 +5775,87 @@ def deterministic_contract_repair(
             and detail.get("missing_bound_tables")
         ):
             source_coverage_findings.append(finding)
-    direct_source_repair_name = "direct_bound_figure_source_projection_v1"
+    complete_source_repair_name = "complete_bound_figure_source_bundle_v1"
     if (
         len(source_coverage_findings) == 1
-        and previous_repair != direct_source_repair_name
+        and previous_repair != complete_source_repair_name
     ):
-        finding = source_coverage_findings[0]
-        detail = (
-            finding.get("detail")
-            if isinstance(finding, dict)
-            else getattr(finding, "detail", {})
+        coverage_finding = source_coverage_findings[0]
+        coverage_detail = (
+            coverage_finding.get("detail")
+            if isinstance(coverage_finding, dict)
+            else getattr(coverage_finding, "detail", {})
         )
+        invalid_source_names: List[str] = []
+        for finding in findings:
+            validator = getattr(finding, "validator", None)
+            detail = getattr(finding, "detail", None)
+            if isinstance(finding, dict):
+                validator = finding.get("validator")
+                detail = finding.get("detail")
+            if validator != "figure_source_data" or not isinstance(detail, dict):
+                continue
+            mismatch = detail.get("best_mismatch")
+            if not (
+                isinstance(mismatch, dict)
+                and mismatch.get("reason")
+                in {
+                    "ambiguous_join_key",
+                    "declared_source_table_not_found",
+                    "no_verifiable_values",
+                }
+                and isinstance(detail.get("source_table"), str)
+            ):
+                continue
+            invalid_source_names.append(str(detail["source_table"]))
+        missing_table_names = coverage_detail.get("missing_bound_tables") or []
+        missing_statistic_ids = (
+            coverage_detail.get("missing_bound_statistics") or []
+        )
+        if (
+            invalid_source_names
+            or missing_statistic_ids
+            or any(Path(str(name)).suffix.lower() != ".csv" for name in missing_table_names)
+        ):
+            repaired = _patch_complete_bound_figure_source_bundle(
+                code,
+                missing_table_names=missing_table_names,
+                missing_statistic_ids=missing_statistic_ids,
+                invalid_source_names=invalid_source_names,
+            )
+            if repaired != code:
+                return complete_source_repair_name, repaired
+    direct_source_repair_name = "direct_bound_figure_source_projection_v1"
+    direct_source_names: List[str] = []
+    if len(source_coverage_findings) == 1:
+        coverage_finding = source_coverage_findings[0]
+        coverage_detail = (
+            coverage_finding.get("detail")
+            if isinstance(coverage_finding, dict)
+            else getattr(coverage_finding, "detail", {})
+        )
+        direct_source_names.extend(coverage_detail.get("missing_bound_tables") or [])
+    for finding in findings:
+        validator = getattr(finding, "validator", None)
+        detail = getattr(finding, "detail", None)
+        if isinstance(finding, dict):
+            validator = finding.get("validator")
+            detail = finding.get("detail")
+        if validator != "figure_source_data" or not isinstance(detail, dict):
+            continue
+        mismatch = detail.get("best_mismatch")
+        if not (
+            isinstance(mismatch, dict)
+            and mismatch.get("reason") == "no_verifiable_values"
+            and isinstance(mismatch.get("upstream_table"), str)
+        ):
+            continue
+        direct_source_names.append(str(mismatch["upstream_table"]))
+    direct_source_names = list(dict.fromkeys(direct_source_names))
+    if direct_source_names and previous_repair != direct_source_repair_name:
         repaired = _patch_direct_bound_figure_source_projection(
             code,
-            missing_table_names=list(detail.get("missing_bound_tables") or []),
+            missing_table_names=direct_source_names,
         )
         if repaired != code:
             return direct_source_repair_name, repaired
@@ -6145,6 +6317,12 @@ def _deterministic_runner_repair(
         repaired = patch_structured_analysis_role_selection(code, run_log)
         if repaired is not None and repaired != code:
             return structured_role_repair, repaired
+
+    matplotlib_patch_source_repair = "matplotlib_patch_source_rows_v1"
+    if previous_repair != matplotlib_patch_source_repair:
+        repaired = patch_matplotlib_patch_source_rows(code, run_log)
+        if repaired != code:
+            return matplotlib_patch_source_repair, repaired
     if repair := _finding_json_repair(code, run_log, previous_repair):
         return repair
 
@@ -6245,6 +6423,16 @@ def _deterministic_runner_repair(
         repaired = patch_resolved_input_manifest_env(code, run_log)
         if repaired != code:
             return manifest_env_repair, repaired
+
+    consumption_owner_repair = "resolved_input_consumption_contract_owner_v1"
+    if previous_repair != consumption_owner_repair:
+        repaired = patch_resolved_input_consumption_contract_owner(
+            code,
+            run_log,
+            resolved_input_bindings=resolved_input_bindings,
+        )
+        if repaired != code:
+            return consumption_owner_repair, repaired
 
     all_rows_outcome_repair = "all_rows_outcome_coordinate_filter_v1"
     if previous_repair != all_rows_outcome_repair:
@@ -7045,25 +7233,7 @@ def _deterministic_runner_repair(
         repair_name = "inline_missing_to_jsonable_utils_v1"
         if previous_repair != repair_name:
             helper = textwrap.dedent("""
-                def to_jsonable(x):
-                    import math
-                    import numpy as np
-                    import pandas as pd
-                    if isinstance(x, (np.integer,)):
-                        return int(x)
-                    if isinstance(x, (np.floating,)):
-                        value = float(x)
-                        return value if math.isfinite(value) else None
-                    if isinstance(x, (np.bool_,)):
-                        return bool(x)
-                    if isinstance(x, np.ndarray):
-                        return x.tolist()
-                    try:
-                        if pd.isna(x):
-                            return None
-                    except Exception:
-                        pass
-                    return str(x)
+                from easyicu.research_agent.script_runtime import to_jsonable
                 """).strip()
             repaired = code.replace(
                 "from easyicu.research_agent.utils import to_jsonable",
@@ -7170,22 +7340,7 @@ def _deterministic_runner_repair(
                 import numpy as np
                 import pandas as pd
 
-                def to_jsonable(x):
-                    if isinstance(x, (np.integer,)):
-                        return int(x)
-                    if isinstance(x, (np.floating,)):
-                        value = float(x)
-                        return value if math.isfinite(value) else None
-                    if isinstance(x, (np.bool_,)):
-                        return bool(x)
-                    if isinstance(x, np.ndarray):
-                        return x.tolist()
-                    try:
-                        if pd.isna(x):
-                            return None
-                    except Exception:
-                        pass
-                    return str(x)
+                from easyicu.research_agent.script_runtime import to_jsonable
 
                 cohort_path = os.environ["COHORT_PARQUET"]
                 out_dir = os.environ["STEP_OUT_DIR"]
@@ -7281,22 +7436,7 @@ def _deterministic_runner_repair(
                 import matplotlib.pyplot as plt
                 from statsmodels.stats.proportion import proportion_confint
 
-                def to_jsonable(x):
-                    if isinstance(x, (np.integer,)):
-                        return int(x)
-                    if isinstance(x, (np.floating,)):
-                        value = float(x)
-                        return value if math.isfinite(value) else None
-                    if isinstance(x, (np.bool_,)):
-                        return bool(x)
-                    if isinstance(x, np.ndarray):
-                        return x.tolist()
-                    try:
-                        if pd.isna(x):
-                            return None
-                    except Exception:
-                        pass
-                    return str(x)
+                from easyicu.research_agent.script_runtime import to_jsonable
 
                 cohort_path = os.environ["COHORT_PARQUET"]
                 out_dir = os.environ["STEP_OUT_DIR"]
@@ -7396,15 +7536,7 @@ def _deterministic_runner_repair(
                 import pandas as pd
                 from sklearn.model_selection import train_test_split
 
-                def to_jsonable(x):
-                    if isinstance(x, (np.integer,)):
-                        return int(x)
-                    if isinstance(x, (np.floating,)):
-                        value = float(x)
-                        return value if np.isfinite(value) else None
-                    if isinstance(x, (np.bool_,)):
-                        return bool(x)
-                    return x
+                from easyicu.research_agent.script_runtime import to_jsonable
 
                 df = pd.read_parquet(os.environ["COHORT_PARQUET"])
                 out = os.environ["STEP_OUT_DIR"]
@@ -7533,15 +7665,7 @@ def _deterministic_runner_repair(
                     save_publication_figure,
                 )
 
-                def to_jsonable(x):
-                    if isinstance(x, (np.integer,)):
-                        return int(x)
-                    if isinstance(x, (np.floating,)):
-                        value = float(x)
-                        return value if np.isfinite(value) else None
-                    if isinstance(x, (np.bool_,)):
-                        return bool(x)
-                    return x
+                from easyicu.research_agent.script_runtime import to_jsonable
 
                 step_out_dir = os.environ["STEP_OUT_DIR"]
                 cohort_path = os.environ["COHORT_PARQUET"]

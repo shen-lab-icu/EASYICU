@@ -1018,6 +1018,27 @@ class PlannedModelRequirement(BaseModel):
             "is not the same statement as null."
         ),
     )
+    exposure_levels: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "The closed, ordered level set of a categorical or ordinal exposure, "
+            "or null for a binary or continuous one. Declaring it commits the "
+            "model to one contrast per non-reference level."
+        ),
+    )
+    exposure_reference_level: Optional[str] = Field(
+        default=None,
+        description="Which declared level every contrast is taken against.",
+    )
+    primary_contrast_level: Optional[str] = Field(
+        default=None,
+        description=(
+            "Which contrast is the headline estimate the manuscript reports. "
+            "With more than two levels this cannot be inferred: the highest "
+            "level against the reference and a per-level trend are different "
+            "scientific claims, and choosing between them is the planner's."
+        ),
+    )
 
     @field_validator(
         "requirement_id",
@@ -1096,7 +1117,86 @@ class PlannedModelRequirement(BaseModel):
                     f"{self.exposure_source!r}; adjusting for the exposure "
                     "removes the association the requirement declares"
                 )
+        self._check_declared_exposure_levels()
         return self
+
+    def _check_declared_exposure_levels(self) -> None:
+        """A level set is declared whole, or not at all.
+
+        Three fields describe one decision -- which levels exist, which is the
+        reference, and which contrast the manuscript reports -- so a partial
+        answer is not a smaller version of it. Whichever of the three is
+        missing, the model cannot be fitted as declared.
+
+        THIS IS DELIBERATELY THE OPPOSITE CALL FROM THE ROBUSTNESS REPLAY SPEC,
+        and the difference is worth stating so it is not "fixed" later by
+        analogy. There, a partial declaration was refused while an ABSENT one
+        was claimed by an equally correct fallback path, so refusing charged
+        the planner for trying and the fix was to fall through. Here the
+        fallback is not equally correct: with the levels absent the executor
+        fits the exposure as a single term, which on a four-level ordinal scale
+        is a *different scientific quantity* -- a per-unit trend rather than a
+        set of stage contrasts -- reported under the declared estimand's name.
+        A wrong number under the right label is exactly what must not happen
+        silently, so an incomplete level declaration fails closed and names the
+        field that is missing.
+        """
+
+        declared = {
+            "exposure_levels": self.exposure_levels,
+            "exposure_reference_level": self.exposure_reference_level,
+            "primary_contrast_level": self.primary_contrast_level,
+        }
+        present = {name for name, value in declared.items() if value is not None}
+        if not present:
+            return
+        missing = sorted(set(declared) - present)
+        if missing:
+            raise ValueError(
+                "a categorical exposure is declared by "
+                + ", ".join(sorted(declared))
+                + " together; this requirement is missing "
+                + ", ".join(repr(name) for name in missing)
+                + ", so the host cannot tell which contrast the manuscript "
+                "reports and must not choose one"
+            )
+
+        levels = [str(value or "").strip() for value in self.exposure_levels or []]
+        if any(not level for level in levels):
+            raise ValueError("exposure_levels must not contain a blank level")
+        if len(levels) != len(set(levels)):
+            raise ValueError("exposure_levels must not repeat a level")
+        if len(levels) < 2:
+            raise ValueError(
+                "exposure_levels needs at least two levels; a contrast is "
+                "between two of them"
+            )
+        reference = str(self.exposure_reference_level or "").strip()
+        primary = str(self.primary_contrast_level or "").strip()
+        if reference not in levels:
+            raise ValueError(
+                f"exposure_reference_level {reference!r} is not one of the "
+                "declared exposure_levels"
+            )
+        if primary not in levels:
+            raise ValueError(
+                f"primary_contrast_level {primary!r} is not one of the "
+                "declared exposure_levels"
+            )
+        if primary == reference:
+            raise ValueError(
+                "primary_contrast_level must not be the reference level; a "
+                "level contrasted against itself is not an estimate"
+            )
+
+
+_DEFAULT_STABILITY_BASE_SEED = 1729
+"""Recorded starting seed when the study does not pick one.
+
+A seed makes a result reproducible; which seed it is carries no scientific
+claim.  Defaulting it keeps every run's randomisation recorded and repeatable
+while removing one more field the plan had to fill in to validate at all.
+"""
 
 
 class TrajectoryStabilitySpec(BaseModel):
@@ -1107,33 +1207,68 @@ class TrajectoryStabilitySpec(BaseModel):
     metric, or label-alignment rule.  The selected clustering model, cluster
     count, representation, and missing-data fit are inherited from the typed
     upstream trajectory manifests rather than repeated here.
+
+    Sixteen of these fields are ``Literal`` types with exactly one legal value:
+    v1 of this calculator implements one resampling scheme, one comparison
+    metric and one label-alignment rule, so there is nothing to choose between.
+    They carry that single value as their default, which is the convention the
+    other Planner-owned specs in this module already follow.  The ``Literal``
+    still rejects every other spelling, the value is still serialised into the
+    spec and still hashed into ``trajectory_stability_spec_sha256`` -- the
+    Planner simply no longer has to retype sixteen constants correctly for the
+    plan to validate at all.  If a second implementation is ever added to any
+    of them, the field becomes a real choice and its default must be removed
+    (``test_planner_spec_constants.py`` enforces exactly that).
+
+    ``minimum_successful_resamples`` is likewise not a choice: the validator
+    below requires it to equal ``n_resamples``.  Leave it null and it is filled
+    in from ``n_resamples``; declare it and a disagreeing value is still
+    rejected.
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    resampling_method: Literal["subsample_without_replacement"]
+    resampling_method: Literal["subsample_without_replacement"] = (
+        "subsample_without_replacement"
+    )
     n_resamples: int = Field(ge=2, le=500)
     sample_fraction: Optional[float] = Field(default=None, gt=0.0, lt=1.0)
     sample_size: Optional[int] = Field(default=None, ge=2)
-    sample_fraction_rounding: Literal["floor"]
-    base_seed: int = Field(ge=0, le=2_147_483_647)
-    seed_derivation: Literal["numpy_seedsequence_spawn_uint32_v1"]
-    cross_resample_membership: Literal["distinct_membership_required"]
-    stability_metric: Literal["adjusted_rand_index"]
-    stability_aggregation: Literal["mean"]
-    metric_label_source: Literal["raw_refit_labels_label_invariant"]
-    evaluation_scope: Literal["sampled_overlap"]
-    label_alignment: Literal["hungarian_maximum_overlap"]
-    label_alignment_reference: Literal["frozen_candidate_assignments"]
-    label_alignment_tie_break: Literal["minimum_rank_distance_then_lexicographic_v1"]
-    final_assignment_policy: Literal["copy_selected_candidate_labels"]
-    minimum_successful_resamples: int = Field(ge=2)
-    failed_refit_policy: Literal["record_once_no_retry"]
-    refit_engine: Literal["easyicu_observed_data_diag_gmm_v1"]
-    refit_initialization: Literal["random_balanced_assignments"]
-    refit_max_iter: int = Field(ge=10, le=10_000)
-    refit_tolerance: float = Field(gt=0.0, le=0.1)
-    refit_regularization: float = Field(gt=0.0, le=1.0)
+    sample_fraction_rounding: Literal["floor"] = "floor"
+    base_seed: int = Field(default=_DEFAULT_STABILITY_BASE_SEED, ge=0, le=2_147_483_647)
+    seed_derivation: Literal["numpy_seedsequence_spawn_uint32_v1"] = (
+        "numpy_seedsequence_spawn_uint32_v1"
+    )
+    cross_resample_membership: Literal["distinct_membership_required"] = (
+        "distinct_membership_required"
+    )
+    stability_metric: Literal["adjusted_rand_index"] = "adjusted_rand_index"
+    stability_aggregation: Literal["mean"] = "mean"
+    metric_label_source: Literal["raw_refit_labels_label_invariant"] = (
+        "raw_refit_labels_label_invariant"
+    )
+    evaluation_scope: Literal["sampled_overlap"] = "sampled_overlap"
+    label_alignment: Literal["hungarian_maximum_overlap"] = "hungarian_maximum_overlap"
+    label_alignment_reference: Literal["frozen_candidate_assignments"] = (
+        "frozen_candidate_assignments"
+    )
+    label_alignment_tie_break: Literal[
+        "minimum_rank_distance_then_lexicographic_v1"
+    ] = "minimum_rank_distance_then_lexicographic_v1"
+    final_assignment_policy: Literal["copy_selected_candidate_labels"] = (
+        "copy_selected_candidate_labels"
+    )
+    minimum_successful_resamples: Optional[int] = Field(default=None, ge=2)
+    failed_refit_policy: Literal["record_once_no_retry"] = "record_once_no_retry"
+    refit_engine: Literal["easyicu_observed_data_diag_gmm_v1"] = (
+        "easyicu_observed_data_diag_gmm_v1"
+    )
+    refit_initialization: Literal["random_balanced_assignments"] = (
+        "random_balanced_assignments"
+    )
+    refit_max_iter: int = Field(default=200, ge=10, le=10_000)
+    refit_tolerance: float = Field(default=1e-6, gt=0.0, le=0.1)
+    refit_regularization: float = Field(default=1e-6, gt=0.0, le=1.0)
     minimum_mean_stability: Optional[float] = Field(
         default=None,
         ge=-1.0,
@@ -1143,8 +1278,10 @@ class TrajectoryStabilitySpec(BaseModel):
             "stability without making a binary accept/reject decision."
         ),
     )
-    decision_mode: Literal["report_only", "minimum_mean_threshold"]
-    threshold_failure_action: Literal["fail_closed_require_planner_revision"]
+    decision_mode: Optional[Literal["report_only", "minimum_mean_threshold"]] = None
+    threshold_failure_action: Literal["fail_closed_require_planner_revision"] = (
+        "fail_closed_require_planner_revision"
+    )
 
     @model_validator(mode="after")
     def _closed_resampling_design(self) -> "TrajectoryStabilitySpec":
@@ -1153,12 +1290,25 @@ class TrajectoryStabilitySpec(BaseModel):
                 "trajectory stability requires exactly one of sample_fraction "
                 "or sample_size"
             )
-        if self.minimum_successful_resamples != self.n_resamples:
+        if self.minimum_successful_resamples is None:
+            self.minimum_successful_resamples = self.n_resamples
+        elif self.minimum_successful_resamples != self.n_resamples:
             raise ValueError(
                 "v1 trajectory stability requires every planned refit to succeed; "
                 "minimum_successful_resamples must equal n_resamples"
             )
-        if self.decision_mode == "report_only":
+        # decision_mode restates minimum_mean_stability: the two are equivalent
+        # by the rules below, so declaring a threshold IS choosing to gate on
+        # it.  Left null it is derived; declared, a disagreement is still an
+        # error rather than a silently preferred interpretation.
+        implied = (
+            "report_only"
+            if self.minimum_mean_stability is None
+            else "minimum_mean_threshold"
+        )
+        if self.decision_mode is None:
+            self.decision_mode = implied
+        elif self.decision_mode == "report_only":
             if self.minimum_mean_stability is not None:
                 raise ValueError(
                     "report_only stability must not declare a binary threshold"
@@ -1209,7 +1359,25 @@ class ArtifactConsumptionContract(BaseModel):
 
 
 class TableOneVariableSpec(BaseModel):
-    """Planner-owned summary and comparison rule for one Table 1 variable."""
+    """Planner-owned summary and comparison rule for one Table 1 variable.
+
+    An ordinal row may declare ``levels`` even when it is summarised
+    numerically. It once could not, and that refusal killed a whole task before
+    a single step ran: five consecutive planning attempts were rejected on
+    ``steps.2.table_one_spec.variables.2`` for declaring the level set of an
+    ordinal clinical score. Every such score -- a SOFA component 0-4, a KDIGO
+    stage 0-3, a GCS -- has a real closed set, the directive asks each variable
+    for its "closed levels" without qualification, and the observed set is
+    something the host itself now supplies in the variable catalog. Refusing
+    the one declaration a Planner would naturally write, for the one variable
+    kind whose set is genuinely closed, is not a safeguard.
+
+    A declared set that nothing checks would be worse than none, because it
+    reads as a guarantee. So the executor enforces it exactly as it enforces
+    ``group_levels``: a value observed outside the declared set stops the step
+    rather than being summarised as though it had been anticipated. Continuous
+    rows keep the ban -- a measurement has no closed set to declare.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -1260,9 +1428,10 @@ class TableOneVariableSpec(BaseModel):
                     "only ordinal variables may use a numeric Table 1 summary/test "
                     "outside the continuous variable kind"
                 )
-            if self.levels:
+            if len(self.levels) == 1:
                 raise ValueError(
-                    "numeric ordinal Table 1 summaries must not declare category levels"
+                    "an ordinal Table 1 variable declares either no closed levels "
+                    "or at least two; one value is not a set"
                 )
         return self
 
@@ -1273,6 +1442,26 @@ class TableOneSpec(BaseModel):
     The host executes this declaration but never selects the grouping variable,
     variable roles, summary family, or inferential test. For exactly two
     declared groups, the host also emits comparison-minus-reference SMDs.
+
+    ``missing_group_policy`` decides what a row whose grouping value is missing
+    means -- the same question ``ExposureOutcomeDistributionSpec`` asks about an
+    unobserved outcome, and it is answered the same way: by the Planner, in the
+    declaration, never by the executor at run time. It once had a single legal
+    value, and a single legal value is not a policy. Every recorded Table 1 that
+    grouped on a fully observed column (an outcome flag, a discharge status) was
+    unaffected; a Table 1 grouped on a measurement-derived clinical score could
+    not be built at all, by any plan, because such a score is never observed on
+    every stay. A real run measured that: KDIGO stage was absent for 696 of
+    94,458 stays, 0.74%, and the step died inside its container with no legal
+    declaration that could have saved it.
+
+    ``exclude_and_report`` removes those rows from the whole table -- the
+    grouped columns *and* Overall, from one filtered frame -- so that Overall
+    stays equal to the sum of its groups. Splitting them is how a denominator
+    and its parts come to describe two different row sets. The count removed
+    travels in the emitted table itself, on every row, because that table is
+    what the output gate reads and what the manuscript binds; a number kept
+    anywhere else can be dropped on the way.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -1282,7 +1471,7 @@ class TableOneSpec(BaseModel):
     group_levels: List[Any] = Field(min_length=2)
     variables: List[TableOneVariableSpec] = Field(min_length=1)
     include_overall: Literal[True] = True
-    missing_group_policy: Literal["fail_closed"] = "fail_closed"
+    missing_group_policy: Literal["fail_closed", "exclude_and_report"] = "fail_closed"
     missingness_display: Literal["n_percent_by_group"] = "n_percent_by_group"
     p_values_required: Literal[True] = True
     p_value_adjustment: Literal["none_descriptive_table"] = "none_descriptive_table"
@@ -1382,7 +1571,19 @@ class ExposureOutcomeDistributionSpec(BaseModel):
         ),
     )
     denominator_policy: Literal["all_declared_rows", "observed_outcome_rows"]
-    missing_exposure_policy: Literal["fail_closed"] = "fail_closed"
+    missing_exposure_policy: Literal["fail_closed", "exclude_from_denominator"] = Field(
+        default="fail_closed",
+        description=(
+            "What a row with no observed exposure means. 'fail_closed' stops "
+            "the step. 'exclude_from_denominator' is complete-case on the "
+            "exposure: those rows leave the table and their count travels in "
+            "it, so the denominator change is visible rather than inferred. "
+            "There is deliberately NO option to pool them into a level -- an "
+            "unobserved exposure is not the reference and not any other "
+            "category, and encoding it as one reports a stay under a stage "
+            "nobody recorded."
+        ),
+    )
     missing_outcome_policy: Literal[
         "fail_closed",
         "exclude_from_denominator",
@@ -1561,6 +1762,34 @@ def _spec_names_only_products_the_step_declares(
         )
 
 
+_EXACT_TYPED_TABLE_INPUT = re.compile(r"table:[a-z][a-z0-9_]*")
+
+
+def inputs_owing_a_consumption_contract(inputs: Sequence[Any]) -> set[str]:
+    """The declared inputs a consumption contract has to decide about.
+
+    Only a ``table:`` input has rows, and the contract's whole content is
+    whether they are all consumed or a subset is. A ``statistic:`` input is one
+    finite number in a JSON sidecar, so ``mode="all_rows"`` over it decides
+    nothing; this validator has always exempted it.
+
+    It lives here, called by both readers, because the other reader --
+    ``execution/runners/figure_input_capability._contracts_match`` -- carried
+    its own stricter copy and demanded a contract for *every* declared input.
+    A step that satisfied this schema was then refused by the capability behind
+    it, so the renderer silently declined and the figure went to the Coder.
+    Measured 2026-07-30 on today's plans: 7 of 21 visualization steps lost
+    their deterministic owner that way, and in 100% of them the inputs without
+    a contract were exactly the statistics.
+    """
+
+    return {
+        str(value)
+        for value in inputs or ()
+        if _EXACT_TYPED_TABLE_INPUT.fullmatch(str(value))
+    }
+
+
 def spec_backs_every_declared_product(
     expected_outputs: Sequence[Any],
     *,
@@ -1630,6 +1859,110 @@ class MeasurementAuditProduct(BaseModel):
             known_kinds=MEASUREMENT_AUDIT_KINDS,
             label="measurement audit",
         )
+        return self
+
+
+#: The two products a typed cohort-definition step promises. One spelling
+#: each, because the recorded plans used four for the cohort artifact
+#: (`artifact:analysis_cohort` 111, `cohort:analysis_set` 37,
+#: `dataset:analysis_cohort` 4, `cohort:<bench name>` 4) and four for the flow
+#: table (`table:cohort_flow` 131, `cohort_attrition` 11, `attrition_flow` 5,
+#: `attrition` 2) -- and a host owner that had to recognise all of them would
+#: be the string-set matching this codebase keeps having to delete.
+COHORT_DEFINITION_COHORT_OUTPUT = "artifact:analysis_cohort"
+COHORT_DEFINITION_FLOW_OUTPUT = "table:cohort_flow"
+
+
+class CohortEligibilityCriterion(BaseModel):
+    """One documented eligibility criterion of the materialised cohort."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    criterion_id: str = Field(
+        min_length=1,
+        description=(
+            "The identifier this criterion carries in the attrition flow "
+            "table, so a reader can match the narrative to the row."
+        ),
+    )
+    description: str = Field(
+        min_length=1,
+        description=(
+            "What the criterion required, in the manuscript's own words. It "
+            "is documentation of an eligibility rule the bound cohort already "
+            "satisfies, not a filter this step will evaluate."
+        ),
+    )
+
+
+class CohortDefinitionSpec(BaseModel):
+    """Planner-owned statement that the analysis set IS the bound universe.
+
+    The first analysis step of every recorded plan defines the analytic cohort
+    and reports its attrition, and it is the single most expensive step in the
+    system: measured 2026-08-02 over the recorded runs, 127 of 127 were written
+    by the Coder, 21 of them failed, and each failure killed a mean of 5.1
+    downstream steps -- 108 dead steps, 59% of every cascade in the corpus. The
+    failure reasons do not repeat (ten distinct ones, none more than twice,
+    eight with no recorded finding at all): there is no single defect to fix,
+    because the step is improvised afresh every run.
+
+    It is also, in practice, arithmetic the host can do. The cohort is already
+    materialised and digest-bound before the run; the step reads it, declares
+    it the analysis set, accounts for the drop from the universe and emits an
+    identity receipt. Over 196 recorded attrition tables, 191 excluded ZERO
+    rows -- the multi-row flows document criteria that removed nobody.
+
+    ``analysis_set`` is a closed single-member literal on purpose. This spec
+    claims host ownership, so it must be impossible to declare for a step that
+    really does filter rows: a study that needs an executable exclusion simply
+    omits the spec and keeps the generated-code path. Widening this literal
+    later is a capability decision, not a typo fix.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["easyicu.cohort_definition/1"] = (
+        "easyicu.cohort_definition/1"
+    )
+    analysis_set: Literal["bound_universe"] = Field(
+        default="bound_universe",
+        description=(
+            "The only analysis set this typed step can produce: every row of "
+            "the bound, digest-verified cohort. It carries its one legal value "
+            "as a default because a constant the Planner must retype is a "
+            "constant it can misspell -- three canonical tasks once produced "
+            "no plan at all that way. The ownership claim is presenting this "
+            "spec, not typing this word; the Literal still rejects every "
+            "other spelling."
+        ),
+    )
+    identity_column: str = Field(
+        min_length=1,
+        description=(
+            "The stable row key the identity receipt hashes. Declared because "
+            "an executor that picked it from column order would bind the "
+            "receipt to whichever column happened to come first."
+        ),
+    )
+    eligibility_criteria: List[CohortEligibilityCriterion] = Field(
+        default_factory=list,
+        description=(
+            "The eligibility already applied upstream, one entry per row the "
+            "attrition table should carry. Each excludes no rows here -- they "
+            "document how the bound cohort came to be, which is what the "
+            "manuscript's flow diagram reports."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _criterion_ids_are_unique(self) -> "CohortDefinitionSpec":
+        ids = [criterion.criterion_id for criterion in self.eligibility_criteria]
+        if len(ids) != len(set(ids)):
+            raise ValueError(
+                "cohort_definition_spec eligibility_criteria criterion_id "
+                "values must be unique; the attrition table is keyed by them"
+            )
         return self
 
 
@@ -1753,6 +2086,9 @@ class AnalysisStep(BaseModel):
     # It may contain digest-verified categorical labels that must never return
     # to Planner, Replanner, Coder, or repair prompts.
     _table_one_execution_binding: Any = PrivateAttr(default=None)
+    # Same rule, for every other level set the Planner declared in the host's
+    # own opaque placeholders (see authority/declared_levels.py).
+    _declared_level_binding: Any = PrivateAttr(default=None)
 
     step_id: str
     planned_analysis_role: PlannedAnalysisRole = Field(
@@ -1821,6 +2157,16 @@ class AnalysisStep(BaseModel):
                 "the host must not infer that from names or input order."
             ),
         )
+    )
+    cohort_definition_spec: Optional[CohortDefinitionSpec] = Field(
+        default=None,
+        description=(
+            "Planner-owned statement that this step's analysis set is exactly "
+            "the bound universe, plus the identity column and the eligibility "
+            "the attrition table should report. Present it only when no "
+            "exclusion remains for the step to apply; a step that really "
+            "filters rows omits it and keeps the generated-code path."
+        ),
     )
     measurement_audit_spec: Optional[MeasurementAuditSpec] = Field(
         default=None,
@@ -1921,6 +2267,22 @@ class AnalysisStep(BaseModel):
                     "exposure_outcome_distribution_spec exposure and outcome must "
                     f"be explicit step inputs; missing {missing_spec_inputs!r}"
                 )
+        if self.cohort_definition_spec is not None:
+            # The step must promise BOTH halves the spec describes: the cohort
+            # it declares and the attrition table that accounts for it. A spec
+            # attached to a step promising only one of them would claim host
+            # ownership of work the step never said it would deliver.
+            declared = list(self.expected_outputs)
+            if COHORT_DEFINITION_COHORT_OUTPUT not in declared:
+                raise ValueError(
+                    "cohort_definition_spec requires expected output "
+                    f"{COHORT_DEFINITION_COHORT_OUTPUT!r}"
+                )
+            if COHORT_DEFINITION_FLOW_OUTPUT not in declared:
+                raise ValueError(
+                    "cohort_definition_spec requires expected output "
+                    f"{COHORT_DEFINITION_FLOW_OUTPUT!r}"
+                )
         if self.measurement_audit_spec is not None:
             _spec_names_only_products_the_step_declares(
                 self.expected_outputs,
@@ -1951,12 +2313,9 @@ class AnalysisStep(BaseModel):
             == "visualization"
             and consumption_keys
         ):
-            typed_table_inputs = {
-                value
-                for value in self.inputs
-                if re.fullmatch(r"table:[a-z][a-z0-9_]*", str(value))
-            }
-            if set(consumption_keys) != typed_table_inputs:
+            if set(consumption_keys) != inputs_owing_a_consumption_contract(
+                self.inputs
+            ):
                 raise ValueError(
                     "visualization input_consumption_contracts must cover every "
                     "exact typed table input"
@@ -2086,6 +2445,16 @@ class AnalysisPlan(BaseModel):
             "include concept_id, time_window, aggregation, operator and value."
         ),
     )
+    endpoint: Optional[EndpointSpec] = Field(
+        default=None,
+        description=(
+            "Typed endpoint declaration for this study: what the endpoint IS, "
+            "and for a time axis, which column carries follow-up time, what "
+            "t=0 means, and what censors it. Required for families whose "
+            "registry entry declares a required_endpoint_kind. Never inferred "
+            "from a column-name suffix or dtype."
+        ),
+    )
     robustness_specs: List[RobustnessSpec] = Field(
         default_factory=list,
         description=(
@@ -2205,6 +2574,16 @@ class AnalysisPlan(BaseModel):
                 )
         if self.robustness_specs:
             try:
+                # Structural validity only.  Constructing an ``AnalysisPlan`` is
+                # not the same act as accepting one from the Planner: this path
+                # also loads a recorded plan from disk, re-reads a lock on
+                # resume, and builds the framework's own case-neutral
+                # placeholders.  A requirement about what the *Planner must
+                # declare* judged all of those too -- 190 of 409 recorded plan
+                # documents stopped parsing, and a resume of any of them would
+                # have failed at load.  The Planner-output rule is applied where
+                # the Planner's output is accepted, in ``agents.core``, so it
+                # still reaches the model that can act on it.
                 validate_robustness_specs(self.robustness_specs)
             except RobustnessPlanError as exc:
                 raise ValueError(str(exc)) from exc

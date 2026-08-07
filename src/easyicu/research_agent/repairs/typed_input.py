@@ -3,10 +3,522 @@
 from __future__ import annotations
 
 import ast
+import re
 from typing import Any, Mapping, Sequence
 
 from ..gates.typed_input import resolved_input_shadowed_by_cohort_env_findings
 from ..schema import ValidationFinding
+
+
+def patch_resolved_input_consumption_contract_owner(
+    code: str,
+    run_log: str,
+    *,
+    resolved_input_bindings: Mapping[str, Any] | None,
+) -> str:
+    """Read a verified consumption contract from its binding, not its product.
+
+    Resolved-input manifests place ``consumption_contract`` beside
+    ``product_contract`` on the typed binding.  This repair only corrects a
+    generated script after the exact all-rows runtime failure, when the host
+    binding named in that failure proves the top-level contract is ``all_rows``
+    and the product contract does not contain a competing nested contract.
+    The existing fail-closed all-rows check remains unchanged.
+    """
+
+    failure = re.search(
+        r"RuntimeError:\s+Input\s+(?P<input_key>\S+)\s+does not have the required "
+        r"all_rows contract",
+        str(run_log or ""),
+        flags=re.IGNORECASE,
+    )
+    if failure is None:
+        return code
+    input_key = failure.group("input_key")
+    binding = (resolved_input_bindings or {}).get(input_key)
+    if not isinstance(binding, Mapping):
+        return code
+    consumption_contract = binding.get("consumption_contract")
+    product_contract = binding.get("product_contract")
+    identity_row = binding.get("identity_row")
+    if (
+        not isinstance(consumption_contract, Mapping)
+        or consumption_contract.get("mode") != "all_rows"
+        or not isinstance(product_contract, Mapping)
+        or "consumption_contract" in product_contract
+        or not isinstance(identity_row, Mapping)
+        or identity_row.get("declared_kind") != "table"
+        or identity_row.get("input_key") != input_key
+    ):
+        return code
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+
+    product_owners: dict[str, set[str]] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)) or node.value is None:
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        if len(targets) != 1 or not isinstance(targets[0], ast.Name):
+            continue
+        value = node.value
+        binding_name: str | None = None
+        if (
+            isinstance(value, ast.Call)
+            and isinstance(value.func, ast.Attribute)
+            and isinstance(value.func.value, ast.Name)
+            and value.func.attr == "get"
+            and value.args
+            and isinstance(value.args[0], ast.Constant)
+            and value.args[0].value == "product_contract"
+        ):
+            binding_name = value.func.value.id
+        elif (
+            isinstance(value, ast.Subscript)
+            and isinstance(value.value, ast.Name)
+            and isinstance(value.slice, ast.Constant)
+            and value.slice.value == "product_contract"
+        ):
+            binding_name = value.value.id
+        if binding_name is not None and binding_name != targets[0].id:
+            product_owners.setdefault(targets[0].id, set()).add(binding_name)
+
+    candidates: list[tuple[ast.Name, str]] = []
+    for node in ast.walk(tree):
+        owner: ast.Name | None = None
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.attr == "get"
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+            and node.args[0].value == "consumption_contract"
+        ):
+            owner = node.func.value
+        elif (
+            isinstance(node, ast.Subscript)
+            and isinstance(node.value, ast.Name)
+            and isinstance(node.slice, ast.Constant)
+            and node.slice.value == "consumption_contract"
+        ):
+            owner = node.value
+        if owner is None:
+            continue
+        binding_names = product_owners.get(owner.id, set())
+        if len(binding_names) == 1:
+            candidates.append((owner, next(iter(binding_names))))
+    if len(candidates) != 1:
+        return code
+    owner, binding_name = candidates[0]
+    if not all(
+        isinstance(value, int)
+        for value in (
+            owner.lineno,
+            owner.col_offset,
+            owner.end_lineno,
+            owner.end_col_offset,
+        )
+    ):
+        return code
+
+    lines = code.splitlines(keepends=True)
+    line_starts: list[int] = []
+    cursor = 0
+    for line in lines:
+        line_starts.append(cursor)
+        cursor += len(line)
+
+    def _offset(lineno: int, utf8_column: int) -> int:
+        line = lines[lineno - 1]
+        char_column = len(line.encode("utf-8")[:utf8_column].decode("utf-8"))
+        return line_starts[lineno - 1] + char_column
+
+    start = _offset(owner.lineno, owner.col_offset)
+    end = _offset(owner.end_lineno, owner.end_col_offset)
+    repaired = code[:start] + binding_name + code[end:]
+    try:
+        ast.parse(repaired)
+    except SyntaxError:
+        return code
+    return repaired
+
+
+def patch_missing_typed_input_receipt(
+    code: str,
+    *,
+    findings: Sequence[Any],
+) -> str:
+    """Project one script-verified typed input into ``step_summary``.
+
+    This repair does not let the host attest on behalf of generated code.  It
+    only adds a receipt when the generated script itself already selects the
+    exact binding, reads its evidence id and digest, verifies that digest, and
+    loads the bound table.  Ambiguous or partially verified shapes decline.
+    """
+
+    missing_details: list[Mapping[str, Any]] = []
+    coverage_details: list[Mapping[str, Any]] = []
+    for finding in findings:
+        validator = getattr(finding, "validator", None)
+        detail = getattr(finding, "detail", None)
+        if isinstance(finding, Mapping):
+            validator = finding.get("validator")
+            detail = finding.get("detail")
+        if validator != "step_summary_integrity" or not isinstance(detail, Mapping):
+            continue
+        if detail.get("issue") == "input_bindings_missing":
+            missing_details.append(detail)
+        elif detail.get("issue") == "input_binding_coverage_incomplete":
+            coverage_details.append(detail)
+    if len(missing_details) != 1 or len(coverage_details) != 1:
+        return code
+    resolved_keys = missing_details[0].get("resolved_input_keys")
+    coverage_resolved_keys = coverage_details[0].get("resolved_input_keys")
+    missing_keys = coverage_details[0].get("missing_input_keys")
+    if not (
+        isinstance(resolved_keys, list)
+        and resolved_keys == coverage_resolved_keys == missing_keys
+        and len(resolved_keys) == 1
+        and isinstance(resolved_keys[0], str)
+        and resolved_keys[0]
+    ):
+        return code
+    input_key = resolved_keys[0]
+
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+
+    resolved_manifest_path_names: set[str] = set()
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Name)
+            and node.value.func.id == "Path"
+            and len(node.value.args) == 1
+            and isinstance(node.value.args[0], ast.Subscript)
+            and isinstance(node.value.args[0].value, ast.Attribute)
+            and isinstance(node.value.args[0].value.value, ast.Name)
+            and node.value.args[0].value.value.id == "os"
+            and node.value.args[0].value.attr == "environ"
+            and isinstance(node.value.args[0].slice, ast.Constant)
+            and node.value.args[0].slice.value == "EASYICU_RESOLVED_INPUTS_JSON"
+        ):
+            continue
+        resolved_manifest_path_names.add(node.targets[0].id)
+    if len(resolved_manifest_path_names) != 1:
+        return code
+
+    resolved_handle_names: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.With):
+            continue
+        for item in node.items:
+            if not (
+                isinstance(item.optional_vars, ast.Name)
+                and isinstance(item.context_expr, ast.Call)
+                and isinstance(item.context_expr.func, ast.Name)
+                and item.context_expr.func.id == "open"
+                and item.context_expr.args
+                and isinstance(item.context_expr.args[0], ast.Name)
+                and item.context_expr.args[0].id in resolved_manifest_path_names
+            ):
+                continue
+            resolved_handle_names.add(item.optional_vars.id)
+    if len(resolved_handle_names) != 1:
+        return code
+
+    resolved_document_names: set[str] = set()
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Attribute)
+            and isinstance(node.value.func.value, ast.Name)
+            and node.value.func.value.id == "json"
+            and node.value.func.attr == "load"
+            and node.value.args
+            and isinstance(node.value.args[0], ast.Name)
+            and node.value.args[0].id in resolved_handle_names
+        ):
+            continue
+        resolved_document_names.add(node.targets[0].id)
+    if len(resolved_document_names) != 1:
+        return code
+
+    resolved_manifest_names: set[str] = set()
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Attribute)
+            and isinstance(node.value.func.value, ast.Name)
+            and node.value.func.value.id in resolved_document_names
+            and node.value.func.attr == "get"
+            and len(node.value.args) >= 2
+            and isinstance(node.value.args[0], ast.Constant)
+            and node.value.args[0].value == "manifest"
+            and isinstance(node.value.args[1], ast.Name)
+            and node.value.args[1].id == node.value.func.value.id
+        ):
+            continue
+        resolved_manifest_names.add(node.targets[0].id)
+    if len(resolved_manifest_names) != 1:
+        return code
+
+    binding_candidates: list[tuple[str, str]] = []
+    typed_input_owners: set[str] = set()
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Attribute)
+            and isinstance(node.value.func.value, ast.Name)
+            and node.value.func.value.id in resolved_manifest_names
+            and node.value.func.attr == "get"
+            and node.value.args
+            and isinstance(node.value.args[0], ast.Constant)
+            and node.value.args[0].value == "inputs"
+        ):
+            continue
+        typed_input_owners.add(node.targets[0].id)
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+        ):
+            continue
+        owner_name: str | None = None
+        selected_key: str | None = None
+        if (
+            isinstance(node.value, ast.Subscript)
+            and isinstance(node.value.value, ast.Name)
+            and isinstance(node.value.slice, ast.Constant)
+            and isinstance(node.value.slice.value, str)
+        ):
+            owner_name = node.value.value.id
+            selected_key = node.value.slice.value
+        elif (
+            isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Attribute)
+            and isinstance(node.value.func.value, ast.Name)
+            and node.value.func.attr == "get"
+            and node.value.args
+            and isinstance(node.value.args[0], ast.Constant)
+            and isinstance(node.value.args[0].value, str)
+        ):
+            owner_name = node.value.func.value.id
+            selected_key = node.value.args[0].value
+        if owner_name in typed_input_owners and selected_key == input_key:
+            binding_candidates.append((node.targets[0].id, owner_name))
+    if len(binding_candidates) != 1:
+        return code
+    binding_name, _typed_inputs_name = binding_candidates[0]
+
+    metadata_names: dict[str, list[str]] = {
+        "evidence_id": [],
+        "relative_path": [],
+        "sha256": [],
+    }
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Attribute)
+            and isinstance(node.value.func.value, ast.Name)
+            and node.value.func.value.id == binding_name
+            and node.value.func.attr == "get"
+            and node.value.args
+            and isinstance(node.value.args[0], ast.Constant)
+            and node.value.args[0].value in metadata_names
+        ):
+            continue
+        metadata_names[str(node.value.args[0].value)].append(node.targets[0].id)
+    if any(len(names) != 1 for names in metadata_names.values()):
+        return code
+    evidence_name = metadata_names["evidence_id"][0]
+    relative_path_name = metadata_names["relative_path"][0]
+    sha_name = metadata_names["sha256"][0]
+
+    path_candidates: list[str] = []
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and isinstance(node.value, ast.Call)
+            and node.value.args
+            and any(
+                isinstance(argument, ast.Name) and argument.id == relative_path_name
+                for argument in node.value.args
+            )
+        ):
+            continue
+        function_name = (
+            node.value.func.id
+            if isinstance(node.value.func, ast.Name)
+            else node.value.func.attr
+            if isinstance(node.value.func, ast.Attribute)
+            else None
+        )
+        if function_name == "resolve_bound_path":
+            path_candidates.append(node.targets[0].id)
+    if len(path_candidates) != 1:
+        return code
+    path_name = path_candidates[0]
+
+    digest_guards = 0
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.If)
+            and isinstance(node.test, ast.Compare)
+            and len(node.test.ops) == 1
+            and isinstance(node.test.ops[0], ast.NotEq)
+            and len(node.test.comparators) == 1
+            and isinstance(node.test.left, ast.Call)
+            and node.test.left.args
+            and isinstance(node.test.left.args[0], ast.Name)
+            and node.test.left.args[0].id == path_name
+            and isinstance(node.test.comparators[0], ast.Name)
+            and node.test.comparators[0].id == sha_name
+            and any(isinstance(statement, ast.Raise) for statement in node.body)
+        ):
+            continue
+        function_name = (
+            node.test.left.func.id
+            if isinstance(node.test.left.func, ast.Name)
+            else node.test.left.func.attr
+            if isinstance(node.test.left.func, ast.Attribute)
+            else None
+        )
+        if function_name == "sha256_file":
+            digest_guards += 1
+    if digest_guards != 1:
+        return code
+
+    frame_candidates: list[str] = []
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and isinstance(node.value, ast.Call)
+            and node.value.args
+            and isinstance(node.value.args[0], ast.Name)
+            and node.value.args[0].id == path_name
+            and isinstance(node.value.func, ast.Attribute)
+            and isinstance(node.value.func.value, ast.Name)
+            and node.value.func.value.id == "pd"
+            and node.value.func.attr in {"read_csv", "read_parquet"}
+        ):
+            continue
+        frame_candidates.append(node.targets[0].id)
+    if len(frame_candidates) != 1:
+        return code
+    frame_name = frame_candidates[0]
+
+    summary_candidates: list[tuple[ast.Assign, ast.Dict]] = []
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id == "step_summary"
+            and isinstance(node.value, ast.Dict)
+            and not any(
+                isinstance(key, ast.Constant) and key.value == "input_bindings"
+                for key in node.value.keys
+            )
+        ):
+            summary_candidates.append((node, node.value))
+    summary_dumps = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "json"
+        and node.func.attr == "dump"
+        and node.args
+        and isinstance(node.args[0], ast.Name)
+        and node.args[0].id == "step_summary"
+    ]
+    if len(summary_candidates) != 1 or len(summary_dumps) != 1:
+        return code
+    summary_assignment, summary_dict = summary_candidates[0]
+    if not summary_dict.values or summary_dict.end_lineno is None:
+        return code
+
+    lines = code.splitlines(keepends=True)
+    line_starts: list[int] = []
+    offset = 0
+    for line in lines:
+        line_starts.append(offset)
+        offset += len(line)
+
+    def absolute_offset(lineno: int, utf8_column: int) -> int:
+        line = lines[lineno - 1]
+        character_column = len(line.encode("utf-8")[:utf8_column].decode("utf-8"))
+        return line_starts[lineno - 1] + character_column
+
+    last_value = summary_dict.values[-1]
+    if (
+        last_value.end_lineno is None
+        or last_value.end_col_offset is None
+        or summary_dict.end_col_offset is None
+    ):
+        return code
+    value_end = absolute_offset(last_value.end_lineno, last_value.end_col_offset)
+    dict_end = absolute_offset(summary_dict.end_lineno, summary_dict.end_col_offset)
+    closing_offset = dict_end - 1
+    tail = code[value_end:closing_offset]
+    if tail.strip() not in {"", ","}:
+        return code
+    assignment_indent = " " * int(summary_assignment.col_offset)
+    key_indent = " " * (
+        int(summary_dict.keys[0].col_offset)
+        if summary_dict.keys and summary_dict.keys[0] is not None
+        else int(summary_assignment.col_offset) + 4
+    )
+    item_indent = key_indent + " " * 4
+    field_indent = item_indent + " " * 4
+    receipt = (
+        f'{key_indent}"input_bindings": [\n'
+        f"{item_indent}{{\n"
+        f'{field_indent}"input_key": {input_key!r},\n'
+        f'{field_indent}"evidence_id": {evidence_name},\n'
+        f'{field_indent}"sha256": {sha_name},\n'
+        f'{field_indent}"loaded": True,\n'
+        f'{field_indent}"row_count": int(len({frame_name})),\n'
+        f"{item_indent}}},\n"
+        f"{key_indent}],\n"
+        f"{assignment_indent}"
+    )
+    if tail.strip() == ",":
+        repaired = code[:closing_offset] + receipt + code[closing_offset:]
+    else:
+        repaired = code[:value_end] + ",\n" + receipt + code[value_end:]
+    try:
+        ast.parse(repaired)
+    except SyntaxError:
+        return code
+    return repaired
 
 
 def patch_all_rows_outcome_coordinate_filter(
@@ -449,7 +961,7 @@ def patch_resolved_input_relative_path_root(
 ) -> str:
     """Join host-issued run-relative input paths to ``EASYICU_RUN_DIR``."""
 
-    coordinates: list[tuple[int, int, int, int]] = []
+    coordinates: list[tuple[tuple[int, int, int, int], str]] = []
     matching_findings = 0
     for finding in repair_findings:
         detail = finding.detail or {}
@@ -473,7 +985,12 @@ def patch_resolved_input_relative_path_root(
                 for value in values
             ):
                 return code
-            coordinates.append(tuple(int(value) for value in values))
+            kind = occurrence.get("kind", "environment_key")
+            if kind not in {"environment_key", "root_parameter"}:
+                return code
+            coordinates.append(
+                (tuple(int(value) for value in values), str(kind))
+            )
     if (
         matching_findings != 1
         or not coordinates
@@ -497,6 +1014,18 @@ def patch_resolved_input_relative_path_root(
         and node.end_lineno is not None
         and node.end_col_offset is not None
     }
+    names = {
+        (
+            int(node.lineno),
+            int(node.col_offset),
+            int(node.end_lineno),
+            int(node.end_col_offset),
+        ): node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Name)
+        and node.end_lineno is not None
+        and node.end_col_offset is not None
+    }
     lines = code.splitlines(keepends=True)
     line_starts: list[int] = []
     offset = 0
@@ -509,20 +1038,31 @@ def patch_resolved_input_relative_path_root(
         char_col = len(line.encode("utf-8")[:utf8_col].decode("utf-8"))
         return line_starts[lineno - 1] + char_col
 
-    replacements: list[tuple[int, int]] = []
-    for coordinate in coordinates:
-        node = constants.get(coordinate)
-        if node is None:
+    replacements: list[tuple[int, int, str]] = []
+    for coordinate, kind in coordinates:
+        node = (
+            constants.get(coordinate)
+            if kind == "environment_key"
+            else names.get(coordinate)
+        )
+        if node is None or (
+            kind == "root_parameter"
+            and not isinstance(node.ctx, ast.Load)
+        ):
             return code
         replacements.append(
             (
                 absolute_offset(coordinate[0], coordinate[1]),
                 absolute_offset(coordinate[2], coordinate[3]),
+                (
+                    repr("EASYICU_RUN_DIR")
+                    if kind == "environment_key"
+                    else 'os.environ["EASYICU_RUN_DIR"]'
+                ),
             )
         )
     repaired = code
-    replacement = repr("EASYICU_RUN_DIR")
-    for start, end in sorted(replacements, reverse=True):
+    for start, end, replacement in sorted(replacements, reverse=True):
         repaired = repaired[:start] + replacement + repaired[end:]
     try:
         ast.parse(repaired)
@@ -629,6 +1169,8 @@ def patch_resolved_input_cohort_env_shadow(
 
 __all__ = [
     "patch_all_rows_outcome_coordinate_filter",
+    "patch_missing_typed_input_receipt",
+    "patch_resolved_input_consumption_contract_owner",
     "patch_resolved_input_manifest_env",
     "patch_resolved_input_cohort_env_shadow",
     "patch_resolved_input_relative_path_root",

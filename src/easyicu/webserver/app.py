@@ -8,14 +8,18 @@ and their backing services.
 from __future__ import annotations
 
 import ipaddress
-import os
 from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from easyicu.webserver.host_security import AllowedHostsMiddleware
+from easyicu.webserver.host_security import (
+    PROXY_HEADERS,
+    AllowedHostsMiddleware,
+    resolve_allowed_hosts,
+    trusts_proxy,
+)
 from easyicu.webserver.routes.agent import artifact_router as agent_artifact_router
 from easyicu.webserver.routes.agent import control_router as agent_control_router
 from easyicu.webserver.routes.copilot import router as copilot_router
@@ -59,48 +63,12 @@ def _package_version() -> str:
 app = FastAPI(title="EasyICU", version=_package_version())
 
 
-def _web_allowed_hosts() -> list[str]:
-    configured = [
-        host.strip()
-        for host in os.getenv("EASYICU_WEB_ALLOWED_HOSTS", "").split(",")
-        if host.strip()
-    ]
-    allow_any = os.getenv("EASYICU_WEB_ALLOW_ANY_HOST", "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-    if "*" in configured and not allow_any:
-        configured = [host for host in configured if host != "*"]
-    return configured or ["127.0.0.1", "localhost", "[::1]", "testserver"]
-
-
-WEB_ALLOWED_HOSTS = _web_allowed_hosts()
+WEB_ALLOWED_HOSTS = resolve_allowed_hosts()
 app.add_middleware(AllowedHostsMiddleware, allowed_hosts=WEB_ALLOWED_HOSTS)
 
 
-#: Headers a reverse proxy adds. A browser on this machine never sends them.
-_PROXY_HEADERS = (
-    "x-forwarded-for",
-    "x-forwarded-host",
-    "x-forwarded-proto",
-    "x-real-ip",
-    "forwarded",
-)
-
-
-def _trusts_proxy() -> bool:
-    return os.getenv("EASYICU_WEB_TRUST_PROXY", "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-
-
 def _is_proxied_request(request: Request) -> bool:
-    return any(header in request.headers for header in _PROXY_HEADERS)
+    return any(header in request.headers for header in PROXY_HEADERS)
 
 
 def _is_local_web_client(request: Request) -> bool:
@@ -132,7 +100,7 @@ async def local_clients_only(request: Request, call_next):
     # for the whole internet, and these APIs read and write the filesystem.
     # The forwarding headers are what gives that away; a browser on this
     # machine does not send them.
-    if _is_proxied_request(request) and not _trusts_proxy():
+    if _is_proxied_request(request) and not trusts_proxy():
         return JSONResponse(
             status_code=403,
             content={
@@ -180,12 +148,7 @@ app.include_router(job_lifecycle_router)
 # Static frontend last, mounted at root, with HTML serving so "/" -> index.html.
 app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")
 
-
-def main() -> None:  # console-script entry candidate
-    import uvicorn
-
-    uvicorn.run("easyicu.webserver.app:app", host="127.0.0.1", port=8502, reload=False)
-
-
-if __name__ == "__main__":
-    main()
+# No ``main()`` here on purpose. This module used to carry a second entry point
+# that bound port 8502 while the real console script (``easyicu-webapp`` ->
+# ``easyicu.webserver.__main__:main``) binds 8765, so the docs, the launcher and
+# this file each named a different port. ``__main__.py`` owns host/port.

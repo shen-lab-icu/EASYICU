@@ -744,6 +744,44 @@ def _is_primary_analysis_cohort_method(value: object) -> bool:
     )
 
 
+def _is_primary_analysis_cohort_flow_product(name: object) -> bool:
+    """Recognise a case-neutral cohort attrition/flow product.
+
+    Product names are agent-authored for the same reason method labels are, and
+    the two halves of one predicate must tolerate the same variation. The method
+    half above has taken tokens since it was written; this half required one of
+    seven exact spellings, and the asymmetry decided which steps received the
+    host's flow contract and which were checked by
+    :func:`primary_analysis_cohort_integrity_findings` at all.
+
+    Measured 2026-07-30 over 314 recorded real steps: ``table:attrition_flow``
+    was declared five times and matched none of the seven, along with
+    ``analytic_set_attrition``, ``complete_case_attrition`` and
+    ``primary_model_complete_case_attrition_reconciled``.  Those steps were
+    never told the canonical column contract and never reached the 40 arithmetic
+    checks that enforce it.  One of them shipped a flow table reporting
+    ``n_at_start_rows`` 94,458 and ``n_excluded_rows`` 0 alongside
+    ``n_remaining_rows`` 60,461 -- a patient-flow diagram that does not
+    subtract -- and the step was recorded ``ok``.
+
+    ``attrition`` alone carries the meaning; ``flow`` and ``denominator`` need a
+    population word beside them, because a flow of something else is not this.
+    A cohort *summary*, *prevalence*, or *reconciliation audit* is a different
+    product and stays out: those three appear 25 times in the same corpus and
+    none is an attrition cascade.
+    """
+
+    product = _normalise(name)
+    tokens = frozenset(part for part in product.split("_") if part)
+    if not tokens:
+        return False
+    if "attrition" in tokens:
+        return True
+    return bool(tokens & {"flow", "denominator", "denominators"}) and bool(
+        tokens & {"cohort", "eligibility", "analytic", "analysis"}
+    )
+
+
 def _primary_analysis_cohort_product(raw: object) -> tuple[str, str] | None:
     """Return one exact primary-cohort product identity.
 
@@ -813,10 +851,29 @@ def _declares_reserved_primary_cohort_product(step: AnalysisStep) -> bool:
     )
 
 
-def _primary_analysis_cohort_product_matches_plan(
-    raw: object, *, plan: Any
+def locked_primary_cohort_product(
+    raw: object, *, locked_cohort_name: object
 ) -> tuple[str, str] | None:
-    """Bind a named ``cohort:`` product to the Planner-locked cohort only."""
+    """Return the identity of the run's single locked primary-cohort population.
+
+    :func:`reserved_primary_cohort_product` answers for the two globally
+    reserved spellings only.  A plan whose Planner declared the population
+    under the plan's own locked cohort name means the *same* population, and
+    the host publishes that spelling itself -- ``closed_cohort_product_
+    vocabulary`` offers ``cohort:<exact cohort.name>`` to the Planner.
+
+    Surfaces that decide *which population a step sees* must ask here, because
+    the reserved reader alone cannot see that third spelling.  Measured over
+    819 recorded real plans: of 3,995 typed primary-cohort inputs, 36 were
+    written under the plan's own cohort name, and every one of them made the
+    typed-input plane bind the full cohort while the run-level plane mounted
+    and reported the development sample.  In canary20 that split was what fed
+    the primary model 94,425 rows against a contract expecting 1,000, whose
+    ``model_denominator_or_event_mismatch`` then spent the step's repairs.
+
+    ``locked_cohort_name`` is the plan's cohort name; an absent or blank name
+    narrows this back to the reserved spellings rather than matching anything.
+    """
 
     product = _primary_analysis_cohort_product(raw)
     if product is None:
@@ -825,10 +882,21 @@ def _primary_analysis_cohort_product_matches_plan(
         return product
     raw_kind, _, _ = str(raw or "").strip().partition(":")
     _, name = product
-    cohort_name = _normalise(getattr(getattr(plan, "cohort", None), "name", None))
+    cohort_name = _normalise(locked_cohort_name)
     if _normalise(raw_kind) == "cohort" and cohort_name and name == cohort_name:
         return product
     return None
+
+
+def _primary_analysis_cohort_product_matches_plan(
+    raw: object, *, plan: Any
+) -> tuple[str, str] | None:
+    """Bind a named ``cohort:`` product to the Planner-locked cohort only."""
+
+    return locked_primary_cohort_product(
+        raw,
+        locked_cohort_name=getattr(getattr(plan, "cohort", None), "name", None),
+    )
 
 
 def _declares_explicit_cohort_namespace(raw: object) -> bool:
@@ -850,7 +918,7 @@ def _primary_analysis_cohort_attrition_candidate(step: AnalysisStep) -> bool:
     ) and any(
         product is not None
         and product[0] == "table"
-        and product[1] in _PRIMARY_ANALYSIS_COHORT_FLOW_PRODUCTS
+        and _is_primary_analysis_cohort_flow_product(product[1])
         for product in parsed
     )
 
@@ -869,7 +937,7 @@ def _primary_analysis_cohort_attrition_step(step: AnalysisStep) -> bool:
     return any(
         product is not None
         and product[0] == "table"
-        and product[1] in _PRIMARY_ANALYSIS_COHORT_FLOW_PRODUCTS
+        and _is_primary_analysis_cohort_flow_product(product[1])
         for product in (typed_product(raw) for raw in step.expected_outputs or [])
     )
 
@@ -899,6 +967,12 @@ def primary_analysis_cohort_producer_uses_universe(
         if _primary_analysis_cohort_product_matches_plan(raw, plan=plan) is not None:
             analysis_cohort_products += 1
             continue
+        # The canonical vocabulary, not the recognition predicate.  Entering the
+        # gate is a question about what a step claims to be; passing it is a
+        # question about whether the declaration is one the host will validate.
+        # A step naming its cascade something else must be told to rename it,
+        # which is what the owner finding below does -- at plan preflight,
+        # before the first Coder call.
         if kind == "table" and name in _PRIMARY_ANALYSIS_COHORT_FLOW_PRODUCTS:
             has_attrition = True
             continue
@@ -2111,7 +2185,7 @@ def primary_analysis_cohort_integrity_findings(
         for raw in (step.expected_outputs or [])
         if (parsed := typed_product(raw)) is not None
         for kind, name in (parsed,)
-        if kind == "table" and name in _PRIMARY_ANALYSIS_COHORT_FLOW_PRODUCTS
+        if kind == "table" and _is_primary_analysis_cohort_flow_product(name)
     }
     for product in sorted(declared_flow_products):
         candidates = _registered_product_paths(
@@ -3395,6 +3469,7 @@ def declared_product_contract_findings(
     effect_method_authorized: bool,
     effect_figure_source_authorized: bool = False,
     out_dir: Path | None = None,
+    trajectory_role_contract_applies: bool = True,
 ) -> list[ValidationFinding]:
     """Validate declared-product realization and scientific output scope."""
 
@@ -3409,19 +3484,20 @@ def declared_product_contract_findings(
     }
     registered, figure_paths = _registered_products(step_summary, out_dir=out_dir)
     findings: list[ValidationFinding] = []
-    findings.extend(
-        trajectory_role_scope_summary_findings(
-            step=step,
-            step_summary=step_summary,
+    if trajectory_role_contract_applies:
+        findings.extend(
+            trajectory_role_scope_summary_findings(
+                step=step,
+                step_summary=step_summary,
+            )
         )
-    )
-    findings.extend(
-        trajectory_role_result_findings(
-            step=step,
-            step_summary=step_summary,
-            out_dir=out_dir,
+        findings.extend(
+            trajectory_role_result_findings(
+                step=step,
+                step_summary=step_summary,
+                out_dir=out_dir,
+            )
         )
-    )
     findings.extend(
         _assignment_model_completion_findings(
             step=step,
@@ -3545,6 +3621,7 @@ __all__ = [
     "effect_estimand_tier",
     "effect_measure_family",
     "effect_role_family",
+    "locked_primary_cohort_product",
     "reserved_primary_cohort_product",
     "typed_product",
     "typed_product_binding_contract",

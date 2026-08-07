@@ -6,7 +6,7 @@ import hashlib
 import json
 import threading
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
@@ -19,6 +19,7 @@ from easyicu.webserver import settings as settings_store
 from easyicu.webserver import science_workbench
 from easyicu.webserver import sources as source_store
 from easyicu.webserver import study_contexts as context_store
+from easyicu.webserver.ideas.mining import EXECUTION_GATE_BLOCKERS
 from easyicu.webserver.routes.jobs import submit_job
 from easyicu.webserver.routes.request_parsing import body_bool
 
@@ -268,6 +269,7 @@ def _validate_agent_project_seed_for_run(
             "blockers": [
                 "refresh Agent project from Idea Mining so preflight checks are available"
             ],
+            "blocker_codes": ["seed_gate_missing"],
         }
     blockers = [str(item) for item in gate.get("blockers") or [] if item]
     if gate and not gate.get("agent_run_ready_after_human_confirmation"):
@@ -275,6 +277,10 @@ def _validate_agent_project_seed_for_run(
             "ok": False,
             "error": "agent_project_execution_gate_blocked",
             "blockers": blockers,
+            # Seeds written before mining.py emitted codes carry only the
+            # sentence; recover the code by exact lookup rather than letting
+            # the UI regex-match prose to guess what to tell the user.
+            "blocker_codes": _blocker_codes(gate, blockers),
             "execution_gate": gate,
         }
 
@@ -284,6 +290,7 @@ def _validate_agent_project_seed_for_run(
             "ok": False,
             "error": "agent_project_demo_export_blocked",
             "blockers": ["prepare or select a real EasyICU export"],
+            "blocker_codes": ["export_not_real"],
             "active_export_contract": contract,
         }
     contract_status = str(contract.get("status") or "").lower()
@@ -292,6 +299,7 @@ def _validate_agent_project_seed_for_run(
             "ok": False,
             "error": "agent_project_export_contract_not_ready",
             "blockers": ["re-extract or confirm missing required concepts"],
+            "blocker_codes": ["required_concepts_missing"],
             "active_export_contract": contract,
         }
 
@@ -305,10 +313,23 @@ def _validate_agent_project_seed_for_run(
                 "ok": False,
                 "error": "agent_project_active_export_changed",
                 "blockers": ["select the same active export used by Idea Mining"],
+                "blocker_codes": ["active_export_changed"],
                 "expected_path_hash": expected_hash,
                 "active_path_hash": active_hash,
             }
     return {"ok": True}
+
+
+def _blocker_codes(gate: Dict[str, Any], blockers: List[str]) -> List[str]:
+    """Prefer the gate's own codes; recover legacy seeds by exact sentence."""
+    codes = [str(code) for code in gate.get("blocker_codes") or [] if code]
+    if codes:
+        return codes
+    legacy = {text: code for code, text in EXECUTION_GATE_BLOCKERS.items()}
+    # An unrecognised sentence stays unrecognised. Guessing a remedy from
+    # prose is how the UI ended up regex-matching English to decide what to
+    # tell a clinician to do next.
+    return [legacy[text] for text in blockers if text in legacy]
 
 
 def _idea_seed_requires_gate(seed: Dict[str, Any]) -> bool:
@@ -363,10 +384,7 @@ def post_agent_run_provider_config(body: Dict[str, Any]) -> dict:
 
     # Fail closed: writing provider credentials must not silently flip the
     # global AI opt-in — only an explicit enable_ai=true may enable it.
-    updates: Dict[str, Any] = {"ai_enabled": enable_ai}
-    if updates["ai_enabled"]:
-        updates["agent_model_mode"] = "external"
-    settings = settings_store.update_settings(updates)
+    settings = settings_store.update_settings({"ai_enabled": enable_ai})
     return {
         **meta,
         "settings": {**settings, "about": settings_store.about()},

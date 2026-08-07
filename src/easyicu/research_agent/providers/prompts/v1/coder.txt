@@ -126,6 +126,15 @@ Code contract:
   analysis. A fixed-cohort reconciliation may audit those fields but must keep
   every input row and report a final cohort count equal to `len(df)`.
 - Write any artefact (CSV, PNG, SVG, JSON) to os.environ["STEP_OUT_DIR"].
+- COUNT COLUMN NAMES ARE READ AS COUNTS. In any table you register, the host
+  reads the columns `n`, `n_full`, `cohort_n`, `n_complete_case`, `n_dropped`,
+  `event_n`, `non_event_n`, `numerator` and `denominator` as population
+  counts, and refuses a value that is negative or not a whole number. This
+  holds for tables you designed yourself, not only host-prescribed ones. So a
+  signed quantity -- a difference, a delta, a change, a residual -- must not
+  be written under one of those names: call it `<quantity>_difference` or
+  `<quantity>_delta` instead. A real step died on exactly this, reporting a
+  correct reconciliation difference of -93458 in a column it called `n`.
 - If a step depends on an artefact produced by a previous step, first look for
   these runtime paths when available: `EASYICU_RUN_DIR`,
   `EASYICU_EVIDENCE_DIR`, and `EASYICU_MANIFEST_PARTIAL`. Read
@@ -247,15 +256,50 @@ Code contract:
   write the precise invalid-row reason to `step_summary.json`, leave
   `figure_files` empty, and emit no partial accounting figure.
 - OPTIONAL trajectory: if os.environ.get("TRAJECTORY_PARQUET") is set, it
-  is a LONG per-timepoint table with columns
+  is a LONG per-timepoint table, usually
   (stay_id, charttime, concept, value_num, value_str) — charttime is
-  hours from ICU admission, value_num the numeric view. Use it (joined to
+  hours from ICU admission, value_num the numeric view. Do not guess those
+  names: EASYICU_RESOLVED_INPUTS_JSON carries
+  `host_authorized_ambient_inputs.trajectory` with the path, sha256, the role
+  of each column, the time unit/origin, and `concepts`, the exact and complete
+  vocabulary in the table. Read roles and concepts there; select concepts by
+  exact string from that list. That entry is the host's authorization: a
+  verified host-staged input, NOT an undeclared file. Its absence from
+  `inputs` is by design (it has no name in the executable roster) and is not
+  a reason to refuse to read it, to substitute an empty frame, or to fall
+  back to cohort columns. Use it (joined to
   the cohort on stay_id) when the wide cohort's per-stay summaries cannot
   express what the step needs: a threshold-crossing onset (e.g. first
   charttime where concept=="map" and value_num<65 = hypotension onset), an
   incident-after-exposure endpoint (e.g. first "aki" event whose charttime
   exceeds the first "peep" charttime, among stays AKI-free at baseline), or
   a landmark / time-varying exposure design.
+  MANDATORY when your step declares `manifest:trajectory_window_manifest`
+  among its expected_outputs: the fixed windows come FROM this table, not
+  from cohort column names. Do not scan the analysis cohort for
+  `<family>_h<start>_<end>` columns and do not fail when none exist -- a
+  long-bound run has none by construction. Bin charttime into the windows
+  the step declares, aggregate value_num within each bin per stay and
+  concept, and record the windows you used in the manifest.
+  The concept vocabulary of that table is the DISTINCT VALUES OF ITS
+  `concept` COLUMN -- read them from the table. There is no separate
+  planner-authorized concept mapping to wait for, and its absence is not a
+  reason to block: the trajectory was bound with its concepts already
+  materialized. Match the families your step needs against the values that
+  are actually present, use those, and record any you could not find as
+  unavailable instead of emitting an empty representation. Take those
+  values VERBATIM from the column; never construct a concept name from the
+  research question's wording. A question about "SOFA components and
+  lactate" does not mean the table holds `sofa_resp` or `lactate` -- read
+  what is there and use exactly that.
+  MANDATORY when your step declares `manifest:trajectory_representation_schema`
+  among its expected_outputs: that JSON file's key names are a fixed host
+  contract, not free-form description. It MUST contain exactly these keys,
+  spelled exactly like this: `id_column`, `observation_family`,
+  `observation_columns`, `profile_columns`, `representation_columns`,
+  `frozen_population_n`, `representation_sha256`, plus `trailing_na_policy`.
+  A near-miss name such as `ordered_observation_columns` reads as "the field
+  is missing" and refuses the whole step after it has already run.
   MANDATORY when a timing/onset/incident question is being gated: if
   TRAJECTORY_PARQUET is set and contains the concept(s) the endpoint needs,
   you MUST construct the onset / incident endpoint FROM THE TRAJECTORY
@@ -299,13 +343,23 @@ Code contract:
   hoc `fig.savefig` calls:
   `from easyicu.research_agent.figures.publication import
   make_figure_contract, apply_publication_style, add_panel_label,
-  save_publication_figure, audit_publication_exports`. Define a
+  save_publication_figure, audit_publication_exports_json`. Import the
+  `_json` form, not `audit_publication_exports`: the typed form returns
+  host model objects that `json.dump` cannot serialize, and step_summary.json
+  must hold JSON primitives. Define a
   claim-first `FigureContract`, map each panel to source evidence,
   and save the publication bundle from the same matplotlib figure.
   Treat this helper surface as EasyICU's default embedded
-  `nature-figure` workflow. Call its stable host-owned keyword API directly:
-  `save_publication_figure(fig=fig, out_dir=out_dir, stem=stem,
-  contract=contract)` (substitute your local variable names). Add only
+  `nature-figure` workflow. Call its stable host-owned keyword API directly
+  and KEEP ITS RETURN VALUE -- it is a `{format: path}` mapping and the only
+  place the host publishes where it put each file:
+  `saved = save_publication_figure(fig=fig, out_dir=out_dir, stem=stem,
+  contract=contract)` (substitute your local variable names). `saved["png"]`,
+  `saved["svg"]` and so on are the exported images, and `saved["contract"]`
+  is the `.figure_contract.json` this same call wrote. Read those paths from
+  `saved`; do not reconstruct them by string-building a stem, and do not
+  reference a contract variable you never bound in the scope that reads it.
+  Add only
   documented overrides such as `formats=` or `dpi=` when needed. Do not use
   `inspect.signature`, `__signature__`, parameter-name loops, or dynamic
   signature dispatch to adapt EasyICU helpers; EasyICU owns helper-version
@@ -390,10 +444,27 @@ Code contract:
   and confidence bound for one of those quantities must remain inside [0, 1].
   For a binomial risk or prevalence interval, use the vetted
   `easyicu.research_agent.methods.ordered_trends.wilson_interval` helper, which
-  normalises floating-point boundary artefacts before serialization. Never
-  clip a genuinely invalid estimate to make it pass a range check. This rule
-  does not apply to effect scales such as risk ratios, odds ratios, hazard
-  ratios, or risk differences.
+  normalises floating-point boundary artefacts before serialization. It returns
+  a `WilsonInterval` dataclass: read its bounds from `ci.ci_low` and
+  `ci.ci_high` -- never `ci.lower`/`ci.upper`, never
+  `ci.lower_bound`/`ci.upper_bound`, and never by indexing or unpacking it. A
+  different helper of the same name inside the distribution executor returns a
+  `(low, high)` tuple; this one does not, so do not carry that shape over.
+  Never clip a genuinely invalid estimate to make it pass a range check.
+  This rule does not apply to effect scales such as
+  risk ratios, odds ratios, hazard ratios, or risk differences.
+- If a table you write contains a TOTAL / OVERALL row alongside its
+  per-group rows, the table itself must say so. Add a `row_role` column
+  and mark that row `overall` and every partition row `exposure_level`
+  (that is the spelling the host's own distribution output uses; the
+  column may also be named `role`, `row_type`, `record_role`,
+  `group_type`, `partition_status`, `estimate_type`, `result_role`,
+  `record_type`, `summary_type`, `status` or `variable_class`).
+  Without it a consumer reading only these bytes cannot tell the total
+  apart from another group and will double every denominator it sums, so
+  the host refuses the table and the step spends a repair on relabelling
+  instead of on the analysis. The simpler alternative is to not write a
+  total row at all: the reader can sum the groups.
 - When reporting a source-status count map, always include the complete four
   category schema: valid observed; no source; measured/source present but
   summary missing; and contradictory/invalid. Preserve zero-frequency
@@ -593,31 +664,21 @@ JSON SERIALISATION — MANDATORY:
 - Every dict you write to disk must contain only Python primitives
   (int, float, str, bool, list, dict, None). numpy scalars and
   pandas missing values are NOT JSON-serialisable.
-- Define this helper near the top of EVERY script that writes JSON,
-  and ALWAYS pass it as `default=to_jsonable`:
-
-    def to_jsonable(x):
-        import math
-        import numpy as np
-        import pandas as pd
-        if isinstance(x, (np.integer,)):
-            return int(x)
-        if isinstance(x, (np.floating,)):
-            v = float(x)
-            return v if math.isfinite(v) else None
-        if isinstance(x, (np.bool_,)):
-            return bool(x)
-        if isinstance(x, np.ndarray):
-            return x.tolist()
-        try:
-            if pd.isna(x):
-                return None
-        except (TypeError, ValueError):
-            pass
-        return str(x)
-
-  Then call ALWAYS: `json.dump(payload, f, indent=2,
+- Do NOT write this coercion yourself. Import it:
+  `from easyicu.research_agent.script_runtime import to_jsonable`
+  and ALWAYS call `json.dump(payload, f, indent=2,
   default=to_jsonable, ensure_ascii=False)`.
+  `write_json(path, payload)` from the same module does both in one
+  call and creates the parent directory.
+- Likewise, do NOT hand-write file hashing or cohort loading:
+  `from easyicu.research_agent.authority.provenance import sha256_file`
+  and
+  `from easyicu.research_agent.execution.runners.typed_input_binding
+   import load_typed_cohort`.
+  These are the host's own implementations, so a receipt you produce
+  with them matches the one the host verifies. A local reimplementation
+  is not more portable -- it is one more thing that can be wrong, and
+  it is where past runs actually died.
 
 CSV CELL VALUES — MANDATORY:
 - Every CSV cell must be a SCALAR (one number or one short string).
@@ -898,11 +959,6 @@ PREDICTION / CLUSTERING APIs:
   `from sklearn.preprocessing import OneHotEncoder`;
   `categorical_transformer = Pipeline([("imputer", SimpleImputer(strategy="most_frequent")),
   ("onehot", OneHotEncoder(handle_unknown="ignore", sparse_output=False))])`.
-- For clustering tasks, use numeric physiologic features, impute
-  medians, scale before KMeans/AgglomerativeClustering, and write
-  `n_clusters`/`cluster_count` plus `silhouette_score` when at least
-  two non-empty clusters exist. If clustering is not feasible, write
-  a null silhouette with a precise skipped reason and exit normally.
 
 ROBUSTNESS:
 - If the step is cross-database validation but only `COHORT_PARQUET`

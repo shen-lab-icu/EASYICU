@@ -42,6 +42,7 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
+from ..audits.aggregate_row import unlabelled_aggregate_row_findings
 from ..audits.step_summary_integrity import StepSummaryIntegrityValidator
 from ..audits.envelope_consumers import StepSummaryFractionEnvelopeDualReader
 from ..audits.validators import (
@@ -79,6 +80,7 @@ from ..contracts.robustness_execution import (
 from ..robustness.panel import RobustnessSpec
 from ..authority.runtime_artifacts import current_successful_step_records
 from ..schema import AnalysisPlan, AnalysisStep, ResearchContext
+from ..trajectory.plan_contract import trajectory_plan_contract_applies
 
 
 def _primary_cohort_integrity_authority_paths(
@@ -726,6 +728,10 @@ def _step_deterministic_contract_findings(
         completed_step_records=completed_step_records,
         resolved_input_bindings=resolved_input_bindings,
         out_dir=out_dir,
+        trajectory_role_contract_applies=trajectory_plan_contract_applies(
+            plan=plan,
+            context=context,
+        ),
     )
     findings += _cohort_definition_sensitivity_contract_findings(
         step=step,
@@ -769,6 +775,14 @@ def _step_deterministic_contract_findings(
     findings += cross_step_reconciliation_trace_validator.audit(
         step=step,
         step_summary=step_summary,
+        out_dir=out_dir,
+    )
+    # Runs beside the reconciliation trace because it is the same failure seen
+    # one step earlier: that validator catches a consumer that bound the wrong
+    # parent row, this one catches the producer that made the rows
+    # indistinguishable in the first place.
+    findings += unlabelled_aggregate_row_findings(
+        step_id=step.step_id,
         out_dir=out_dir,
     )
     findings += step_summary_integrity_validator.audit(

@@ -20,6 +20,16 @@ deterministic gate. There is no soft margin. Therefore:
     contains a number, a comparison, or a clinical effect-direction
     word MUST include `{evidence:<id>}` somewhere in the same
     sentence. If you cannot satisfy this, drop the sentence.
+  * ONE ID PER NUMBER, NOT ONE PER SENTENCE. A sentence that prints
+    values coming from different steps must cite EVERY step that owns
+    one of them. "X had 14 missing observations among 94,458 stays"
+    takes two ids: the audit step that counted the 14, and the cohort
+    step whose summary reports the 94,458. Citing only one of them
+    blocks the whole manuscript: the binder restricts each value to the
+    evidence the sentence names, finds that no candidate belongs to it,
+    and refuses rather than attaching another step's number to your
+    claim. If two owners in one sentence reads badly, split the
+    sentence -- do not drop a citation.
   * This rule applies to every manuscript section, not only Results.
     Background, Introduction, Methods, Discussion, and Limitations
     sentences that mention a cohort, variable, database, model,

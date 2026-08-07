@@ -171,6 +171,12 @@ def _item(task_id: str) -> SimpleNamespace:
     )
 
 
+def test_legacy_blank_predictor_is_explicit_null_operational_exposure() -> None:
+    item = SimpleNamespace(operational_exposure=None, primary_predictor="")
+
+    assert bench._operational_exposure_for_item(item) is None
+
+
 def test_benchmark_reuse_identity_binds_data_seed_and_input_values() -> None:
     first_cohort = [{"stay_id": 1, "value": 7}]
     second_cohort = [{"stay_id": 1, "value": 8}]

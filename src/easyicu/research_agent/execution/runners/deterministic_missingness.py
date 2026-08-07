@@ -48,6 +48,7 @@ from ...authority.plausibility import FlagOnlyPlausibilityScope
 from ...icu_rules import companion_count_column_for_measured
 from ...schema import AnalysisStep, spec_backs_every_declared_product
 from .plausibility_receipt import render_standard_plausibility_receipt_code
+from .typed_input_binding import sole_typed_cohort_input
 
 __all__ = [
     "MEASUREMENT_AUDIT_KIND_FILES",
@@ -64,6 +65,26 @@ __all__ = [
     "missingness_measurement_audit_code",
     "source_availability_audit_executor_owns_step",
 ]
+
+
+#: This executor's own label for the whole-cohort stratum of the exposure
+#: completeness table. It reads as a total to a person, and to nothing else.
+_ALL_STRATA_LABEL = "__all__"
+
+#: The host's declared row-role vocabulary, so the total row is legible to the
+#: aggregate-row validator rather than only to this producer.
+#:
+#: DUPLICATED, and stated here rather than hidden: the same two strings are
+#: defined in ``audits/aggregate_row.py`` (``OVERALL_ROW_ROLE`` /
+#: ``LEVEL_ROW_ROLE``) and in ``exposure_outcome_distribution_executor.py``
+#: (``_OVERALL_ROLE`` / ``_LEVEL_ROLE``). They are re-declared instead of
+#: imported because this module's body is rendered inline into the container
+#: script, which imports only ``icu_rules`` and ``methods.*``; pulling the
+#: validator package in would drag the schema layer across that boundary for
+#: two string constants. ``test_the_total_row_is_legible_to_its_validator``
+#: asserts all three spellings agree, so the copy cannot drift silently.
+_OVERALL_ROW_ROLE = "overall"
+_LEVEL_ROW_ROLE = "exposure_level"
 
 
 _MISSINGNESS_AVAILABILITY_METHOD_TOKENS = frozenset(
@@ -427,26 +448,19 @@ def declared_audit_spec_is_emittable(step: AnalysisStep) -> bool:
 
 
 def _cohort_input_scope(step: AnalysisStep) -> tuple[bool, str | None]:
-    """Resolve an optional single typed row-membership authority."""
+    """Resolve an optional single typed row-membership authority.
 
-    typed_inputs = {
-        str(value or "").strip()
-        for value in step.inputs
-        if ":" in str(value or "").strip()
-    }
-    if not typed_inputs:
+    This audit may run without one, so it keeps its own arity policy (absent is
+    supported); *which* keys name the closed cohort product is the published
+    vocabulary and is read from its one owner.
+    """
+
+    input_key = sole_typed_cohort_input(step)
+    if input_key is None:
         return True, None
-    if len(typed_inputs) != 1:
+    if not input_key:
         return False, None
-    input_key = next(iter(typed_inputs))
-    kind, separator, product = input_key.partition(":")
-    if (
-        separator
-        and product
-        and (kind == "cohort" or input_key == "artifact:analysis_cohort")
-    ):
-        return True, input_key
-    return False, None
+    return True, input_key
 
 
 def missingness_audit_input_scope_supported(step: AnalysisStep) -> bool:
@@ -1170,16 +1184,16 @@ def missingness_measurement_audit_code(
                     "value_column": value_col or "",
                     "n_total": n_total,
                     "measured_one_n": measured_one_n,
-                    "measured_one_pct": round(100.0 * measured_one_n / n_total, 6),
+                    "measured_one_pct": 100.0 * measured_one_n / n_total,
                     "value_missing_n": value_missing_n,
-                    "value_missing_pct": round(100.0 * value_missing_n / n_total, 6),
+                    "value_missing_pct": 100.0 * value_missing_n / n_total,
                     # aliases so every downstream resolver (figure renderer /
                     # validator) finds a column it recognises.
                     "measured_n": measured_one_n,
                     "n_nonmissing": measured_one_n,
                     "missing_n": value_missing_n,
-                    "missing_pct": round(100.0 * value_missing_n / n_total, 6),
-                    "measured_pct": round(100.0 * measured_one_n / n_total, 6),
+                    "missing_pct": 100.0 * value_missing_n / n_total,
+                    "measured_pct": 100.0 * measured_one_n / n_total,
                     "eligible_n": eligible_n,
                     "not_applicable_n": not_applicable_n,
                     "event_present_n": event_present_n,
@@ -1417,16 +1431,32 @@ def missingness_measurement_audit_code(
                         "value_column": record["value_column"],
                         "exposure_variable": exposure_column or "",
                         "exposure_category": label,
+                        # THE FIRST ROW IS THE WHOLE COHORT, AND THE TABLE HAS
+                        # TO SAY SO IN A SPELLING ITS READERS ALREADY KNOW.
+                        # ``exposure_category='__all__'`` said it, but only to
+                        # someone who knows this producer; the host's own
+                        # aggregate-row validator looks for a declared ROLE
+                        # column, so it read the total as a third exposure
+                        # group.
+                        #
+                        # The three strings are LITERALS because this block is
+                        # a template rendered into the container script, which
+                        # defines no host names -- the module constants above
+                        # exist so a test can assert these literals still match
+                        # the validator's vocabulary.
+                        "row_role": (
+                            "overall" if label == "__all__" else "exposure_level"
+                        ),
                         "n_stratum": stratum_n,
                         "measured_n": measured_n,
                         "measured_pct": (
-                            round(100.0 * measured_n / stratum_n, 6)
+                            100.0 * measured_n / stratum_n
                             if stratum_n
                             else float("nan")
                         ),
                         "value_missing_n": stratum_n - measured_n,
                         "value_missing_pct": (
-                            round(100.0 * (stratum_n - measured_n) / stratum_n, 6)
+                            100.0 * (stratum_n - measured_n) / stratum_n
                             if stratum_n
                             else float("nan")
                         ),
@@ -1439,7 +1469,7 @@ def missingness_measurement_audit_code(
                             else float("nan")
                         ),
                         "raw_indicator_one_pct": (
-                            round(100.0 * raw_indicator_n / stratum_n, 6)
+                            100.0 * raw_indicator_n / stratum_n
                             if resolved_raw_flag is not None and stratum_n
                             else float("nan")
                         ),
@@ -1488,7 +1518,7 @@ def missingness_measurement_audit_code(
                     "n_total": n_total,
                     "n_complete": observed_n,
                     "n_excluded_missing": int(n_total - observed_n),
-                    "complete_pct": round(100.0 * observed_n / n_total, 6),
+                    "complete_pct": 100.0 * observed_n / n_total,
                 }
             )
         expects_analytic_denominator = any(
@@ -1527,7 +1557,7 @@ def missingness_measurement_audit_code(
                     int(n_total - complete_n) if complete_n is not None else None
                 ),
                 "complete_pct": (
-                    round(100.0 * complete_n / n_total, 6)
+                    100.0 * complete_n / n_total
                     if complete_n is not None
                     else None
                 ),
@@ -1548,7 +1578,16 @@ def missingness_measurement_audit_code(
             ]
         ).to_csv(out_dir / "cohort_flow.csv", index=False)
 
-        worst = audit.head(5)[["concept", "value_missing_pct"]].to_dict("records")
+        # The count travels with the percentage. A manuscript states the
+        # numerator ("missing for 696 of 94,458 stays") and cites this step,
+        # but publishing only the rate leaves this step owning no claim for
+        # the number in that sentence -- the binder then finds the same value
+        # registered by other steps, none of them the cited one, and has to
+        # refuse. ``value_missing_n`` is the numerator of the percentage
+        # already published here and sits in this step's own CSV rows.
+        worst = audit.head(5)[
+            ["concept", "value_missing_n", "value_missing_pct"]
+        ].to_dict("records")
         n_structural = int((audit["missingness_kind"] == "structural_no_source").sum())
         n_binary_event_status = int(
             (audit["indicator_semantics"] == "binary_event_presence").sum()

@@ -31,7 +31,7 @@ from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Sequence
 
 from ..authority.provider_budget import (
-    active_provider_retry_available,
+    consume_active_provider_handoff,
     consume_active_transport_attempt,
 )
 from ..authority.secret_redaction import (
@@ -361,14 +361,10 @@ class OpenAIClient:
             request_timeout = float(
                 os.environ.get("EASYICU_LLM_TIMEOUT") or request_timeout
             )
-            max_retries = int(
-                os.environ.get("EASYICU_LLM_MAX_RETRIES") or max_retries
-            )
+            max_retries = int(os.environ.get("EASYICU_LLM_MAX_RETRIES") or max_retries)
         if stream_enabled is None:
             stream_enabled = (
-                str(os.environ.get("EASYICU_LLM_STREAM", "") or "")
-                .strip()
-                .lower()
+                str(os.environ.get("EASYICU_LLM_STREAM", "") or "").strip().lower()
                 in {"1", "true", "yes", "on"}
                 if allow_environment_overrides
                 else False
@@ -733,10 +729,13 @@ class OpenAIClient:
         manual_attempts = max(1, int(getattr(self, "_max_retries", 8)))
 
         def _sleep_before_retry(seconds: float, attempt_index: int) -> None:
-            if (
-                attempt_index + 1 < manual_attempts
-                and active_provider_retry_available()
-            ):
+            # Only the attempt count decides. This also consulted the step
+            # allowance, which was coherent while that allowance cancelled
+            # retries; once it stopped doing so (2026-08-04) the check
+            # survived only to suppress the backoff of a retry that was going
+            # to happen regardless -- i.e. to hammer a failing endpoint
+            # hardest exactly when the step was nearly out of budget.
+            if attempt_index + 1 < manual_attempts:
                 _time.sleep(seconds)
 
         for attempt in range(manual_attempts):
@@ -1165,7 +1164,7 @@ class FallbackLLMClient:
         for client in self._clients:
             try:
                 if not client_counts_transport_attempts(client):
-                    consume_active_transport_attempt()
+                    consume_active_provider_handoff()
                 # Forward top_p only to clients that accept it (OpenAI-
                 # compatible); legacy clients keep their previous
                 # 3-kwarg signature.

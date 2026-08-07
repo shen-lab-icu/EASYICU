@@ -194,6 +194,57 @@ def cohort_hygiene_findings(
                     )
                 )
 
+    # (C) Elapsed-time columns that contradict their own anchor. The export
+    # writes ``<concept>_time`` as hours elapsed from the cohort anchor, so a
+    # negative value places the event before the anchor that defines the row.
+    #
+    # The rule is STRUCTURAL, not a named-column rule: it reads the export's
+    # own convention off the export. MEASURED on the real MIMIC-IV cohort --
+    # 21 elapsed-time columns, and 20 of them have min EXACTLY 0.00. The
+    # convention is not in doubt; one column breaks it, in 28 of 94,458 rows.
+    #
+    # Every one of the nine recorded tasks carries those same 28 rows and NONE
+    # was told. Only a survival analysis ever compares the columns, so h1 hit
+    # it 20 minutes into its primary step, wrote its own guard, raised, and
+    # died with four provider calls unspent -- having discovered a property of
+    # the cohort that was fixed before it was ever handed one.
+    #
+    # Reported, never enforced: 0.03 % of rows is a data-quality fact, not a
+    # reason to refuse an analysis, and which rows to drop or censor is the
+    # analyst's call. Same severity and impartiality as (A) and (B).
+    for column in df.columns:
+        if not str(column).lower().endswith("_time"):
+            continue
+        elapsed = pd.to_numeric(df[column], errors="coerce").dropna()
+        if elapsed.empty:
+            continue
+        negative_n = int((elapsed < 0).sum())
+        if not negative_n:
+            continue
+        findings.append(
+            ValidationFinding(
+                validator="cohort_auditor",
+                severity="warning",
+                message=(
+                    f"{negative_n} row(s) give column '{column}' a negative "
+                    "elapsed time, placing the event before the anchor the row "
+                    f"is measured from (minimum {float(elapsed.min()):.4g}). "
+                    "Every other elapsed-time column in this export starts at "
+                    "0. No row is dropped or censored — recorded for the "
+                    "analyst to judge before any time-to-event analysis."
+                ),
+                detail={
+                    "kind": "cohort_hygiene",
+                    "subkind": "elapsed_time_precedes_anchor",
+                    "column": str(column),
+                    "negative_n": negative_n,
+                    "minimum": float(elapsed.min()),
+                    "n_rows": int(len(df)),
+                    "impartial": True,
+                },
+            )
+        )
+
     return findings
 
 
@@ -824,6 +875,80 @@ def _concept_audit_script_excerpt(
     )
 
 
+def _concept_audit_step_roster_block(
+    plan_step_roster: Optional[Sequence[Mapping[str, Any]]],
+) -> str:
+    """The plan's other steps, so "nobody did this" can be distinguished.
+
+    Deliberately id/role/method only. The other steps' rule prose would be the
+    largest block in this prompt and would invite auditing them; what the
+    auditor needs is not their content but the fact that they exist and own
+    work, so a requirement discharged elsewhere stops looking undischarged.
+    """
+
+    if not plan_step_roster:
+        return ""
+    lines = []
+    for entry in plan_step_roster:
+        step_id = str(entry.get("step_id") or "").strip()
+        if not step_id:
+            continue
+        role = str(entry.get("planned_analysis_role") or "").strip()
+        method = str(entry.get("method") or "").strip()
+        lines.append(f"- {step_id} [{role or 'unspecified'}] {method}".rstrip())
+    if not lines:
+        return ""
+    return (
+        "Other steps in this locked plan (id, planned role, method):\n"
+        + "\n".join(lines)
+        + "\nYou are auditing ONLY the step named above. A requirement the plan "
+        "assigns to a different step in this roster is that step's obligation, "
+        "not a defect in this script: report it only if THIS step's own declared "
+        "contract carries it. In particular a cohort, eligibility, exclusion or "
+        "attrition rule is discharged by the step that owns the cohort contract, "
+        "and by the time this step runs that step has already run and its output "
+        "is an input here. Do not require this script to re-apply it.\n"
+    )
+
+
+def _concept_audit_endpoint_block(
+    study_endpoint: Optional[Mapping[str, Any]],
+) -> str:
+    """The declared endpoint, or an explicit statement that none was declared.
+
+    Says which case it is either way. Rendering nothing when nothing is declared
+    would let the auditor keep supplying the missing rule from the research
+    question -- silently, and differently each run, which is how one task got
+    blocked twice for opposite censoring choices. An absent declaration is a
+    fact about the plan and is reported as one.
+    """
+
+    if not study_endpoint:
+        return (
+            "Declared study endpoint: NONE. The plan declared no typed endpoint, "
+            "so no follow-up time, time origin, censoring rule or level set is "
+            "authoritative for this run. Do not supply one from the research "
+            "question and do not report the script for contradicting a rule that "
+            "is not declared anywhere; a missing declaration is the plan's "
+            "defect, not this script's.\n"
+        )
+    payload = {
+        key: value
+        for key, value in study_endpoint.items()
+        if key not in {"authorization", "schema_version"}
+    }
+    return (
+        "Declared study endpoint (from the locked plan -- AUTHORITATIVE):\n"
+        + json.dumps(payload, ensure_ascii=False, default=str, sort_keys=True)
+        + "\nThis declaration, not the research question and not your own reading "
+        "of it, defines the endpoint, the follow-up clock, its origin, what "
+        "censors follow-up, and the closed level set. A script implementing "
+        "exactly these fields is correct even if you would have designed the "
+        "study differently; report a mismatch only against a field printed "
+        "above, and name that field.\n"
+    )
+
+
 class LLMConceptAuditor:
     """Optional LLM-based semantic review after deterministic checks.
 
@@ -846,8 +971,16 @@ class LLMConceptAuditor:
         script_text: str,
         step: Optional[AnalysisStep] = None,
         provider_budget: Optional[StepProviderCallBudget] = None,
+        study_endpoint: Optional[Mapping[str, Any]] = None,
+        plan_step_roster: Optional[Sequence[Mapping[str, Any]]] = None,
     ) -> List[ValidationFinding]:
-        prompt = self._prompt(context=context, script_text=script_text, step=step)
+        prompt = self._prompt(
+            context=context,
+            script_text=script_text,
+            step=step,
+            study_endpoint=study_endpoint,
+            plan_step_roster=plan_step_roster,
+        )
         try:
             raw = complete_with_provider_budget(
                 budget=provider_budget,
@@ -911,6 +1044,8 @@ class LLMConceptAuditor:
         context: ResearchContext,
         script_text: str,
         step: Optional[AnalysisStep],
+        study_endpoint: Optional[Mapping[str, Any]] = None,
+        plan_step_roster: Optional[Sequence[Mapping[str, Any]]] = None,
     ) -> str:
         # A wide ICU context can exceed the prompt budget.  Never take the
         # first columns blindly: preserve plan-declared inputs and their
@@ -1028,6 +1163,24 @@ class LLMConceptAuditor:
             "host-owned fail-closed boundary: it raises on missing, invalid, or "
             "discordant measured/count pairs. Do not demand a second status "
             "guard or inspection of its successful receipt. "
+            # The host's own system prompt (rule 1) tells the agent that a total
+            # score MAY be modelled as a numeric covariate provided the choice is
+            # stated explicitly. Without the sentence below this auditor refused
+            # that exact compliance: a real run declared the coding on its own
+            # balance-table rows and was still blocked for "ordinal scores
+            # treated as continuous", so the two host layers published opposite
+            # contracts and the step died on the one the agent obeyed.
+            "The system rule permits an ordinal score to be modelled as a "
+            "numeric covariate when that choice is stated explicitly. So a "
+            "rank-preserving numeric representation used as an ADJUSTMENT "
+            "covariate, and labelled as such by the script's own output (for "
+            "example a scale or coding field carried on the covariate's row), "
+            "has met that requirement: do not report it as an "
+            "ordinal-treated-as-continuous defect on that basis alone. Report "
+            "instead an ordinal entered numerically with no such declaration "
+            "anywhere in the script, an ordinal serving as the primary exposure "
+            "or estimand without a declared coding, or an ordinal averaged "
+            "rather than summarised rank-preservingly. "
             "A value returned by a direct call imported exactly as "
             "`strict_numeric_input` from that same host module has already "
             "failed closed on every non-missing value that is unconvertible, "
@@ -1039,6 +1192,19 @@ class LLMConceptAuditor:
             "boundary, use issue_code "
             "`strict_numeric_nonfinite_guard_required` and include every "
             "affected name in `detail.variables`. "
+            # The sibling of the two boundaries above, for the event/time pair.
+            # Added with the boundary itself: a host helper the auditor does not
+            # recognise gets a "add a second guard" finding on the step that
+            # correctly called it, which is how a compliant script is blocked.
+            "A direct, uncaught call imported exactly as "
+            "`event_time_reconciliation_receipt` from "
+            "`easyicu.research_agent.methods.survival_inputs` is a host-owned "
+            "fail-closed boundary: it raises when an event row's time cannot "
+            "place it on the follow-up axis and when an event code falls outside "
+            "the declared closed set. Do not demand a second reconciliation of "
+            "the same pair, and do not report a censored row carrying no event "
+            "time as a defect -- that is the expected shape, and excluding on it "
+            "removes non-events from the denominator. "
             "A Step input whose exact ConceptDescriptor names a source_concept, "
             "analysis_window, and aggregation-compatible materialized column is "
             "a host-owned binding. Direct use of that exact input is therefore "
@@ -1097,6 +1263,25 @@ class LLMConceptAuditor:
             "without reconciling them to counts and denominators, or select an "
             "alternate per-stay summary in place of the authoritative exposure; "
             "those behaviors can change the displayed scientific result. "
+            "Do not assume that a generically named `n` field is the total "
+            "denominator when the typed upstream product does not declare that "
+            "meaning. If non-negative integer `n_nonmissing` and `missing_n` "
+            "components are present, `n_nonmissing / (n_nonmissing + missing_n)` "
+            "reconciles availability by construction; require a positive finite "
+            "component sum, but do not demand that it equal an otherwise "
+            "undefined `n`. "
+            "Read an instruction to display standardized feature patterns "
+            "together with an instruction not to recompute scaling as follows: "
+            "the script must not refit or replace upstream analytical "
+            "preprocessing, clustering, profiles, or model inputs, but it may "
+            "apply and label a local rendering-only normalization to values read "
+            "from the completed parent product. Do not call that display "
+            "transform a recomputation of upstream scientific scaling when raw "
+            "parent values remain the bound source-data authority and the "
+            "transformed values are not reused as a scientific artifact. Still "
+            "flag an undeclared transform, mutation of the authoritative parent "
+            "table, refitting of upstream analysis, or downstream reuse of the "
+            "rendering transform. "
             "If a generic outcome column such as 'death' is explicitly bound in "
             "the variable metadata to ICU mortality, hospital mortality or a "
             "fixed follow-up horizon, do not raise an error unless the script "
@@ -1143,7 +1328,19 @@ class LLMConceptAuditor:
             "findings, with messages under 60 words and at most 20 variables each.\n\n"
             f"Step: {step.step_id if step else '(unknown)'}\n"
             f"Step intent: {step.intent if step else '(unknown)'}\n"
-            "Planner-declared step contract:\n"
+            # MEASURED (h1, sweep47_A): step 04_primary_landmark_survival_analysis
+            # was blocked `repair_failed` for "Prevalent exposure is only audited,
+            # not excluded before the 24-hour follow-up landmark" -- and the plan
+            # assigns that exclusion to 01_define_analysis_cohort, whose own
+            # icu_rule_refs read "Exclude prevalent events before the 24-hour
+            # landmark as a cohort-definition step". Step 01 had already run.
+            #
+            # This auditor sees ONE step's contract and no roster, so a
+            # study-level obligation discharged elsewhere is indistinguishable
+            # from one nobody discharged. It was making a whole-plan judgement
+            # from a step-local view, and the step it faulted was not the owner.
+            + _concept_audit_step_roster_block(plan_step_roster)
+            + "Planner-declared step contract:\n"
             + json.dumps(
                 step_contract,
                 ensure_ascii=False,
@@ -1151,7 +1348,18 @@ class LLMConceptAuditor:
                 default=str,
             )
             + "\n"
-            f"Target outcome: {context.target_outcome}\n"
+            # MEASURED: without this block, this auditor blocked survival steps
+            # for using "los_hosp instead of the contract-required ICU discharge
+            # censoring represented by los_icu" -- a requirement that appears in
+            # no artifact of that run. `los_icu` is absent from every one of that
+            # task's 13 analysis plans, and the plans that stated a follow-up
+            # rule at all stated hospital discharge. Two runs of the same task
+            # were blocked for opposite choices. With nothing declared, the
+            # auditor was comparing the script against its own reading of the
+            # research question -- which is exactly the guess the endpoint
+            # declaration exists to remove, on both sides of the comparison.
+            + _concept_audit_endpoint_block(study_endpoint)
+            + f"Target outcome: {context.target_outcome}\n"
             "Named time windows:\n"
             + json.dumps(
                 [window.model_dump(mode="json") for window in context.time_windows],
@@ -2814,6 +3022,22 @@ class CrossStepCohortLockValidator:
         "runner_repaired",
     }
     _COUNT_PATHS: tuple[tuple[str, ...], ...] = (
+        # First, because it is the only entry the HOST writes. Everything below
+        # is a spelling this validator hopes a producer happened to choose, and
+        # a hoped-for name can mean something else in another producer's
+        # vocabulary. ``n_total`` is exactly that: 8 recorded robustness
+        # summaries use it for the analysis cohort, and one uses it for the
+        # number of variants compared -- so the cohort-lock guard read an
+        # analysis cohort of 2 against a locked 1,000, with the correct value
+        # sitting in the same file under this key.
+        #
+        # Measured over 819 recorded summaries: 53 carry ``analysis_cohort_n``.
+        # Of those the search below lands on ``n_total`` 35 times, ``cohort_n``
+        # 3 times, and on NOTHING 15 times -- so in 15 the guard was blind while
+        # the value it needed was present. Putting this first corrects the one
+        # disagreement, gives the 15 a reading, and leaves the 37 that already
+        # agree untouched.
+        ("analysis_cohort_n",),
         ("n_final_cohort",),
         ("final_analytic_cohort_n",),
         ("final_cohort_n",),
@@ -7535,6 +7759,7 @@ class FigureSourceDataValidator:
         "row_type",
         "group_type",
         "estimate_type",
+        "estimate_unit",
         "effect_scale",
         "model_id",
         "source_model_id",
@@ -8570,9 +8795,7 @@ class FigureSourceDataValidator:
             if exposure_rows.empty:
                 return product
             for _, row in exposure_rows.iterrows():
-                contract = contract_by_model.get(
-                    str(row.get("model_id") or "").strip()
-                )
+                contract = contract_by_model.get(str(row.get("model_id") or "").strip())
                 if (
                     contract is None
                     or str(row.get("source_variable") or "").strip()
@@ -8586,9 +8809,7 @@ class FigureSourceDataValidator:
             # that compact shape only when every row maps exactly to a fitted
             # host model contract and preserves its locked exposure source.
             for _, row in contract_frame.iterrows():
-                contract = contract_by_model.get(
-                    str(row.get("model_id") or "").strip()
-                )
+                contract = contract_by_model.get(str(row.get("model_id") or "").strip())
                 if (
                     contract is None
                     or str(row.get("exposure") or "").strip()
@@ -9734,6 +9955,7 @@ class FigureSourceDataValidator:
         table_products: Dict[Path, str] = dict(same_step_tables)
         table_frames: Dict[Path, pd.DataFrame] = {}
         declared_table_aliases: Dict[str, Set[Path]] = {}
+        declared_statistic_artifacts: Dict[str, Set[str]] = {}
         bound_tabular_paths: Set[Path] = set()
         unsupported_value_inputs: List[str] = []
         if resolved_input_bindings is not None:
@@ -9809,6 +10031,10 @@ class FigureSourceDataValidator:
                         for family in result_families
                     ):
                         required_statistics[raw_input] = (product_name, value)
+                        declared_statistic_artifacts.setdefault(
+                            bound_path.name,
+                            set(),
+                        ).add(raw_input)
                     else:
                         unsupported_value_inputs.append(raw_input)
                     continue
@@ -10253,6 +10479,21 @@ class FigureSourceDataValidator:
                     group_df = source_df.loc[
                         declared_row_names.eq(declared_name)
                     ].copy()
+                    declared_statistic_ids = declared_statistic_artifacts.get(
+                        declared_name,
+                        set(),
+                    )
+                    if declared_statistic_ids and all(
+                        statistic_id in source_statistic_matches
+                        for statistic_id in declared_statistic_ids
+                    ):
+                        # A source row may truthfully name the exact JSON file
+                        # backing a digest-verified typed statistic.  It is not
+                        # an upstream *table*, so do not force that provenance
+                        # claim through the tabular basename resolver.  The
+                        # statistic payload/value checks below still have to
+                        # pass before the source receives credit.
+                        continue
                     group_tables = sorted(
                         {
                             path
@@ -12308,7 +12549,115 @@ class FigureSourceDataValidator:
         unverified_source_columns = sorted(
             source_value_columns - set(verified_value_mappings)
         )
+        if not source_value_columns and not upstream_value_columns:
+            # A DESIGN TABLE HAS NOTHING TO VERIFY, AND DEMANDING IT VERIFIES
+            # NOTHING.
+            #
+            # The rule above exists so a figure cannot claim a number no bound
+            # parent supports. A parent carrying no value column supports no
+            # number, so "verify its values" is a demand nothing can meet: an
+            # exact row-for-row copy of it fails here with
+            # ``no_verifiable_values``, which is what happened to the robustness
+            # renderer's specification-grid companion on e2 (2026-08-03) -- the
+            # grid is the plan's own description of what each specification
+            # CHANGES (``spec_id``/``axis``/``description`` plus override
+            # columns that are empty), and none of that is a result.
+            #
+            # The filter that already exists for this -- ``result_families``
+            # deciding a bound table is not a value source -- is skipped
+            # whenever the step declares no result family, and a rendering-only
+            # figure step never declares one: measured over every recorded plan,
+            # 912 of 1052 visualization steps (87%). So the guard that would
+            # have excused this case is disabled in exactly the case it is for.
+            #
+            # BOTH SIDES MUST BE VALUE-LESS. If the upstream carries values and
+            # the source does not, the source dropped them and must still fail
+            # -- which is why this is not keyed on the source alone.
+            #
+            # AND THE COPY MUST BE EXACT ON EVERY SHARED COLUMN, not only on
+            # ``_TEXT_COLUMNS``. That list is a fixed 22 names and the grid's
+            # own ``description`` -- the sentence the plan registered for a
+            # specification -- is not among them, so the text check above would
+            # have let an altered description through. With no value to verify,
+            # faithful reproduction is the only verification left, so it is the
+            # one this branch performs.
+            infidelities: List[Dict[str, Any]] = []
+            for column in sorted(set(source.columns) & set(upstream.columns)):
+                if column in cls._TEXT_COLUMNS:
+                    continue  # already compared, and already reported above
+                left = _merged_source(column).fillna("").astype(str).str.strip()
+                right = _merged_upstream(column).fillna("").astype(str).str.strip()
+                disagreeing = left != right
+                if disagreeing.any():
+                    index = int(disagreeing[disagreeing].index[0])
+                    infidelities.append(
+                        {
+                            "column": column,
+                            "key": _format_key(merged.loc[index]),
+                            "source": str(left.loc[index]),
+                            "upstream": str(right.loc[index]),
+                        }
+                    )
+            if infidelities:
+                return {
+                    "ok": False,
+                    "reason": "source_values_disagree",
+                    "key_column": key_label,
+                    "upstream_table": upstream_path.name,
+                    "mismatches": infidelities[:20],
+                    "n_mismatches": len(infidelities),
+                    "message": (
+                        f"{upstream_path.name} carries no value to verify, so the "
+                        "source data must reproduce it exactly; it does not"
+                    ),
+                }
+            return {
+                "ok": True,
+                "reason": "valueless_parent_reproduced",
+                "source_table": source_path.name,
+                "upstream_table": upstream_path.name,
+                "key_column": key_label,
+                "n_source_rows": int(len(source_df)),
+                "verified_value_mappings": {},
+                "join_mode": (
+                    "structural_fallback"
+                    if used_structural_fallback
+                    else "declared_key"
+                ),
+            }
         if not verified_value_mappings or unverified_source_columns:
+            # WHY no column matched, when the answer is mechanical.
+            #
+            # A source table that carries SEVERAL rows per upstream row -- one
+            # per panel, per statistic, per level -- holds values from several
+            # upstream columns in one source column, so by construction no
+            # single upstream vector matches it and every column arrives here
+            # unverified. The reader is then told which columns failed but not
+            # the one fact that explains all of them, and the repair that
+            # follows tends to rename columns, which the Coder prompt already
+            # says "is not a repair".
+            #
+            # MEASURED over the recorded corpus: 12 of 361 source-data tables
+            # carry duplicate keys, and 6 of the 8 whose step status is known
+            # failed. It is not fatal on its own -- 2 passed -- so this reports
+            # the shape and does not judge it.
+            #
+            # m1's 09_missingness_audit_figure, 2026-08-04: 6 rows over 3
+            # upstream rows, one per panel, so ``count`` alternated between the
+            # upstream's ``missing_n`` and ``measured_n``.
+            rows_per_upstream_row: dict[str, object] = {}
+            try:
+                distinct_keys = int(source[list(key_cols)].drop_duplicates().shape[0])
+                if distinct_keys and len(source) > distinct_keys:
+                    rows_per_upstream_row = {
+                        "source_rows_per_upstream_row": round(
+                            len(source) / distinct_keys, 3
+                        ),
+                        "n_source_rows": int(len(source)),
+                        "n_distinct_source_keys": distinct_keys,
+                    }
+            except Exception:  # noqa: BLE001 - a diagnostic must never fail the audit
+                rows_per_upstream_row = {}
             if unverified_source_columns:
                 verification_detail = (
                     "these source-data value columns were not verified against "
@@ -12316,6 +12665,14 @@ class FigureSourceDataValidator:
                     f"{unverified_source_columns}; one verified column cannot "
                     "authenticate another renamed, formatted, or transformed value"
                 )
+                if rows_per_upstream_row:
+                    verification_detail += (
+                        f"; the source carries {rows_per_upstream_row['n_source_rows']}"
+                        f" rows over {rows_per_upstream_row['n_distinct_source_keys']}"
+                        " upstream rows, so one source column holds values from"
+                        " several upstream columns and no single upstream vector"
+                        " can match it"
+                    )
             else:
                 verification_detail = (
                     "no source-data value column was available for a real "
@@ -12330,6 +12687,7 @@ class FigureSourceDataValidator:
                 "verified_source_value_columns": sorted(verified_value_mappings),
                 "verified_value_mappings": verified_value_mappings,
                 "ambiguous_value_mappings": ambiguous_value_mappings,
+                **rows_per_upstream_row,
                 "message": (
                     f"source rows joined to {upstream_path.name} on {key_label}, "
                     f"but {verification_detail}"

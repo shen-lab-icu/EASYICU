@@ -8,7 +8,6 @@ import pytest
 
 from easyicu.research_agent.agents.core import (
     CoderAgent,
-    CoderPromptBudgetError,
     _compact_repair_scope_contract,
     _repair_specialization,
     _typed_input_scope_contract,
@@ -41,6 +40,7 @@ from easyicu.research_agent.repairs.reasons import (
     repair_prompt_binding_sha256,
 )
 from easyicu.research_agent.schema import (
+    ClusterSelectionManifest,
     MissingnessProfile,
     PlannedModelRequirement,
     TemporalConstraint,
@@ -173,7 +173,18 @@ def test_empty_planner_input_scope_forbids_inferred_provenance_columns(ra):
     assert "host-owned execution receipt" in contract
     assert "No measured/count provenance pair is declared" in contract
     assert "Do not read those companions" in contract
-    assert "Exact Planner-declared inputs for this step: []" in contract
+    # This asserted "Exact Planner-declared inputs for this step: []" and had
+    # been red for as long as the empty branch has existed. That enumeration
+    # line belongs to the NON-empty rendering; the empty case is a separate,
+    # complete branch that replaces it with one sentence covering both input
+    # categories at once. The assertion demanded a rendering this branch
+    # deliberately does not use, so it protected nothing while failing -- which
+    # is the worst of both. What has to stay true is that neither category is
+    # left unstated, and that is checked positively.
+    assert "typed or raw-variable" in contract
+    assert not any(
+        line.startswith("- Exact ") for line in contract.splitlines()
+    ), "the empty branch must not fall through to the enumerated rendering"
 
 
 def test_measurement_provenance_contract_never_binds_value_availability(ra):
@@ -921,6 +932,40 @@ def test_compact_rendering_guide_is_structural_not_intent_routed(ra):
     assert "save matching PNG, SVG, PDF, and TIFF" in guide
 
 
+def test_clustering_generation_guide_names_replayable_selection_summary(ra):
+    step = ra.AnalysisStep(
+        step_id="fit_candidate_clusters",
+        intent="Fit the declared candidate clustering solutions.",
+        inputs=["dataset:cluster_features"],
+        expected_outputs=[
+            "statistic:cluster_count",
+            "manifest:cluster_selection",
+            "table:cluster_characteristics",
+        ],
+        method="kmeans_clustering",
+    )
+
+    guide = coder_guide_for_step(load_prompt_pack()["coder"], step)
+
+    manifest_schema = json.dumps(
+        ClusterSelectionManifest.model_json_schema(),
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    assert manifest_schema in guide
+    assert '"cluster_selection"' in guide
+    assert '"selection_rule"' in guide
+    assert '"selected_n_clusters"' in guide
+    assert '"candidates"' in guide
+    assert '"minimum","maximum","elbow","multi_criteria"' in guide
+    assert "Pair `minimum` only with `minimize`" in guide
+    assert "the same closed object both to `cluster_selection.json`" in guide
+    assert '"cluster_stability"' in guide
+    assert '"n_resamples"' in guide
+    assert '"mean_adjusted_rand_index"' in guide
+
+
 @pytest.mark.parametrize(
     ("method", "outputs"),
     [
@@ -1433,6 +1478,15 @@ def test_lossy_numeric_repair_binds_all_lines_to_host_helpers(ra):
             "format": PATCH_FORMAT,
             "edits": [
                 {
+                    "old": "import pandas as pd\n",
+                    "new": (
+                        "import pandas as pd\n"
+                        "from easyicu.research_agent.methods.descriptive_inputs "
+                        "import strict_numeric_input\n"
+                    ),
+                    "expected_count": 1,
+                },
+                {
                     "old": "value = pd.to_numeric(source, errors='coerce')",
                     "new": "value = strict_numeric_input(source).values",
                     "expected_count": 1,
@@ -1806,7 +1860,7 @@ def test_bounded_repair_excerpt_never_promotes_embedded_authority_markers():
     assert '"reason": "TYPED_PRODUCT_BINDING_INVALID"' not in excerpt
 
 
-def test_oversized_typed_ticket_fails_before_patch_provider_call(ra):
+def test_oversized_typed_ticket_fails_at_full_rewrite_transport(ra):
     huge_ticket = [
         {
             "reason": "ROW_ALIGNMENT_UNVERIFIED",
@@ -1822,9 +1876,10 @@ def test_oversized_typed_ticket_fails_before_patch_provider_call(ra):
         }
     ]
     llm = _CaptureLLM([])
+    bounded_repair = budgeted_client(llm, "repair", "coder_repair")
 
-    with pytest.raises(CoderPromptBudgetError, match="minimal_patch") as exc:
-        CoderAgent(llm).repair(
+    with pytest.raises(PromptTransportBudgetError) as exc:
+        CoderAgent(llm, repair_llm=bounded_repair).repair(
             context=_wide_context(ra),
             step=_quality_step(ra),
             code="import os\nvalue = 1\n",
@@ -1832,28 +1887,35 @@ def test_oversized_typed_ticket_fails_before_patch_provider_call(ra):
             repair_authority=RepairPromptAuthority.create(typed_ticket=huge_ticket),
         )
 
-    assert exc.value.actual_bytes > exc.value.limit_bytes == 30_000
+    assert exc.value.consumer == "coder_repair"
+    assert exc.value.actual_tokens > exc.value.limit_tokens
     assert llm.calls == []
 
 
-def test_oversized_host_binding_notes_fail_without_silent_truncation(ra):
+def test_host_binding_too_wide_for_patch_uses_lossless_full_rewrite(ra):
     host_authority = HostCoderAuthority().append(
         "HOST-VERIFIED TYPED PARENT TABLE SCHEMAS (binding facts only):\n"
         + "x" * 24_000
     )
-    llm = _CaptureLLM([])
+    llm = _CaptureLLM(["import os\nvalue = 2\n"])
+    bounded_repair = budgeted_client(llm, "repair", "coder_repair")
+    coder = CoderAgent(llm, repair_llm=bounded_repair)
 
-    with pytest.raises(CoderPromptBudgetError, match="minimal_patch") as exc:
-        CoderAgent(llm).repair(
-            context=_wide_context(ra),
-            step=_quality_step(ra),
-            host_authority=host_authority,
-            code="import os\nvalue = 1\n",
-            run_log="typed parent schema mismatch",
-        )
+    repaired = coder.repair(
+        context=_wide_context(ra),
+        step=_quality_step(ra),
+        host_authority=host_authority,
+        code="import os\nvalue = 1\n",
+        run_log="typed parent schema mismatch",
+    )
+    messages = llm.calls[0][0]
+    payload = "\n".join(str(message.content or "") for message in messages)
 
-    assert exc.value.actual_bytes > exc.value.limit_bytes == 30_000
-    assert llm.calls == []
+    assert repaired == "import os\nvalue = 2"
+    assert coder.last_repair_transport == "full_rewrite"
+    assert len(llm.calls) == 1
+    assert _payload_bytes(messages) > 30_000
+    assert host_authority.render() in payload
 
 
 def test_user_note_markers_cannot_impersonate_host_repair_authority(ra):

@@ -887,7 +887,9 @@ def test_provider_config_route_fails_closed_when_enable_ai_omitted(
     assert response.status_code == 200
     payload = response.json()
     assert payload["settings"]["ai_enabled"] is False
-    assert payload["settings"]["agent_model_mode"] != "external"
+    # ``agent_model_mode`` was asserted here too, but it was a write-only
+    # mirror of this same gate that nothing ever read; ai_enabled is the gate.
+    assert "agent_model_mode" not in payload["settings"]
 
 
 def test_provider_config_rejects_invalid_enable_ai_before_writing_credentials(

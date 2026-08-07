@@ -1878,6 +1878,11 @@ def test_primary_cohort_coder_receives_verified_physical_predicate_receipt(
         "resolved_column": "age",
         "step_order": 1,
         "value": 18,
+        # A magnitude filter is never narrowed by an event time, so the ledger
+        # states that explicitly rather than omitting the fields on some rows.
+        "event_time_column": None,
+        "event_time_start_hours": None,
+        "event_time_end_hours": None,
     }
 
 

@@ -14,7 +14,7 @@ from typing import Any, Mapping, Optional, Sequence
 
 import pandas as pd
 
-from ..contracts.declared_product import reserved_primary_cohort_product
+from ..contracts.declared_product import locked_primary_cohort_product
 from .evidence_store import sha256_of_file
 from .runtime_artifacts import verified_run_evidence_path
 from .typed_input_receipt import typed_input_row_identity_sha256
@@ -53,17 +53,25 @@ def resolve_development_input_projection(
     run_dir: Path,
     authoritative_cohort_path: Optional[Path],
     development_sample: Optional[Any],
+    locked_cohort_name: object = None,
 ) -> Optional[DevelopmentInputProjection]:
     """Return the exact development child, or ``None`` on any ambiguity.
 
-    ``declared_input`` is the raw Planner token, because the reserved
-    primary-cohort identity is owned by ``declared_product`` and cannot be
-    recovered from the canonical ``kind:product`` pair.
+    ``declared_input`` is the raw Planner token, because the primary-cohort
+    identity is owned by ``declared_product`` and cannot be recovered from the
+    canonical ``kind:product`` pair.  ``locked_cohort_name`` is the plan's own
+    cohort name, needed for the same reason: a Planner that declared the
+    population under that name declared *this* population, and a surface that
+    cannot see it skips the projection and hands the step the full cohort
+    while the run-level plane still mounts and reports the sample.
     """
 
     if (
         development_sample is None
-        or reserved_primary_cohort_product(declared_input) is None
+        or locked_primary_cohort_product(
+            declared_input, locked_cohort_name=locked_cohort_name
+        )
+        is None
     ):
         return None
     try:

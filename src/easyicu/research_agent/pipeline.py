@@ -57,6 +57,7 @@ logger = logging.getLogger(__name__)
 
 from .agents.core import (
     AnalyzerAgent,
+    infer_analysis_type,
     ClinicalSemanticsAgent,
     CoderAgent,
     CriticAgent,
@@ -141,6 +142,7 @@ from .research_context.builder import (
 from .research_context.typed import parse_research_context_json
 from .gates.preplan import preplan_data_failure_reason, preplan_data_findings
 from .authority.context_numeric_claims import register_context_numeric_claims
+from .authority.declared_levels import bind_step_declared_levels
 from .authority.table_one_binding import (
     bind_table_one_execution_spec,
     restore_table_one_private_checkpoint,
@@ -205,6 +207,7 @@ from .intake.materialized_trajectory import (
     VerifiedLegacyTrajectoryCapsuleReceipt,
     VerifiedMaterializedTrajectoryAuthority,
     load_verified_materialized_trajectory_authority,
+    long_trajectory_is_bound,
     stage_legacy_trajectory_exact,
     stage_materialized_trajectory_authority,
 )
@@ -216,7 +219,9 @@ from .robustness.panel import (
 )
 from .trajectory.plan_contract import (
     augment_trajectory_plan_products,
+    non_trajectory_clustering_stability_guide,
     trajectory_plan_dag_findings,
+    trajectory_planner_contract_guide,
     trajectory_step_roles,
 )
 from .reporting.readiness import (
@@ -246,7 +251,9 @@ from .audits.manuscript_claims import (  # noqa: E402,F401
     _extract_percent_claims_near,
 )
 
-_audit_manuscript_numeric_claims = audit_manuscript_numeric_claims  # noqa: F841 (legacy alias)
+_audit_manuscript_numeric_claims = (
+    audit_manuscript_numeric_claims  # noqa: F841 (legacy alias)
+)
 
 from .authority.evidence_store import (
     EvidenceEnforcementError,
@@ -319,6 +326,7 @@ from .plan_utils import (
     _cap_plan_preserving_figure_steps,
     _clustering_contract_applies,
     _cohort_definition_contract_findings,
+    endpoint_contract_findings,
     _cohort_definition_is_empty,
     _ensure_audit_panel_step_in_plan,
     _ensure_publication_figure_step_in_plan,
@@ -1426,9 +1434,7 @@ class ResearchAgentPipeline:
             "max_estimated_cost_usd_per_batch": (
                 config.max_estimated_cost_usd_per_batch
             ),
-            "max_wall_clock_seconds_per_task": (
-                config.max_wall_clock_seconds_per_task
-            ),
+            "max_wall_clock_seconds_per_task": (config.max_wall_clock_seconds_per_task),
             "input_cost_usd_per_million_tokens": (
                 config.provider_input_cost_usd_per_million_tokens
             ),
@@ -2142,6 +2148,13 @@ class ResearchAgentPipeline:
         emit_progress: Callable[..., None],
     ) -> _PlanPhaseResult:
         """Build context, attach memory, and emit an execution plan."""
+        # The Planner is refused a trajectory design unless the host can see a
+        # trajectory, and ResearchContext only ever shows the wide fixed-window
+        # representation.  Answering here, from the same predicate the execution
+        # phase uses, is what lets the trajectory contract be raised while the
+        # Planner can still act on it -- H3 previously met that contract only
+        # after its last revision, so it never got to satisfy it.
+        long_trajectory_bound = long_trajectory_is_bound(trajectory_binding)
         context_path = run_dir / "research_context.json"
         if resume_context_evidence_path is not None:
             # Resume context authority is the digest-verified evidence copy,
@@ -2694,6 +2707,43 @@ class ResearchAgentPipeline:
                 if value
             )
 
+        # The Planner prompt renders this guide itself, but from the context
+        # alone -- which carries only the wide representation. A run whose
+        # trajectory is bound as the long typed input therefore saw nothing,
+        # and was then refused by a gate that DOES know about that tier. Only
+        # the pipeline holds the flag, so it supplies the guide the prompt
+        # could not build, and only when the prompt's own attempt came back
+        # empty, so a wide-column run is never told twice.
+        analysis_type_key = infer_analysis_type(agent_context).key
+        trajectory_planning_guides = []
+        if long_trajectory_bound and not trajectory_planner_contract_guide(
+            context=agent_context,
+            analysis_type=analysis_type_key,
+        ):
+            trajectory_planning_guides.append(
+                trajectory_planner_contract_guide(
+                    context=agent_context,
+                    analysis_type=analysis_type_key,
+                    long_trajectory_bound=True,
+                )
+            )
+        # The converse case: a group-discovery study with no trajectory in
+        # either representation is still asked for a stability audit, and the
+        # only typed stability field it can see belongs to the trajectory
+        # calculator. Declaring that field is what refused m3's whole plan.
+        trajectory_planning_guides.append(
+            non_trajectory_clustering_stability_guide(
+                context=agent_context,
+                analysis_type=analysis_type_key,
+                long_trajectory_bound=long_trajectory_bound,
+            )
+        )
+        planning_contract_context = "\n\n".join(
+            value
+            for value in (planning_contract_context, *trajectory_planning_guides)
+            if value
+        )
+
         for client in self._iter_mock_clients(llm):
             client.context = agent_context
         llm_signature = self._llm_signature(llm)
@@ -2746,6 +2796,7 @@ class ResearchAgentPipeline:
                 if self._cost_price_table is not None
                 else CostMeter(runtime_dir=run_dir / ".runtime")
             )
+
             # Order: envelope -> hard stop -> meter. The hard-stop wrapper
             # reserves every raw transport retry before delivery; the meter
             # receives usage from that same call for the normal run manifest.
@@ -2793,6 +2844,11 @@ class ResearchAgentPipeline:
                     plan=plan,
                     context=agent_context,
                 )
+                # The resumed plan is the one on disk, so it still carries the
+                # host's opaque placeholders; a resume that skipped this would
+                # execute a different declaration than the first attempt did.
+                for resumed_step in plan.steps:
+                    bind_step_declared_levels(resumed_step, agent_context)
                 know_how_binding.verify_resume(
                     plan.know_how_decisions,
                     enabled=self._enable_know_how,
@@ -3098,6 +3154,41 @@ class ResearchAgentPipeline:
                             detail={"generation_mode": "cohort_retry"},
                         )
                     )
+            # Endpoint retry, on the same terms as the 纳排 retry above and for
+            # the same reason: the other half of the study's identity was left
+            # undeclared, and one planner miss should not cost the run. Adopt
+            # the retry only if it actually declares the required kind, so a
+            # good plan is never discarded when the retry does not improve it.
+            if not used_mock_llm and endpoint_contract_findings(plan):
+                endpoint_retry = None
+                try:
+                    endpoint_retry = planner.run(
+                        agent_context,
+                        **know_how_binding.planner_kwargs,
+                        enforce_article_contract=True,
+                        article_contract_context=context,
+                        planning_contract_context=planning_contract_context,
+                    )
+                except Exception:
+                    endpoint_retry = None
+                if (
+                    endpoint_retry is not None
+                    and endpoint_retry.steps
+                    and not endpoint_contract_findings(endpoint_retry)
+                ):
+                    plan = endpoint_retry
+                    findings.append(
+                        ValidationFinding(
+                            validator="endpoint_contract",
+                            severity="warning",
+                            message=(
+                                "Planner initially declared no typed study "
+                                "endpoint for a family that requires one; "
+                                "recovered the declaration on retry."
+                            ),
+                            detail={"generation_mode": "endpoint_retry"},
+                        )
+                    )
         # Skip the plan-shaping transforms when resuming: the saved plan is
         # already in its final, transformed form, and re-running split/cap/
         # ensure_* could rename or reorder step_ids and break the resume skip
@@ -3106,6 +3197,7 @@ class ResearchAgentPipeline:
             plan, plan_contract_findings = _enforce_advanced_plan_contract(
                 plan=plan,
                 context=context,
+                long_trajectory_bound=long_trajectory_bound,
             )
             findings.extend(plan_contract_findings)
             plan, split_findings = _split_table_and_figure_outputs_in_plan(plan=plan)
@@ -3158,6 +3250,7 @@ class ResearchAgentPipeline:
                 for finding in trajectory_plan_dag_findings(
                     plan=plan,
                     context=context,
+                    long_trajectory_bound=long_trajectory_bound,
                 )
             )
             plan = ensure_cohort_definition(plan)
@@ -3167,6 +3260,10 @@ class ResearchAgentPipeline:
             # it), record a loud, auditable contract error instead of silently
             # running the analysis on the full universe.
             findings.extend(_cohort_definition_contract_findings(plan))
+        # The endpoint half of the same declaration, checked for every plan
+        # rather than only inside the cohort branch above: a family can require
+        # a typed endpoint whether or not it also defines an analysis cohort.
+        findings.extend(endpoint_contract_findings(plan))
         if study_design_brief is not None:
             if (
                 plan.analysis_type
@@ -3278,6 +3375,7 @@ class ResearchAgentPipeline:
         )
         for planned_step in plan.steps:
             bind_table_one_execution_spec(planned_step, agent_context)
+            bind_step_declared_levels(planned_step, agent_context)
         write_table_one_private_checkpoint(run_dir=run_dir, plan=plan)
         if not reused_prior_plan:
             plan_path.write_text(plan.model_dump_json(indent=2), encoding="utf-8")
@@ -11065,14 +11163,8 @@ _SEMANTIC_ALIAS_MAP: Dict[tuple, tuple] = {
         "table_one",
     ),
     ("", "cluster_mortality.csv"): ("cluster_mortality", "outcome_rate"),
-    ("", "clustering_algorithm_details.json"): (
-        "clustering_algorithm_details",
-        "clustering_methodology",
-    ),
-    ("", "clustering_methodology.json"): (
-        "clustering_methodology",
-        "cluster_summary",
-    ),
+    ("", "clustering_algorithm_details.json"): ("clustering_algorithm_details",),
+    ("", "clustering_methodology.json"): ("clustering_methodology",),
     # Figures.
     ("", "mortality_by_sofa2_stratum.png"): (
         "mortality_by_sofa2_stratum",
@@ -11151,16 +11243,21 @@ def _semantic_aliases_for(step: AnalysisStep, artefact: Path) -> List[str]:
             intent=intent,
             expected_outputs=step.expected_outputs or [],
         ):
-            out.extend(
-                [
-                    "cluster_summary",
-                    "cluster_characteristics",
-                    "cluster_mortality",
-                    "clustering_performance",
-                    "clustering_methodology",
-                    "table_one",
-                ]
-            )
+            out.append("clustering_performance")
+            if not (artefact.parent / "cluster_characteristics.csv").exists():
+                out.extend(
+                    ["cluster_summary", "cluster_characteristics", "table_one"]
+                )
+            if not (artefact.parent / "cluster_mortality.csv").exists():
+                out.append("cluster_mortality")
+            if not any(
+                (artefact.parent / name).exists()
+                for name in (
+                    "clustering_methodology.json",
+                    "clustering_algorithm_details.json",
+                )
+            ):
+                out.append("clustering_methodology")
         if (
             "robustness" in expected
             or "robustness" in intent
@@ -11190,6 +11287,11 @@ def _semantic_aliases_for(step: AnalysisStep, artefact: Path) -> List[str]:
         if step_substr and step_substr not in (step.step_id or "").lower():
             continue
         out.extend(aliases)
+    if (
+        artefact.name == "clustering_algorithm_details.json"
+        and not (artefact.parent / "clustering_methodology.json").exists()
+    ):
+        out.append("clustering_methodology")
     return out
 
 

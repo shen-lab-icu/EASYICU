@@ -2540,8 +2540,21 @@ def test_concept_repair_failure_resumes_quarantined_draft_fail_closed(
     audit_state = {"emit_error": True, "reject_marker": None}
     persisted_message = "Displayed percentage is not reconciled to its denominator."
 
-    def fake_audit(self, *, context, script_text, step, provider_budget=None):
-        del self, context
+    def fake_audit(
+        self,
+        *,
+        context,
+        script_text,
+        step,
+        provider_budget=None,
+        study_endpoint=None,
+        plan_step_roster=None,
+    ):
+        # The declaration arguments are named rather than swallowed by `**_`.
+        # A double that accepts anything would have kept this test green while
+        # the real call site passed a keyword the auditor never read; naming them
+        # is what made the mismatch visible when the interface grew.
+        del self, context, study_endpoint, plan_step_roster
         reject_marker = audit_state["reject_marker"]
         if not audit_state["emit_error"] and not (
             reject_marker and reject_marker in script_text
@@ -2810,7 +2823,16 @@ def test_resume_repair_ticket_uses_only_current_deterministic_coordinates(
 
     coordinate = {"call_line": 10}
 
-    def deterministic_finding(self, *, context, script_text, step):
+    def deterministic_finding(
+        self,
+        *,
+        context,
+        script_text,
+        step,
+        provider_budget=None,
+        study_endpoint=None,
+        plan_step_roster=None,
+    ):
         del self, context, script_text
         call_line = coordinate["call_line"]
         return [
@@ -3009,9 +3031,16 @@ def test_resume_retires_unchanged_draft_after_deterministic_policy_supersession(
     audit_state = {"old_policy": True}
 
     def policy_transition_audit(
-        self, *, context, script_text, step, provider_budget=None
+        self,
+        *,
+        context,
+        script_text,
+        step,
+        provider_budget=None,
+        study_endpoint=None,
+        plan_step_roster=None,
     ):
-        del self, context, script_text
+        del self, context, script_text, study_endpoint, plan_step_roster
         if not audit_state["old_policy"]:
             return []
         finding = _stored_horizon_error(ra)
@@ -3205,7 +3234,13 @@ def test_resume_reaudits_material_deterministic_quarantine_repair(
         *,
         repair_reasons=(),
         repair_findings=(),
+        step=None,
     ):
+        # `step` is forwarded by `authorized_deterministic_concept_repair` since
+        # the all-rows profile-roles repair was registered. Without it here the
+        # call raises TypeError, the whole deterministic-repair path dies, and the
+        # symptom surfaces as "zero coder repairs" on the FIRST run -- which reads
+        # as a deliberate lifecycle change rather than a crashed double.
         if not repair_enabled["value"]:
             return code, []
         return real_repair(
@@ -3213,6 +3248,7 @@ def test_resume_reaudits_material_deterministic_quarantine_repair(
             messages,
             repair_reasons=repair_reasons,
             repair_findings=repair_findings,
+            step=step,
         )
 
     monkeypatch.setattr(

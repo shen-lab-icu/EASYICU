@@ -89,7 +89,7 @@ def patch_direct_resolved_input_identity_key(
                     int(node.end_col_offset),
                 )
             )
-    if set(coordinates) != candidate_coordinates:
+    if not set(coordinates) <= candidate_coordinates:
         return code
 
     lines = code.splitlines(keepends=True)

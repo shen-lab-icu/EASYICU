@@ -42,10 +42,18 @@ def step_provider_call_entitlement(
     which is how the three numbers drifted apart before: each is edited for its
     own reason, and nothing recomputes their sum. This is that sum, in one
     place, so a change to any term is felt by the other two.
+
+    The generation term was a literal ``1`` while ``coder_generation.py``
+    declares ``MAX_INITIAL_GENERATION_ATTEMPTS = 2`` -- "at most one audited
+    regeneration" -- so the host's own documented happy path could spend two
+    where this sum funded one. That is the same drift this function exists to
+    stop, in its own first term.
     """
 
+    from ..agents.coder_generation import MAX_INITIAL_GENERATION_ATTEMPTS
+
     return (
-        1  # initial generation
+        MAX_INITIAL_GENERATION_ATTEMPTS  # initial generation, per its own policy
         + max(0, int(max_code_repair_attempts))
         + max(0, int(max_step_llm_repair_attempts))
         # execution/phase.py reserves the final call for the concept audit
@@ -73,6 +81,8 @@ def assert_step_provider_budget_funds_its_repairs(
     what is refused is under-funding nobody decided on.
     """
 
+    from ..agents.coder_generation import MAX_INITIAL_GENERATION_ATTEMPTS
+
     granted = max(0, int(max_step_provider_calls))
     entitled = step_provider_call_entitlement(
         max_code_repair_attempts=max_code_repair_attempts,
@@ -83,7 +93,8 @@ def assert_step_provider_budget_funds_its_repairs(
         return
     raise ValueError(
         f"max_step_provider_calls={granted} cannot fund the repair policy this "
-        f"configuration declares: 1 initial generation + "
+        f"configuration declares: {MAX_INITIAL_GENERATION_ATTEMPTS} initial "
+        f"generation attempt(s) + "
         f"{max(0, int(max_code_repair_attempts))} code repairs + "
         f"{max(0, int(max_step_llm_repair_attempts))} LLM repairs"
         + (" + 1 reserved concept audit" if llm_concept_audit_enabled else "")
@@ -461,9 +472,7 @@ class PipelineConfig:
             "max_provider_attempts_per_batch": self.max_provider_attempts_per_batch,
             "max_total_tokens_per_run": self.max_total_tokens_per_run,
             "max_total_tokens_per_batch": self.max_total_tokens_per_batch,
-            "max_estimated_cost_usd_per_batch": (
-                self.max_estimated_cost_usd_per_batch
-            ),
+            "max_estimated_cost_usd_per_batch": (self.max_estimated_cost_usd_per_batch),
             "max_wall_clock_seconds_per_task": self.max_wall_clock_seconds_per_task,
             "input_cost_usd_per_million_tokens": (
                 self.provider_input_cost_usd_per_million_tokens

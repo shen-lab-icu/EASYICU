@@ -219,7 +219,12 @@
       snapshot = await api.loadJobSnapshot(meta.job_id);
     } catch (error) {
       if (!stillCurrent(meta)) return false;
-      const missing = /HTTP\s+404\b/.test(String(error && error.message || error));
+      // err.status, not the message. api.js puts the backend's human reason in
+      // .message for 4xx and the "path -> HTTP 404" string in .technical, and
+      // /api/jobs answers 404 with detail="unknown job" — so matching
+      // /HTTP 404/ against .message never fired, and a scan the server had
+      // already forgotten was reported as a dropped connection to reconnect to.
+      const missing = !!(error && error.status === 404);
       const callback = completion;
       if (missing) {
         disconnect({ forget: true });

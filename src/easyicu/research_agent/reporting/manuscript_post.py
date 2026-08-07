@@ -9,7 +9,8 @@ final report. They are pure-text rewrites that:
 * drop sentences carrying ``[TBD]`` / ``[TODO]`` / ``[TK]`` writer
   placeholders that small/local models occasionally leak into the
   bound output;
-* repair common writer aliasing mistakes on prediction-task manuscripts, while
+* repair an ordinally drifted step placeholder only when its semantic suffix
+  names exactly one registered step, plus common prediction-task aliases while
   keeping outcome-rate aliases gated to binary/event-style targets.
 
 They were originally inline in :mod:`pipeline`. They are module-level
@@ -41,6 +42,9 @@ _UNRESOLVED_EVIDENCE_PLACEHOLDER_RE = re.compile(
 )
 
 _TBD_RE = re.compile(r"\[(?:TBD|TODO|TK)\]|\bTBD\b", re.IGNORECASE)
+
+_EVIDENCE_REFERENCE_RE = re.compile(r"\{evidence:(?P<id>[^{}]+)\}")
+_NUMBERED_STEP_ID_RE = re.compile(r"^(?P<ordinal>\d+)_(?P<suffix>.+)$")
 
 _FORBIDDEN_INTERPRETIVE_TERMS = (
     "surprise",
@@ -124,6 +128,51 @@ def _context_target_outcome_is_binary_like(context: ResearchContext) -> bool:
     }
 
 
+def _repair_unique_step_ordinal_placeholders(
+    scaffold: str,
+    *,
+    resolvable: set[str],
+) -> tuple[str, List[tuple[str, str]]]:
+    """Repair only an off-by-ordinal citation with one exact semantic owner.
+
+    Writer models sometimes preserve the full step name but invent the numeric
+    prefix (for example ``03_feature_availability_flow`` when the registered
+    step is ``02_feature_availability_flow``).  The suffix is the semantic step
+    identity; it is safe to repair only when exactly one resolvable numbered
+    step has that suffix.  No fuzzy spelling, substring, or nearest-neighbour
+    match is permitted, and ambiguous suffixes remain unresolved.
+    """
+
+    by_suffix: Dict[str, set[str]] = {}
+    for name in resolvable:
+        match = _NUMBERED_STEP_ID_RE.fullmatch(str(name))
+        if match is None:
+            continue
+        by_suffix.setdefault(match.group("suffix"), set()).add(str(name))
+
+    text = scaffold
+    repairs: List[tuple[str, str]] = []
+    seen: set[str] = set()
+    for match in _EVIDENCE_REFERENCE_RE.finditer(scaffold):
+        old = match.group("id").strip()
+        if old in seen or old in resolvable:
+            continue
+        seen.add(old)
+        step_match = _NUMBERED_STEP_ID_RE.fullmatch(old)
+        if step_match is None:
+            continue
+        candidates = sorted(by_suffix.get(step_match.group("suffix"), set()))
+        if len(candidates) != 1:
+            continue
+        new = candidates[0]
+        text = text.replace(
+            "{evidence:" + old + "}",
+            "{evidence:" + new + "}",
+        )
+        repairs.append((old, new))
+    return text, repairs
+
+
 def _repair_common_writer_placeholders(
     scaffold: str,
     *,
@@ -131,7 +180,7 @@ def _repair_common_writer_placeholders(
     evidence: EvidenceStore,
     allowed_evidence_names: Optional[Sequence[str]] = None,
 ) -> tuple[str, List[tuple[str, str]]]:
-    """Map common writer aliases to existing evidence for prediction tasks.
+    """Repair provable step ordinals and common prediction evidence aliases.
 
     The manuscript writer sometimes carries habits from association tasks
     (`table_one`, `outcome_rate`, `primary_association`) into prediction-model
@@ -139,12 +188,14 @@ def _repair_common_writer_placeholders(
     step summary, repair the placeholder before binding instead of letting the
     manuscript accumulate avoidable missing-evidence comments.
     """
-    text = scaffold
-    repairs: List[tuple[str, str]] = []
     resolvable = set(
         evidence.resolvable_names()
         if allowed_evidence_names is None
         else allowed_evidence_names
+    )
+    text, repairs = _repair_unique_step_ordinal_placeholders(
+        scaffold,
+        resolvable=resolvable,
     )
     question = (context.research_question or "").lower()
     is_prediction = any(
@@ -1062,15 +1113,42 @@ def _claim_identity(claim: NumericClaim) -> str:
 
 _CITED_EVIDENCE_RE = re.compile(r"\{evidence:(?P<id>[^}]+)\}")
 
+#: The citation form the writer actually emits, once placeholders have been
+#: rendered: ``[label](evidence/<evidence_id>__<filename>)``. The ``__`` join
+#: is the EvidenceStore's own convention -- see
+#: ``EvidenceStore._target_path``: ``base / f"{safe_id}__{safe_filename}"``.
+#: The tail after the filename is ``[^)\n]*`` and not ``[^)\s]*`` because the
+#: writer appends a title -- ``... "sha256=c962ff2e")`` -- so a space-stopping
+#: tail matches nothing at all on a real manuscript.
+_RENDERED_EVIDENCE_LINK_RE = re.compile(r"\]\(evidence/(?P<id>[^)\s/]+?)__[^)\n]*\)")
+
 
 def _cited_evidence_ids(context: str) -> frozenset[str]:
-    """Return the evidence ids this sentence explicitly cites."""
+    """Return the evidence ids this sentence explicitly cites.
 
-    return frozenset(
+    Both forms are read, because the placeholder form is not what survives to
+    this point. Measured 2026-08-01 over all 115 recorded bound manuscripts:
+    ``{evidence:<id>}`` appears **0** times and the rendered link form appears
+    **541** times. So the caller's "the sentence names its source, restrict the
+    candidates to it" rule -- and with it the only thing that could tell one
+    step's estimate from another's when both registered the same number -- has
+    never once fired on a real manuscript.
+
+    canary37 is what that costs. Its Results sentence cited the primary model's
+    own step summary, one line's worth of characters away from the value, and
+    the primary estimate still went out as ambiguous across eleven candidate
+    fields -- blocking a manuscript in which every other number had bound.
+    """
+
+    cited = {
         match.group("id").strip()
         for match in _CITED_EVIDENCE_RE.finditer(context or "")
-        if match.group("id").strip()
+    }
+    cited.update(
+        match.group("id").strip()
+        for match in _RENDERED_EVIDENCE_LINK_RE.finditer(context or "")
     )
+    return frozenset(value for value in cited if value)
 
 
 def _evidence_lineage(evidence: EvidenceStore) -> Dict[str, frozenset[str]]:
@@ -1113,6 +1191,94 @@ def _evidence_lineage(evidence: EvidenceStore) -> Dict[str, frozenset[str]]:
         if alias not in resolved and evidence_id in resolved:
             resolved[str(alias)] = resolved[evidence_id]
     return resolved
+
+
+#: One citation in either form, used to walk the run that precedes a
+#: sentence's own words.
+_LEADING_CITATION_RE = re.compile(
+    r"\s*(?:\{evidence:[^}\n]+\}|\[[^\]\n]*\]\(evidence/[^)\n]*\))"
+)
+
+
+def _sentence_cites_within_its_own_prose(context: str) -> bool:
+    """Whether this sentence cites anything after its own words begin.
+
+    The sentence window keeps the citation run on both sides of the prose,
+    because the writer emits citations before a sentence as readily as after
+    and position alone does not settle ownership.  For NARROWING that is right:
+    an extra citation only costs recall.  For REFUSING it is not: a citation
+    that merely terminates the previous sentence is not this sentence naming a
+    source, and treating it as one blocks a number the sentence never
+    misattributed.
+
+    So strip the leading run and ask whether any citation remains.
+    """
+
+    text = context or ""
+    cursor = 0
+    while True:
+        match = _LEADING_CITATION_RE.match(text, cursor)
+        if match is None or match.end() <= cursor:
+            break
+        cursor = match.end()
+    return bool(_cited_evidence_ids(text[cursor:]))
+
+
+def _miscitation_detail(
+    candidates: Sequence[tuple[NumericClaim, float]],
+    *,
+    context: str,
+    lineage: Optional[Mapping[str, frozenset[str]]],
+) -> Optional[Dict[str, List[str]]]:
+    """Name the miscitation when a sentence cites a step that owns no such value.
+
+    Three different failures currently leave the same mark on a manuscript:
+    nobody registered this number, several registered claims tie for it, and
+    the sentence cited a step that did not register it. Only the last is a
+    writer error, and only the last can name its fix -- yet all three surfaced
+    as "Manuscript numeric claims disagree with registered step_summary
+    values", which names no sentence, no citation and no owner.
+
+    MEASURED (e1 sepsis 10/10 and e3 KDIGO 11/11, both manuscripts written and
+    both blocked by their own numeric audit): every remaining marker was the
+    cohort size 94,458. The sentence
+
+        The operational denominator comprised 94,458 ICU stays represented in
+        the supplied cohort definition {evidence:00_probe}.
+
+    cites its own source, that source resolves, and restricting the 45
+    candidates to its lineage leaves zero -- ``00_probe``'s two evidence files
+    contain no 94458 at all. The binder was right to refuse. The writer
+    attributed the cohort denominator to a step that has nothing to do with it,
+    and writer.txt already carries the rule with this very number as its worked
+    example, so the gap is not instruction: the writer gets no repair, and the
+    failure never told anyone which step it should have cited instead.
+
+    Returns the cited ids and the ids that DO own the value, or ``None`` when
+    this is not a miscitation.
+    """
+
+    if not candidates or not lineage:
+        return None
+    # No separate empty-`cited` guard: an empty set resolves to an empty
+    # `resolvable` on the next line and returns there. A mutation deleting the
+    # extra check changed nothing, which is what a redundant line looks like.
+    cited = _cited_evidence_ids(context)
+    resolvable = sorted(item for item in cited if item in lineage)
+    if not resolvable:
+        # An unresolved placeholder is its own failure and never scoped
+        # anything, so it cannot have caused this refusal.
+        return None
+    if _restrict_to_cited_evidence(candidates, cited=cited, lineage=lineage):
+        return None
+    owners = sorted(
+        {
+            str(claim.step_id or claim.evidence_id or "")
+            for claim, _ in candidates
+            if (claim.step_id or claim.evidence_id)
+        }
+    )
+    return {"cited": resolvable, "owned_by": owners}
 
 
 def _restrict_to_cited_evidence(
@@ -1171,8 +1337,33 @@ def _select_numeric_claim(
             # The sentence names its source and no candidate belongs to it.
             # Binding the value anyway would attach a foreign step's number to
             # this claim, so it stays untraced.
-            return None, True
-        candidates = scoped
+            #
+            # Unless it named nothing. The window deliberately keeps the run of
+            # citations on BOTH sides, because the writer puts them before a
+            # sentence as readily as after and position alone does not identify
+            # ownership. The comment defending that called an extra citation a
+            # recall cost that "cannot by itself produce a wrong bind" -- true,
+            # and beside the point: at this gate a lost bind is not a cost, it
+            # is a blocked manuscript.
+            #
+            # MEASURED (e3 KDIGO, 11/11 steps, manuscript written): the Results
+            # sentence carrying the primary estimate is, in the pre-binding
+            # text, exactly
+            #
+            #   {evidence:03_stage_stratified_mortality_distribution} In the
+            #   adjusted primary analysis, ... (odds ratio, 6.48; 95% CI,
+            #   6.02-6.97).
+            #
+            # -- no citation of its own, only the previous sentence's trailing
+            # one. All three of its numbers scoped to step 03's lineage, which
+            # owns none of them, and went out ambiguous. The manuscript was
+            # blocked on a premise that was false: this sentence never named a
+            # source. So refuse only when the sentence actually cited something
+            # itself; a purely inherited citation may narrow, never veto.
+            if _sentence_cites_within_its_own_prose(context):
+                return None, True
+        else:
+            candidates = scoped
 
     if len(candidates) == 1:
         return candidates[0][0], False
@@ -1268,17 +1459,158 @@ def _numeric_sentence_context(text: str, *, start: int, end: int) -> str:
     That makes a repeated denominator appear to belong to the wrong step.
     Sentence boundaries keep the exact local citation and exclude neighbouring
     claims. The cap only limits pathological generated run-on prose.
+
+    The window then reaches PAST the terminal period through the evidence
+    links that immediately follow it, because that is where the writer puts
+    them. canary37 is the recorded cost: its Results sentence ended
+    ``... from 1.02 to 2.39.`` and the citation naming the owning step sat
+    just after the period, so the sentence window saw no citation at all, the
+    cited-evidence restriction never ran, and the primary estimate stayed
+    ambiguous across eleven candidate fields -- blocking a manuscript in which
+    every other number had bound. Only links are absorbed, and only while they
+    are unbroken by prose, so the next sentence's words can never enter.
     """
 
     context_start = 0
     for match in _NUMERIC_SENTENCE_BOUNDARY_RE.finditer(text, 0, start):
         context_start = match.end()
+    # The leading run of citations is KEPT, not skipped. Skipping it was a
+    # symmetry argument, and canary39 refuted it on a real manuscript: the
+    # writer puts a citation before a sentence as readily as after, and there
+    # the value's true owner sat BEFORE while the citation after it belonged to
+    # the next sentence. Position does not identify ownership, so both
+    # neighbouring runs stay in scope. That is safe because the restriction
+    # below only ever NARROWS the candidate set: an extra citation costs recall,
+    # it cannot by itself produce a wrong bind.
     next_boundary = _NUMERIC_SENTENCE_BOUNDARY_RE.search(text, end)
     context_end = next_boundary.end() if next_boundary is not None else len(text)
+    context_end = _extend_through_trailing_citations(text, context_end)
     max_chars = 1600
     context_start = max(context_start, start - max_chars)
     context_end = min(context_end, end + max_chars)
     return text[context_start:context_end]
+
+
+#: A markdown link whose target is an evidence artefact, as the writer emits
+#: it: ``[label](evidence/<file> "sha256=...")``. Anchored so only an unbroken
+#: run of such links is absorbed.
+_TRAILING_CITATION_RE = re.compile(r"\s*\[[^\]\n]*\]\(evidence/[^)\n]*\)")
+
+
+def _extend_through_trailing_citations(text: str, context_end: int) -> int:
+    """Extend a sentence window over the citations written after its period.
+
+    Nothing but evidence links is absorbed: the first thing that is not one
+    stops the walk, so a following sentence's prose -- and therefore its
+    claims -- can never be pulled into this sentence's context.
+    """
+
+    cursor = context_end
+    while True:
+        match = _TRAILING_CITATION_RE.match(text, cursor)
+        if match is None or match.end() <= cursor:
+            # A pattern that can match the empty string would spin here
+            # forever. The one above cannot -- it requires a bracketed label --
+            # but a walk that trusts a regex to advance is one edit away from
+            # hanging the writer phase, and a mutation of exactly that shape
+            # did hang this test suite.
+            return cursor
+        cursor = match.end()
+
+
+def repair_miscited_numeric_citations(
+    scaffold: str,
+    *,
+    evidence: EvidenceStore,
+) -> tuple[str, List[Dict[str, str]]]:
+    """Add the owning step's citation to a number cited to the wrong step.
+
+    MEASURED, and it is the whole remaining distance on both manuscripts the
+    pipeline has produced. e1 sepsis (10/10 steps) and e3 KDIGO (11/11) each
+    end with exactly two unbound numbers, all four the cohort size 94,458, all
+    four a sentence citing a step that registered no such value::
+
+        The operational denominator comprised 94,458 ICU stays represented in
+        the supplied cohort definition {evidence:00_probe}.
+
+    Replacing that one citation with an owning step takes e1 to 0 markers /
+    13 bound and e3 to 0 markers / 11 bound. One citation per manuscript is
+    the entire gap between "written" and "numerically verified".
+
+    ``writer.txt`` already states the rule, with this very number as its worked
+    example: a sentence printing values from different steps must cite EVERY
+    step that owns one of them, and citing only one blocks the manuscript. The
+    writer had the rule and did not follow it, and it gets no repair pass of
+    its own, so the sentence is final the moment it is written.
+
+    This repair is deliberately ADDITIVE. The writer's own citation stays --
+    it is what the prose is about -- and the owner of the number is appended
+    beside it, which is exactly the two-id form the rule asks for. Nothing is
+    replaced and no citation is ever removed, so a genuine attribution error
+    remains visible in the text rather than being quietly rewritten.
+
+    The owner chosen is the earliest-ordered registered owner of that value:
+    provenance flows forward, so the earliest step to register the number is
+    the closest to where it came from. When no owner resolves to a citable
+    evidence name, nothing is added and the gate still refuses.
+    """
+
+    lineage = _evidence_lineage(evidence)
+    if not lineage:
+        return scaffold, []
+    resolvable = set(evidence.resolvable_names())
+    skip_spans = _spans_to_skip(scaffold)
+    repairs: List[Dict[str, str]] = []
+    insertions: List[tuple[int, str]] = []
+    for match in _NUMERIC_IN_PROSE_RE.finditer(scaffold):
+        start, end = match.start("value"), match.end("value")
+        if _position_is_inside(start, skip_spans):
+            continue
+        value = match.group("value")
+        lookup_value = _lookup_literal_for_numeric_match(
+            scaffold, match_end=end, value=value
+        )
+        if _is_bibliographic_year_context(scaffold, start=start, end=end, value=value):
+            continue
+        context = _numeric_sentence_context(scaffold, start=start, end=end)
+        candidates = _candidate_claims_for_value(
+            evidence, lookup_value, authoritative_claims=None
+        )
+        claim, _ambiguous = _select_numeric_claim(
+            candidates=candidates,
+            context=context,
+            previous_step_id=None,
+            lineage=lineage,
+        )
+        # Only a number that actually fails to bind is repaired. Keying on the
+        # miscitation alone fired on 6 sentences in e3 where 2 were blocked:
+        # the other 4 bound perfectly well and would have collected a citation
+        # they did not need. A repair pass that edits text it was not asked to
+        # fix is one that cannot be reviewed by its own diff.
+        if claim is not None:
+            continue
+        detail = _miscitation_detail(candidates, context=context, lineage=lineage)
+        if detail is None:
+            continue
+        owner = next(
+            (item for item in sorted(detail["owned_by"]) if item in resolvable),
+            None,
+        )
+        if owner is None:
+            continue
+        token = "{evidence:" + owner + "}"
+        if token in context:
+            continue
+        insertions.append((end, " " + token))
+        repairs.append(
+            {"value": value, "cited": ",".join(detail["cited"]), "added": owner}
+        )
+    if not insertions:
+        return scaffold, []
+    repaired = scaffold
+    for position, token in sorted(insertions, key=lambda item: -item[0]):
+        repaired = repaired[:position] + token + repaired[position:]
+    return repaired, repairs
 
 
 def bind_numeric_values(
@@ -1336,6 +1668,7 @@ def bind_numeric_values(
     skip_spans = _spans_to_skip(manuscript)
     binding_map: Dict[str, NumericClaim] = {}
     untraced: List[str] = []
+    miscited: List[Dict[str, Any]] = []
     used_ids: Dict[str, str] = {}  # claim identity -> footnote_id
     display_values: Dict[str, str] = {}
     previous_step_id: Optional[str] = None
@@ -1387,8 +1720,19 @@ def bind_numeric_values(
         )
         if claim is None:
             untraced.append(value)
+            miscitation = _miscitation_detail(
+                candidates, context=context, lineage=lineage
+            )
+            if miscitation is not None:
+                miscited.append({"value": value, **miscitation})
             if mode is EvidenceEnforcementMode.SOFT:
-                if ambiguous:
+                if miscitation is not None:
+                    out_parts.append(
+                        f" <!-- MISCITED:{value}"
+                        f":cited=[{','.join(miscitation['cited'])}]"
+                        f":owned_by=[{','.join(miscitation['owned_by'])}] -->"
+                    )
+                elif ambiguous:
                     candidate_ids = ",".join(
                         _claim_identity(candidate) for candidate, _ in candidates
                     )
@@ -1439,8 +1783,17 @@ def bind_numeric_values(
         raise EvidenceEnforcementError(
             f"Manuscript contains {len(untraced)} numeric value(s) not "
             f"traceable to any registered claim (STRICT mode). "
-            f"Examples: {untraced[:5]}",
-            detail={"untraced": untraced},
+            f"Examples: {untraced[:5]}"
+            + (
+                # The one refusal that names its own fix. Reported beside the
+                # value list so the reader is not left to guess which sentence
+                # cited what.
+                f" Miscited: {miscited[:3]}"
+                if miscited
+                else ""
+            ),
+            detail={"untraced": untraced, "miscited": miscited} if miscited
+            else {"untraced": untraced},
         )
 
     return bound, binding_map, untraced

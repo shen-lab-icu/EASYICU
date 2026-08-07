@@ -9,6 +9,7 @@ import pytest
 
 from easyicu.research_agent.authority.coder_authority import HostCoderAuthority
 from easyicu.research_agent.authority.provider_budget import (
+    PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION,
     StepProviderCallBudget,
     load_provider_call_budget_state,
     provider_call_budget_receipt_path,
@@ -639,7 +640,12 @@ def test_initial_generation_transport_persists_before_candidate_seal(
     )
 
     state = load_provider_call_budget_state(receipt_path, step_id="01_summary")
-    assert state.schema_version == 7
+    # Against the writer's own constant, not a literal. This test is about the
+    # transport being persisted before the candidate seal; the schema version was
+    # incidental coupling, and it broke here when the receipt legitimately went
+    # from 7 to 8 to carry reserved_category_extensions. Bound this way it still
+    # catches a stale or downgraded write while an intentional bump costs nothing.
+    assert state.schema_version == PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION
     assert state.initial_generation is not None
     assert state.initial_generation["transport"]["state"] == "completed"
     assert budget.initial_generation_resume_status() == "completed"

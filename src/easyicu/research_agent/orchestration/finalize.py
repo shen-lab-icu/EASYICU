@@ -19,7 +19,8 @@ import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Mapping, Optional
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
 import pandas as pd
 
@@ -106,6 +107,112 @@ def _active_step_evidence_ids(
     """
 
     return active_step_evidence_ids(per_step_records)
+
+
+class _EValueBaselineUnresolved(RuntimeError):
+    """Internal: the E-value block has nothing real to convert an OR with."""
+
+
+@dataclass(frozen=True)
+class ObservedEventRate:
+    """The run's own event rate, or an explicit account of why there is none."""
+
+    value: Optional[float]
+    cause: str  # stable machine reason; "" when resolved
+    reason: str  # one sentence for the finding message
+    candidates: Tuple[float, ...] = ()
+    source_column: str = ""
+
+
+# Columns an outcome-rate product may use for its rate. This is a reading
+# convention for an untyped product, not a gate: every name here means the same
+# quantity, and a value under a name NOT listed is treated as absent rather
+# than guessed at.
+_EVENT_RATE_COLUMNS: Tuple[str, ...] = (
+    "outcome_rate",
+    "rate",
+    "mortality_rate",
+    "event_rate",
+)
+
+
+def resolve_observed_event_rate(path: Optional[Path]) -> ObservedEventRate:
+    """Read one unambiguous observed event rate from an outcome-rate product.
+
+    Every failure mode returns ``value=None`` with a cause. The previous
+    version instead seeded ``baseline_prev = 0.1`` and let each failure fall
+    through to it: a missing product, an unreadable file, an unparseable cell,
+    every one of them silently produced an E-value computed at an invented
+    10% event rate. It also kept the LAST matching cell it saw, so a product
+    with one row per exposure group contributed whichever row happened to sort
+    last.
+
+    Disagreeing candidates are refused rather than reduced. Picking the first,
+    the last, or the mean would each be a different scientific choice about
+    which population the E-value is anchored to, and none of them is stated
+    anywhere the reader can see.
+    """
+
+    if path is None:
+        return ObservedEventRate(
+            value=None,
+            cause="no_outcome_rate_product",
+            reason="this run registered no outcome-rate product.",
+        )
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as error:
+        return ObservedEventRate(
+            value=None,
+            cause="outcome_rate_unreadable",
+            reason=f"its outcome-rate product could not be read ({error}).",
+        )
+
+    import csv as _csv
+    import io
+
+    candidates: list[float] = []
+    columns: list[str] = []
+    for row in _csv.DictReader(io.StringIO(text)):
+        for key in _EVENT_RATE_COLUMNS:
+            if key not in row:
+                continue
+            try:
+                value = float(row[key])
+            except (TypeError, ValueError):
+                continue
+            if 0.0 < value < 1.0:
+                candidates.append(value)
+                columns.append(key)
+
+    if not candidates:
+        return ObservedEventRate(
+            value=None,
+            cause="outcome_rate_has_no_usable_rate",
+            reason=(
+                "its outcome-rate product carries no value in (0, 1) under any "
+                f"of {list(_EVENT_RATE_COLUMNS)}."
+            ),
+        )
+    distinct = sorted(set(candidates))
+    if len(distinct) > 1:
+        return ObservedEventRate(
+            value=None,
+            cause="outcome_rate_ambiguous",
+            reason=(
+                f"its outcome-rate product reports {len(distinct)} different "
+                f"rates ({', '.join(f'{v:.4f}' for v in distinct)}) and none is "
+                "declared as the cohort baseline."
+            ),
+            candidates=tuple(distinct),
+        )
+    return ObservedEventRate(
+        value=distinct[0],
+        cause="",
+        reason="",
+        candidates=tuple(distinct),
+        source_column=columns[0],
+    )
 
 
 def _current_verified_semantic_csv(
@@ -504,33 +611,38 @@ def finalise_success(
             import csv as _csv
 
             primary_record, primary_path = primary_source
-            baseline_prev = 0.1
             outcome_rate_source = _current_verified_semantic_csv(
                 evidence=evidence,
                 per_step_records=per_step_records,
                 run_dir=run_dir,
                 semantic_id="outcome_rate",
             )
-            if outcome_rate_source is not None:
-                try:
-                    _outcome_rate_record, or_path = outcome_rate_source
-                    with or_path.open("r", encoding="utf-8") as fh:
-                        for row in _csv.DictReader(fh):
-                            for key in (
-                                "outcome_rate",
-                                "rate",
-                                "mortality_rate",
-                                "event_rate",
-                            ):
-                                if key in row:
-                                    try:
-                                        cand = float(row[key])
-                                        if 0 < cand < 1:
-                                            baseline_prev = cand
-                                    except (TypeError, ValueError):
-                                        pass
-                except Exception:
-                    pass
+            resolved = resolve_observed_event_rate(
+                None if outcome_rate_source is None else outcome_rate_source[1]
+            )
+            baseline_prev = resolved.value
+            if baseline_prev is None:
+                # No invented rate. An E-value computed at a guessed baseline is
+                # a reported number nobody can trace to this cohort, and it
+                # reads exactly like one that can.
+                findings.append(
+                    ValidationFinding(
+                        validator="e_value",
+                        severity="warning",
+                        message=(
+                            "E-values were not computed: "
+                            f"{resolved.reason} An odds ratio cannot be converted "
+                            "to a risk ratio without this run's observed event "
+                            "rate, and the host does not substitute one."
+                        ),
+                        detail={
+                            "reason": "e_value_baseline_prevalence_unresolved",
+                            "cause": resolved.cause,
+                            "candidates": list(resolved.candidates),
+                        },
+                    )
+                )
+                raise _EValueBaselineUnresolved(resolved.reason)
 
             rows_out: List[Dict[str, Any]] = []
             with primary_path.open("r", encoding="utf-8") as fh:
@@ -585,7 +697,13 @@ def finalise_success(
                 ev_md_lines = [
                     "# E-values for primary effects (O23)",
                     "",
-                    f"Baseline event prevalence used: **{baseline_prev:.3f}**",
+                    # State the provenance, not just the value. An OR-derived
+                    # E-value is only as defensible as the rate it was
+                    # converted at, and a bare number gives a reader no way to
+                    # tell a measured rate from an assumed one.
+                    f"Baseline event prevalence used: **{baseline_prev:.4f}** "
+                    f"— this run's observed event rate, read from column "
+                    f"`{resolved.source_column}` of its outcome-rate product.",
                     "",
                     "| Term | OR | 95% CI | E-value | E-value (CI bound) |",
                     "|---|---|---|---|---|",
@@ -642,11 +760,23 @@ def finalise_success(
                         severity="info",
                         message=(
                             f"Computed E-values for {len(rows_out)} primary "
-                            f"effect row(s) (baseline prevalence={baseline_prev:.3f})."
+                            "effect row(s) at this run's observed event rate "
+                            f"{baseline_prev:.4f} (column "
+                            f"'{resolved.source_column}')."
                         ),
                         evidence_ids=[ev_record.evidence_id],
+                        detail={
+                            "baseline_prevalence": baseline_prev,
+                            "baseline_prevalence_source": "observed_outcome_rate",
+                            "baseline_prevalence_column": resolved.source_column,
+                        },
                     )
                 )
+    except _EValueBaselineUnresolved:
+        # The precise finding was already appended where the cause is known.
+        # Re-reporting it here as a generic "computation failed" would bury the
+        # one fact a reader needs: no rate was available, and none was invented.
+        pass
     except Exception as exc:
         findings.append(
             ValidationFinding(

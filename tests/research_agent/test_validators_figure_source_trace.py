@@ -212,6 +212,46 @@ def test_nullable_boolean_metadata_does_not_break_exact_numeric_projection(
     assert drift.get("reason") == "source_values_disagree", drift
 
 
+def test_estimate_unit_is_compared_as_text_not_parsed_as_a_number(
+    tmp_path: Path,
+):
+    """A truthful unit label must not become a numeric parse failure."""
+
+    upstream = tmp_path / "cluster_stability.csv"
+    pd.DataFrame(
+        {
+            "metric": ["bootstrap_ari", "silhouette"],
+            "estimate": [0.84, 0.31],
+            "estimate_unit": ["adjusted_rand_index", "silhouette_coefficient"],
+        }
+    ).to_csv(upstream, index=False)
+    source = pd.DataFrame(
+        {
+            "source_row_index": [0, 1],
+            "metric": ["bootstrap_ari", "silhouette"],
+            "estimate": [0.84, 0.31],
+            "estimate_unit": ["adjusted_rand_index", "silhouette_coefficient"],
+        }
+    )
+
+    clean = FigureSourceDataValidator._compare_source_to_upstream(
+        source_df=source,
+        source_path=tmp_path / "cluster_stability_source_data.csv",
+        upstream_path=upstream,
+    )
+    assert clean.get("ok") is True, clean
+
+    source.loc[1, "estimate_unit"] = "adjusted_rand_index"
+    drift = FigureSourceDataValidator._compare_source_to_upstream(
+        source_df=source,
+        source_path=tmp_path / "cluster_stability_source_data.csv",
+        upstream_path=upstream,
+    )
+    assert drift.get("ok") is False, drift
+    assert drift.get("reason") == "source_values_disagree", drift
+    assert drift.get("mismatches", [])[0]["column"] == "estimate_unit"
+
+
 def test_model_id_term_composite_key_disambiguates_shared_terms_and_flags_drift(
     tmp_path: Path,
 ):
@@ -2674,6 +2714,61 @@ def test_standalone_statistic_artifact_authenticates_current_figure(
     )
     assert any(
         finding.detail.get("reason") == "resolved_input_evidence_mismatch"
+        for finding in rejected
+    )
+
+
+def test_statistic_source_may_name_its_exact_bound_json_artifact(
+    tmp_path: Path,
+):
+    figure_out, step, summary, records, bindings = _statistic_figure_fixture(
+        tmp_path,
+        source_value=0.81,
+    )
+    statistic_path = tmp_path / "evidence" / "metric__auroc.json"
+    statistic_path.write_text(
+        json.dumps({"name": "auroc", "estimate": 0.81}),
+        encoding="utf-8",
+    )
+    digest = hashlib.sha256(statistic_path.read_bytes()).hexdigest()
+    records[0]["evidence_ids"].append("metric_artifact")
+    bindings["statistic:auroc"] = {
+        "declared_kind": "statistic",
+        "product": "auroc",
+        "produced_by_step": "03_model",
+        "evidence_id": "metric_artifact",
+        "sha256": digest,
+        "absolute_path": str(statistic_path),
+    }
+    source_path = figure_out / "model_performance_source_data.csv"
+    source = pd.read_csv(source_path)
+    source["source_table"] = statistic_path.name
+    source.to_csv(source_path, index=False)
+
+    findings = FigureSourceDataValidator().audit(
+        step=step,
+        out_dir=figure_out,
+        run_dir=tmp_path,
+        step_summary=summary,
+        completed_step_records=records,
+        resolved_input_bindings=bindings,
+    )
+
+    assert [finding for finding in findings if finding.severity == "error"] == []
+
+    source["source_table"] = "foreign_statistic.json"
+    source.to_csv(source_path, index=False)
+    rejected = FigureSourceDataValidator().audit(
+        step=step,
+        out_dir=figure_out,
+        run_dir=tmp_path,
+        step_summary=summary,
+        completed_step_records=records,
+        resolved_input_bindings=bindings,
+    )
+    assert any(
+        finding.detail.get("best_mismatch", {}).get("reason")
+        == "declared_source_table_not_found"
         for finding in rejected
     )
 

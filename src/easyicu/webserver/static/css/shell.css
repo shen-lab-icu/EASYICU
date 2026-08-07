@@ -2,6 +2,31 @@
 
 .nav-sec{ margin:12px 12px 4px; }
 
+/* Stage status on the three nav sections. The sections already were the main
+   line (plan -> data -> draft); this makes their state visible instead of
+   leaving the user to guess how far they had got. */
+.stage-sec{ display:flex; align-items:center; gap:8px; }
+.stage-sec > span:first-child{ flex:1; min-width:0; }
+.stage-chip{
+  display:inline-flex; align-items:center; gap:3px; flex:none;
+  font-size:9.5px; line-height:1; letter-spacing:0; text-transform:none;
+  padding:3px 6px; border-radius:999px; border:1px solid var(--hair-2);
+  color:var(--ink-4); background:var(--surface);
+}
+.stage-chip.done{ color:oklch(42% 0.09 155); border-color:oklch(84% 0.05 155); background:oklch(97% 0.02 155); }
+.stage-chip.active{ color:oklch(42% 0.10 245); border-color:oklch(84% 0.055 245); background:oklch(97% 0.022 245); }
+.stage-chip.stale{ color:oklch(46% 0.11 65); border-color:oklch(83% 0.07 65); background:oklch(97% 0.03 65); }
+.stage-chip svg{ flex:none; }
+
+.shared-note.plan-only{ margin-top:6px; }
+
+/* Demo <-> Real is a data-source swap that invalidates downstream work, not a
+   display preference. Once downstream work exists, stop letting it look like
+   the EN/中 toggle sitting next to it. */
+.mode-seg.consequential{ border-color:oklch(78% 0.09 65); box-shadow:0 0 0 2px oklch(95% 0.035 65); }
+.mode-seg.consequential button:not(.on){ color:oklch(46% 0.11 65); }
+body[data-reduce-motion="true"] .mode-seg.consequential{ box-shadow:none; }
+
 .ideas-entry{ background:var(--surface); border-color:var(--hair-2); margin-top:3px; }
 .ideas-entry:hover{ border-color:oklch(71% 0.09 225); box-shadow:var(--sh-1); }
 .ideas-entry.on{ border-color:oklch(64% 0.10 225); box-shadow:var(--sh-1); background:linear-gradient(180deg, oklch(97% 0.018 225), var(--surface)); }
@@ -9,7 +34,27 @@
 .ideas-entry .cp-d{ color:var(--ink-4); }
 .ideas-entry .cp-go{ color:oklch(48% 0.10 225); }
 
+/* Data Workspace: one producer, three consumers. Rendering them as four peers
+   hid the order of operations, so a new user's first click could only fail. */
+.wsg-step{
+  margin:5px 0 3px 11px; padding-left:9px;
+  border-left:1px solid var(--hair-2);
+  font-size:9.5px; letter-spacing:.02em; color:var(--ink-4);
+}
+.wsitem.ws-reads{ margin-left:11px; }
+
 .wsitem{ align-items:flex-start; min-height:44px; padding:8px 11px; }
 .wsi-copy{ min-width:0; display:flex; flex-direction:column; gap:1px; }
 .wsitem .wsi-sub{ font-size:10.5px; line-height:1.25; color:var(--ink-4); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .wsitem.active .wsi-sub{ color:var(--ink-3); }
+
+/* Moved verbatim out of redesign.css. The sibling .ideas-entry rules were
+   already here; .agent-entry was stranded in the bucket. Nothing else
+   defines it, and shell.css loads after redesign.css did. */
+.agent-entry{ background:var(--surface); border-color:var(--hair-2); margin-top:8px; }
+.agent-entry:hover{ border-color:var(--hair-3); box-shadow:var(--sh-1); }
+.agent-entry.on{ border-color:var(--ink-3); box-shadow:var(--sh-1); }
+.agent-entry .cp-ico{ background:var(--ink); }
+.agent-entry .cp-t{ color:var(--ink); }
+.agent-entry .cp-d{ color:var(--ink-4); }
+.agent-entry .cp-go{ color:var(--ink-4); }

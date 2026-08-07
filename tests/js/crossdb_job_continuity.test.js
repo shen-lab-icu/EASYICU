@@ -1,6 +1,15 @@
 /* Executable lifecycle contract for Cross-DB raw-distribution reconnects. */
 'use strict';
 
+function missingJobError() {
+  // Exactly what api.js hands a caller for HTTP 404 detail="unknown job".
+  const err = new Error('unknown job');
+  err.technical = '/api/jobs/x -> HTTP 404';
+  err.status = 404;
+  err.code = 'unknown job';
+  return err;
+}
+
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
@@ -165,7 +174,7 @@ function harness(options) {
   assert.equal(await invalidResult.context.EU_CROSSDB_JOB_CONTINUITY.restoreIfNeeded(), false);
   assert.equal(invalidResult.localStorage.getItem(KEY), null, 'a rejected terminal result must not be replayed forever');
 
-  const missing = harness({ stored: JSON.stringify(META), snapshotError: new Error('/api/jobs/job_cross_01 -> HTTP 404') });
+  const missing = harness({ stored: JSON.stringify(META), snapshotError: missingJobError() });
   assert.equal(await missing.context.EU_CROSSDB_JOB_CONTINUITY.restoreIfNeeded(), false);
   assert.deepEqual(missing.calls.at(-1), ['unavailable', META.job_id]);
   assert.equal(missing.localStorage.getItem(KEY), null, 'server-restart/404 metadata must be cleared');

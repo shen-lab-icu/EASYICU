@@ -52,6 +52,15 @@ def _e_value_for_rr(rr: float) -> float:
     return r + math.sqrt(r * (r - 1.0))
 
 
+class BaselinePrevalenceRequiredError(ValueError):
+    """An odds ratio reached the E-value with no observed event rate.
+
+    A subclass of ValueError so existing callers that guard the E-value with
+    ``except ValueError`` keep working, while a caller that wants to report
+    *this* cause specifically can catch the narrower type.
+    """
+
+
 @dataclass
 class EValueResult:
     estimate: float
@@ -83,13 +92,24 @@ def compute_e_value(
         estimate: OR / RR / HR point estimate.
         ci: two-sided 95% CI as ``(lower, upper)``. Optional.
         estimate_type: ``"or"``, ``"rr"``, or ``"hr"``.
-        baseline_prevalence: only required when ``estimate_type == "or"``
-            for the Zhang-Yu conversion. When missing we default to
-            0.1 with a note (common ICU mortality range).
+        baseline_prevalence: the cohort's OBSERVED event rate, in (0, 1).
+            REQUIRED when ``estimate_type == "or"`` for the Zhang-Yu
+            conversion, and refused when absent or out of range.
 
     Returns an :class:`EValueResult`. For an OR / RR / HR above 1 we
     compute the E-value for the *lower* CI bound; for estimates below
     1 we use the *upper* bound (the "hardest to explain away" edge).
+
+    Raises:
+        BaselinePrevalenceRequiredError: for an OR with no usable observed
+            event rate. This used to default to 0.1 with an explanatory note,
+            which is a GUESSED scientific parameter that moves a reported
+            number: for OR=2.0, an assumed 0.1 gives E=3.04 while a real
+            rate of 0.214 gives E=2.68 -- overstating robustness. A note
+            does not make an invented input
+            defensible, and the caller cannot detect the substitution by
+            looking at the value. Refusing here makes the guess impossible
+            for every caller rather than for the one we happened to audit.
     """
     kind = estimate_type.lower()
     if kind not in {"or", "rr", "hr"}:
@@ -98,8 +118,22 @@ def compute_e_value(
     note: Optional[str] = None
     if kind == "or":
         if baseline_prevalence is None:
-            baseline_prevalence = 0.1
-            note = "OR converted to RR assuming baseline_prevalence=0.1 (default)"
+            raise BaselinePrevalenceRequiredError(
+                "An odds ratio cannot be converted to a risk ratio without the "
+                "cohort's observed event rate. Supply baseline_prevalence from "
+                "the run's own outcome-rate product, or do not report an "
+                "E-value for this estimate."
+            )
+        if not 0.0 < float(baseline_prevalence) < 1.0:
+            raise BaselinePrevalenceRequiredError(
+                f"baseline_prevalence={baseline_prevalence!r} is not an observed "
+                "event rate in (0, 1). A rate of 0 or 1 has no risk ratio, and a "
+                "value outside the interval is not a rate at all."
+            )
+        note = (
+            "OR converted to RR at the observed event rate "
+            f"{float(baseline_prevalence):.4f}"
+        )
         rr_point = _rr_from_or(estimate, baseline_prevalence)
     # HR ≈ RR for rare events; keep as-is.
     ev = _e_value_for_rr(rr_point)
@@ -262,6 +296,7 @@ def run_negative_control_check(
 
 
 __all__ = [
+    "BaselinePrevalenceRequiredError",
     "EValueResult",
     "NegativeControlResult",
     "compute_e_value",

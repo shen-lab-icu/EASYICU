@@ -7,11 +7,19 @@ module adds the two outer scopes needed by paid benchmark batches:
 * the complete batch.
 
 Every transport attempt reserves its worst-case token and cost allowance and
-atomically persists that reservation *before* the transport starts.  A failed
-or interrupted attempt keeps its reservation because a remote provider may
-have accepted work even when the client never received usage metadata.  A
-successful response may release the conservative difference between the
+atomically persists that reservation *before* the transport starts.  A
+successful response releases the conservative difference between the
 reservation and provider-reported usage.
+
+A failed or interrupted attempt stays charged, because a remote provider may
+have accepted work even when the client never received usage metadata -- but
+charged for what could actually be at risk, not for the worst case.  Both
+worst-case terms are deliberate over-reservations with no report to settle
+against, and each has an explicit release keyed to what the caller itself
+authorized: the completion hold falls to ``requested_completion_tokens``, and
+the prompt hold to ``estimate_prompt_tokens`` of the bytes actually sent.  See
+``finish_transport_attempt``; each release records the measured run that
+motivated it.
 
 The ledger intentionally contains no prompts, responses, credentials, or
 patient data.  It is also the batch progress checkpoint: task transitions and
@@ -106,17 +114,12 @@ class ProviderHardStopLimits:
             raise ValueError("max_estimated_cost_usd_per_batch must be positive")
         if self.max_wall_clock_seconds_per_task <= 0:
             raise ValueError("max_wall_clock_seconds_per_task must be positive")
-        if (
-            self.max_provider_attempts_per_batch
-            < self.max_provider_attempts_per_run
-        ):
+        if self.max_provider_attempts_per_batch < self.max_provider_attempts_per_run:
             raise ValueError(
                 "batch Provider-attempt ceiling cannot be below the per-run ceiling"
             )
         if self.max_total_tokens_per_batch < self.max_total_tokens_per_run:
-            raise ValueError(
-                "batch token ceiling cannot be below the per-run ceiling"
-            )
+            raise ValueError("batch token ceiling cannot be below the per-run ceiling")
 
     def canonical_payload(self) -> Dict[str, object]:
         return dict(asdict(self))
@@ -241,6 +244,15 @@ def load_provider_hard_stop_ledger(path: Path) -> Dict[str, object]:
             "Provider hard-stop ledger schema or digest is invalid"
         )
     return payload
+
+
+def _prompt_payload_bytes(messages: Sequence[Any]) -> int:
+    """The caller-visible prompt bytes this attempt is about to transmit."""
+
+    return sum(
+        len(str(getattr(message, "content", "") or "").encode("utf-8"))
+        for message in messages
+    )
 
 
 def _prompt_token_reservation(messages: Sequence[Any]) -> int:
@@ -414,9 +426,7 @@ class ProviderHardStopLedger:
 
     def _task_locked(self, task_id: str) -> Dict[str, object]:
         matches = [
-            task
-            for task in self._tasks_locked()
-            if task.get("task_id") == str(task_id)
+            task for task in self._tasks_locked() if task.get("task_id") == str(task_id)
         ]
         if len(matches) != 1:
             raise ProviderHardStopLedgerError(
@@ -446,9 +456,7 @@ class ProviderHardStopLedger:
                     )
                 attempts += 1
                 accounted_tokens += int(call.get("accounted_tokens") or 0)
-                estimated_cost += float(
-                    call.get("accounted_estimated_cost_usd") or 0.0
-                )
+                estimated_cost += float(call.get("accounted_estimated_cost_usd") or 0.0)
         return {
             "provider_attempts": attempts,
             "accounted_tokens": accounted_tokens,
@@ -460,12 +468,8 @@ class ProviderHardStopLedger:
     def _persist_locked(self) -> None:
         self._payload["updated_at"] = _utc_now()
         self._payload["totals"] = self._totals_locked()
-        statuses = {
-            str(task.get("status") or "") for task in self._tasks_locked()
-        }
-        self._payload["terminal"] = bool(
-            statuses and statuses <= _TERMINAL_TASK_STATES
-        )
+        statuses = {str(task.get("status") or "") for task in self._tasks_locked()}
+        self._payload["terminal"] = bool(statuses and statuses <= _TERMINAL_TASK_STATES)
         _atomic_write(self.path, self._payload)
 
     def start_task(
@@ -498,8 +502,7 @@ class ProviderHardStopLedger:
             if reopen_terminal and status in {"completed", "failed"}:
                 calls = task.get("calls")
                 if not isinstance(calls, list) or any(
-                    isinstance(call, Mapping)
-                    and call.get("state") == "in_progress"
+                    isinstance(call, Mapping) and call.get("state") == "in_progress"
                     for call in calls
                 ):
                     raise ProviderHardStopLedgerError(
@@ -644,6 +647,7 @@ class ProviderHardStopLedger:
             )
         self.assert_task_active(task_id)
         prompt_reserve = _prompt_token_reservation(messages)
+        prompt_payload_bytes = _prompt_payload_bytes(messages)
         requested_completion = max(1, int(max_tokens))
         completion_reserve = max(
             requested_completion,
@@ -729,6 +733,7 @@ class ProviderHardStopLedger:
                     "started_at": _utc_now(),
                     "finished_at": None,
                     "prompt_token_reservation": prompt_reserve,
+                    "prompt_payload_bytes": prompt_payload_bytes,
                     "provider_prompt_overhead_token_reservation": (
                         PROVIDER_PROMPT_OVERHEAD_TOKEN_RESERVATION
                     ),
@@ -777,6 +782,110 @@ class ProviderHardStopLedger:
                     if error_type is not None
                     else "completed_usage_unreported"
                 )
+                # A RESERVATION IS A HOLD, AND EVERY HOLD NEEDS A RELEASE PATH.
+                #
+                # ``completion_reserve`` is deliberately taken as
+                # ``max(requested_completion, FLOOR)`` before transport, because
+                # a gateway may return more than we asked for and we must not
+                # start a call we could not afford in the worst case.  A
+                # reported call then releases that hold down to the provider's
+                # own numbers.  An UNREPORTED call had no release path at all,
+                # so it stayed charged at the floor forever.
+                #
+                # MEASURED on h1_ventilation_survival, 2026-08-03
+                # (``..._7c6bac6_verify07``).  The local gateway was answering
+                # HTTP 500 in 0.98 s with ``Post ".../responses": EOF`` -- the
+                # upstream connection died while the request was still being
+                # sent, about a quarter of the time a successful call needs to
+                # come back (3.5-7.9 s).  Every one of the 14 attempts asked for
+                # 4,096 completion tokens (2,048 for repair).  The 10 that died
+                # were each charged the 128,000 floor: 1,848,481 of the run's
+                # 2,000,000 tokens, and $45.39 of the batch's $100, for output
+                # that provably never existed.  The run died at step 3 of 9 --
+                # not on any analysis defect, on its own accounting.
+                #
+                # The floor exists to absorb a provider REPORTING more than it
+                # was asked for; with no report there is nothing to absorb, and
+                # ``requested_completion`` is the true ceiling on what the
+                # provider could have produced for this request.  So release the
+                # completion hold to what the caller actually authorized and
+                # keep the prompt reservation in full -- those bytes may have
+                # reached the provider and been billed.  Attempt storms stay
+                # bounded by ``max_provider_attempts_per_{run,batch}``, which is
+                # the guard that owns retry count; the token ceiling should
+                # charge tokens that could actually be at risk.
+                #
+                # Same 14 attempts under this rule: 699,021 tokens instead of
+                # 1,944,205, leaving 1.3M for the analysis that was starved.
+                requested_completion = int(call.get("requested_completion_tokens") or 0)
+                held_completion = int(call.get("completion_token_reservation") or 0)
+                if 0 < requested_completion < held_completion:
+                    released = held_completion - requested_completion
+                    call["completion_token_reservation"] = requested_completion
+                    call["accounted_tokens"] = max(
+                        0, int(call.get("accounted_tokens") or 0) - released
+                    )
+                    call["accounted_estimated_cost_usd"] = max(
+                        0.0,
+                        float(call.get("accounted_estimated_cost_usd") or 0.0)
+                        - (released * self.limits.output_cost_usd_per_million_tokens)
+                        / 1_000_000.0,
+                    )
+                    call["unreported_completion_hold_released"] = released
+
+                # THE PROMPT HOLD NEEDS THE SAME RELEASE PATH, FOR THE SAME
+                # REASON.
+                #
+                # ``_prompt_token_reservation`` bounds a prompt by its UTF-8
+                # byte count -- one token per byte, which is a true ceiling and
+                # about four times the truth. Its own docstring says why that
+                # is safe: "successful calls release the unused reservation
+                # back to their provider-reported usage." A failed call had no
+                # such release and kept the byte-denominated hold forever.
+                #
+                # MEASURED on verify12, 2026-08-04, from the batch's durable
+                # ledger: a successful call was charged 23,436 tokens and a
+                # failed one 90,542 -- a call that returned nothing cost 3.9x
+                # one that returned an answer. Over the m1 run, 19 of 39 calls
+                # failed and took 707,014 tokens, 35% of the 2,000,000 run
+                # ceiling and 2.75x the 256,708 the successful calls actually
+                # used. All nine analysis steps then passed and the manuscript
+                # writer was refused a 150,931-token reservation.
+                #
+                # The release lands on the estimator this codebase already
+                # calibrated for exactly this question rather than a new
+                # number: ``estimate_prompt_tokens`` divides by
+                # ``CONSERVATIVE_BYTES_PER_TOKEN = 3.0``, deliberately below
+                # the 3.7685 minimum measured over real receipts, so the
+                # charge still over-counts every observed ratio. The provider
+                # framing allowance is already in tokens and is kept whole.
+                # A ledger written before this field existed keeps its full
+                # hold: no bytes recorded, nothing to release.
+                payload_bytes = int(call.get("prompt_payload_bytes") or 0)
+                held_prompt = int(call.get("prompt_token_reservation") or 0)
+                if payload_bytes > 0:
+                    from ..providers.prompt_budget import estimate_prompt_tokens
+
+                    released_prompt = (
+                        estimate_prompt_tokens(payload_bytes)
+                        + PROVIDER_PROMPT_OVERHEAD_TOKEN_RESERVATION
+                    )
+                    if 0 < released_prompt < held_prompt:
+                        given_back = held_prompt - released_prompt
+                        call["prompt_token_reservation"] = released_prompt
+                        call["accounted_tokens"] = max(
+                            0, int(call.get("accounted_tokens") or 0) - given_back
+                        )
+                        call["accounted_estimated_cost_usd"] = max(
+                            0.0,
+                            float(call.get("accounted_estimated_cost_usd") or 0.0)
+                            - (
+                                given_back
+                                * self.limits.input_cost_usd_per_million_tokens
+                            )
+                            / 1_000_000.0,
+                        )
+                        call["unreported_prompt_hold_released"] = given_back
                 self._persist_locked()
                 return
             prompt_tokens = max(0, int(usage.get("prompt_tokens") or 0))
@@ -787,9 +896,7 @@ class ProviderHardStopLedger:
                 max(0, int(usage.get("total_tokens") or 0)),
             )
             reserved_total = int(call.get("accounted_tokens") or 0)
-            reserved_completion = int(
-                call.get("completion_token_reservation") or 0
-            )
+            reserved_completion = int(call.get("completion_token_reservation") or 0)
             overflow_code: Optional[str] = None
             overflow_detail: Optional[str] = None
             if completion_tokens > reserved_completion:
@@ -812,10 +919,8 @@ class ProviderHardStopLedger:
                 call["accounted_tokens"] = reported_total
                 unknown_tokens = reported_total - component_total
                 call["accounted_estimated_cost_usd"] = (
-                    prompt_tokens
-                    * self.limits.input_cost_usd_per_million_tokens
-                    + completion_tokens
-                    * self.limits.output_cost_usd_per_million_tokens
+                    prompt_tokens * self.limits.input_cost_usd_per_million_tokens
+                    + completion_tokens * self.limits.output_cost_usd_per_million_tokens
                     + unknown_tokens
                     * max(
                         self.limits.input_cost_usd_per_million_tokens,
@@ -907,17 +1012,13 @@ class ProviderHardStopLedger:
                         "Provider hard-stop call record is invalid"
                     )
                 call_tokens = int(raw_call.get("accounted_tokens") or 0)
-                call_cost = float(
-                    raw_call.get("accounted_estimated_cost_usd") or 0.0
-                )
+                call_cost = float(raw_call.get("accounted_estimated_cost_usd") or 0.0)
                 accounted_tokens += call_tokens
                 accounted_cost += call_cost
                 raw_reported_total = raw_call.get("reported_total_tokens")
                 if raw_reported_total is not None:
                     reported_calls += 1
-                    reported_prompt += int(
-                        raw_call.get("reported_prompt_tokens") or 0
-                    )
+                    reported_prompt += int(raw_call.get("reported_prompt_tokens") or 0)
                     reported_completion += int(
                         raw_call.get("reported_completion_tokens") or 0
                     )

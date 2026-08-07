@@ -164,7 +164,23 @@ def test_prose_cohort_is_extracted_materialised_and_enforced(
                     description=(
                         "Repeat the association analysis among complete cases."
                     ),
-                    missing_override={"strategy": "complete_case"},
+                    # A complete-case spec has to name the variables whose
+                    # completeness defines the set; the host refuses to infer
+                    # it, because restricting on a narrower or wider set than
+                    # the model uses is a different analysis. This fixture
+                    # predates that rule and declared none, so the Planner
+                    # rejected it five times and the prose-cohort behaviour
+                    # under test was never reached.
+                    #
+                    # Exactly the two variables this fixture's analysis names.
+                    # The mock plan declares no covariate roster, so adding
+                    # plausible adjusters here would assert an adjustment set
+                    # the plan never had -- the same different-analysis error
+                    # from the other direction.
+                    missing_override={
+                        "strategy": "complete_case",
+                        "variables": ["sofa2", "death"],
+                    },
                 )
             ],
         }
