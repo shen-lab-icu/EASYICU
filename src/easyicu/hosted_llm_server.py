@@ -494,6 +494,29 @@ def _post_upstream(
     headers = _build_upstream_headers(request)
     upstream_url = f"{OPENROUTER_BASE_URL}/chat/completions"
     requested_model = str(upstream_payload.get("model") or "")
+    attempts: list[dict[str, Any]] = []
+
+    def record_attempt(
+        *,
+        model: str,
+        response: requests.Response | None = None,
+        retrying: bool = False,
+        transport_error: bool = False,
+    ) -> None:
+        if transport_error:
+            attempts.append({"model": model, "outcome": "transport_error"})
+            return
+        if response is None:  # pragma: no cover - defensive boundary
+            return
+        status_code = int(response.status_code)
+        attempt = {
+            "model": model,
+            "status_code": status_code,
+            "outcome": "success" if status_code < 400 else "retry" if retrying else "failed",
+        }
+        if retrying:
+            attempt["retry_reason"] = "retryable_upstream_response"
+        attempts.append(attempt)
 
     def with_model_provenance(
         response: requests.Response,
@@ -505,6 +528,7 @@ def _post_upstream(
         # preserving the OpenAI-compatible response body for ordinary callers.
         response.easyicu_requested_model = requested_model  # type: ignore[attr-defined]
         response.easyicu_attempted_model = attempted_model  # type: ignore[attr-defined]
+        response.easyicu_model_attempts = tuple(attempts)  # type: ignore[attr-defined]
         return response
 
     try:
@@ -520,7 +544,13 @@ def _post_upstream(
             status_code=502, detail=f"Upstream request failed: {exc}"
         ) from exc
 
-    if stream or not _should_retry_with_fallback(upstream_response):
+    should_retry = not stream and _should_retry_with_fallback(upstream_response)
+    record_attempt(
+        model=requested_model,
+        response=upstream_response,
+        retrying=should_retry,
+    )
+    if not should_retry:
         return with_model_provenance(
             upstream_response,
             attempted_model=requested_model,
@@ -539,10 +569,15 @@ def _post_upstream(
                 stream=False,
             )
         except requests.RequestException:
+            record_attempt(model=fallback_model, transport_error=True)
             continue
-        if upstream_response.status_code < 400 or not _should_retry_with_fallback(
-            upstream_response
-        ):
+        should_retry = _should_retry_with_fallback(upstream_response)
+        record_attempt(
+            model=fallback_model,
+            response=upstream_response,
+            retrying=should_retry,
+        )
+        if upstream_response.status_code < 400 or not should_retry:
             return with_model_provenance(
                 upstream_response,
                 attempted_model=fallback_model,
@@ -662,6 +697,9 @@ async def chat_completions(request: Request):
         attempted_model = str(
             getattr(upstream_response, "easyicu_attempted_model", "") or ""
         )
+        attempts = list(
+            getattr(upstream_response, "easyicu_model_attempts", ()) or ()
+        )
         upstream_reported_model = str(data.get("model") or "")
         actual_model = upstream_reported_model or attempted_model
         if actual_model:
@@ -670,13 +708,14 @@ async def chat_completions(request: Request):
             # than the model requested before a hosted fallback.
             data["model"] = actual_model
         data["easyicu_model_provenance"] = {
-            "schema_version": "easyicu.hosted_model_provenance/1",
+            "schema_version": "easyicu.hosted_model_provenance/2",
             "requested_model": requested_model,
             "attempted_model": attempted_model,
             "upstream_reported_model": upstream_reported_model or None,
             "fallback_used": bool(
                 requested_model and attempted_model and requested_model != attempted_model
             ),
+            "attempts": attempts,
         }
     return JSONResponse(status_code=upstream_response.status_code, content=data)
 

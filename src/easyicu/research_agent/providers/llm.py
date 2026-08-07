@@ -814,6 +814,8 @@ class OpenAIClient:
         # falling back to the chars/4 heuristic. Defensive: not every
         # provider populates ``usage`` on every response.
         call_usage: Optional[Dict[str, Any]] = None
+        actual_model: Optional[str] = None
+        relay_provenance: Optional[Dict[str, Any]] = None
         try:
             usage = getattr(resp, "usage", None)
             if usage is not None:
@@ -824,16 +826,18 @@ class OpenAIClient:
                     ),
                     "total_tokens": int(getattr(usage, "total_tokens", 0) or 0),
                 }
-            actual_model = getattr(resp, "model", None)
-            if isinstance(actual_model, str) and actual_model.strip():
+            response_model = getattr(resp, "model", None)
+            if isinstance(response_model, str) and response_model.strip():
+                actual_model = response_model.strip()
                 if call_usage is None:
                     call_usage = {}
-                call_usage["actual_model"] = actual_model.strip()
-            relay_provenance = getattr(resp, "easyicu_model_provenance", None)
-            if isinstance(relay_provenance, dict):
+                call_usage["actual_model"] = actual_model
+            response_provenance = getattr(resp, "easyicu_model_provenance", None)
+            if isinstance(response_provenance, dict):
+                relay_provenance = dict(response_provenance)
                 if call_usage is None:
                     call_usage = {}
-                call_usage["model_provenance"] = dict(relay_provenance)
+                call_usage["model_provenance"] = relay_provenance
         except Exception:
             call_usage = None
         # Compatibility only; cost attribution uses the call-scoped return.
@@ -922,7 +926,12 @@ class OpenAIClient:
                 ts = datetime.now().strftime("%Y%m%dT%H%M%S_%f")
                 payload = redact_debug_value(
                     {
-                        "model": self._model,
+                        # Do not collapse configured/requested and actual
+                        # response models. A hosted relay may have fallen back
+                        # after the request left this client.
+                        "requested_model": self._model,
+                        "actual_model": actual_model,
+                        "model_provenance": relay_provenance,
                         "finish_reason": getattr(choice, "finish_reason", None),
                         "prompt_messages": _truncated_debug_messages(chat_messages),
                         "raw_message_head": _truncated_debug_text(

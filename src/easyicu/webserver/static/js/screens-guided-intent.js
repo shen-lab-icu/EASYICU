@@ -62,7 +62,6 @@
           question: text,
           llm_provider: o.llm_provider || 'offline',
           external_llm_opt_in: !!o.external_llm_opt_in,
-          ai_enabled: !!o.ai_enabled,
           language: window.EU_LANG || 'en',
         }),
       });

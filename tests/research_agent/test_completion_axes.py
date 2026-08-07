@@ -8,6 +8,7 @@ from pathlib import Path
 from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.reporting.readiness import (
     execution_gate_status,
+    render_report,
     write_readiness_artifacts,
 )
 from easyicu.research_agent.schema import (
@@ -131,6 +132,38 @@ def test_explicit_development_lane_forces_diagnostic_only(tmp_path: Path):
     assert gates["forced_diagnostic_only"] is True
     assert status["forced_diagnostic_only"] is True
     assert status["status"] == "diagnostic_only"
+
+
+def test_report_keeps_analysis_only_distinct_from_diagnostic_only(tmp_path: Path):
+    context = ResearchContext(
+        research_question="Is a treatment exposure associated with mortality?",
+        cohort=CohortDescriptor(
+            cohort_name="synthetic",
+            database="synthetic",
+            n_patients=10,
+            n_stays=10,
+        ),
+        variables=[],
+    )
+
+    report = render_report(
+        context=context,
+        plan=None,
+        findings=[],
+        per_step_records=[],
+        evidence=EvidenceStore(tmp_path),
+        readiness={
+            "execution_complete": True,
+            "evidence_complete": False,
+            "numeric_verified": False,
+            "analysis_validated": False,
+            "manuscript_ready": False,
+            "display_suite_complete": False,
+            "publication_ready": False,
+        },
+    )
+
+    assert "## Status: ANALYSIS ONLY" in report
 
 
 def _readiness_with_all_content_gates_passing(

@@ -909,9 +909,7 @@ def test_attrition_rule_id_repair_rejects_partial_or_nonlabel_literal_coverage()
         assert deterministic_contract_repair(code=code, findings=[finding]) is None
 
 
-def test_contract_repair_preserves_full_parent_for_unavailable_figure_source(
-    tmp_path,
-):
+def test_contract_repair_fails_closed_for_unavailable_figure_source():
     code = """import pandas as pd
 
 NOTICE = "not_estimable_notice"
@@ -945,44 +943,7 @@ def make_source(out_dir, source_table, frame):
 
     repair = deterministic_contract_repair(code=code, findings=[finding])
 
-    assert repair is not None
-    repair_id, repaired = repair
-    assert repair_id == "unavailable_figure_full_source_projection_v1"
-    namespace = {}
-    exec(repaired, namespace)
-    source_path = namespace["make_source"](
-        tmp_path,
-        "robustness_grid.csv",
-        namespace["pd"].DataFrame(
-            {
-                "spec_id": ["primary", "secondary"],
-                "n_analysis": [515, 1000],
-                "mortality_pct": [15.1, 10.2],
-            }
-        ),
-    )
-    observed = namespace["pd"].read_csv(source_path)
-    assert observed.columns.tolist() == [
-        "source_row_index",
-        "source_table",
-        "spec_id",
-        "n_analysis",
-        "mortality_pct",
-    ]
-    assert observed["source_row_index"].tolist() == [0, 1]
-    assert observed["source_table"].tolist() == [
-        "robustness_grid.csv",
-        "robustness_grid.csv",
-    ]
-    assert observed["n_analysis"].tolist() == [515, 1000]
-    assert (
-        deterministic_contract_repair(
-            code=code,
-            findings=[finding],
-            previous_repair=repair_id,
-        )
-        is None
-    )
+    assert repair is None
 
 
 def test_unavailable_figure_source_repair_requires_typed_finding_and_notice_shape():
