@@ -62,7 +62,6 @@ from .lossy_coercion import (
     patch_returned_coercion_loss_guard as _patch_returned_coercion_loss_guard,
 )
 from .merge_collision import patch_pandas_merge_dynamic_column_collision
-from .matplotlib_source import patch_matplotlib_patch_source_rows
 from .cluster_summary import patch_cluster_count_summary_alias
 from .model_contract import patch_penalized_convergence_contract
 from .name_alias import patch_undefined_mapping_near_match_alias
@@ -125,7 +124,6 @@ from .reasons import RepairReason
 from .typed_input import (
     patch_all_rows_outcome_coordinate_filter,
     patch_bound_panel_measurement_status_alias,
-    patch_missing_typed_input_receipt,
     patch_resolved_input_cohort_env_shadow,
     patch_resolved_input_consumption_contract_owner,
     patch_resolved_input_manifest_env,
@@ -5759,12 +5757,6 @@ def deterministic_contract_repair(
         if repaired != code:
             return unresolved_receipt_repair_name, repaired
 
-    missing_receipt_repair_name = "complete_typed_input_receipt_v1"
-    if previous_repair != missing_receipt_repair_name:
-        repaired = patch_missing_typed_input_receipt(code, findings=findings)
-        if repaired != code:
-            return missing_receipt_repair_name, repaired
-
     render_echo_repair_name = "render_only_effect_echo_suppression_v1"
     if previous_repair != render_echo_repair_name:
         repaired = patch_render_only_effect_echo(code, findings=findings)
@@ -6363,11 +6355,6 @@ def _deterministic_runner_repair(
         if repaired is not None and repaired != code:
             return structured_role_repair, repaired
 
-    matplotlib_patch_source_repair = "matplotlib_patch_source_rows_v1"
-    if previous_repair != matplotlib_patch_source_repair:
-        repaired = patch_matplotlib_patch_source_rows(code, run_log)
-        if repaired != code:
-            return matplotlib_patch_source_repair, repaired
     if repair := _finding_json_repair(code, run_log, previous_repair):
         return repair
 

@@ -120,24 +120,36 @@ def _silhouette_value(
         if metric_col and value_col:
             vals: List[float] = []
             for _, row in frame.iterrows():
-                if "silhouette" in str(row[metric_col]).lower():
+                metric_name = str(row[metric_col]).strip().lower().replace("_", " ")
+                if metric_name in {
+                    "silhouette",
+                    "mean silhouette",
+                    "overall silhouette",
+                    "silhouette score",
+                }:
                     try:
                         vals.append(float(row[value_col]))
                     except (TypeError, ValueError):
                         continue
-            if vals:
-                return record, sum(vals) / len(vals)
+            # A generic long-form metric has no proof that multiple values are
+            # interchangeable overall scores (they may be clusters, k values,
+            # folds, or resamples).  The figure can annotate exactly one
+            # declared overall score, never manufacture one by averaging.
+            if len(vals) == 1:
+                return record, vals[0]
         return record, None
     try:
         series = pd.to_numeric(frame[col], errors="coerce").dropna()
         if series.empty:
-            return None
-        # A per-cluster metrics table has one silhouette row per cluster; the
-        # panel annotation reports the OVERALL silhouette, so average the rows
-        # rather than take the first cluster's value (which would misstate
-        # overall cluster quality).
-        value = float(series.mean()) if len(series) > 1 else float(series.iloc[0])
-        return record, value
+            return record, None
+        # Even a column named ``silhouette`` is ambiguous when it contains more
+        # than one value.  Per-cluster values do not yield the global silhouette
+        # by an unweighted mean; only a single value (or exact duplicates of it)
+        # is an auditable overall metric for this panel.
+        unique = series.drop_duplicates()
+        if len(unique) != 1:
+            return record, None
+        return record, float(unique.iloc[0])
     except (IndexError, ValueError):
         return record, None
 
@@ -361,24 +373,37 @@ def render_phenotype_figure(
     # C -- cluster sizes + silhouette annotation (stability)
     if size_series is not None:
         sizes = np.array(
-            [float(size_series.get(str(lbl), 0.0)) for lbl in cluster_labels]
+            [float(size_series.get(str(lbl), np.nan)) for lbl in cluster_labels]
         )
     elif size_col is not None:
         sizes = (
-            pd.to_numeric(profiles[size_col], errors="coerce").fillna(0.0).to_numpy()
+            pd.to_numeric(profiles[size_col], errors="coerce").to_numpy()
         )
     else:
-        sizes = np.ones(len(cluster_labels))
-    ax_stab.bar(
-        range(len(cluster_labels)),
-        sizes,
-        color=[colors[i % len(colors)] for i in range(len(cluster_labels))],
-        width=0.62,
+        sizes = np.array([], dtype=float)
+    has_complete_sizes = len(sizes) == len(cluster_labels) and bool(
+        np.isfinite(sizes).all() and (sizes > 0).all()
     )
+    if has_complete_sizes:
+        ax_stab.bar(
+            range(len(cluster_labels)),
+            sizes,
+            color=[colors[i % len(colors)] for i in range(len(cluster_labels))],
+            width=0.62,
+        )
+    else:
+        ax_stab.text(
+            0.02,
+            0.55,
+            "Cluster sizes unavailable",
+            transform=ax_stab.transAxes,
+            fontsize=6.0,
+            color=palette.get("neutral", "#8F8F8F"),
+        )
     ax_stab.set_xticks(
         range(len(cluster_labels)), [f"C{lbl}" for lbl in cluster_labels], fontsize=6.0
     )
-    ax_stab.set_ylabel("Cluster size (n)" if size_col else "Clusters")
+    ax_stab.set_ylabel("Cluster size (n)")
     stability_record, silhouette = _silhouette_value(evidence, run_dir)
     title = "Cluster stability"
     if silhouette is not None:
