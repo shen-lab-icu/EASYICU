@@ -455,63 +455,6 @@ __all__ = [
     "prompt_pack_files",
 ]
 
-# Schemas are dependency-free, safe to import eagerly.
-from .schema import (
-    ResearchContext,
-    ConceptDescriptor,
-    EndpointSpec,
-    FixedWindowTrajectoryMetadata,
-    ClusterSelectionCandidate,
-    ClusterSelectionManifest,
-    CohortDescriptor,
-    TimeWindow,
-    TemporalConstraint,
-    PlannedAnalysisRole,
-    AnalysisStep,
-    AnalysisPlan,
-    EvidenceRef,
-    ConceptRef,
-    ClinicalSemanticsResolution,
-    DataExtractionRequest,
-    DataExtractionResult,
-    StatisticalAnalysisRequest,
-    StatisticalAnalysisResult,
-    VisualizationRequest,
-    VisualizationResult,
-    ManuscriptDraftPacket,
-    HypothesisBlueprint,
-    CritiqueReport,
-    ReflectionMemoryEntry,
-    AgentRuntimeState,
-    EvidenceRecord,
-    AnalysisManifest,
-    PipelineResult,
-    CostRecord,
-    PaperClaimRecord,
-    PaperProfile,
-    PaperReplicationSpec,
-    PaperResultLedger,
-    ReplicationDeviationItem,
-    ReplicationDeviationReport,
-    ProbeSummary,
-    StepRecord,
-)
-from .icu_rules import (
-    COMPOSITE_EXPOSURE_CONSTITUENTS,
-    ICU_RULES,
-    ConceptMethodologyProfile,
-    VariableKind,
-    composite_constituents,
-    concept_methodology_profile,
-    concept_methodology_tag,
-    detect_outcome_as_predictor,
-    detect_overadjustment,
-    is_derived_exposure,
-    outcome_leakage_caution,
-    overadjustment_caution,
-    treatment_mediator_caution,
-)
-
 
 def __getattr__(name: str):
     """Lazy import of heavier components.
@@ -520,6 +463,67 @@ def __getattr__(name: str):
     the module installed does not pull in pandas-heavy code paths or
     optional LLM SDKs unless the user actually uses them.
     """
+    if name in {
+        "ResearchContext",
+        "ConceptDescriptor",
+        "EndpointSpec",
+        "FixedWindowTrajectoryMetadata",
+        "ClusterSelectionCandidate",
+        "ClusterSelectionManifest",
+        "CohortDescriptor",
+        "TimeWindow",
+        "TemporalConstraint",
+        "PlannedAnalysisRole",
+        "AnalysisStep",
+        "AnalysisPlan",
+        "EvidenceRef",
+        "ConceptRef",
+        "ClinicalSemanticsResolution",
+        "DataExtractionRequest",
+        "DataExtractionResult",
+        "StatisticalAnalysisRequest",
+        "StatisticalAnalysisResult",
+        "VisualizationRequest",
+        "VisualizationResult",
+        "ManuscriptDraftPacket",
+        "HypothesisBlueprint",
+        "CritiqueReport",
+        "ReflectionMemoryEntry",
+        "AgentRuntimeState",
+        "EvidenceRecord",
+        "AnalysisManifest",
+        "PipelineResult",
+        "CostRecord",
+        "PaperClaimRecord",
+        "PaperProfile",
+        "PaperReplicationSpec",
+        "PaperResultLedger",
+        "ReplicationDeviationItem",
+        "ReplicationDeviationReport",
+        "ProbeSummary",
+        "StepRecord",
+    }:
+        from . import schema as _schema
+
+        return getattr(_schema, name)
+    if name in {
+        "COMPOSITE_EXPOSURE_CONSTITUENTS",
+        "ICU_RULES",
+        "ConceptMethodologyProfile",
+        "VariableKind",
+        "composite_constituents",
+        "concept_methodology_profile",
+        "concept_methodology_tag",
+        "detect_outcome_as_predictor",
+        "detect_overadjustment",
+        "is_derived_exposure",
+        "outcome_leakage_caution",
+        "overadjustment_caution",
+        "treatment_mediator_caution",
+    }:
+        from . import icu_rules as _icu_rules
+
+        return getattr(_icu_rules, name)
     if name in {
         "KnowHowCard",
         "KnowHowCitation",

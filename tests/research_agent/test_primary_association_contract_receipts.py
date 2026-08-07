@@ -68,6 +68,39 @@ _REQUIREMENT_ID = "primary_full_cohort_logistic"
 _N = 3000
 
 
+def _model_terms() -> list[dict[str, object]]:
+    return [
+        {
+            "name": _EXPOSURE,
+            "role": "exposure",
+            "coding": "binary",
+            "levels": ["0", "1"],
+            "reference_level": "0",
+            "transform": "treatment_contrast",
+        },
+        {
+            "name": "age",
+            "role": "covariate",
+            "coding": "continuous",
+            "transform": "identity",
+        },
+        {
+            "name": "sex",
+            "role": "covariate",
+            "coding": "categorical",
+            "levels": ["Female", "Male"],
+            "reference_level": "Female",
+            "transform": "treatment_contrast",
+        },
+        {
+            "name": "charlson_first",
+            "role": "covariate",
+            "coding": "continuous",
+            "transform": "identity",
+        },
+    ]
+
+
 def _cohort() -> "pd.DataFrame":
     rng = np.random.default_rng(20260729)
     exposure = rng.integers(0, 2, _N).astype(float)
@@ -96,6 +129,7 @@ def _requirement() -> PlannedModelRequirement:
         analysis_set="source_aware",
         required_for_step_success=True,
         covariates=list(_COVARIATES),
+        model_terms=_model_terms(),
     )
 
 
@@ -136,6 +170,7 @@ def _run(out_dir: Path, frame=None, **overrides):
         "analysis_set": "source_aware",
         "analysis_role": "primary",
         "method_family": "binary_logistic_regression",
+        "model_terms": _model_terms(),
     }
     payload.update(overrides)
     previous = os.environ.get("STEP_OUT_DIR")
@@ -259,7 +294,7 @@ def test_a_treatment_coded_contrast_names_the_cohort_column_it_came_from(
     _run(out_dir, frame=cohort)
 
     table = pd.read_csv(out_dir / "adjusted_association_coefficients.csv")
-    contrast = table[table["term"] == "sex=Male"]
+    contrast = table[table["term"] == "sex__is_Male"]
     assert len(contrast) == 1
     assert contrast.iloc[0]["source_variable"] == "sex"
     assert contrast.iloc[0]["term_role"] == "adjustment"

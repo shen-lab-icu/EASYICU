@@ -280,6 +280,7 @@ class StepRepairBudget:
                 provider_snapshot["logical_repair_transport_states"]
             )
         self._provider_receipt_relative_path = provider_receipt_relative_path
+        self._semantic_escalation_recorder: Optional[Callable[[Any], None]] = None
 
     @property
     def llm_repair_attempts(self) -> int:
@@ -288,6 +289,19 @@ class StepRepairBudget:
     @property
     def provider_budget(self) -> StepProviderCallBudget:
         return self._provider_budget
+
+    def bind_semantic_escalation_recorder(
+        self, recorder: Callable[[Any], None]
+    ) -> None:
+        """Attach the step-scoped sink for prohibited scientific rewrites."""
+
+        self._semantic_escalation_recorder = recorder
+
+    def record_semantic_escalation(self, escalation: Any) -> None:
+        """Forward one prohibited rewrite to the bound execution sink."""
+
+        if self._semantic_escalation_recorder is not None:
+            self._semantic_escalation_recorder(escalation)
 
     def sync_provider(self) -> None:
         """Project the provider-budget snapshot into the step record."""
@@ -363,7 +377,9 @@ class StepRepairBudget:
         )
         if stage is None:
             return limit
-        spent = [str(item).strip() for item in self._provider_budget.logical_repair_classes]
+        spent = [
+            str(item).strip() for item in self._provider_budget.logical_repair_classes
+        ]
         if any(item in stage for item in spent):
             return limit
         # One repair for this stage, whenever it is reached. Expressed against
@@ -455,9 +471,7 @@ class StepRepairBudget:
             # Otherwise the record reads "budget 2, attempts 3" with nothing
             # saying why. The reserve is a host decision and belongs in the
             # manifest beside the allowance it extends.
-            self._step_record.setdefault(
-                "step_llm_repair_terminal_gate_reserve", []
-            )
+            self._step_record.setdefault("step_llm_repair_terminal_gate_reserve", [])
             reserves = self._step_record["step_llm_repair_terminal_gate_reserve"]
             if isinstance(reserves, list):
                 reserves.append(normalized_class)
@@ -745,6 +759,7 @@ def authorized_deterministic_concept_repair(
     step: Any,
     source: str,
     context: Optional[Any] = None,
+    on_semantic_escalation: Optional[Callable[[Any], None]] = None,
 ) -> Tuple[str, List[str]]:
     """Return an all-or-nothing centrally authorized mechanical repair."""
 
@@ -754,6 +769,7 @@ def authorized_deterministic_concept_repair(
         repair_reasons=repair_reasons,
         repair_findings=repair_findings,
         step=step,
+        on_semantic_escalation=on_semantic_escalation,
     )
     if context is not None:
         binary_guarded = patch_observed_binary_primary_exposure_guard(

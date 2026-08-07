@@ -1,36 +1,36 @@
 {
   "tool_version": "1.8.0",
-  "tool_sha256": "cd96c78ba7d411f6479e61fcd68ab32db65baa9c7cec79f004b827ac9c48af49",
+  "tool_sha256": "456d2f0f15f27ba80b195649b06f64e2d61852ae71a69c9d388d4dee3fdb0e3a",
   "shim_import_paths": [],
   "files": {
     "execution/phase.py": {
-      "loc": 11933,
-      "sha256": "6224923c8ebb06610d9fa1b02bdbe32c10448496ddffa7df7bc4c00fb2c3b141",
-      "intra_package_import_edges": 79,
+      "loc": 12433,
+      "sha256": "d420bfb6620b2a8f0a26238f1f73891aed39a50c749ec7d7671f7f4141a442a2",
+      "intra_package_import_edges": 95,
       "shim_bypass_violations": []
     },
     "pipeline.py": {
-      "loc": 11283,
-      "sha256": "5b61cbd6344124228d793eb57d614f8d6309b76da4db128cbe2549a2f1bd9198",
-      "intra_package_import_edges": 100,
+      "loc": 11367,
+      "sha256": "17603ac252b8c89ac84ed71e190e31419b311fe7330d10ac78b1162bbace90e9",
+      "intra_package_import_edges": 101,
       "shim_bypass_violations": []
     },
     "reporting/readiness.py": {
-      "loc": 3138,
-      "sha256": "29968add8ff916e655f2e181649d1be6a5d77bdfa117d9493b68e0e50894dee5",
-      "intra_package_import_edges": 14,
+      "loc": 2815,
+      "sha256": "1e6584b0ee3e4a583203167c6a0d350ba8329bc5ed1a7236d9c8cae0671b6f05",
+      "intra_package_import_edges": 20,
       "shim_bypass_violations": []
     },
     "authority/typed_binding.py": {
-      "loc": 1628,
-      "sha256": "7ce0f1a43e796a53cf785117278b193f6bbc320b6c66df79a8652c22a83ac939",
-      "intra_package_import_edges": 11,
+      "loc": 2217,
+      "sha256": "a2b5bfb98824761d45ef48c482db24231d395cc4a04d7ba9f5d6a129857754cf",
+      "intra_package_import_edges": 13,
       "shim_bypass_violations": []
     },
     "authority/plan_authority.py": {
-      "loc": 370,
-      "sha256": "5756e1f543b1f0a6ee3c982855a7b8161e26f96d36035cb2b7272b55c3537c63",
-      "intra_package_import_edges": 8,
+      "loc": 389,
+      "sha256": "71b62ceeccc907bb4c2cc677366ad9faac9db5506b4cbb276f98ce64e69f8e85",
+      "intra_package_import_edges": 10,
       "shim_bypass_violations": []
     },
     "authority/typed_input_receipt.py": {
@@ -46,62 +46,68 @@
       "shim_bypass_violations": []
     },
     "authority/development_projection.py": {
-      "loc": 154,
-      "sha256": "bf7b8be1494b5d0d977a9c626ed3a3fbb4e3eaac654b58d171db9bf5225d9f2c",
-      "intra_package_import_edges": 3,
+      "loc": 190,
+      "sha256": "23998324970e91b1a459f420bc59753a064e710e7ce35ab2f985036a4af9b216",
+      "intra_package_import_edges": 4,
       "shim_bypass_violations": []
     },
     "gates/preflight.py": {
-      "loc": 8606,
-      "sha256": "ed3536fe04612e18bf452cc9a26f9046a438dd9e818ce5fafcdbfafe16fea287",
-      "intra_package_import_edges": 9,
+      "loc": 9044,
+      "sha256": "d3d35f19281d953cc5ed581789adb127e6c2718ca00049527228b5ef7e881f48",
+      "intra_package_import_edges": 11,
       "shim_bypass_violations": []
     },
     "gates/typed_input.py": {
-      "loc": 308,
-      "sha256": "024d5e332283f181704200a2740a4eefa6f9a80f6ec1df12088d7616db2bbb6e",
+      "loc": 529,
+      "sha256": "1205379a0d3dbafc22d463156073044b32178d0c7acf992394f6d271043be7d1",
       "intra_package_import_edges": 2,
       "shim_bypass_violations": []
     },
     "repairs/source.py": {
-      "loc": 8007,
-      "sha256": "6dc05ee5920c78ba6e629f0d1f7465634be0e9eb9bdf5090dbf2af357c65b41f",
-      "intra_package_import_edges": 26,
+      "loc": 7318,
+      "sha256": "4753dc4c8bcf456ed11d5618de2921b7b05f1ce5bc35ded4daafda76e890dd4b",
+      "intra_package_import_edges": 31,
       "shim_bypass_violations": []
     },
     "repairs/typed_input.py": {
-      "loc": 635,
-      "sha256": "82bde50102a58a5b12d388db9842a3352561f6917a94b7d071bd8ec4ce3141a4",
+      "loc": 976,
+      "sha256": "d5f1a049539bb89625194c1e86c55e7439fe494985eda96daff942ebfe645ab9",
       "intra_package_import_edges": 2,
       "shim_bypass_violations": []
     },
     "audits/validators.py": {
-      "loc": 13236,
-      "sha256": "fdacb273500c2bb57f4c51cf1c624bfbc1c38d7045d5054d010b3334c19fd688",
-      "intra_package_import_edges": 13,
+      "loc": 13816,
+      "sha256": "b3e4d2b0d80ae16a5b8b62cc8177d5b22715766aa9a590f3ce8dd84e159fbc41",
+      "intra_package_import_edges": 14,
       "shim_bypass_violations": []
     },
     "plan_utils.py": {
-      "loc": 5044,
-      "sha256": "3ed671903d5ecd4d8609f2d308eed5a3d512cbb73b84e4d15616aa4a78971e87",
-      "intra_package_import_edges": 10,
+      "loc": 5106,
+      "sha256": "923b30de7fa003e1c5cf68d3cf2a972bb5d2a649c74bfa067b687ab29eaea5b9",
+      "intra_package_import_edges": 12,
       "shim_bypass_violations": []
     },
     "agents/core.py": {
-      "loc": 4453,
-      "sha256": "09ecf067b5bb8b93828b17963615b3c759c79bad29a7956b401d690624d9e531",
-      "intra_package_import_edges": 32,
+      "loc": 4933,
+      "sha256": "4db54beada4b929444009f01739ee539273f663f0ca4c71c0b03d9f5177a1fc2",
+      "intra_package_import_edges": 41,
+      "shim_bypass_violations": []
+    },
+    "schema.py": {
+      "loc": 3361,
+      "sha256": "b9378795911f4edb3433b1ff2b28440a365f265d86135c98ae541b35a3719474",
+      "intra_package_import_edges": 6,
       "shim_bypass_violations": []
     },
     "contracts/declared_product.py": {
-      "loc": 3536,
-      "sha256": "21ddfd5f729f710f0fdb8e1e5623ec3017c051523a207272abbcbfcd63ab8936",
+      "loc": 3629,
+      "sha256": "0f9f1c7427581f5195cb33e036096cc00890e7b0f077bd43206714d340931983",
       "intra_package_import_edges": 5,
       "shim_bypass_violations": []
     },
     "figures/skill.py": {
-      "loc": 3573,
-      "sha256": "c3559aed662a55e634ae943555ea422002b9463d02fa6742f67af3bc70c289bc",
+      "loc": 3588,
+      "sha256": "d716328eafa65c14c7a5a59163d078396ceb0582fb54c009696b0a1c016a8963",
       "intra_package_import_edges": 8,
       "shim_bypass_violations": []
     },
@@ -114,29 +120,29 @@
   },
   "functions": {
     "execution/phase.py::_execute_one_step": {
-      "lines": 6381,
-      "line_start": 5090,
-      "direct_nested_funcs": 22,
-      "total_nested_funcs": 24,
-      "own_bound_names": 355,
+      "lines": 6743,
+      "line_start": 5028,
+      "direct_nested_funcs": 23,
+      "total_nested_funcs": 25,
+      "own_bound_names": 361,
       "own_nonlocal_names": [
         "runtime_state"
       ],
       "own_nonlocal_count": 1,
-      "callable_closure_captured_names": 30
+      "callable_closure_captured_names": 33
     },
     "execution/phase.py::run_execute_phase": {
-      "lines": 8146,
-      "line_start": 3788,
+      "lines": 8890,
+      "line_start": 3544,
       "direct_nested_funcs": 15,
-      "total_nested_funcs": 43,
-      "own_bound_names": 145,
+      "total_nested_funcs": 45,
+      "own_bound_names": 161,
       "own_nonlocal_names": [],
       "own_nonlocal_count": 0,
       "callable_closure_captured_names": 79
     }
   },
-  "baseline_reason": "History-preserving re-emit at the same measured state. No metric moves: this run exists so the file carries a baseline_history, and so the +2,641 LOC across 12 files that the 2026-07-27 follow-up emit erased can be restored alongside it.",
+  "baseline_reason": "Remove the duplicate Planner input roster from the initial Coder binding contract; Step inputs remains authoritative and the wide-trajectory payload now passes the 42 KB transport gate without dropping coordinates.",
   "baseline_history": [
     {
       "reason": "Re-baselined after the 2026-07-24..2026-07-27 external-review hardening batch (19 commits): fail-closed concept outcomes, human-review state drift + payload-tamper guards, provider budget/resume accounting, three deterministic executors, scientific-table validation. All growth is reviewed hardening, not drift. Decomposing pipeline.py / execution/phase.py / repairs/source.py remains the open architectural workstream and is NOT authorized by this refresh.",
@@ -206,6 +212,66 @@
     },
     {
       "reason": "History-preserving re-emit at the same measured state. No metric moves: this run exists so the file carries a baseline_history, and so the +2,641 LOC across 12 files that the 2026-07-27 follow-up emit erased can be restored alongside it."
+    },
+    {
+      "reason": "Re-adjudicated the stale 2026-07-27 ratchet after 479 commits of typed host-authority and fail-closed contract work through eadfec0, then the reviewed model-contract consolidation in this change. The 21 regressions all predated this task; repairs/source.py and reporting/readiness.py remain below the old baseline, semantic-repair state was extracted from the execute closure, the module graph remains acyclic, and affected tests are green. Accepted growth is recorded rather than hidden; pipeline.py/execution/phase.py decomposition remains tracked debt, and schema.py is newly ratcheted from this exact state.",
+      "accepted_growth": {
+        "execution/phase.py": {
+          "loc_was": 11933,
+          "loc_now": 12433
+        },
+        "pipeline.py": {
+          "loc_was": 11283,
+          "loc_now": 11367
+        },
+        "authority/typed_binding.py": {
+          "loc_was": 1628,
+          "loc_now": 2217
+        },
+        "authority/plan_authority.py": {
+          "loc_was": 370,
+          "loc_now": 389
+        },
+        "authority/development_projection.py": {
+          "loc_was": 154,
+          "loc_now": 190
+        },
+        "gates/preflight.py": {
+          "loc_was": 8606,
+          "loc_now": 9044
+        },
+        "gates/typed_input.py": {
+          "loc_was": 308,
+          "loc_now": 529
+        },
+        "repairs/typed_input.py": {
+          "loc_was": 635,
+          "loc_now": 976
+        },
+        "audits/validators.py": {
+          "loc_was": 13236,
+          "loc_now": 13816
+        },
+        "plan_utils.py": {
+          "loc_was": 5044,
+          "loc_now": 5106
+        },
+        "agents/core.py": {
+          "loc_was": 4453,
+          "loc_now": 4934
+        },
+        "contracts/declared_product.py": {
+          "loc_was": 3536,
+          "loc_now": 3629
+        },
+        "figures/skill.py": {
+          "loc_was": 3573,
+          "loc_now": 3588
+        }
+      }
+    },
+    {
+      "reason": "Remove the duplicate Planner input roster from the initial Coder binding contract; Step inputs remains authoritative and the wide-trajectory payload now passes the 42 KB transport gate without dropping coordinates."
     }
   ]
 }

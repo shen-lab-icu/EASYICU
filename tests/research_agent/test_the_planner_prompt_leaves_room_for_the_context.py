@@ -51,7 +51,16 @@ from easyicu.research_agent.schema import CohortDescriptor, ResearchContext
 #: byte was measured against this fixed probe first; measuring only the
 #: with-context total is the mistake this file exists to catch, and it recurred
 #: here -- the with-context headroom read 38 KB while the fixed part was over.
-FIXED_PROMPT_BYTE_BUDGET = 50_600
+#:
+#: RAISED 2026-08-07, 50,600 -> 51,600, after exact-start adjudication showed
+#: ``eadfec0`` already rendered 51,599 fixed bytes.  The scientific-contract
+#: consolidation is 95 bytes smaller (51,504), while adding the model-term,
+#: exact-estimator, time-unit and PH-policy keys the Planner must be shown.
+#: The provider-free nine-task resource fixture now peaks at 61,345 of the
+#: reviewed 120,000-byte transport envelope.  Even conservatively adding the
+#: whole 1,000-byte ratchet move to the prior real-context worst case leaves
+#: 36,652 bytes spare (83,348 of 120,000); no context was evicted or truncated.
+FIXED_PROMPT_BYTE_BUDGET = 51_600
 
 #: The nine recorded contexts at the raise, worst first. Concrete, so a later
 #: raise has to beat a real number rather than a round one.
@@ -107,9 +116,9 @@ def test_the_budget_leaves_the_room_the_recorded_failure_needed(fixed_bytes):
     )
     room = _PLANNER_PROMPT_BYTE_LIMIT - fixed_bytes
 
-    assert (
-        h1_context_bytes > 0
-    ), "the arithmetic below is only meaningful if h1's context is real"
+    assert h1_context_bytes > 0, (
+        "the arithmetic below is only meaningful if h1's context is real"
+    )
     assert room > h1_context_bytes, (
         f"the directive leaves {room} bytes for a typed context, but h1 "
         f"carried {h1_context_bytes}. That task plans only by luck."

@@ -27,7 +27,7 @@ from easyicu.research_agent.execution.owner_declaration import (
 )
 from easyicu.research_agent.schema import AnalysisPlan
 
-from .test_adjusted_association_executor import _real_step_payload
+from .test_adjusted_association_executor import _model_terms, _real_step_payload
 from .test_gate_evaluator_contract import gate_call_order
 
 _COVARIATES = ["age", "sex", "charlson_max"]
@@ -77,6 +77,7 @@ def test_the_gate_fires_on_the_recorded_plan_step():
 def test_a_complete_declaration_produces_no_finding():
     payload = json.loads(json.dumps(_real_step_payload()))
     payload["model_requirements"][0]["covariates"] = list(_COVARIATES)
+    payload["model_requirements"][0]["model_terms"] = _model_terms(_COVARIATES)
     assert owner_declaration_plan_findings(plan=_plan(payload)) == []
 
 
@@ -122,7 +123,7 @@ def test_a_step_no_owner_recognises_produces_no_finding():
 
 
 def test_a_step_whose_selection_raises_is_reported_unevaluated(monkeypatch):
-    """"Could not check" must never be recorded as "checked, fine"."""
+    """ "Could not check" must never be recorded as "checked, fine"."""
 
     def _boom(*_args, **_kwargs):
         raise RuntimeError("selector exploded")
@@ -156,7 +157,14 @@ def test_the_directive_forbids_changing_the_science():
     lowered = directive.lower()
     # A replanner that "fixes" a missing declaration by choosing the value, or
     # by removing the step, has changed the study to satisfy bookkeeping.
-    for forbidden in ("exposure", "outcome", "cohort", "covariate", "estimand", "method"):
+    for forbidden in (
+        "exposure",
+        "outcome",
+        "cohort",
+        "covariate",
+        "estimand",
+        "method",
+    ):
         assert forbidden in lowered
     assert "do not split or merge steps" in lowered
     assert "do not delete a step" in lowered
@@ -209,9 +217,7 @@ def test_the_gate_forces_the_replan_it_asked_for():
         and getattr(node.func, "id", None) == "_maybe_replan"
     )
     forced = next(kw for kw in call.keywords if kw.arg == "force")
-    names = {
-        node.id for node in ast.walk(forced.value) if isinstance(node, ast.Name)
-    }
+    names = {node.id for node in ast.walk(forced.value) if isinstance(node, ast.Name)}
     assert "owner_declaration_preflight" in names
 
     directive = next(kw for kw in call.keywords if kw.arg == "directive")
@@ -236,5 +242,7 @@ def test_the_gate_is_keyed_on_the_typed_product_not_a_case_name(product: str):
         "src/easyicu/research_agent/execution/owner_declaration.py"
     ).read_text(encoding="utf-8")
     for case_token in ("sep3", "lactate", "mimic", "E1_", "death", "sofa"):
-        assert case_token not in source, f"case-specific token {case_token!r} in the gate"
+        assert case_token not in source, (
+            f"case-specific token {case_token!r} in the gate"
+        )
     assert product not in source

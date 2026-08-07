@@ -574,8 +574,11 @@ def test_robustness_lock_resume_rehydrates_only_legacy_timestamp_drift(
     assert repair.metadata["llm_signature"] == "mock"
 
 
-def test_plan_payload_normalizer_drops_extra_robustness_spec_keys(ra) -> None:
+def test_plan_payload_normalizer_retries_extra_robustness_spec_keys(ra) -> None:
     from easyicu.research_agent.agents.core import _normalise_plan_payload
+    from easyicu.research_agent.agents.plan_payload import (
+        PlannerScientificProjectionError,
+    )
     from easyicu.research_agent.robustness.panel import default_robustness_specs
     from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
@@ -585,32 +588,21 @@ def test_plan_payload_normalizer_drops_extra_robustness_spec_keys(ra) -> None:
         payload["missing_handling"] = "listwise deletion"
         specs.append(payload)
 
-    data, dropped = _normalise_plan_payload(
-        {
-            "research_question": "Does severity predict mortality?",
-            "steps": [
-                {
-                    "step_id": "01_model",
-                    "planned_analysis_role": "primary",
-                    "intent": "Fit the primary model.",
-                    "expected_outputs": ["statistic:primary_or"],
-                }
-            ],
-            "robustness_specs": specs,
-        }
-    )
-
-    assert all("missing_handling" not in spec for spec in data["robustness_specs"])
-    assert len(dropped["robustness_specs"]) == len(specs)
-    assert all(
-        item.endswith(":missing_handling") for item in dropped["robustness_specs"]
-    )
-    plan = AnalysisPlan(
-        research_question=data["research_question"],
-        steps=[AnalysisStep(**data["steps"][0])],
-        robustness_specs=data["robustness_specs"],
-    )
-    assert len(plan.robustness_specs) == len(specs)
+    with pytest.raises(PlannerScientificProjectionError, match="missing_handling"):
+        _normalise_plan_payload(
+            {
+                "research_question": "Does severity predict mortality?",
+                "steps": [
+                    {
+                        "step_id": "01_model",
+                        "planned_analysis_role": "primary",
+                        "intent": "Fit the primary model.",
+                        "expected_outputs": ["statistic:primary_or"],
+                    }
+                ],
+                "robustness_specs": specs,
+            }
+        )
 
 
 def test_each_spec_produces_panel_row() -> None:
@@ -905,7 +897,7 @@ def test_robustness_variants_adjust_for_primary_covariates(tmp_path: Path) -> No
     step_dir = tmp_path / "steps" / "03_primary_model"
     (step_dir / "outputs").mkdir(parents=True)
     (step_dir / "analysis.py").write_text(
-        "covariates = ['age']\n" "# formula = 'death ~ lactate + age'\n",
+        "covariates = ['age']\n# formula = 'death ~ lactate + age'\n",
         encoding="utf-8",
     )
 

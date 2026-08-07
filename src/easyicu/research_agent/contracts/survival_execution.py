@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from typing import Any, Iterable
 
-from .model_tokens import normalise_model_contract_token
+from .model_terms import validate_model_term_roster
+from .model_tokens import (
+    SURVIVAL_COX_ESTIMATOR,
+    SURVIVAL_PH_DIAGNOSTIC,
+    normalise_model_contract_token,
+)
 from .ownership_verdict import OwnershipVerdict
 from .survival import (
     SURVIVAL_ANALYSIS_RECEIPT_PRODUCT,
@@ -62,7 +67,7 @@ def survival_execution_verdict(
             ),
         )
     unsupported: list[str] = []
-    if "cox" not in normalise_model_contract_token(requirement.estimator):
+    if requirement.estimator != SURVIVAL_COX_ESTIMATOR:
         unsupported.append("estimator")
     if normalise_model_contract_token(requirement.effect_scale) != "hazard_ratio":
         unsupported.append("effect_scale")
@@ -78,11 +83,17 @@ def survival_execution_verdict(
         "no_competing_risk",
     }:
         unsupported.append("competing_risk_strategy")
-    if "schoenfeld" not in normalise_model_contract_token(
-        requirement.proportional_hazards_diagnostic
-    ):
+    if requirement.proportional_hazards_diagnostic != SURVIVAL_PH_DIAGNOSTIC:
         unsupported.append("proportional_hazards_diagnostic")
-    if requirement.exposure_encoding != "numeric_linear":
+    if requirement.proportional_hazards_alpha is None:
+        unsupported.append("proportional_hazards_alpha")
+    if requirement.proportional_hazards_policy not in {
+        "report_only",
+        "block_paper_authorization",
+        "human_review",
+    }:
+        unsupported.append("proportional_hazards_policy")
+    if requirement.exposure_encoding != "declared_model_terms":
         unsupported.append("exposure_encoding")
     if requirement.missing_data_policy != "complete_case":
         unsupported.append("missing_data_policy")
@@ -92,6 +103,17 @@ def survival_execution_verdict(
         unsupported.append("time_horizon_value")
     if requirement.covariates is None:
         unsupported.append("covariates")
+    try:
+        exposure_term, _ = validate_model_term_roster(
+            terms=requirement.model_terms,
+            exposure=requirement.exposure_source,
+            covariates=requirement.covariates,
+        )
+    except ValueError:
+        unsupported.append("model_terms")
+    else:
+        if exposure_term.coding == "categorical":
+            unsupported.append("categorical_exposure_product_shape")
     if unsupported:
         return OwnershipVerdict.wrong_shape(
             SURVIVAL_PRIMARY_ANALYSIS_KIND,

@@ -29,7 +29,7 @@ import math
 from pathlib import Path
 import re
 import textwrap
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Set
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Set
 
 import numpy as np
 import pandas as pd
@@ -38,6 +38,7 @@ _TRY_STAR_NODE_TYPES = (
     (try_star_type,) if (try_star_type := getattr(ast, "TryStar", None)) else ()
 )
 _TRY_NODE_TYPES = (ast.Try, *_TRY_STAR_NODE_TYPES)
+
 
 from ..scalar_utils import (
     _coerce_scalar,
@@ -116,6 +117,11 @@ from .input_scope import (
     patch_raw_input_physical_superset_guard,
 )
 from .preflight import patch_preflight_repairs
+from .semantic_boundary import (
+    SemanticRepairEscalation,
+    mechanical_repair_batch_or_escalate,
+    mechanical_repair_or_escalate,
+)
 from .reasons import RepairReason
 from .typed_input import (
     patch_all_rows_outcome_coordinate_filter,
@@ -817,9 +823,7 @@ def _patch_closed_counts_stable_keywords(
         ]
         if len(level_keywords) > 1:
             return code
-        level_expression = (
-            keyword_map[level_keywords[0]] if level_keywords else None
-        )
+        level_expression = keyword_map[level_keywords[0]] if level_keywords else None
         if level_expression is None:
             function: ast.AST | None = call
             while function is not None and not isinstance(
@@ -1062,8 +1066,9 @@ def _patch_host_helper_keyword_only_call(
                     import_node = inspect_imports[0]
                     repaired_lines = repaired.splitlines(keepends=True)
                     del repaired_lines[
-                        int(import_node.lineno)
-                        - 1 : int(import_node.end_lineno or import_node.lineno)
+                        int(import_node.lineno) - 1 : int(
+                            import_node.end_lineno or import_node.lineno
+                        )
                     ]
                     repaired = "".join(repaired_lines)
                     try:
@@ -2639,7 +2644,7 @@ def _patch_pre312_fstring_subscript_quotes(
     return repaired
 
 
-def deterministic_concept_audit_repair(
+def _deterministic_concept_audit_repair_candidate(
     code: str,
     audit_messages: Sequence[str],
     *,
@@ -2677,10 +2682,7 @@ def deterministic_concept_audit_repair(
             repair_findings=repair_findings,
         )
     )
-    if (
-        profile_roles_repair_name is not None
-        and repaired_profile_roles != repaired
-    ):
+    if profile_roles_repair_name is not None and repaired_profile_roles != repaired:
         repaired = repaired_profile_roles
         repair_names.append(profile_roles_repair_name)
 
@@ -3035,6 +3037,39 @@ def deterministic_concept_audit_repair(
     return repaired, repair_names
 
 
+def deterministic_concept_audit_repair(
+    code: str,
+    audit_messages: Sequence[str],
+    *,
+    repair_reasons: Sequence[RepairReason] = (),
+    repair_findings: Sequence[ValidationFinding] = (),
+    step: Any = None,
+    on_semantic_escalation: Optional[Callable[[SemanticRepairEscalation], None]] = None,
+) -> tuple[str, List[str]]:
+    """Expose only science-neutral concept repairs at the generic boundary.
+
+    Concept preflight is an all-or-nothing source transformation.  If any
+    candidate would change estimator, predictors, coding, missingness, or the
+    analysis population, keep the original script byte-for-byte and surface a
+    typed replan/human-review escalation instead.
+    """
+
+    candidate_code, repair_names = _deterministic_concept_audit_repair_candidate(
+        code,
+        audit_messages,
+        repair_reasons=repair_reasons,
+        repair_findings=repair_findings,
+        step=step,
+    )
+    return mechanical_repair_batch_or_escalate(
+        original_code=code,
+        candidate_code=candidate_code,
+        repair_ids=repair_names,
+        source="deterministic_concept_audit_repair",
+        callback=on_semantic_escalation,
+    )
+
+
 _PROVENANCE_FAILURE_KEYS = frozenset({"invalid_pair_n", "discordant_n"})
 _PROVENANCE_DECISION_KEYS = (
     "fail_closed",
@@ -3086,6 +3121,31 @@ def _provenance_count_key(node: ast.AST) -> Optional[str]:
     ):
         return key_node.value
     return None
+
+
+def _deterministic_runner_repair(
+    *,
+    code: str,
+    run_log: str,
+    previous_repair: Optional[str] = None,
+    analysis_family: Optional[str] = None,
+    resolved_input_bindings: Mapping[str, Any] | None = None,
+    on_semantic_escalation: Optional[Callable[[SemanticRepairEscalation], None]] = None,
+) -> Optional[tuple[str, str]]:
+    """Return a runtime repair only when it cannot change scientific design."""
+
+    candidate = _deterministic_runner_repair_candidate(
+        code=code,
+        run_log=run_log,
+        previous_repair=previous_repair,
+        analysis_family=analysis_family,
+        resolved_input_bindings=resolved_input_bindings,
+    )
+    return mechanical_repair_or_escalate(
+        candidate,
+        source="deterministic_runner_repair",
+        callback=on_semantic_escalation,
+    )
 
 
 def _is_literal_numeric_zero(node: ast.AST) -> bool:
@@ -4395,7 +4455,7 @@ def _patch_overadjustment_covariate_filter(
     return dedupe_re.sub(_rewrite, code, count=1)
 
 
-def _deterministic_summary_repair(
+def _deterministic_summary_repair_candidate(
     *,
     code: str,
     step_summary: Dict[str, Any],
@@ -4568,7 +4628,7 @@ def _deterministic_summary_repair(
         if dtype_summary_failure and _statsmodels_repair_allowed_for_family(
             code, analysis_family
         ):
-            repaired = _deterministic_runner_repair(
+            repaired = _deterministic_runner_repair_candidate(
                 code=code,
                 run_log=summary_text,
                 previous_repair=previous_repair,
@@ -4579,7 +4639,7 @@ def _deterministic_summary_repair(
         if index_alignment_summary_failure and _statsmodels_repair_allowed_for_family(
             code, analysis_family
         ):
-            repaired = _deterministic_runner_repair(
+            repaired = _deterministic_runner_repair_candidate(
                 code=code,
                 run_log=summary_text,
                 previous_repair=previous_repair,
@@ -4680,8 +4740,10 @@ def _deterministic_summary_repair(
                 """).strip("\n")
             repaired = re.sub(
                 r"^(?P<indent>\s*)model_df = model_df\.apply\(pd\.to_numeric, errors=\"coerce\"\)",
-                lambda match: match.group("indent")
-                + replacement.replace("\n", "\n" + match.group("indent")),
+                lambda match: (
+                    match.group("indent")
+                    + replacement.replace("\n", "\n" + match.group("indent"))
+                ),
                 code,
                 count=1,
                 flags=re.MULTILINE,
@@ -4790,6 +4852,29 @@ def _deterministic_summary_repair(
     return None
 
 
+def _deterministic_summary_repair(
+    *,
+    code: str,
+    step_summary: Dict[str, Any],
+    previous_repair: Optional[str] = None,
+    analysis_family: Optional[str] = None,
+    on_semantic_escalation: Optional[Callable[[SemanticRepairEscalation], None]] = None,
+) -> Optional[tuple[str, str]]:
+    """Return a summary repair only when it cannot change scientific design."""
+
+    candidate = _deterministic_summary_repair_candidate(
+        code=code,
+        step_summary=step_summary,
+        previous_repair=previous_repair,
+        analysis_family=analysis_family,
+    )
+    return mechanical_repair_or_escalate(
+        candidate,
+        source="deterministic_summary_repair",
+        callback=on_semantic_escalation,
+    )
+
+
 def _patch_unresolved_input_binding_receipts(
     code: str,
     *,
@@ -4852,9 +4937,7 @@ def _patch_unresolved_input_binding_receipts(
                     valid_literal = False
                     break
                 item_key: Optional[str] = None
-                for item_field, item_value in zip(
-                    item.keys, item.values, strict=True
-                ):
+                for item_field, item_value in zip(item.keys, item.values, strict=True):
                     if (
                         isinstance(item_field, ast.Constant)
                         and item_field.value == "input_key"
@@ -4892,9 +4975,7 @@ def _patch_unresolved_input_binding_receipts(
     repaired = (
         code[: _absolute_offset(candidate.lineno, candidate.col_offset)]
         + "[]"
-        + code[
-            _absolute_offset(candidate.end_lineno, candidate.end_col_offset) :
-        ]
+        + code[_absolute_offset(candidate.end_lineno, candidate.end_col_offset) :]
     )
     try:
         ast.parse(repaired)
@@ -4903,7 +4984,7 @@ def _patch_unresolved_input_binding_receipts(
     return repaired
 
 
-def deterministic_contract_repair(
+def _deterministic_contract_repair_candidate(
     *,
     code: str,
     findings: Sequence[Any],
@@ -5038,6 +5119,27 @@ def deterministic_contract_repair(
         if repaired != code:
             return repair_name, repaired
     return None
+
+
+def deterministic_contract_repair(
+    *,
+    code: str,
+    findings: Sequence[Any],
+    previous_repair: Optional[str] = None,
+    on_semantic_escalation: Optional[Callable[[SemanticRepairEscalation], None]] = None,
+) -> Optional[tuple[str, str]]:
+    """Expose only implementation-preserving contract repairs."""
+
+    candidate = _deterministic_contract_repair_candidate(
+        code=code,
+        findings=findings,
+        previous_repair=previous_repair,
+    )
+    return mechanical_repair_or_escalate(
+        candidate,
+        source="deterministic_contract_repair",
+        callback=on_semantic_escalation,
+    )
 
 
 # Captures ``NameError: name 'foo' is not defined`` for use by Fix F.
@@ -5350,7 +5452,7 @@ def _patch_scalar_cast_before_reduction(code: str) -> str:
     return repaired
 
 
-def _deterministic_runner_repair(
+def _deterministic_runner_repair_candidate(
     *,
     code: str,
     run_log: str,
@@ -5904,9 +6006,8 @@ def _deterministic_runner_repair(
         "indices for endog and exog are not aligned" in lowered
         and any(token in code for token in ("sm.Logit(", "sm.OLS(", "sm.GLM("))
     )
-    if (
-        statsmodels_endog_exog_index_mismatch
-        and _statsmodels_repair_allowed_for_family(code, analysis_family)
+    if statsmodels_endog_exog_index_mismatch and _statsmodels_repair_allowed_for_family(
+        code, analysis_family
     ):
         repair_name = "statsmodels_endog_exog_index_align_v1"
         if previous_repair != repair_name:
@@ -6397,7 +6498,8 @@ def _deterministic_runner_repair(
     if table_one_unclosed_syntax:
         repair_name = "table_one_descriptive_repair_v1"
         if previous_repair != repair_name:
-            repaired = textwrap.dedent("""
+            repaired = (
+                textwrap.dedent("""
                 import json
                 import os
                 import math
@@ -6479,7 +6581,9 @@ def _deterministic_runner_repair(
                 with open(os.path.join(out_dir, "step_summary.json"), "w", encoding="utf-8") as f:
                     json.dump(summary, f, indent=2, default=to_jsonable)
                 print(json.dumps({"table": "table_one.csv", "summary": summary}, default=to_jsonable))
-                """).strip() + "\n"
+                """).strip()
+                + "\n"
+            )
             return repair_name, repaired
 
     outcome_incidence_broken_syntax = "syntaxerror" in lowered and (
@@ -6489,7 +6593,8 @@ def _deterministic_runner_repair(
     if outcome_incidence_broken_syntax:
         repair_name = "outcome_incidence_descriptive_repair_v1"
         if previous_repair != repair_name:
-            repaired = textwrap.dedent("""
+            repaired = (
+                textwrap.dedent("""
                 import json
                 import os
                 import math
@@ -6582,7 +6687,9 @@ def _deterministic_runner_repair(
                 with open(os.path.join(out_dir, "step_summary.json"), "w", encoding="utf-8") as f:
                     json.dump(summary, f, indent=2, default=to_jsonable)
                 print(json.dumps(summary, default=to_jsonable))
-                """).strip() + "\n"
+                """).strip()
+                + "\n"
+            )
             return repair_name, repaired
 
     repeated_keyword_syntax = (
@@ -6593,7 +6700,8 @@ def _deterministic_runner_repair(
     if repeated_keyword_syntax and binary_model_repair_allowed:
         repair_name = "prediction_split_minimal_v1"
         if previous_repair != repair_name:
-            repaired = textwrap.dedent("""
+            repaired = (
+                textwrap.dedent("""
                 import json
                 import os
                 import numpy as np
@@ -6647,7 +6755,9 @@ def _deterministic_runner_repair(
                 with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
                     json.dump(step_summary, f, indent=2, default=to_jsonable, ensure_ascii=False)
                 print(json.dumps(step_summary, indent=2, default=to_jsonable, ensure_ascii=False))
-                """).strip() + "\n"
+                """).strip()
+                + "\n"
+            )
             return repair_name, repaired
 
     logreg_nan = (
@@ -6710,7 +6820,8 @@ def _deterministic_runner_repair(
     if placeholder_ellipsis and binary_model_repair_allowed:
         repair_name = "prediction_discrimination_template_v1"
         if previous_repair != repair_name:
-            repaired = textwrap.dedent("""
+            repaired = (
+                textwrap.dedent("""
                 import json
                 import math
                 import os
@@ -6802,7 +6913,9 @@ def _deterministic_runner_repair(
                 with open(os.path.join(step_out_dir, "step_summary.json"), "w", encoding="utf-8") as f:
                     json.dump(step_summary, f, indent=2, default=to_jsonable, ensure_ascii=False)
                 print(json.dumps(step_summary, indent=2, default=to_jsonable, ensure_ascii=False))
-                """).strip() + "\n"
+                """).strip()
+                + "\n"
+            )
             return repair_name, repaired
 
     omitted_primary_predictor = re.search(
@@ -6910,7 +7023,7 @@ def _deterministic_runner_repair(
                     f'summary["outcomes"]["{match.group("outcome")}"]["{match.group("field")}"].get('
                     f'"1", summary["outcomes"]["{match.group("outcome")}"]'
                     f'["{match.group("field")}"].get(1, '
-                    f'{"0" if match.group("field") == "counts" else "0.0"}))'
+                    f"{'0' if match.group('field') == 'counts' else '0.0'}))"
                 ),
                 code,
             )
@@ -6966,7 +7079,8 @@ def _deterministic_runner_repair(
     if publication_style_nameerror:
         repair_name = "publication_bundle_promote_script_v1"
         if previous_repair != repair_name:
-            repaired = textwrap.dedent("""
+            repaired = (
+                textwrap.dedent("""
                 from __future__ import annotations
                 import json
                 import os
@@ -7038,7 +7152,9 @@ def _deterministic_runner_repair(
                 with open(out_dir / "step_summary.json", "w", encoding="utf-8") as f:
                     json.dump(summary, f, indent=2, ensure_ascii=False)
                 print(json.dumps(summary, indent=2, ensure_ascii=False))
-                """).strip() + "\n"
+                """).strip()
+                + "\n"
+            )
             return repair_name, repaired
 
     # ----------------------------------------------------------------
@@ -7190,7 +7306,7 @@ def _deterministic_runner_repair(
 
         repaired = model_call.sub(_rewrite, patched, count=1)
         repaired = repaired.replace(
-            "X_array = X.to_numpy()\n" "y_array = y.to_numpy()\n",
+            "X_array = X.to_numpy()\ny_array = y.to_numpy()\n",
             "y, X = _easyicu_runner_repair_v1(X, y)\n"
             "X_array = np.asarray(X, dtype=float)\n"
             "y_array = np.asarray(y, dtype=float)\n",

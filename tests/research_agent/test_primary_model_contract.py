@@ -698,40 +698,47 @@ def test_primary_model_contract_blocks_planner_requirement_field_drift(
 
 def test_plan_normalizer_preserves_typed_model_requirements() -> None:
     from easyicu.research_agent.agents.core import _normalise_plan_payload
-
-    payload, dropped = _normalise_plan_payload(
-        {
-            "research_question": "Is an exposure associated with an outcome?",
-            "steps": [
-                {
-                    "step_id": "01_model",
-                    "planned_analysis_role": "primary",
-                    "intent": "Fit the planner-selected model.",
-                    "method": "adjusted_association_models",
-                    "expected_outputs": ["table:adjusted_association_estimates"],
-                    "model_requirements": [
-                        {
-                            "requirement_id": "primary_model",
-                            "outcome": "outcome",
-                            "outcome_type": "binary",
-                            "method_family": "logistic_regression",
-                            "exposure_source": "exposure",
-                            "analysis_role": "primary",
-                            "analysis_set": "complete_case",
-                            "required_for_step_success": True,
-                            "case_hint": "must be discarded",
-                        }
-                    ],
-                }
-            ],
-        }
+    from easyicu.research_agent.agents.plan_payload import (
+        PlannerScientificProjectionError,
     )
+
+    raw = {
+        "research_question": "Is an exposure associated with an outcome?",
+        "steps": [
+            {
+                "step_id": "01_model",
+                "planned_analysis_role": "primary",
+                "intent": "Fit the planner-selected model.",
+                "method": "adjusted_association_models",
+                "expected_outputs": ["table:adjusted_association_estimates"],
+                "model_requirements": [
+                    {
+                        "requirement_id": "primary_model",
+                        "outcome": "outcome",
+                        "outcome_type": "binary",
+                        "method_family": "logistic_regression",
+                        "exposure_source": "exposure",
+                        "analysis_role": "primary",
+                        "analysis_set": "complete_case",
+                        "required_for_step_success": True,
+                        "case_hint": "must be discarded",
+                    }
+                ],
+            }
+        ],
+    }
+
+    with pytest.raises(PlannerScientificProjectionError, match="case_hint"):
+        _normalise_plan_payload(raw)
+
+    del raw["steps"][0]["model_requirements"][0]["case_hint"]
+    payload, dropped = _normalise_plan_payload(raw)
 
     plan = AnalysisPlan.model_validate(payload)
     requirement = plan.steps[0].model_requirements[0]
     assert requirement.requirement_id == "primary_model"
     assert requirement.required_for_step_success is True
-    assert dropped["model_requirements"] == ["primary_model:case_hint"]
+    assert dropped["model_requirements"] == []
 
 
 @pytest.mark.parametrize(

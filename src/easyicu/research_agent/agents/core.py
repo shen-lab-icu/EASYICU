@@ -3044,7 +3044,6 @@ def _typed_input_scope_contract(step: AnalysisStep) -> str:
         "pair or add it to provenance discordance.\n"
         f"{typed_cohort_contract}"
         f"{no_provenance_pair_contract}"
-        f"- Exact Planner-declared inputs for this step: {declared_inputs}\n"
         f"- Exact typed inputs for this step: {typed_inputs}\n"
     )
 

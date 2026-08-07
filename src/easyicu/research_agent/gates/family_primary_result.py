@@ -31,6 +31,7 @@ from ..contracts.survival import (
     SURVIVAL_PRIMARY_OWNER,
 )
 from ..contracts.survival_execution import SURVIVAL_PRIMARY_ANALYSIS_KIND
+from ..contracts.time_units import canonical_time_unit
 
 
 _EFFECT_COLUMNS = (
@@ -137,6 +138,21 @@ def _survival_receipt_findings(
                 endpoint_event_column=endpoint.event_column,
             )
         ]
+    time_descriptor = context.variable(str(requirement.time_column))
+    authoritative_time_unit = canonical_time_unit(
+        getattr(time_descriptor, "unit", None)
+    )
+    if authoritative_time_unit is None:
+        return [_finding(step, "survival_time_unit_authority_missing")]
+    if authoritative_time_unit != requirement.time_unit:
+        return [
+            _finding(
+                step,
+                "survival_time_unit_authority_mismatch",
+                authoritative_unit=authoritative_time_unit,
+                requirement_unit=requirement.time_unit,
+            )
+        ]
 
     raw_path = output_files.get(SURVIVAL_ANALYSIS_RECEIPT_PRODUCT)
     if not isinstance(raw_path, str) or not raw_path.strip():
@@ -216,7 +232,11 @@ def _survival_receipt_findings(
         "estimator": requirement.estimator,
         "effect_measure": requirement.effect_measure,
         "covariates": list(requirement.covariates or ()),
+        "model_terms": list(requirement.model_terms or ()),
         "ph_diagnostic_product": SURVIVAL_PH_DIAGNOSTIC_PRODUCT,
+        "time_unit_authority": "research_context_concept_descriptor",
+        "proportional_hazards_alpha": requirement.proportional_hazards_alpha,
+        "proportional_hazards_policy": requirement.proportional_hazards_policy,
     }
     mismatches = {
         field: {"expected": expected, "reported": getattr(receipt, field)}
@@ -232,6 +252,17 @@ def _survival_receipt_findings(
             "reported": receipt.proportional_hazards_diagnostic,
         }
     for field in ("input_evidence_id", "input_sha256"):
+        if getattr(receipt, field) != step_summary.get(field):
+            mismatches[field] = {
+                "expected": step_summary.get(field),
+                "reported": getattr(receipt, field),
+            }
+    for field in (
+        "design_columns",
+        "exposure_design_column",
+        "proportional_hazards_status",
+        "paper_authorization_allowed",
+    ):
         if getattr(receipt, field) != step_summary.get(field):
             mismatches[field] = {
                 "expected": step_summary.get(field),
@@ -256,6 +287,17 @@ def _survival_receipt_findings(
                 step,
                 "survival_host_receipt_binding_mismatch",
                 mismatches=digest_mismatches,
+            )
+        ]
+    if not receipt.paper_authorization_allowed:
+        return [
+            _finding(
+                step,
+                "survival_ph_policy_blocks_paper_authorization",
+                proportional_hazards_p_value=receipt.proportional_hazards_p_value,
+                proportional_hazards_alpha=receipt.proportional_hazards_alpha,
+                proportional_hazards_policy=receipt.proportional_hazards_policy,
+                proportional_hazards_status=receipt.proportional_hazards_status,
             )
         ]
     return []
@@ -340,7 +382,11 @@ def family_primary_result_reconciliation_findings(
     required_columns = {"exposure_source", "outcome", "effect_scale"}
     missing_columns = sorted(required_columns - columns)
     if missing_columns:
-        return [_finding(step, "result_table_missing_contract_columns", fields=missing_columns)]
+        return [
+            _finding(
+                step, "result_table_missing_contract_columns", fields=missing_columns
+            )
+        ]
     if not rows:
         return [_finding(step, "result_table_has_no_rows")]
     matching = [

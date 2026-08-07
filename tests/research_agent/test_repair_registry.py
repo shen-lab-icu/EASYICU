@@ -367,6 +367,28 @@ def test_all_method_substitutions_are_auto_denied() -> None:
         assert not automatic_repair_allowed(repair_id)
 
 
+def test_generic_repair_boundary_escalates_instead_of_mutating_science() -> None:
+    escalations = []
+    code = """
+import statsmodels.api as sm
+model = sm.Logit(y, X)
+result = model.fit(disp=0, method='newton')
+"""
+
+    repaired = code_repair._deterministic_runner_repair(
+        code=code,
+        run_log="numpy.linalg.LinAlgError: Singular matrix",
+        on_semantic_escalation=escalations.append,
+    )
+
+    assert repaired is None
+    assert len(escalations) == 1
+    escalation = escalations[0]
+    assert escalation.repair_id == "rank_safe_statsmodels_design_v1"
+    assert escalation.issue_code == "scientific_design_change_requires_replan"
+    assert escalation.action == "replan_or_human_review"
+
+
 def test_every_generic_repair_entrypoint_crosses_central_authorization_gate() -> None:
     research_agent_root = Path(code_repair.__file__).resolve().parents[1]
     source = (research_agent_root / "execution/phase.py").read_text(encoding="utf-8")
@@ -425,9 +447,9 @@ def test_only_closed_source_figure_renderers_are_structural_and_automatic() -> N
     ):
         metadata = repair_metadata_for(repair_id)
         assert metadata.repair_class is RepairClass.STRUCTURAL, repair_id
-        assert (
-            metadata.execution_policy is RepairExecutionPolicy.SEALED_RENDERER
-        ), repair_id
+        assert metadata.execution_policy is RepairExecutionPolicy.SEALED_RENDERER, (
+            repair_id
+        )
         assert is_sealed_renderer_repair(repair_id), repair_id
         assert metadata.figure_product_slots, repair_id
         assert metadata.planner_methods, repair_id

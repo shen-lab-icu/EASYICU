@@ -1,10 +1,10 @@
 """Schema-driven projection of raw Planner payloads.
 
 This module owns the boundary between untrusted model JSON and the strict
-``AnalysisPlan`` schema.  It removes unsupported keys, records each removal,
-and normalizes only representation-level aliases.  It never makes a clinical
-choice, fills a scientific field, calls an LLM, or validates the final plan;
-those responsibilities remain with the planner and schema owners.
+``AnalysisPlan`` schema. It may discard presentation-only top/step chatter,
+but an unknown key inside a scientific contract is a structured retry: silently
+projecting it away could turn the Planner's intended design into a different,
+valid-looking design. It normalizes only representation-level aliases.
 """
 
 from __future__ import annotations
@@ -86,6 +86,33 @@ def _declared_field_names(model: type) -> set:
     )
 
 
+class PlannerScientificProjectionError(ValueError):
+    """The Planner emitted an unknown key inside a scientific value object."""
+
+    issue_code = "planner_scientific_contract_unknown_key"
+    owner = "easyicu.planning.plan_payload_projection_v1"
+
+    def __init__(self, *, path: str, unknown_keys: List[str]) -> None:
+        self.path = path
+        self.unknown_keys = tuple(sorted(unknown_keys))
+        super().__init__(
+            f"{self.issue_code}: unknown key(s) at {path}: "
+            + ", ".join(repr(key) for key in self.unknown_keys)
+            + "; re-emit the scientific object using only its declared schema"
+        )
+
+
+def _require_exact_scientific_keys(
+    raw: Dict[str, Any],
+    *,
+    allowed: set,
+    path: str,
+) -> None:
+    unknown = [str(key) for key in raw if key not in allowed]
+    if unknown:
+        raise PlannerScientificProjectionError(path=path, unknown_keys=unknown)
+
+
 def _normalise_plan_payload(
     data: Dict[str, Any],
 ) -> Tuple[Dict[str, Any], Dict[str, List[str]]]:
@@ -107,9 +134,7 @@ def _normalise_plan_payload(
         "robustness_specs": [],
     }
     out = {key: value for key, value in data.items() if key in allowed_plan}
-    dropped["top_level"] = [
-        str(key) for key in data if key not in allowed_plan
-    ]
+    dropped["top_level"] = [str(key) for key in data if key not in allowed_plan]
     steps = []
     for idx, raw_step in enumerate(out.get("steps", []) or []):
         if not isinstance(raw_step, dict):
@@ -142,15 +167,17 @@ def _normalise_plan_payload(
                 raw_requirement.get("requirement_id")
                 or f"step[{idx}].model_requirements[{req_idx}]"
             )
-            dropped["model_requirements"].extend(
-                f"{requirement_id}:{key}"
-                for key in raw_requirement
-                if key not in allowed_model_requirement
+            _require_exact_scientific_keys(
+                raw_requirement,
+                allowed=allowed_model_requirement,
+                path=f"steps[{idx}].model_requirements[{req_idx}]({requirement_id})",
             )
             if "analysis_role" in requirement_payload:
-                requirement_payload["analysis_role"] = _canonicalise_planned_analysis_role(
-                    requirement_payload["analysis_role"],
-                    method=step_payload.get("method"),
+                requirement_payload["analysis_role"] = (
+                    _canonicalise_planned_analysis_role(
+                        requirement_payload["analysis_role"],
+                        method=step_payload.get("method"),
+                    )
                 )
             requirements.append(requirement_payload)
         if "model_requirements" in step_payload:
@@ -171,10 +198,13 @@ def _normalise_plan_payload(
                 raw_contract.get("input_key")
                 or f"step[{idx}].input_consumption_contracts[{contract_idx}]"
             )
-            dropped["input_consumption_contracts"].extend(
-                f"{contract_id}:{key}"
-                for key in raw_contract
-                if key not in allowed_consumption_contract
+            _require_exact_scientific_keys(
+                raw_contract,
+                allowed=allowed_consumption_contract,
+                path=(
+                    f"steps[{idx}].input_consumption_contracts[{contract_idx}]"
+                    f"({contract_id})"
+                ),
             )
             if contract_payload:
                 consumption_contracts.append(contract_payload)
@@ -186,16 +216,16 @@ def _normalise_plan_payload(
             step_payload["input_consumption_contracts"] = consumption_contracts
         raw_table_one = step_payload.get("table_one_spec")
         if isinstance(raw_table_one, dict):
+            _require_exact_scientific_keys(
+                raw_table_one,
+                allowed=allowed_table_one_spec,
+                path=f"steps[{idx}].table_one_spec",
+            )
             table_one_payload = {
                 key: value
                 for key, value in raw_table_one.items()
                 if key in allowed_table_one_spec
             }
-            dropped["table_one_spec"].extend(
-                f"step[{idx}]:{key}"
-                for key in raw_table_one
-                if key not in allowed_table_one_spec
-            )
             variables = []
             for variable_index, raw_variable in enumerate(
                 table_one_payload.get("variables", []) or []
@@ -208,10 +238,10 @@ def _normalise_plan_payload(
                     for key, value in raw_variable.items()
                     if key in allowed_table_one_variable
                 }
-                dropped["table_one_spec"].extend(
-                    f"step[{idx}].variables[{variable_index}]:{key}"
-                    for key in raw_variable
-                    if key not in allowed_table_one_variable
+                _require_exact_scientific_keys(
+                    raw_variable,
+                    allowed=allowed_table_one_variable,
+                    path=(f"steps[{idx}].table_one_spec.variables[{variable_index}]"),
                 )
                 variables.append(variable_payload)
             table_one_payload["variables"] = variables
@@ -267,10 +297,10 @@ def _normalise_plan_payload(
             if key in allowed_robustness_spec
         }
         spec_id = raw_spec.get("spec_id") or f"robustness_specs[{idx}]"
-        dropped["robustness_specs"].extend(
-            f"{spec_id}:{key}"
-            for key in raw_spec
-            if key not in allowed_robustness_spec
+        _require_exact_scientific_keys(
+            raw_spec,
+            allowed=allowed_robustness_spec,
+            path=f"robustness_specs[{idx}]({spec_id})",
         )
         specs.append(spec_payload)
     if "robustness_specs" in out:
@@ -284,4 +314,5 @@ __all__ = [
     "_declared_field_names",
     "_is_untyped_figure_alias_output",
     "_normalise_plan_payload",
+    "PlannerScientificProjectionError",
 ]

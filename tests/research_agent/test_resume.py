@@ -933,7 +933,7 @@ def test_resume_cohort_materializer_rejects_tampered_authority(
 
     assert invalidated == {
         "01_cohort_definition": (
-            "evidence analysis_cohort_execute_repair failed path/digest " "verification"
+            "evidence analysis_cohort_execute_repair failed path/digest verification"
         )
     }
     assert updated["per_step_records"][-1]["status"] == "resume_evidence_invalid"
@@ -1272,7 +1272,7 @@ def test_resume_requires_interpretation_field_when_analyzer_evidence_exists(
 
     assert invalidated == {
         "01_model": (
-            "successful checkpoint is missing required " "interpretation_evidence_id"
+            "successful checkpoint is missing required interpretation_evidence_id"
         )
     }
 
@@ -2219,9 +2219,9 @@ def test_resume_reruns_missing_step(ra, synthetic_cohort, tmp_path: Path):
 
     partial_after = json.loads(partial_path.read_text(encoding="utf-8"))
     new_step_ids = [r["step_id"] for r in partial_after["per_step_records"]]
-    assert (
-        dropped["step_id"] in new_step_ids
-    ), f"dropped step {dropped['step_id']!r} was not re-executed; new ids: {new_step_ids}"
+    assert dropped["step_id"] in new_step_ids, (
+        f"dropped step {dropped['step_id']!r} was not re-executed; new ids: {new_step_ids}"
+    )
 
 
 def test_resume_from_completed_step_can_stop_after_that_step(
@@ -2379,9 +2379,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
         llm=_pattern_llm(
             plan=plan,
             code=code,
-            interpretation=(
-                "The cohort table is available {evidence:cohort_summary}."
-            ),
+            interpretation=("The cohort table is available {evidence:cohort_summary}."),
             manuscript=(
                 "# Title\n\n## Results\n\n"
                 "The table is available {evidence:cohort_summary}."
@@ -3235,6 +3233,7 @@ def test_resume_reaudits_material_deterministic_quarantine_repair(
         repair_reasons=(),
         repair_findings=(),
         step=None,
+        on_semantic_escalation=None,
     ):
         # `step` is forwarded by `authorized_deterministic_concept_repair` since
         # the all-rows profile-roles repair was registered. Without it here the
@@ -3249,6 +3248,7 @@ def test_resume_reaudits_material_deterministic_quarantine_repair(
             repair_reasons=repair_reasons,
             repair_findings=repair_findings,
             step=step,
+            on_semantic_escalation=on_semantic_escalation,
         )
 
     monkeypatch.setattr(
@@ -4321,8 +4321,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
         plan=plan,
         code=code,
         interpretation=(
-            "The primary association table is available "
-            "{evidence:primary_association}."
+            "The primary association table is available {evidence:primary_association}."
         ),
         manuscript=(
             "# Title\n\n## Results\n\n"

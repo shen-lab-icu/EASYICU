@@ -49,6 +49,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Sequence
 
+from ..contracts.model_terms import level_spelling
 from ..research_context.prompt_variables import opaque_level_tokens
 from ..schema import (
     AnalysisStep,
@@ -92,31 +93,6 @@ def is_opaque_level(value: Any) -> bool:
     """True for one of the host's own published placeholders."""
 
     return isinstance(value, str) and value.startswith(OPAQUE_LEVEL_PREFIX)
-
-
-def level_spelling(value: Any) -> str:
-    """One spelling for a level, whichever side of the boundary it arrives from.
-
-    The plan declares string levels; the cohort column may hold them as floats
-    (a real AKI stage column is ``0.0/1.0/2.0/3.0``).  A float that is a whole
-    number keeps its integer spelling, because ``"3"`` and ``"3.0"`` are the
-    same stage and a reader should see one of them.
-
-    Shared with the adjusted-association executor so the resolved declaration
-    and the cohort comparison cannot drift into two spellings of one level.
-    """
-
-    if value is None:
-        return ""
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, float):
-        if value != value:  # NaN
-            return ""
-        if value.is_integer():
-            return str(int(value))
-        return repr(value)
-    return str(value).strip()
 
 
 class DeclaredLevelError(ValueError):
@@ -256,37 +232,83 @@ def _bound_model_requirement(
     requirement: PlannedModelRequirement,
     variables: Dict[str, Any],
 ) -> Optional[PlannedModelRequirement]:
+    updates: Dict[str, Any] = {}
+    bound_terms = []
+    terms_changed = False
+    for term in requirement.model_terms or ():
+        declared_term_levels = list(term.levels or ())
+        if not declared_term_levels:
+            bound_terms.append(term)
+            continue
+        resolved_term_levels = _resolve_opaque_string_levels(
+            name=term.name,
+            declared=declared_term_levels,
+            variables=variables,
+        )
+        if resolved_term_levels is None:
+            bound_terms.append(term)
+            continue
+        reference = (
+            _resolve_opaque_scalar(
+                name=term.name,
+                declared=term.reference_level,
+                levels=declared_term_levels,
+                resolved_levels=resolved_term_levels,
+                field="reference_level",
+            )
+            if term.reference_level is not None
+            else None
+        )
+        bound_terms.append(
+            term.model_copy(
+                update={
+                    "levels": resolved_term_levels,
+                    "reference_level": reference,
+                }
+            )
+        )
+        terms_changed = True
+        if term.role == "exposure" and term.transform == "treatment_contrast":
+            updates["exposure_levels"] = resolved_term_levels
+            updates["exposure_reference_level"] = reference
+            updates["primary_contrast_level"] = _resolve_opaque_scalar(
+                name=term.name,
+                declared=requirement.primary_contrast_level,
+                levels=declared_term_levels,
+                resolved_levels=resolved_term_levels,
+                field="primary_contrast_level",
+            )
+    if terms_changed:
+        updates["model_terms"] = bound_terms
+
     declared = list(requirement.exposure_levels or [])
-    if not declared:
-        return None
-    resolved = _resolve_opaque_string_levels(
-        name=requirement.exposure_source,
-        declared=declared,
-        variables=variables,
-    )
-    if resolved is None:
-        return None
-    reference = _resolve_opaque_scalar(
-        name=requirement.exposure_source,
-        declared=requirement.exposure_reference_level,
-        levels=declared,
-        resolved_levels=resolved,
-        field="exposure_reference_level",
-    )
-    primary = _resolve_opaque_scalar(
-        name=requirement.exposure_source,
-        declared=requirement.primary_contrast_level,
-        levels=declared,
-        resolved_levels=resolved,
-        field="primary_contrast_level",
-    )
-    return requirement.model_copy(
-        update={
-            "exposure_levels": resolved,
-            "exposure_reference_level": reference,
-            "primary_contrast_level": primary,
-        }
-    )
+    if declared and "exposure_levels" not in updates:
+        resolved = _resolve_opaque_string_levels(
+            name=requirement.exposure_source,
+            declared=declared,
+            variables=variables,
+        )
+        if resolved is not None:
+            updates.update(
+                {
+                    "exposure_levels": resolved,
+                    "exposure_reference_level": _resolve_opaque_scalar(
+                        name=requirement.exposure_source,
+                        declared=requirement.exposure_reference_level,
+                        levels=declared,
+                        resolved_levels=resolved,
+                        field="exposure_reference_level",
+                    ),
+                    "primary_contrast_level": _resolve_opaque_scalar(
+                        name=requirement.exposure_source,
+                        declared=requirement.primary_contrast_level,
+                        levels=declared,
+                        resolved_levels=resolved,
+                        field="primary_contrast_level",
+                    ),
+                }
+            )
+    return requirement.model_copy(update=updates) if updates else None
 
 
 def _bound_distribution_spec(

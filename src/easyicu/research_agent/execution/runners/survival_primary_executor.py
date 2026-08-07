@@ -23,6 +23,15 @@ from typing import Any, Dict, Optional, Sequence
 from ...authority.plausibility import FlagOnlyPlausibilityScope
 from ...contracts.family_primary import FamilyPrimaryResultRequirement
 from ...contracts.host_scaffold import HostScaffoldedScript
+from ...contracts.model_terms import (
+    ModelTermSpec,
+    serialise_model_terms,
+    validate_model_term_roster,
+)
+from ...contracts.model_tokens import (
+    SURVIVAL_COX_ESTIMATOR,
+    SURVIVAL_PH_DIAGNOSTIC,
+)
 from ...contracts.ownership_verdict import OwnershipVerdict
 from ...contracts.survival_execution import (
     SURVIVAL_PRIMARY_ANALYSIS_KIND,
@@ -38,6 +47,7 @@ from ...contracts.survival import (
 )
 from ...methods.ph_schoenfeld import ph_test
 from ...schema import AnalysisStep
+from ..model_matrix import ModelTermCompilationError, compile_model_terms
 from .plausibility_receipt import render_standard_plausibility_receipt_code
 from .typed_input_binding import read_frame, sha256_file
 
@@ -133,7 +143,10 @@ def survival_primary_executor_scaffold(
         "estimator": requirement.estimator,
         "effect_measure": requirement.effect_measure,
         "covariates": list(requirement.covariates or ()),
+        "model_terms": serialise_model_terms(requirement.model_terms or ()),
         "ph_diagnostic": requirement.proportional_hazards_diagnostic,
+        "ph_alpha": requirement.proportional_hazards_alpha,
+        "ph_policy": requirement.proportional_hazards_policy,
     }
     prologue = textwrap.dedent(
         f"""
@@ -162,8 +175,10 @@ def survival_primary_executor_scaffold(
     ).strip()
     if receipt_code:
         prologue += "\n\n" + receipt_code.strip()
-    prologue += "\n\n" + textwrap.dedent(
-        """
+    prologue += (
+        "\n\n"
+        + textwrap.dedent(
+            """
         summary = run_survival_primary(
             input_path=bound.path,
             input_product=bound.input_key,
@@ -173,7 +188,8 @@ def survival_primary_executor_scaffold(
             **declared_survival,
         )
         """
-    ).strip()
+        ).strip()
+    )
     epilogue = [
         'out_dir = Path(os.environ["STEP_OUT_DIR"])',
         "out_dir.mkdir(parents=True, exist_ok=True)",
@@ -312,7 +328,10 @@ def run_survival_primary(
     estimator: str,
     effect_measure: str,
     covariates: Sequence[str],
+    model_terms: Sequence[ModelTermSpec | Dict[str, Any]],
     ph_diagnostic: str,
+    ph_alpha: float,
+    ph_policy: str,
     emit_step_summary: bool = True,
 ) -> Dict[str, Any]:
     """Fit, diagnose and receipt-bind the exact Planner-declared Cox model."""
@@ -331,23 +350,67 @@ def run_survival_primary(
             "survival_input_evidence_missing",
             "Bound cohort has no evidence identity",
         )
-    terms = [exposure, *[str(value) for value in covariates]]
-    needed = [time_column, event_column, *terms]
+    if estimator != SURVIVAL_COX_ESTIMATOR:
+        raise SurvivalPrimaryExecutionError(
+            "survival_estimator_not_exact",
+            f"The sealed owner implements only {SURVIVAL_COX_ESTIMATOR!r}",
+        )
+    if ph_diagnostic != SURVIVAL_PH_DIAGNOSTIC:
+        raise SurvivalPrimaryExecutionError(
+            "survival_ph_diagnostic_not_exact",
+            f"The sealed owner implements only {SURVIVAL_PH_DIAGNOSTIC!r}",
+        )
+    if ph_policy not in {
+        "report_only",
+        "block_paper_authorization",
+        "human_review",
+    }:
+        raise SurvivalPrimaryExecutionError(
+            "survival_ph_policy_unsupported",
+            "The declared PH handling policy is unsupported",
+        )
+    if not math.isfinite(float(ph_alpha)) or not 0 < float(ph_alpha) < 1:
+        raise SurvivalPrimaryExecutionError(
+            "survival_ph_alpha_invalid",
+            "The declared PH alpha must be finite and strictly between zero and one",
+        )
+    parsed_terms = [
+        item if isinstance(item, ModelTermSpec) else ModelTermSpec.model_validate(item)
+        for item in model_terms
+    ]
+    try:
+        exposure_term, adjustment_terms = validate_model_term_roster(
+            terms=parsed_terms,
+            exposure=exposure,
+            covariates=covariates,
+        )
+    except ValueError as exc:
+        raise SurvivalPrimaryExecutionError(
+            "survival_model_term_roster_invalid", str(exc)
+        ) from exc
+    if exposure_term.coding == "categorical":
+        raise SurvivalPrimaryExecutionError(
+            "survival_categorical_exposure_shape_unsupported",
+            "The v1 primary result cannot report multiple exposure contrasts",
+        )
+    adjustment = [term.name for term in adjustment_terms]
+    source_terms = [term.name for term in parsed_terms]
+    needed = [time_column, event_column, *source_terms]
     if len(needed) != len(set(needed)):
         raise SurvivalPrimaryExecutionError(
             "survival_columns_not_distinct",
-            "Time, event, exposure and covariate columns must be distinct"
+            "Time, event, exposure and covariate columns must be distinct",
         )
     missing = sorted(set(needed) - set(frame.columns))
     if missing:
         raise SurvivalPrimaryExecutionError(
             "survival_declared_columns_missing",
             "Declared survival columns are absent from the bound cohort: "
-            + ", ".join(missing)
+            + ", ".join(missing),
         )
     source = frame.loc[:, needed].copy()
     n_source_rows = len(source)
-    for column in needed:
+    for column in (time_column, event_column):
         original = source[column]
         numeric = pd.to_numeric(original, errors="coerce")
         conversion_loss = original.notna() & numeric.isna()
@@ -357,7 +420,22 @@ def run_survival_primary(
                 f"Declared numeric column {column!r} contains non-numeric values",
             )
         source[column] = numeric
-    analysis = source.dropna(subset=needed).copy()
+    try:
+        compiled = compile_model_terms(
+            source,
+            terms=parsed_terms,
+            exposure=exposure,
+        )
+    except ModelTermCompilationError as exc:
+        raise SurvivalPrimaryExecutionError(exc.reason_code, str(exc)) from exc
+    if len(compiled.exposure_columns) != 1:
+        raise SurvivalPrimaryExecutionError(
+            "survival_exposure_design_shape_invalid",
+            "The v1 primary survival result requires one exposure coefficient",
+        )
+    exposure_design_column = compiled.exposure_columns[0]
+    analysis = source[[time_column, event_column]].join(compiled.design)
+    analysis = analysis.dropna(subset=list(analysis.columns)).copy()
     if analysis.empty:
         raise SurvivalPrimaryExecutionError(
             "survival_complete_cases_empty",
@@ -365,7 +443,7 @@ def run_survival_primary(
         )
     if not all(
         bool(pd.Series(analysis[column], copy=False).map(math.isfinite).all())
-        for column in needed
+        for column in analysis.columns
     ):
         raise SurvivalPrimaryExecutionError(
             "survival_analysis_value_nonfinite",
@@ -386,18 +464,16 @@ def run_survival_primary(
     if not observed_codes.issubset({0, int(event_value)}):
         raise SurvivalPrimaryExecutionError(
             "survival_event_code_unexpected",
-            "Observed event codes do not match the declared binary endpoint"
+            "Observed event codes do not match the declared binary endpoint",
         )
-    if analysis[exposure].nunique(dropna=True) < 2:
+    if analysis[exposure_design_column].nunique(dropna=True) < 2:
         raise SurvivalPrimaryExecutionError(
             "survival_exposure_contrast_absent",
             "The exposure has no estimable contrast",
         )
 
     censored_at_horizon = analysis[time_column] > float(time_horizon_value)
-    analysis[time_column] = analysis[time_column].clip(
-        upper=float(time_horizon_value)
-    )
+    analysis[time_column] = analysis[time_column].clip(upper=float(time_horizon_value))
     analysis[event_column] = (
         event_codes.eq(int(event_value)) & ~censored_at_horizon
     ).astype(int)
@@ -405,7 +481,7 @@ def run_survival_primary(
     if n_events < 2:
         raise SurvivalPrimaryExecutionError(
             "survival_event_support_insufficient",
-            "Fewer than two declared events remain after administrative censoring"
+            "Fewer than two declared events remain after administrative censoring",
         )
     if sha256_file(input_path) != input_sha256:
         raise SurvivalPrimaryExecutionError(
@@ -418,21 +494,22 @@ def run_survival_primary(
         event_column=event_column,
         event_value=event_value,
         exposure_source=exposure,
-        covariates=list(covariates),
+        covariates=adjustment,
+        design_columns=list(compiled.design.columns),
     )
     analysis_frame_sha256 = _canonical_frame_sha256(analysis)
     estimate = _fit_declared_cox(
         analysis,
         duration_column=time_column,
         event_column=event_column,
-        exposure=exposure,
+        exposure=exposure_design_column,
     )
     try:
         ph_table = ph_test(
             analysis,
             duration_col=time_column,
             event_col=event_column,
-            covariates=terms,
+            covariates=list(compiled.design.columns),
             time_transform="km",
         )
     except Exception as exc:
@@ -444,14 +521,32 @@ def run_survival_primary(
     if len(global_rows) != 1:
         raise SurvivalPrimaryExecutionError(
             "survival_ph_global_result_invalid",
-            "The PH diagnostic did not return exactly one global result"
+            "The PH diagnostic did not return exactly one global result",
         )
     global_p = float(global_rows["p_value"].iloc[0])
     if not math.isfinite(global_p) or not 0 <= global_p <= 1:
         raise SurvivalPrimaryExecutionError(
             "survival_ph_global_p_invalid",
-            "The PH diagnostic returned an invalid global p value"
+            "The PH diagnostic returned an invalid global p value",
         )
+    ph_violation = global_p < float(ph_alpha)
+    if not ph_violation:
+        ph_status = "not_rejected"
+    elif ph_policy == "report_only":
+        ph_status = "violation_report_only"
+    elif ph_policy == "block_paper_authorization":
+        ph_status = "violation_block_paper_authorization"
+    else:
+        ph_status = "violation_human_review"
+    paper_authorization_allowed = ph_status in {
+        "not_rejected",
+        "violation_report_only",
+    }
+    ph_table = ph_table.copy()
+    ph_table["declared_alpha"] = float(ph_alpha)
+    ph_table["handling_policy"] = ph_policy
+    ph_table["ph_status"] = ph_status
+    ph_table["paper_authorization_allowed"] = paper_authorization_allowed
 
     out_dir = Path(os.environ["STEP_OUT_DIR"])
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -469,7 +564,8 @@ def run_survival_primary(
         "n_analysis_rows": len(analysis),
         "n_events": n_events,
         "formula": formula,
-        "covariates": ";".join(covariates),
+        "covariates": ";".join(adjustment),
+        "exposure_design_column": exposure_design_column,
     }
     pd.DataFrame([result_row]).to_csv(result_path, index=False)
     result_sha256 = sha256_file(result_path)
@@ -481,7 +577,8 @@ def run_survival_primary(
         event_column=event_column,
         event_value=event_value,
         exposure_source=exposure,
-        covariates=list(covariates),
+        covariates=adjustment,
+        model_terms=parsed_terms,
         time_horizon_value=time_horizon_value,
         time_unit=time_unit,
     )
@@ -520,12 +617,19 @@ def run_survival_primary(
         estimator=estimator,
         effect_measure=effect_measure,
         formula=formula,
-        covariates=list(covariates),
+        covariates=adjustment,
+        model_terms=parsed_terms,
+        design_columns=list(compiled.design.columns),
+        exposure_design_column=exposure_design_column,
         applied_filter=applied_filter,
         package_versions=_package_versions(),
         proportional_hazards_diagnostic=ph_diagnostic,
         proportional_hazards_tested=True,
         proportional_hazards_p_value=global_p,
+        proportional_hazards_alpha=float(ph_alpha),
+        proportional_hazards_policy=ph_policy,
+        proportional_hazards_status=ph_status,
+        paper_authorization_allowed=paper_authorization_allowed,
     )
     receipt_path = out_dir / _RECEIPT_FILENAME
     receipt_path.write_text(
@@ -562,7 +666,15 @@ def run_survival_primary(
         "n_analysis": len(analysis),
         "n_events": n_events,
         "formula": formula,
-        "covariates": list(covariates),
+        "covariates": adjustment,
+        "model_terms": serialise_model_terms(parsed_terms),
+        "design_columns": list(compiled.design.columns),
+        "exposure_design_column": exposure_design_column,
+        "proportional_hazards_p_value": global_p,
+        "proportional_hazards_alpha": float(ph_alpha),
+        "proportional_hazards_policy": ph_policy,
+        "proportional_hazards_status": ph_status,
+        "paper_authorization_allowed": paper_authorization_allowed,
         "output_files": {
             result_product: result_path.name,
             SURVIVAL_PH_DIAGNOSTIC_PRODUCT: ph_path.name,

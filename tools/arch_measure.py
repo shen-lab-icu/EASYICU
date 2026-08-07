@@ -95,6 +95,9 @@ TARGET_FILES: List[Path] = [
     RA / "audits" / "validators.py",
     RA / "plan_utils.py",
     RA / "agents" / "core.py",
+    # Scientific contract consolidation now makes the compatibility schema an
+    # active owner boundary; keep its future growth on the same ratchet.
+    RA / "schema.py",
     RA / "contracts" / "declared_product.py",
     RA / "figures" / "skill.py",
     RA / "authority" / "evidence_store.py",

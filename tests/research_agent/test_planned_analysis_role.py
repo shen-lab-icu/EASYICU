@@ -146,6 +146,17 @@ def _primary_association_step() -> AnalysisStep:
                 outcome_type="binary",
                 method_family="logistic_regression",
                 exposure_source="sealed_exposure",
+                covariates=[],
+                model_terms=[
+                    {
+                        "name": "sealed_exposure",
+                        "role": "exposure",
+                        "coding": "binary",
+                        "levels": ["0", "1"],
+                        "reference_level": "0",
+                        "transform": "treatment_contrast",
+                    }
+                ],
                 analysis_role="primary",
                 analysis_set="source_aware",
                 required_for_step_success=True,

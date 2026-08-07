@@ -46,6 +46,8 @@ from easyicu.research_agent.schema import (
     ResearchContext,
 )
 
+from .test_adjusted_association_executor import _model_terms
+
 _FIXTURE = Path(__file__).parent / "fixtures" / "real_plan_steps_fresh17_fresh19.json"
 
 
@@ -53,6 +55,15 @@ def _real_step(label: str, step_id: str) -> dict:
     document = json.loads(_FIXTURE.read_text(encoding="utf-8"))
     plan = next(e for e in document["plans"] if e["label"] == label)["plan"]
     return next(s for s in plan["steps"] if s["step_id"] == step_id)
+
+
+def _declared_association_step(label: str, step_id: str) -> dict:
+    """Add the model-term declaration absent from the historical artifact."""
+
+    payload = _real_step(label, step_id)
+    requirement = payload["model_requirements"][0]
+    requirement["model_terms"] = _model_terms(requirement["covariates"])
+    return payload
 
 
 def _context() -> ResearchContext:
@@ -113,7 +124,7 @@ def test_bundling_the_figure_costs_the_association_step_its_owner() -> None:
     the adjustment set or the inputs changes.
     """
 
-    planned = _real_step("fresh20", "05_primary_adjusted_association")
+    planned = _declared_association_step("fresh20", "05_primary_adjusted_association")
     assert planned["expected_outputs"] == [
         ADJUSTED_ASSOCIATION_OUTPUT,
         "figure:primary_adjusted_association",
@@ -139,7 +150,7 @@ def test_the_owner_declines_rather_than_claiming_a_figure_it_cannot_render() -> 
     -- strictly worse than never claiming it.
     """
 
-    planned = _real_step("fresh20", "05_primary_adjusted_association")
+    planned = _declared_association_step("fresh20", "05_primary_adjusted_association")
     table_only = dict(planned)
     table_only["expected_outputs"] = [ADJUSTED_ASSOCIATION_OUTPUT]
 
@@ -534,6 +545,29 @@ def test_bundling_a_second_model_costs_the_step_its_owner() -> None:
         "analysis_set": "complete_case",
         "required_for_step_success": True,
         "covariates": ["age", "sex"],
+        "model_terms": [
+            {
+                "name": "stage_max",
+                "role": "exposure",
+                "coding": "ordinal_linear",
+                "levels": ["0", "1", "2", "3"],
+                "transform": "declared_level_index",
+            },
+            {
+                "name": "age",
+                "role": "covariate",
+                "coding": "continuous",
+                "transform": "identity",
+            },
+            {
+                "name": "sex",
+                "role": "covariate",
+                "coding": "binary",
+                "levels": ["0", "1"],
+                "reference_level": "0",
+                "transform": "treatment_contrast",
+            },
+        ],
     }
     secondary = {
         **primary,

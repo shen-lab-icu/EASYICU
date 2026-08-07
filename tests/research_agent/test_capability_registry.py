@@ -31,6 +31,10 @@ from easyicu.research_agent.reporting.readiness import (
 from easyicu.research_agent.planning.study_design_playbook import StudyDesignFamily
 
 _RUNNER_ENTRYPOINTS: dict[str, tuple[str, str]] = {
+    "adjusted_association_estimates": (
+        "execution.runners.adjusted_association_executor",
+        "adjusted_association_executor_code",
+    ),
     "survival_primary_cox": (
         "execution.runners.survival_primary_executor",
         "survival_primary_executor_code",
@@ -86,9 +90,9 @@ def test_registry_figure_renderers_exist_in_family_renderers():
         # the base association skill is rendered outside FAMILY_RENDERERS
         if c.figure_renderer == "base_association_skill":
             continue
-        assert (
-            c.figure_renderer in FAMILY_RENDERERS
-        ), f"{c.figure_renderer} not in FAMILY_RENDERERS"
+        assert c.figure_renderer in FAMILY_RENDERERS, (
+            f"{c.figure_renderer} not in FAMILY_RENDERERS"
+        )
 
 
 # --- auxiliary runners are importable --------------------------------------
@@ -114,15 +118,21 @@ def test_every_study_design_family_is_covered():
 def test_partition_helpers_are_consistent():
     det = set(cr.deterministic_primary_families())
     llm = set(cr.llm_coded_primary_families())
-    assert det == {"Survival / time-to-event"}
+    assert det == {
+        "Association — exact single-model adjusted",
+        "Survival / time-to-event",
+    }
     assert llm
     assert det.isdisjoint(llm)
     assert len(det) + len(llm) == len(cr.CAPABILITY_REGISTRY)
 
 
-def test_only_survival_has_a_deterministic_primary_owner():
+def test_survival_and_exact_association_have_deterministic_primary_owners():
     fams = cr.families_without_deterministic_primary()
-    assert fams == set(get_args(StudyDesignFamily)) - {"time_to_event"}
+    assert fams == set(get_args(StudyDesignFamily)) - {
+        "association",
+        "time_to_event",
+    }
 
 
 # --- renderer ---------------------------------------------------------------
@@ -151,10 +161,60 @@ def test_known_unsupported_boundary_is_recorded_and_rendered():
 def test_get_capability_disambiguates_association():
     dose = cr.get_capability("association", dose_response=True)
     general = cr.get_capability("association", dose_response=False)
+    freeform = cr.get_capability("association", freeform=True)
     assert dose is not None and dose.primary_runner is None
-    assert general is not None and general.primary_runner is None
+    assert (
+        general is not None
+        and general.primary_runner == "adjusted_association_estimates"
+    )
+    assert freeform is not None and freeform.primary_runner is None
     assert "graded ordinal" in dose.label.lower()
-    assert "general" in general.label.lower()
+    assert "exact single-model" in general.label.lower()
+    assert "free-form" in freeform.label.lower()
+
+
+def test_plan_contract_selects_exact_or_freeform_association_capability(ra):
+    exact = ra.AnalysisPlan(
+        research_question="Estimate one adjusted association.",
+        analysis_type="association_study",
+        steps=[
+            ra.AnalysisStep(
+                step_id="01_exact",
+                planned_analysis_role="primary",
+                intent="Fit the exact adjusted model.",
+                method="adjusted_association_models",
+                expected_outputs=["table:adjusted_association_estimates"],
+            )
+        ],
+    )
+    freeform = ra.AnalysisPlan(
+        research_question="Estimate an association with an interaction.",
+        analysis_type="association_study",
+        steps=[
+            ra.AnalysisStep(
+                step_id="01_freeform",
+                planned_analysis_role="primary",
+                intent="Fit the declared interaction model.",
+                method="association_interaction_model",
+                expected_outputs=["table:interaction_estimates"],
+            )
+        ],
+    )
+
+    assert (
+        cr.get_capability_for_plan(
+            analysis_type=exact.analysis_type,
+            plan=exact,
+        ).capability_id
+        == "association_adjusted_v1"
+    )
+    assert (
+        cr.get_capability_for_plan(
+            analysis_type=freeform.analysis_type,
+            plan=freeform,
+        ).capability_id
+        == "association_freeform_v1"
+    )
 
 
 def test_live_auxiliary_dispatch_matches_registry_in_both_directions():

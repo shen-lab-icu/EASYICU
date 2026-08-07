@@ -15,10 +15,11 @@ this registry, that test fails — the matrix cannot silently rot.
 
 Two design points this registry makes explicit:
 
-* **Every primary analysis has one explicit owner.** Most families remain
-  agent-coded. A fully declared binary-endpoint Cox contract is owned by the
-  sealed host executor, which chooses no cohort, exposure, outcome, adjustment,
-  horizon or diagnostic. ``primary_analysis`` and ``figure`` stay separate.
+* **Every primary analysis has one explicit owner.** A fully declared Cox or
+  exact single-model adjusted-association contract is owned by a sealed host
+  executor, which chooses no cohort, exposure, outcome, coding, adjustment,
+  horizon or diagnostic. Free-form scientific kernels remain agent-coded.
+  ``primary_analysis`` and ``figure`` stay separate.
 * **A capability gap is always REPORTED, never silently filled.** When no valid
   runner/data contract exists the pipeline fails closed with a specific reason
   (see ``FAIL_CLOSED_LADDER``); it never fabricates a result or degrades a
@@ -28,6 +29,7 @@ Two design points this registry makes explicit:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import re
 from typing import TYPE_CHECKING, Literal, Optional, Tuple
 
 from .study_design_playbook import StudyDesignFamily
@@ -46,6 +48,7 @@ __all__ = [
     "FAIL_CLOSED_LADDER",
     "get_capability",
     "get_capability_by_id",
+    "get_capability_for_plan",
     "assess_scientific_capability",
     "deterministic_primary_families",
     "llm_coded_primary_families",
@@ -70,7 +73,7 @@ class ScientificCapability:
     # primary analysis (the reported estimand)
     primary_analysis: str  # "deterministic" | "llm_coded"
     primary_estimand: str
-    primary_runner: Optional[str]  # reserved; primary scientific runners are not wired
+    primary_runner: Optional[str]
     primary_runner_module: Optional[str]
     # figure
     figure: str  # "deterministic" | "llm_coded"
@@ -152,9 +155,7 @@ class ScientificCapabilityAssessment:
             "execution_backend_available": self.execution_backend_available,
             "scientific_validator_available": self.scientific_validator_available,
             "claim_ceiling": self.claim_ceiling,
-            "claim_ceiling_allows_reportable": (
-                self.claim_ceiling_allows_reportable
-            ),
+            "claim_ceiling_allows_reportable": (self.claim_ceiling_allows_reportable),
             "issue_code": self.issue_code,
             "reason": self.reason,
         }
@@ -260,24 +261,57 @@ CAPABILITY_REGISTRY: Tuple[ScientificCapability, ...] = (
     ),
     ScientificCapability(
         family="association",
-        label="Association — general (non-graded)",
+        label="Association — exact single-model adjusted",
+        primary_analysis="deterministic",
+        primary_estimand="Host-computed adjusted association under one exact Planner-owned estimator and typed model-term contract",
+        primary_runner="adjusted_association_estimates",
+        primary_runner_module="execution.runners.adjusted_association_executor",
+        figure="deterministic",
+        figure_renderer="base_association_skill",
+        data_contract=(
+            "one exposure and outcome",
+            "exact covariate roster",
+            "typed coding, levels, reference and transform for every model term",
+            "exact supported estimator token",
+        ),
+        fail_closed=(
+            "The owner declines names-only coding, unsupported estimators, multiple "
+            "model requirements, undeclared levels, rank loss or a non-estimable "
+            "fit; no estimator or predictor is substituted."
+        ),
+        notes="Only the exact single-model contract is deterministic; broader association kernels remain a separate LLM-coded capability. The base figure skill renders registered products.",
+        capability_id="association_adjusted_v1",
+        result_contract="typed planned_model_requirement + host model contract + registered adjusted estimate",
+        required_diagnostics=(
+            "model-term coding receipt",
+            "primary model contract",
+            "effect/interval reconciliation",
+        ),
+    ),
+    ScientificCapability(
+        family="association",
+        label="Association — general / free-form",
         primary_analysis="llm_coded",
-        primary_estimand="LLM-coded adjusted association (logistic/linear); bound via NumericClaim + primary-effect extractor",
+        primary_estimand="Agent-coded association for scientific kernels outside the exact single-model host contract",
         primary_runner=None,
         primary_runner_module=None,
         figure="deterministic",
         figure_renderer="base_association_skill",
-        data_contract=("exposure", "outcome", "covariates"),
-        fail_closed=(
-            "LLM code failure -> mechanical code_repair only (no deterministic "
-            "association refit or estimator substitution) -> if still failing the "
-            "step fails, the execution gate floors the status to diagnostic_only, "
-            "and the specific error is surfaced (never a silent pass)."
+        data_contract=(
+            "explicit scientific specification",
+            "registered result product",
         ),
-        notes="Base figure skill renders forest + strata + missingness deterministically.",
-        capability_id="association_adjusted_v1",
-        result_contract="planned_model_requirement + registered adjusted estimate",
-        required_diagnostics=("primary model contract", "effect/interval reconciliation"),
+        fail_closed=(
+            "Unsupported or under-declared scientific kernels remain agent-coded and "
+            "cannot be relabelled as the deterministic adjusted-association owner."
+        ),
+        notes="This capability covers interactions, splines, multiple models and other free-form association kernels; implementation repair may not change their scientific design.",
+        capability_id="association_freeform_v1",
+        result_contract="agent-authored registered result under deterministic gates",
+        required_diagnostics=(
+            "method-specific contract",
+            "effect/interval reconciliation",
+        ),
     ),
     ScientificCapability(
         family="prediction",
@@ -324,7 +358,11 @@ CAPABILITY_REGISTRY: Tuple[ScientificCapability, ...] = (
         ),
         capability_id="phenotyping_cluster_v1",
         result_contract="registered clustering, profile, and stability products",
-        required_diagnostics=("representation", "cluster stability", "descriptive outcome use"),
+        required_diagnostics=(
+            "representation",
+            "cluster stability",
+            "descriptive outcome use",
+        ),
     ),
     ScientificCapability(
         family="descriptive",
@@ -478,25 +516,35 @@ FAIL_CLOSED_LADDER: Tuple[Tuple[str, str], ...] = (
 
 
 def get_capability(
-    family: StudyDesignFamily, *, dose_response: bool = False
+    family: StudyDesignFamily,
+    *,
+    dose_response: bool = False,
+    freeform: bool = False,
 ) -> Optional[ScientificCapability]:
     """Return the capability record for a family.
 
-    ``association`` has two records (general + dose-response); ``dose_response``
-    selects the graded-exposure one.
+    ``association`` has exact, free-form and dose-response records. The default
+    is the exact ``association_adjusted_v1`` capability used by
+    ``association_study``; callers must explicitly request the broader path.
     """
     matches = [c for c in CAPABILITY_REGISTRY if c.family == family]
     if not matches:
         return None
     if family == "association":
-        for c in matches:
-            is_graded = "graded ordinal" in c.label.lower()
-            if is_graded == dose_response:
-                return c
+        wanted = (
+            "association_ordinal_trend_v1"
+            if dose_response
+            else "association_freeform_v1"
+            if freeform
+            else "association_adjusted_v1"
+        )
+        return next((c for c in matches if c.capability_id == wanted), None)
     return matches[0]
 
 
-def get_capability_by_id(capability_id: Optional[str]) -> Optional[ScientificCapability]:
+def get_capability_by_id(
+    capability_id: Optional[str],
+) -> Optional[ScientificCapability]:
     """Return one directly declared capability, rejecting unknown ids."""
 
     wanted = str(capability_id or "").strip()
@@ -512,10 +560,83 @@ def get_capability_by_id(capability_id: Optional[str]) -> Optional[ScientificCap
     return matches[0]
 
 
+def _plan_declares_exact_adjusted_association(plan: object) -> bool:
+    """Whether the Planner selected the deterministic association contract.
+
+    Method and output shape choose the capability. Missing model terms or an
+    unsupported exact estimator do not downgrade the step to free-form: those
+    are declaration/ownership failures that must remain visible to the exact
+    owner's fail-closed gates.
+    """
+
+    for step in tuple(getattr(plan, "steps", ()) or ()):
+        if getattr(step, "planned_analysis_role", None) != "primary":
+            continue
+        method = re.sub(
+            r"[^a-z0-9]+",
+            "_",
+            str(getattr(step, "method", "") or "").lower().split(" with ", 1)[0],
+        ).strip("_")
+        outputs = {
+            str(value or "").strip().lower()
+            for value in tuple(getattr(step, "expected_outputs", ()) or ())
+        }
+        if (
+            method == "adjusted_association_models"
+            and "table:adjusted_association_estimates" in outputs
+        ):
+            return True
+    return False
+
+
+def get_capability_for_plan(
+    *,
+    analysis_type: Optional[str],
+    plan: object = None,
+) -> Optional[ScientificCapability]:
+    """Resolve one capability from the declared analysis and primary step.
+
+    Association is the only family with two non-ordinal primary execution
+    routes. A primary step that explicitly selects the exact adjusted-model
+    method/output contract stays on the deterministic route; another explicit
+    association primary step selects the free-form agent route. With no primary
+    step the conservative analysis-type default remains deterministic so an
+    under-declared plan cannot obtain a looser publication contract.
+    """
+
+    raw_type = str(analysis_type or "").strip()
+    if not raw_type:
+        return None
+    try:
+        from .analysis_types import canonical_analysis_family, get_analysis_type
+
+        canonical = canonical_analysis_family(raw_type)
+        if canonical is None:
+            return None
+        capability = get_capability_by_id(get_analysis_type(canonical).capability_id)
+    except (TypeError, ValueError):
+        return None
+    if (
+        capability is None
+        or capability.capability_id != "association_adjusted_v1"
+        or plan is None
+    ):
+        return capability
+    primary_steps = [
+        step
+        for step in tuple(getattr(plan, "steps", ()) or ())
+        if getattr(step, "planned_analysis_role", None) == "primary"
+    ]
+    if not primary_steps or _plan_declares_exact_adjusted_association(plan):
+        return capability
+    return get_capability_by_id("association_freeform_v1")
+
+
 def assess_scientific_capability(
     *,
     analysis_type: Optional[str],
     context: "ResearchContext",
+    plan: object = None,
 ) -> ScientificCapabilityAssessment:
     """State the maximum claim allowed by the declared pre-execution contract.
 
@@ -547,7 +668,7 @@ def assess_scientific_capability(
         )
 
     try:
-        from .analysis_types import canonical_analysis_family, get_analysis_type
+        from .analysis_types import canonical_analysis_family
 
         canonical = canonical_analysis_family(raw_type)
         if canonical is None:
@@ -572,7 +693,10 @@ def assess_scientific_capability(
                     "the descriptive display fallback is not a result validator."
                 ),
             )
-        capability = get_capability_by_id(get_analysis_type(canonical).capability_id)
+        capability = get_capability_for_plan(
+            analysis_type=canonical,
+            plan=plan,
+        )
     except (TypeError, ValueError):
         capability = None
         canonical = raw_type
@@ -615,9 +739,7 @@ def assess_scientific_capability(
             ),
             None,
         )
-        levels = list(
-            getattr(exposure_descriptor, "ordinal_levels", None) or []
-        )
+        levels = list(getattr(exposure_descriptor, "ordinal_levels", None) or [])
         input_contract_resolved = bool(
             exposure
             and outcome

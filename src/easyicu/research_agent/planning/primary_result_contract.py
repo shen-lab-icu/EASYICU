@@ -12,6 +12,7 @@ from ..schema import (
 )
 from ..contracts.survival import SURVIVAL_PH_DIAGNOSTIC_PRODUCT
 from ..contracts.survival_execution import survival_execution_verdict
+from ..contracts.time_units import canonical_time_unit
 from .analysis_types import infer_analysis_type
 
 
@@ -30,7 +31,8 @@ def primary_result_contract_guide() -> str:
         "adjustment and overlap diagnostic; survival contracts name time origin, "
         "event, censoring, competing-risk strategy, horizon, effect measure, "
         "a numeric horizon/unit, event value, exact adjustment set, input product, "
-        "and a PH diagnostic when using Cox. Primary Cox execution and its "
+        "typed coding for every model term, and a PH diagnostic plus declared "
+        "handling policy/alpha when using Cox. Primary Cox execution and its "
         "receipt are host-owned, not Coder-authored.\n\n"
         "Missingness is scientific design: Do not impute the primary exposure or "
         "outcome. For prediction, split first and fit every imputer/scaler only on "
@@ -120,6 +122,26 @@ def validate_required_primary_result(
                     "The survival primary-result contract must use the exact "
                     "EndpointSpec time_origin, time_column, and event_column"
                 )
+            time_descriptor = context.variable(str(requirement.time_column))
+            if time_descriptor is None or not str(time_descriptor.unit or "").strip():
+                raise ValueError(
+                    "The survival time column requires an authoritative unit in "
+                    "ResearchContext.variables; units are never inferred from a "
+                    "column name or value magnitude"
+                )
+            authoritative_time_unit = canonical_time_unit(time_descriptor.unit)
+            if authoritative_time_unit is None:
+                raise ValueError(
+                    "The survival time column unit in ResearchContext is not in "
+                    "the supported closed vocabulary (minutes, hours, days)"
+                )
+            if authoritative_time_unit != requirement.time_unit:
+                raise ValueError(
+                    "family_primary_result_requirement.time_unit must match the "
+                    "host-owned ConceptDescriptor.unit for the exact time column; "
+                    f"expected {authoritative_time_unit!r}, declared "
+                    f"{requirement.time_unit!r}"
+                )
             if SURVIVAL_ANALYSIS_RECEIPT_PRODUCT not in primary.expected_outputs:
                 raise ValueError(
                     "A survival primary step must declare "
@@ -196,6 +218,12 @@ def validate_required_primary_result(
             "The required primary association model must use the exact "
             "ResearchContext operational exposure and outcome columns; expected "
             f"exposure_source={exposure!r}, outcome={outcome!r}"
+        )
+    if requirement.model_terms is None:
+        raise ValueError(
+            "The required primary association model must explicitly declare "
+            "model_terms; the host cannot infer continuous, binary, categorical "
+            "or ordinal coding from names or dtypes"
         )
 
 

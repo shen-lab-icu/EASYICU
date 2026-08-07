@@ -241,9 +241,10 @@ def test_data_quality_article_contract_stays_measurement_only(ra):
     )
 
     assert contract.required_roles == ["data_quality"]
-    assert {
-        requirement.module_id for requirement in contract.requirements
-    } == {"missingness_data_quality", "measurement_process_audit"}
+    assert {requirement.module_id for requirement in contract.requirements} == {
+        "missingness_data_quality",
+        "measurement_process_audit",
+    }
 
 
 def test_article_contract_flags_and_can_augment_narrow_association_plan(ra):
@@ -446,6 +447,15 @@ def test_planner_article_contract_retries_missing_robustness_instead_of_faking_i
                         "outcome_type": "binary",
                         "method_family": "binary_logistic_regression",
                         "exposure_source": "x",
+                        "covariates": [],
+                        "model_terms": [
+                            {
+                                "name": "x",
+                                "role": "exposure",
+                                "coding": "continuous",
+                                "transform": "identity",
+                            }
+                        ],
                         "analysis_role": "primary",
                         "analysis_set": "complete_case",
                         "required_for_step_success": True,
@@ -514,9 +524,7 @@ def test_planner_article_contract_retries_missing_robustness_instead_of_faking_i
 
     assert recovered.steps[-1].method == "robustness_sensitivity"
     assert len(capture.calls) == 2
-    initial_prompt = "\n".join(
-        message.content for message in capture.calls[0][0]
-    )
+    initial_prompt = "\n".join(message.content for message in capture.calls[0][0])
     retry_prompt = "\n".join(message.content for message in capture.calls[1][0])
     assert "HOST-DERIVED PRE-PLAN DESIGN PROFILE" in initial_prompt
     assert rendered_contract in initial_prompt
@@ -525,7 +533,9 @@ def test_planner_article_contract_retries_missing_robustness_instead_of_faking_i
         "data_quality, descriptive_result, primary_estimand, robustness"
         in initial_prompt
     )
-    assert "robustness_specs (array; non-empty when the binding contract" in retry_prompt
+    assert (
+        "robustness_specs (array; non-empty when the binding contract" in retry_prompt
+    )
     assert "method='robustness_sensitivity'" in retry_prompt
 
     payload["steps"] = [

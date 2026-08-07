@@ -9,10 +9,10 @@ the whole cohort by numeric-coercing ``sex`` before dummy encoding, object-dtype
 design matrices handed to statsmodels, and contracts "satisfied" with a null
 estimate.
 
-Nothing here decides science.  The planner fixes the outcome, the outcome type,
-the method family, the exposure and -- since the contract gained
-``covariates`` -- the adjustment set.  This executor claims the step only when
-every one of those is declared, and computes exactly what was declared.
+Nothing here decides science.  The planner fixes the outcome, exact estimator,
+exposure, adjustment set, and the coding/levels/reference/transform of every
+model term.  This executor claims the step only when every one of those is
+declared, and computes exactly what was declared.
 
 The fit is ``robustness.estimators.fit_estimator``, which the robustness panel
 already uses: it drops incomplete rows, refuses a rank-deficient design rather
@@ -39,14 +39,25 @@ import textwrap
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from ...authority.declared_levels import execution_model_requirement, level_spelling
+from ...authority.declared_levels import execution_model_requirement
 from ...authority.plausibility import FlagOnlyPlausibilityScope
 from ...contracts.host_scaffold import HostScaffoldedScript
-from ...contracts.model_tokens import normalise_model_contract_token
+from ...contracts.model_terms import (
+    ModelTermSpec,
+    serialise_model_terms,
+    validate_model_term_roster,
+)
+from ...contracts.model_tokens import (
+    ADJUSTED_ASSOCIATION_ANALYSIS_KIND,
+    ASSOCIATION_LOGIT_ESTIMATOR,
+    ASSOCIATION_OLS_ESTIMATOR,
+    canonical_association_method,
+    normalise_model_contract_token,
+)
 from ...contracts.ownership_verdict import OwnershipVerdict
+from ..model_matrix import ModelTermCompilationError, compile_model_terms
 from ...robustness.estimators import fit_estimator
 from ...schema import (
-    ADJUSTED_ASSOCIATION_BINARY_METHOD_FAMILIES,
     PLANNED_MODEL_REQUIREMENTS_OUTPUT,
     PLANNED_MODEL_REQUIREMENTS_OUTPUT_KIND,
     PLANNED_MODEL_REQUIREMENTS_STEP_METHOD,
@@ -72,10 +83,6 @@ ADJUSTED_ASSOCIATION_OUTPUT = (
     f"{PLANNED_MODEL_REQUIREMENTS_OUTPUT_KIND}:{PLANNED_MODEL_REQUIREMENTS_OUTPUT}"
 )
 
-#: The ``analysis_kind`` this owner reports, in selection and in its verdict.
-#: One declaration, because a retyped kind literal is how two layers end up
-#: disagreeing about which owner produced an artifact (see task #95/N6).
-ADJUSTED_ASSOCIATION_ANALYSIS_KIND = PLANNED_MODEL_REQUIREMENTS_OUTPUT
 _TABLE_FILENAME = "adjusted_association_estimates.csv"
 
 #: The exact header. The first six are what ``bind_primary_output`` reads; the
@@ -196,8 +203,8 @@ MODEL_CONTRACT_FIELDS = (
 _BASELINE_MISSING_POLICY = "drop_missing_baseline"
 
 _FIT_METHODS = {
-    "logistic": "statsmodels_logit_maximum_likelihood",
-    "linear": "statsmodels_ols",
+    "logistic": ASSOCIATION_LOGIT_ESTIMATOR,
+    "linear": ASSOCIATION_OLS_ESTIMATOR,
 }
 
 
@@ -211,19 +218,13 @@ def _requirement(step: AnalysisStep) -> Optional[PlannedModelRequirement]:
 
 
 def _estimator_kind(requirement: PlannedModelRequirement) -> str:
-    family = normalise_model_contract_token(requirement.method_family)
+    family = canonical_association_method(requirement.method_family)
     if requirement.outcome_type == "binary":
-        return (
-            "logistic" if family in ADJUSTED_ASSOCIATION_BINARY_METHOD_FAMILIES else ""
-        )
+        return "logistic" if family == ASSOCIATION_LOGIT_ESTIMATOR else ""
     # The continuous families include quantile regression, which fit_estimator
     # does not implement.  Claiming it and fitting OLS instead would answer a
     # different question under the declared method's name.
-    return (
-        "linear"
-        if family in {"linear_regression", "ordinary_least_squares", "ols"}
-        else ""
-    )
+    return "linear" if family == ASSOCIATION_OLS_ESTIMATOR else ""
 
 
 def _effect_scale(kind: str) -> str:
@@ -308,6 +309,15 @@ def adjusted_association_executor_verdict(step: AnalysisStep) -> OwnershipVerdic
             reason=(
                 "the model requirement declares no adjustment set, and "
                 "reconstructing one from step.inputs would be inference"
+            ),
+        )
+    if requirement.model_terms is None:
+        return OwnershipVerdict.incomplete_declaration(
+            ADJUSTED_ASSOCIATION_ANALYSIS_KIND,
+            missing=("model_requirements[0].model_terms",),
+            reason=(
+                "the model requirement names variables but does not declare "
+                "their coding, levels, references and transforms"
             ),
         )
     if not _estimator_kind(requirement):
@@ -419,12 +429,7 @@ def adjusted_association_executor_scaffold(
             "analysis_set": {requirement.analysis_set!r},
             "analysis_role": {requirement.analysis_role!r},
             "method_family": {requirement.method_family!r},
-            "exposure_levels": {
-                list(requirement.exposure_levels)
-                if requirement.exposure_levels is not None
-                else None
-            !r},
-            "exposure_reference_level": {requirement.exposure_reference_level!r},
+            "model_terms": {serialise_model_terms(requirement.model_terms or ())!r},
             "primary_contrast_level": {requirement.primary_contrast_level!r},
         }}
 
@@ -575,121 +580,10 @@ class _DeclaredContrasts:
         return tuple(level for level in self.levels if level != self.reference)
 
 
-# One spelling for a level, whichever side of the privacy boundary it arrives
-# from.  The plan declares levels as strings; the cohort column may hold them
-# as floats (a real AKI stage column is ``0.0/1.0/2.0/3.0``).  The authority
-# layer resolves the host's opaque placeholders into declared levels with this
-# same function, so a resolved declaration and the cohort it is checked against
-# cannot end up in two spellings of one level.
-_level_key = level_spelling
-
-
-def _declared_contrasts(
-    column: Any,
-    *,
-    exposure: str,
-    levels: Optional[Sequence[str]],
-    reference: Optional[str],
-    primary: Optional[str],
-) -> Optional[_DeclaredContrasts]:
-    """Return the declared contrasts, or None for a single-term exposure.
-
-    The declaration is checked against the cohort, not trusted: a level the
-    plan declared that no stay has cannot be estimated, and a level the cohort
-    holds that the plan never declared means the pre-specified level set and
-    the analysed population disagree. Either way the fitted model would not be
-    the declared one, so both fail closed rather than quietly analysing
-    whichever levels happened to be present.
-    """
-
-    if levels is None and reference is None and primary is None:
-        return None
-    if levels is None or reference is None or primary is None:
-        raise AdjustedAssociationError(
-            "a categorical exposure needs its levels, its reference and its "
-            "primary contrast together; the host will not choose which "
-            "contrast the manuscript reports"
-        )
-
-    declared = tuple(_level_key(level) for level in levels)
-    reference_key = _level_key(reference)
-    primary_key = _level_key(primary)
-    if len(set(declared)) != len(declared) or any(not item for item in declared):
-        raise AdjustedAssociationError(
-            f"declared exposure levels for {exposure!r} must be unique and non-empty"
-        )
-    if reference_key not in declared or primary_key not in declared:
-        raise AdjustedAssociationError(
-            f"the reference and primary contrast for {exposure!r} must both be "
-            "declared levels"
-        )
-    if reference_key == primary_key:
-        raise AdjustedAssociationError(
-            "the primary contrast must not be the reference level"
-        )
-
-    observed = {_level_key(value) for value in column.dropna().unique().tolist()}
-    unexpected = sorted(observed - set(declared))
-    absent = sorted(set(declared) - observed)
-    if unexpected:
-        raise AdjustedAssociationError(
-            f"the bound cohort holds levels of {exposure!r} the plan never "
-            "declared: " + ", ".join(repr(item) for item in unexpected)
-        )
-    if absent:
-        raise AdjustedAssociationError(
-            f"the plan declared levels of {exposure!r} no stay has: "
-            + ", ".join(repr(item) for item in absent)
-        )
-    return _DeclaredContrasts(
-        levels=declared, reference=reference_key, primary=primary_key
-    )
-
-
 def _contrast_column(exposure: str, level: str) -> str:
     """The design-matrix name for one level's indicator."""
 
     return f"{exposure}__is_{level}"
-
-
-def _contrast_design(
-    model_frame: Any,
-    *,
-    exposure: str,
-    adjustment: Sequence[str],
-    contrasts: _DeclaredContrasts,
-) -> Tuple[Any, str]:
-    """Treatment-code the exposure against its declared reference.
-
-    One design, one fit: every contrast comes from the same model, so the
-    stage-2 and stage-3 estimates are conditional on each other exactly as the
-    declared model says. Fitting each level separately would produce numbers
-    that no single model ever computed.
-
-    A row whose exposure is UNOBSERVED is not the reference level.  Treatment
-    coding makes that mistake by default: every indicator is 0 for a missing
-    value, which is bit-for-bit the encoding of the reference, so the fit
-    silently answers "stage 0" for a patient whose stage nobody recorded.  On
-    canary13 that was 8 of 1000 stays -- the host's own primary-model contract
-    recomputed the complete-case denominator as 992 and refused the step over
-    the difference, which is the only reason the pooling was ever visible.
-    The indicators are therefore missing where the exposure is, so the
-    estimator drops those rows as complete-case rather than counting them in a
-    level they were never observed to be in.
-    """
-
-    import pandas as pd
-
-    keys = model_frame[exposure].map(_level_key)
-    unobserved = keys.eq("")
-    indicators: Dict[str, Any] = {}
-    for level in contrasts.contrast_levels:
-        column = (keys == level).astype(float)
-        indicators[_contrast_column(exposure, level)] = column.mask(unobserved)
-    design = pd.DataFrame(indicators, index=model_frame.index)
-    for name in adjustment:
-        design[name] = model_frame[name]
-    return design, _contrast_column(exposure, contrasts.primary)
 
 
 def _contrast_rows(
@@ -739,7 +633,7 @@ def _contrast_rows(
         )
     if sum(1 for row in rows if row["is_primary_contrast"]) != 1:
         raise AdjustedAssociationError(
-            "exactly one contrast must carry the primary mark the manuscript " "quotes"
+            "exactly one contrast must carry the primary mark the manuscript quotes"
         )
     return rows
 
@@ -750,12 +644,11 @@ def run_adjusted_association_from_env(
     exposure: str,
     outcome: str,
     covariates: Sequence[str],
+    model_terms: Sequence[ModelTermSpec | Dict[str, Any]],
     estimator_kind: str,
     analysis_set: str,
     analysis_role: str,
     method_family: str,
-    exposure_levels: Optional[Sequence[str]] = None,
-    exposure_reference_level: Optional[str] = None,
     primary_contrast_level: Optional[str] = None,
     typed_cohort_input: Optional[str] = None,
     frame: Any = None,
@@ -784,8 +677,32 @@ def run_adjusted_association_from_env(
         frame, cohort_path = load_step_cohort_frame(
             typed_cohort_input=typed_cohort_input
         )
-    adjustment = [str(name).strip() for name in covariates or []]
-    needed = [exposure, outcome, *adjustment]
+    canonical_method = canonical_association_method(method_family)
+    expected_method = {
+        "logistic": ASSOCIATION_LOGIT_ESTIMATOR,
+        "linear": ASSOCIATION_OLS_ESTIMATOR,
+    }.get(estimator_kind)
+    if expected_method is None or canonical_method != expected_method:
+        raise AdjustedAssociationError(
+            f"declared estimator {canonical_method!r} does not exactly dispatch "
+            f"to runtime kind {estimator_kind!r}"
+        )
+    parsed_terms = [
+        item if isinstance(item, ModelTermSpec) else ModelTermSpec.model_validate(item)
+        for item in model_terms
+    ]
+    try:
+        exposure_term, adjustment_terms = validate_model_term_roster(
+            terms=parsed_terms,
+            exposure=exposure,
+            covariates=covariates,
+        )
+    except ValueError as exc:
+        raise AdjustedAssociationError(
+            "declared model term roster is invalid: " + str(exc)
+        ) from exc
+    adjustment = [item.name for item in adjustment_terms]
+    needed = [outcome, *[item.name for item in parsed_terms]]
     missing = [column for column in needed if column not in frame.columns]
     if missing:
         raise AdjustedAssociationError(
@@ -794,29 +711,41 @@ def run_adjusted_association_from_env(
         )
 
     model_frame = frame[needed]
-    contrasts = _declared_contrasts(
-        model_frame[exposure],
-        exposure=exposure,
-        levels=exposure_levels,
-        reference=exposure_reference_level,
-        primary=primary_contrast_level,
-    )
-    if contrasts is None:
-        design = model_frame[[exposure, *adjustment]]
-        focal_term = exposure
-    else:
-        design, focal_term = _contrast_design(
+    try:
+        compiled = compile_model_terms(
             model_frame,
+            terms=parsed_terms,
             exposure=exposure,
-            adjustment=adjustment,
-            contrasts=contrasts,
         )
+    except ModelTermCompilationError as exc:
+        raise AdjustedAssociationError(str(exc)) from exc
+    contrasts: Optional[_DeclaredContrasts] = None
+    if exposure_term.transform == "treatment_contrast":
+        contrast_levels = exposure_term.contrast_levels
+        if exposure_term.coding == "binary":
+            primary = contrast_levels[0]
+        else:
+            primary = str(primary_contrast_level or "").strip()
+            if primary not in contrast_levels:
+                raise AdjustedAssociationError(
+                    "the categorical exposure primary_contrast_level must be one "
+                    "of its declared non-reference levels"
+                )
+        contrasts = _DeclaredContrasts(
+            levels=tuple(exposure_term.levels or ()),
+            reference=str(exposure_term.reference_level),
+            primary=primary,
+        )
+        focal_term = _contrast_column(exposure, primary)
+    else:
+        focal_term = compiled.exposure_columns[0]
     result = fit_estimator(
         cohort=None,
-        X=design,
+        X=compiled.design,
         y=model_frame[outcome],
         kind=estimator_kind,
         term=focal_term,
+        source_by_design_column=compiled.source_by_design_column,
     )
     estimate = _finite(result.point_estimate)
     ci_low = _finite(result.ci_low)
@@ -890,11 +819,7 @@ def run_adjusted_association_from_env(
         adjustment=adjustment,
         effect_scale=_effect_scale(estimator_kind),
         exposure_contrast_columns=(
-            ()
-            if contrasts is None
-            else [
-                _contrast_column(exposure, level) for level in contrasts.contrast_levels
-            ]
+            compiled.exposure_columns if contrasts is not None else ()
         ),
     )
     exposure_terms = [
@@ -906,7 +831,7 @@ def run_adjusted_association_from_env(
     # one, because a four-level exposure legitimately fits three, while a
     # single-term model fitting two still means the design and the plan
     # disagree.
-    expected_terms = 1 if contrasts is None else len(contrasts.contrast_levels)
+    expected_terms = len(compiled.exposure_columns)
     if len(exposure_terms) != expected_terms:
         raise AdjustedAssociationError(
             f"declared model {requirement_id!r} fitted {len(exposure_terms)} "
@@ -935,9 +860,9 @@ def run_adjusted_association_from_env(
         # plan: a logistic fit only reaches here after refusing anything but a
         # binary 0/1 outcome, so this reports what was fitted.
         "outcome_type": "binary" if estimator_kind == "logistic" else "continuous",
-        # Passed through, because several declared families map to one
-        # implemented estimator.  ``_estimator_kind`` already refused to claim
-        # the step unless this family is one of them, so the echo is checked.
+        # Passed through after exact-token resolution. ``_estimator_kind``
+        # already refused every method family except the canonical estimator
+        # (or one of its reviewed aliases), so this echo names the fit that ran.
         "method_family": method_family,
         "exposure_source": exposure,
         # The term the manuscript quotes, not whichever contrast was fitted
@@ -977,6 +902,8 @@ def run_adjusted_association_from_env(
         "separation_detected": bool(result.separation_detected),
         "penalized": False,
         "fit_method": _FIT_METHODS[estimator_kind],
+        "model_terms": serialise_model_terms(parsed_terms),
+        "design_columns": list(compiled.design.columns),
     }
 
     summary: Dict[str, Any] = {
@@ -987,6 +914,8 @@ def run_adjusted_association_from_env(
         "exposure": exposure,
         "outcome": outcome,
         "covariates": adjustment,
+        "model_terms": serialise_model_terms(parsed_terms),
+        "design_columns": list(compiled.design.columns),
         "estimator_kind": estimator_kind,
         "analysis_set": analysis_set,
         "typed_cohort_input": typed_cohort_input,

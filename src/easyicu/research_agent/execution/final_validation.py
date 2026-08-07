@@ -34,6 +34,7 @@ from ..audits.validators import (
     StepSummaryFractionValidator,
 )
 from ..authority.plausibility import FlagOnlyPlausibilityScope
+from ..contracts.model_tokens import ADJUSTED_ASSOCIATION_ANALYSIS_KIND
 from ..contracts.runtime import ValidationFinding
 from ..contracts.survival import SURVIVAL_PRIMARY_OWNER
 from ..contracts.survival_execution import SURVIVAL_PRIMARY_ANALYSIS_KIND
@@ -51,7 +52,10 @@ from .envelope_sealing import (
 from .figure_preparation import _family_has_deterministic_figure_renderer
 
 
-_PRIMARY_DETERMINISTIC_RUNNERS: set[str] = {SURVIVAL_PRIMARY_ANALYSIS_KIND}
+_PRIMARY_DETERMINISTIC_RUNNERS: set[str] = {
+    ADJUSTED_ASSOCIATION_ANALYSIS_KIND,
+    SURVIVAL_PRIMARY_ANALYSIS_KIND,
+}
 
 
 def _bind_findings_to_step_attempt(
@@ -92,14 +96,22 @@ def _primary_runner_core_estimate_present(
         step_summary.get("receipt_issuer") != SURVIVAL_PRIMARY_OWNER
     ):
         return False
+    if kind == ADJUSTED_ASSOCIATION_ANALYSIS_KIND:
+        contracts = step_summary.get("model_contracts")
+        return bool(
+            step_summary.get("adjusted_effect") is not None
+            and isinstance(contracts, list)
+            and len(contracts) == 1
+        )
     if kind in ("causal_primary_iptw", "ordinal_dose_response"):
         return step_summary.get("adjusted_effect") is not None
     if step_summary.get("hazard_ratio") is not None:
         return True
     primary_model = step_summary.get("primary_model")
-    return isinstance(primary_model, Mapping) and primary_model.get(
-        "hazard_ratio"
-    ) is not None
+    return (
+        isinstance(primary_model, Mapping)
+        and primary_model.get("hazard_ratio") is not None
+    )
 
 
 def _demote_step_contract_for_primary_runner(
@@ -107,29 +119,18 @@ def _demote_step_contract_for_primary_runner(
     step_summary: Mapping[str, Any],
     findings: Sequence[ValidationFinding],
 ) -> List[ValidationFinding]:
-    """Keep the legacy runner compatibility demotion deliberately narrow."""
+    """Return findings unchanged until a stable, audited waiver code exists.
 
-    kind = step_record.get("deterministic_standard_analysis")
-    if not _primary_runner_core_estimate_present(kind, step_summary):
-        return list(findings)
-    demoted: List[ValidationFinding] = []
-    for finding in findings:
-        if (
-            getattr(finding, "validator", "") == "step_contract"
-            and finding.severity == "error"
-        ):
-            finding = finding.model_copy(
-                update={
-                    "severity": "warning",
-                    "message": (
-                        finding.message
-                        + f" [advisory: step satisfied by deterministic {kind} "
-                        "runner; extra planner-requested outputs are non-blocking]"
-                    ),
-                }
-            )
-        demoted.append(finding)
-    return demoted
+    A trusted estimate proves only that the estimate exists. It does not prove
+    that every other ``step_contract`` error is harmless: those findings also
+    cover failed statuses, missing registered products and unauthorized cohort
+    redefinition. The historical validator-wide waiver therefore had an empty
+    safe domain. Keep this compatibility hook read-only so a future waiver must
+    introduce an exact reason-code allowlist and its own contract tests first.
+    """
+
+    del step_record, step_summary
+    return list(findings)
 
 
 def _is_too_few_panels_figure_finding(finding: ValidationFinding) -> bool:

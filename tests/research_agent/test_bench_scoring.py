@@ -279,9 +279,9 @@ def test_external_protocol_adapter_keeps_old_jsonl_runnable_with_visible_default
     assert item.expected_finding_substrings == ["audit tag"]
     assert item.protocol_adapter["database"]["defaulted"] is True
     assert item.protocol_adapter["operational_exposure"]["defaulted"] is True
-    assert item.protocol_adapter["operational_exposure"][
-        "resolved_column_present"
-    ] is True
+    assert (
+        item.protocol_adapter["operational_exposure"]["resolved_column_present"] is True
+    )
     defaults = {
         (entry["field"], entry["status"])
         for entry in item.protocol_adapter["diagnostics"]
@@ -339,9 +339,7 @@ def test_five_dim_scoring_uses_concept_key_and_activates_explicit_frozen_gold(
         expected_finding_substrings=[],
         expected_artifact_substrings=[],
         expected_outputs=[],
-        gold_answer={
-            "numeric_targets": {"primary_or": {"lower": 0.5, "upper": 2.0}}
-        },
+        gold_answer={"numeric_targets": {"primary_or": {"lower": 0.5, "upper": 2.0}}},
         gold_answer_status="frozen",
     )
 
@@ -393,7 +391,14 @@ def test_external_jsonl_runner_persists_protocol_adapter_contract(
     def fake_run_one_arm(**kwargs):
         captured["item"] = kwargs["item"]
         score = bench._skipped_arm(kwargs["label"])
-        score["status"] = "ok"
+        score.update(
+            status="ok",
+            execution_complete=True,
+            step_scientific_requirements_complete=True,
+            failed_step_ids=[],
+            missing_step_ids=[],
+            scientific_acceptance={"status": "accepted", "issues": []},
+        )
         return score
 
     monkeypatch.setattr(bench, "_make_llm", lambda **kwargs: object())
@@ -410,9 +415,7 @@ def test_external_jsonl_runner_persists_protocol_adapter_contract(
     )
 
     result = json.loads(
-        (tmp_path / "results" / "ehrflowbench_results.json").read_text(
-            encoding="utf-8"
-        )
+        (tmp_path / "results" / "ehrflowbench_results.json").read_text(encoding="utf-8")
     )["scores"][0]
     assert captured["item"].database == "aumc"
     assert captured["item"].operational_exposure == "signal_max"
@@ -420,9 +423,10 @@ def test_external_jsonl_runner_persists_protocol_adapter_contract(
     assert result["expected_predictor"] == "signal"
     assert result["operational_exposure"] == "signal_max"
     assert result["protocol_adapter"]["database"]["defaulted"] is False
-    assert result["protocol_adapter"]["operational_exposure"][
-        "resolved_column_present"
-    ] is True
+    assert (
+        result["protocol_adapter"]["operational_exposure"]["resolved_column_present"]
+        is True
+    )
 
 
 def test_five_dim_scorecard_is_additive_and_robust(tmp_path):

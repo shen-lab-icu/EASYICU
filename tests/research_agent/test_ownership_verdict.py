@@ -32,7 +32,7 @@ from easyicu.research_agent.execution.runners.adjusted_association_executor impo
 )
 from easyicu.research_agent.schema import AnalysisStep
 
-from .test_adjusted_association_executor import _real_step_payload
+from .test_adjusted_association_executor import _model_terms, _real_step_payload
 
 
 # ---------------------------------------------------------------------------
@@ -110,6 +110,7 @@ def _step(*, covariates=_COVARIATES, **overrides) -> AnalysisStep:
     payload = json.loads(json.dumps(_real_step_payload()))
     if covariates is not None:
         payload["model_requirements"][0]["covariates"] = list(covariates)
+        payload["model_requirements"][0]["model_terms"] = _model_terms(covariates)
     payload.update(overrides)
     return AnalysisStep.model_validate(payload)
 

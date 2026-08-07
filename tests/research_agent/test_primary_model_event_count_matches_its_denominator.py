@@ -181,6 +181,28 @@ def _run(frame: "pd.DataFrame") -> dict:
         analysis_set="complete_case",
         analysis_role="primary",
         method_family="logistic_regression",
+        model_terms=[
+            {
+                "name": "lact_max",
+                "role": "exposure",
+                "coding": "continuous",
+                "transform": "identity",
+            },
+            {
+                "name": "age",
+                "role": "covariate",
+                "coding": "continuous",
+                "transform": "identity",
+            },
+            {
+                "name": "sex",
+                "role": "covariate",
+                "coding": "categorical",
+                "levels": ["Female", "Male"],
+                "reference_level": "Female",
+                "transform": "treatment_contrast",
+            },
+        ],
         frame=frame,
         emit_step_summary=False,
     )

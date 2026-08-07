@@ -519,9 +519,7 @@ def test_reused_mock_pipeline_refreshes_context_between_prediction_and_clusterin
     assert "04_trajectory_clustering_analysis" in second_step_ids, second_step_ids
 
 
-def test_mock_planner_rejects_protocol_only_survival_plan(
-    ra, tmp_path: Path
-):
+def test_mock_planner_rejects_protocol_only_survival_plan(ra, tmp_path: Path):
     cohort = pd.DataFrame(
         {
             "stay_id": range(1, 81),
@@ -677,6 +675,14 @@ def test_parse_preserves_agent_selected_family_and_rationale(ra):
                             "outcome_type": "binary",
                             "method_family": "logistic_regression",
                             "exposure_source": "exposure",
+                            "model_terms": [
+                                {
+                                    "name": "exposure",
+                                    "role": "exposure",
+                                    "coding": "continuous",
+                                    "transform": "identity",
+                                }
+                            ],
                             "analysis_role": "primary",
                             "analysis_set": "complete_case",
                             "required_for_step_success": True,

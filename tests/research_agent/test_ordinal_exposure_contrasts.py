@@ -32,6 +32,30 @@ pd = pytest.importorskip("pandas")
 _LEVELS = ["0", "1", "2", "3"]
 
 
+def _model_terms(
+    *,
+    levels: list[str] | None = None,
+    coding: str = "categorical",
+) -> list[dict[str, object]]:
+    declared_levels = list(_LEVELS if levels is None else levels)
+    return [
+        {
+            "name": "aki_stage",
+            "role": "exposure",
+            "coding": coding,
+            "levels": declared_levels,
+            "reference_level": "0",
+            "transform": "treatment_contrast",
+        },
+        {
+            "name": "age",
+            "role": "covariate",
+            "coding": "continuous",
+            "transform": "identity",
+        },
+    ]
+
+
 def _ordinal_cohort(n: int = 600):
     """A four-stage exposure with a real monotone gradient, plus covariates.
 
@@ -61,8 +85,7 @@ def _run(tmp_path: Path, monkeypatch, **overrides):
         analysis_set="complete_case",
         analysis_role="primary",
         method_family="logistic_regression",
-        exposure_levels=_LEVELS,
-        exposure_reference_level="0",
+        model_terms=_model_terms(),
         primary_contrast_level="3",
         frame=_ordinal_cohort(),
         emit_step_summary=False,
@@ -147,13 +170,12 @@ def test_a_binary_exposure_still_writes_exactly_one_row(tmp_path, monkeypatch):
         tmp_path,
         monkeypatch,
         frame=frame,
-        exposure_levels=None,
-        exposure_reference_level=None,
+        model_terms=_model_terms(levels=["0", "1"], coding="binary"),
         primary_contrast_level=None,
     )
     assert len(rows) == 1
-    assert rows[0]["exposure_level"] == ""
-    assert rows[0]["reference_level"] == ""
+    assert rows[0]["exposure_level"] == "1"
+    assert rows[0]["reference_level"] == "0"
     # Still the headline, so every consumer reads the mark uniformly.
     assert rows[0]["is_primary_contrast"] == "True"
 
@@ -174,8 +196,12 @@ def test_a_level_the_cohort_does_not_have_is_refused(tmp_path, monkeypatch):
     show a reader three stages where the plan pre-specified four.
     """
 
-    with pytest.raises(AdjustedAssociationError, match="no stay has"):
-        _run(tmp_path, monkeypatch, exposure_levels=["0", "1", "2", "3", "4"])
+    with pytest.raises(AdjustedAssociationError, match="no observed row"):
+        _run(
+            tmp_path,
+            monkeypatch,
+            model_terms=_model_terms(levels=["0", "1", "2", "3", "4"]),
+        )
 
 
 def test_a_level_the_plan_never_declared_is_refused(tmp_path, monkeypatch):
@@ -185,11 +211,11 @@ def test_a_level_the_plan_never_declared_is_refused(tmp_path, monkeypatch):
     # stage-3 stays the plan never mentioned. An earlier draft also moved the
     # headline out of range, and the reference/headline check fired first --
     # the test passed without ever reaching the rule it names.
-    with pytest.raises(AdjustedAssociationError, match="never\\s+declared"):
+    with pytest.raises(AdjustedAssociationError, match="undeclared level"):
         _run(
             tmp_path,
             monkeypatch,
-            exposure_levels=["0", "1", "2"],
+            model_terms=_model_terms(levels=["0", "1", "2"]),
             primary_contrast_level="2",
         )
 
@@ -205,12 +231,12 @@ def test_a_half_declared_level_set_is_refused_rather_than_guessed(
     different question under the declared name.
     """
 
-    with pytest.raises(AdjustedAssociationError, match="together"):
+    with pytest.raises(AdjustedAssociationError, match="primary_contrast_level"):
         _run(tmp_path, monkeypatch, primary_contrast_level=None)
 
 
 def test_the_primary_contrast_cannot_be_the_reference(tmp_path, monkeypatch):
-    with pytest.raises(AdjustedAssociationError, match="not be the reference"):
+    with pytest.raises(AdjustedAssociationError, match="non-reference"):
         _run(tmp_path, monkeypatch, primary_contrast_level="0")
 
 
@@ -487,37 +513,37 @@ def test_every_contrast_indicator_is_missing_where_the_exposure_is() -> None:
     its own, because the design is a value the fit and every later reader see.
     """
 
-    from easyicu.research_agent.execution.runners.adjusted_association_executor import (
-        _DeclaredContrasts,
-        _contrast_column,
-        _contrast_design,
-    )
+    from easyicu.research_agent.contracts.model_terms import ModelTermSpec
+    from easyicu.research_agent.execution.model_matrix import compile_model_terms
 
     import numpy as np
 
     frame = pd.DataFrame(
         {
-            "aki_stage": [0.0, 1.0, np.nan, 3.0],
-            "age": [60.0, 70.0, 80.0, 65.0],
+            "aki_stage": [0.0, 1.0, np.nan, 2.0, 3.0],
+            "age": [60.0, 70.0, 80.0, 75.0, 65.0],
         }
     )
-    contrasts = _DeclaredContrasts(
-        levels=("0", "1", "2", "3"), reference="0", primary="3"
+    compiled = compile_model_terms(
+        frame,
+        exposure="aki_stage",
+        terms=[ModelTermSpec.model_validate(item) for item in _model_terms()],
     )
+    design = compiled.design
 
-    design, focal = _contrast_design(
-        frame, exposure="aki_stage", adjustment=["age"], contrasts=contrasts
+    assert compiled.exposure_columns == (
+        "aki_stage__is_1",
+        "aki_stage__is_2",
+        "aki_stage__is_3",
     )
-
-    assert focal == _contrast_column("aki_stage", "3")
     unobserved = 2
     for level in ("1", "2", "3"):
-        column = design[_contrast_column("aki_stage", level)]
+        column = design[f"aki_stage__is_{level}"]
         assert pd.isna(column.iloc[unobserved]), level
         # ...and the observed rows keep their exact indicator, so masking has
         # not blurred the rows that do have a stage.
         assert column.iloc[0] == 0.0
-    assert design[_contrast_column("aki_stage", "1")].iloc[1] == 1.0
-    assert design[_contrast_column("aki_stage", "3")].iloc[3] == 1.0
+    assert design["aki_stage__is_1"].iloc[1] == 1.0
+    assert design["aki_stage__is_3"].iloc[4] == 1.0
     # The adjustment column is untouched: only the exposure was unobserved.
     assert not design["age"].isna().any()
