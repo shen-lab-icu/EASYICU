@@ -21,7 +21,7 @@ from easyicu.research_agent.execution.runners.adjusted_association_executor impo
     ADJUSTED_ASSOCIATION_ANALYSIS_KIND,
     ADJUSTED_ASSOCIATION_OUTPUT,
 )
-from easyicu.research_agent.gates.owner_declaration import (
+from easyicu.research_agent.execution.owner_declaration import (
     owner_declaration_plan_findings,
     owner_declaration_replan_directive,
 )
@@ -128,7 +128,7 @@ def test_a_step_whose_selection_raises_is_reported_unevaluated(monkeypatch):
         raise RuntimeError("selector exploded")
 
     monkeypatch.setattr(
-        "easyicu.research_agent.gates.owner_declaration.select_standard_executor",
+        "easyicu.research_agent.execution.owner_declaration.select_standard_executor",
         _boom,
     )
     findings = owner_declaration_plan_findings(plan=_plan(_real_step_payload()))
@@ -233,7 +233,7 @@ def test_the_gate_is_keyed_on_the_typed_product_not_a_case_name(product: str):
     from pathlib import Path
 
     source = Path(
-        "src/easyicu/research_agent/gates/owner_declaration.py"
+        "src/easyicu/research_agent/execution/owner_declaration.py"
     ).read_text(encoding="utf-8")
     for case_token in ("sep3", "lactate", "mimic", "E1_", "death", "sofa"):
         assert case_token not in source, f"case-specific token {case_token!r} in the gate"

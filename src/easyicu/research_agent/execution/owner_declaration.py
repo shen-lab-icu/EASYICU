@@ -1,4 +1,4 @@
-"""Plan-time gate: a deterministic owner exists and is one declaration away.
+"""Execution-owned plan-time preflight for incomplete owner declarations.
 
 A step can declare a product the host already computes deterministically and
 still be executed by the stochastic coder, because the owner declined over a
@@ -46,7 +46,7 @@ from __future__ import annotations
 import json
 from typing import Any, Iterable, List, Sequence, Tuple
 
-from ..execution.runners.selection import (
+from .runners.selection import (
     StandardExecutorCandidate,
     select_standard_executor,
 )

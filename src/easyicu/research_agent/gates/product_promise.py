@@ -41,7 +41,7 @@ immutable EvidenceStore authority" -- a message naming nothing about the cause.
 A malformed promise must leave the plan readable and become a repairable
 finding the Planner can act on.
 
-Why it does not live in ``owner_declaration.py``
+Why it does not live in ``execution.owner_declaration``
 ------------------------------------------------
 That gate reports *missing fields* -- its finding says "does not declare X"
 and its directive says "declare the missing field(s)". Here nothing is

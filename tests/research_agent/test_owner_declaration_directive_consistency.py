@@ -1,6 +1,6 @@
 """A gate must not demand a declaration and forbid making it in the same breath.
 
-``gates/owner_declaration.py`` reports the fields an existing deterministic
+``execution/owner_declaration.py`` reports the fields an existing deterministic
 owner is waiting on, and ships a replan directive alongside.  The directive
 carried a hand-written prohibition list::
 
@@ -24,7 +24,7 @@ import re
 
 import pytest
 
-from easyicu.research_agent.gates.owner_declaration import (
+from easyicu.research_agent.execution.owner_declaration import (
     _declared_choice,
     _prohibited_choices,
     _SCIENTIFIC_CHOICES,

@@ -41,7 +41,7 @@ from easyicu.research_agent.execution.runners.missingness_measurement_figure_exe
     missingness_measurement_figure_declaration_verdict,
     missingness_measurement_figure_executor_owns_step,
 )
-from easyicu.research_agent.gates.owner_declaration import (
+from easyicu.research_agent.execution.owner_declaration import (
     owner_declaration_plan_findings,
 )
 from easyicu.research_agent.schema import AnalysisPlan

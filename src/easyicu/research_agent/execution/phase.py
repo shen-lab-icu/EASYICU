@@ -145,7 +145,7 @@ from ..gates.concept import (
     quarantined_errors_superseded_by_current_policy as _quarantined_errors_superseded_by_current_policy,
 )
 from ..gates.plausibility_receipt import plausibility_audit_receipt_findings
-from ..gates.owner_declaration import (
+from .owner_declaration import (
     execution_declaration_refusal,
     owner_declaration_plan_findings,
     owner_declaration_replan_directive,
