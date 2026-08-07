@@ -3,7 +3,11 @@ import pytest
 
 import easyicu.scores.kdigo_aki as kdigo_aki
 from easyicu.scores.kdigo_aki import (
+    KDIGOComponentCalculationError,
+    KDIGOComponentLoadError,
+    KDIGOComponentSchemaError,
     _calculate_uo_rates_simple,
+    get_aki_incidence,
     kdigo_stages,
     kdigo_uo,
     load_kdigo_aki,
@@ -96,7 +100,7 @@ def test_kdigo_uo_missing_patient_weight_leaves_rates_missing():
     assert staged["aki_stage_uo"].isna().all()
     assert not staged["uo_assessable"].any()
     assert staged["uo_assessment_reason"].eq(
-        "uo_window_or_weight_unavailable"
+        "missing_weight"
     ).all()
 
 
@@ -115,6 +119,28 @@ def test_kdigo_uo_invalid_weight_does_not_fall_back_to_70kg():
     assert result["uo_rt_6hr"].isna().all()
 
 
+def test_empty_weight_source_is_missingness_not_a_calculation_crash():
+    urine = pd.DataFrame(
+        {
+            "stay_id": [1, 1],
+            "charttime": [0, 60],
+            "urine": [10.0, 10.0],
+        }
+    )
+
+    result = kdigo_stages(
+        None,
+        urine_df=urine,
+        weight_df=pd.DataFrame(),
+        id_col="stay_id",
+        time_col="charttime",
+    )
+
+    assert result["urine_ascertainment"].eq("indeterminate").all()
+    assert result["urine_ascertainment_reason"].eq("missing_weight").all()
+    assert result["aki_ascertainment"].eq("indeterminate").all()
+
+
 def test_kdigo_missing_baseline_is_unknown_not_stage_zero():
     creatinine = pd.DataFrame(
         {"stay_id": [1], "charttime": [0], "crea": [1.2]}
@@ -127,8 +153,12 @@ def test_kdigo_missing_baseline_is_unknown_not_stage_zero():
     assert pd.isna(result["aki_stage"].iloc[0])
     assert pd.isna(result["aki"].iloc[0])
     assert not bool(result["aki_assessable"].iloc[0])
-    assert result["aki_assessment_reason"].iloc[0] == "no_assessable_component"
-    assert result["uo_assessment_reason"].iloc[0] == "urine_or_weight_unavailable"
+    assert result["aki_ascertainment"].iloc[0] == "indeterminate"
+    assert result["aki_assessment_reason"].iloc[0] == "indeterminate"
+    assert result["uo_assessment_reason"].iloc[0] == "source_absent"
+    assert result["creatinine_ascertainment_reason"].iloc[0] == (
+        "insufficient_baseline"
+    )
 
 
 def test_kdigo_uses_urine_timeline_when_creatinine_is_unavailable():
@@ -198,28 +228,34 @@ def test_load_kdigo_keeps_urine_only_patients_in_the_public_api():
     assert result["aki_assessable"].any()
 
 
-def test_summarize_aki_exposes_the_assessable_denominator():
+def test_summarize_aki_separates_definitive_partial_and_indeterminate_patients():
     frame = pd.DataFrame(
         {
-            "stay_id": [1, 2, 3],
-            "aki": pd.Series([True, False, pd.NA], dtype="boolean"),
-            "aki_stage": pd.Series([1, 0, pd.NA], dtype="Int64"),
-            "aki_assessable": [True, True, False],
+            "stay_id": [1, 2, 3, 4],
+            "aki": pd.Series([True, False, pd.NA, pd.NA], dtype="boolean"),
+            "aki_stage": pd.Series([1, 0, 0, pd.NA], dtype="Int64"),
+            "aki_ascertainment": [
+                "positive",
+                "negative_complete",
+                "partial_no_observed_positive",
+                "indeterminate",
+            ],
         }
     )
 
     summary = summarize_aki(frame, id_col="stay_id")
 
     assert summary["aki_positive_patients"] == 1
-    assert summary["aki_negative_assessable_patients"] == 1
+    assert summary["aki_negative_complete_patients"] == 1
+    assert summary["aki_partial_no_observed_positive_patients"] == 1
     assert summary["aki_indeterminate_patients"] == 1
-    assert summary["n_assessable_patients"] == 2
-    assert summary["aki_prevalence_among_assessable"] == pytest.approx(0.5)
-    assert summary["ascertainment_coverage"] == pytest.approx(2 / 3)
-    assert summary["aki_rate_denominator"] == "assessable_patients"
+    assert summary["n_definitive_phenotype_patients"] == 2
+    assert summary["aki_prevalence_among_definitive_phenotypes"] == pytest.approx(0.5)
+    assert summary["definitive_phenotype_coverage"] == pytest.approx(0.5)
+    assert summary["aki_rate_denominator"] == "definitive_phenotype_patients"
 
 
-def test_kdigo_uo_calculation_error_is_unknown_not_stage_zero(monkeypatch):
+def test_kdigo_uo_calculation_error_fails_closed_with_stable_reason(monkeypatch):
     creatinine = pd.DataFrame(
         {"stay_id": [1, 1], "charttime": [0, 60], "crea": [1.0, 1.1]}
     )
@@ -232,17 +268,59 @@ def test_kdigo_uo_calculation_error_is_unknown_not_stage_zero(monkeypatch):
         raise RuntimeError("source decoding failed")
 
     monkeypatch.setattr(kdigo_aki, "kdigo_uo", broken_uo)
-    result = kdigo_stages(
-        creatinine,
-        urine_df=urine,
-        weight_df=weight,
-        id_col="stay_id",
-        time_col="charttime",
+    with pytest.raises(KDIGOComponentCalculationError) as error:
+        kdigo_stages(
+            creatinine,
+            urine_df=urine,
+            weight_df=weight,
+            id_col="stay_id",
+            time_col="charttime",
+        )
+
+    assert error.value.component == "urine_output"
+    assert error.value.reason_code == "kdigo_urine_output_calculation_failed"
+
+
+def test_nonnumeric_urine_is_not_silently_converted_to_zero_output():
+    urine = pd.DataFrame(
+        {
+            "stay_id": [1, 1],
+            "charttime": [0, 60],
+            "urine": [10.0, "bad-source-value"],
+        }
+    )
+    weight = pd.DataFrame({"stay_id": [1], "weight": [70.0]})
+
+    with pytest.raises(KDIGOComponentSchemaError) as error:
+        kdigo_uo(
+            urine,
+            weight,
+            id_col="stay_id",
+            time_col="charttime",
+        )
+
+    assert error.value.component == "urine_output"
+    assert error.value.reason_code == "kdigo_urine_output_numeric_encoding_invalid"
+
+
+def test_nonnumeric_creatinine_is_not_downgraded_to_patient_data_absent():
+    creatinine = pd.DataFrame(
+        {
+            "stay_id": [1, 1],
+            "charttime": [0, 60],
+            "crea": [1.0, "bad-source-value"],
+        }
     )
 
-    assert result["aki_stage_uo"].isna().all()
-    assert not result["uo_assessable"].any()
-    assert result["uo_assessment_reason"].eq("uo_calculation_error").all()
+    with pytest.raises(KDIGOComponentSchemaError) as error:
+        kdigo_stages(
+            creatinine,
+            id_col="stay_id",
+            time_col="charttime",
+        )
+
+    assert error.value.component == "creatinine"
+    assert error.value.reason_code == "kdigo_creatinine_numeric_encoding_invalid"
 
 
 def test_kdigo_uo_global_weight_without_id_applies_to_all_rows():
@@ -363,7 +441,10 @@ def test_kdigo_rrt_stage_applies_from_first_active_rrt_time():
     assert result["aki_stage"].iloc[2] == 3
     assert result["aki_stage"].iloc[3] == 3
     assert pd.isna(result["aki"].iloc[0])
-    assert bool(result["aki"].iloc[1]) is False
+    assert pd.isna(result["aki"].iloc[1])
+    assert result["aki_ascertainment"].iloc[1] == (
+        "partial_no_observed_positive"
+    )
     assert bool(result["aki"].iloc[2]) is True
     assert bool(result["aki"].iloc[3]) is True
 
@@ -381,3 +462,130 @@ def test_kdigo_rrt_exact_timestamp_match_is_not_required():
     result = kdigo_stages(creatinine, rrt_df=rrt, id_col="stay_id", time_col="charttime")
 
     assert result.loc[result["charttime"] == 200, "aki_stage_rrt"].item() == 3
+
+
+def test_component_negative_without_complete_window_is_partial_not_negative():
+    creatinine = pd.DataFrame(
+        {
+            "stay_id": [1, 1],
+            "charttime": [0, 300],
+            "crea": [1.0, 1.0],
+        }
+    )
+
+    result = kdigo_stages(
+        creatinine,
+        id_col="stay_id",
+        time_col="charttime",
+    )
+
+    last = result.iloc[-1]
+    assert last["aki_stage_creat"] == 0
+    assert last["creatinine_ascertainment"] == "negative"
+    assert last["creatinine_ascertainment_reason"] == "criterion_negative"
+    assert last["urine_ascertainment"] == "indeterminate"
+    assert last["urine_ascertainment_reason"] == "source_absent"
+    assert last["rrt_ascertainment"] == "indeterminate"
+    assert last["rrt_ascertainment_reason"] == "source_absent"
+    assert last["observation_window_coverage"] == "partial"
+    assert last["aki_ascertainment"] == "partial_no_observed_positive"
+    assert pd.isna(last["aki"])
+    assert not bool(last["aki_assessable"])
+
+
+def test_complete_window_and_three_negative_components_prove_negative_aki():
+    creatinine = pd.DataFrame(
+        {
+            "stay_id": [1, 1],
+            "charttime": [0, 300],
+            "crea": [1.0, 1.0],
+        }
+    )
+    urine = pd.DataFrame(
+        {
+            "stay_id": [1] * 6,
+            "charttime": [0, 60, 120, 180, 240, 300],
+            "urine": [100.0] * 6,
+        }
+    )
+    weight = pd.DataFrame({"stay_id": [1], "weight": [100.0]})
+    rrt = pd.DataFrame({"stay_id": [1], "charttime": [0], "rrt": [0]})
+
+    result = kdigo_stages(
+        creatinine,
+        urine_df=urine,
+        weight_df=weight,
+        rrt_df=rrt,
+        id_col="stay_id",
+        time_col="charttime",
+        observation_window_coverage={1: "complete"},
+    )
+
+    last = result.iloc[-1]
+    assert last["creatinine_ascertainment"] == "negative"
+    assert last["urine_ascertainment"] == "negative"
+    assert last["rrt_ascertainment"] == "negative"
+    assert last["rrt_ascertainment_reason"] == "criterion_negative"
+    assert last["aki_ascertainment"] == "negative_complete"
+    assert bool(last["aki"]) is False
+    assert bool(last["aki_assessable"]) is True
+
+
+def test_positive_component_overrides_partial_coverage():
+    rrt = pd.DataFrame({"stay_id": [1], "charttime": [30], "rrt": [1]})
+
+    result = kdigo_stages(
+        None,
+        rrt_df=rrt,
+        id_col="stay_id",
+        time_col="charttime",
+    )
+
+    assert result["observation_window_coverage"].iloc[0] == "partial"
+    assert result["aki_ascertainment"].iloc[0] == "positive"
+    assert bool(result["aki"].iloc[0]) is True
+
+
+def test_nonempty_rrt_with_unresolved_schema_fails_closed():
+    with pytest.raises(KDIGOComponentSchemaError) as error:
+        kdigo_stages(
+            pd.DataFrame({"stay_id": [1], "charttime": [0], "crea": [1.0]}),
+            rrt_df=pd.DataFrame({"wrong": [1]}),
+            id_col="stay_id",
+            time_col="charttime",
+        )
+
+    assert error.value.reason_code == "kdigo_rrt_timeline_schema_invalid"
+
+
+def test_load_kdigo_source_exception_is_not_downgraded_to_missing(monkeypatch):
+    import easyicu.api
+
+    def broken_load(**_kwargs):
+        raise OSError("corrupt source")
+
+    monkeypatch.setattr(easyicu.api, "load_concepts", broken_load)
+
+    with pytest.raises(KDIGOComponentLoadError) as error:
+        load_kdigo_aki("synthetic", verbose=False)
+
+    assert error.value.reason_code == "kdigo_component_load_failed"
+    assert error.value.component == "crea"
+
+
+def test_public_aki_helpers_reject_missing_identity_before_indexing():
+    frame = pd.DataFrame(
+        {
+            "aki": pd.Series([True], dtype="boolean"),
+            "aki_stage": pd.Series([1], dtype="Int64"),
+            "aki_ascertainment": ["positive"],
+        }
+    )
+
+    with pytest.raises(KDIGOComponentSchemaError) as incidence_error:
+        get_aki_incidence(frame)
+    with pytest.raises(KDIGOComponentSchemaError) as summary_error:
+        summarize_aki(frame)
+
+    assert incidence_error.value.reason_code == "kdigo_public_api_keys_unresolved"
+    assert summary_error.value.reason_code == "kdigo_public_api_id_unresolved"
