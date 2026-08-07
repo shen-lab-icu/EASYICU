@@ -53,6 +53,21 @@ def _declared_floors() -> dict[str, tuple[int, ...]]:
     return floors
 
 
+def _core_declared_floors() -> dict[str, tuple[int, ...]]:
+    data = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))
+    floors: dict[str, tuple[int, ...]] = {}
+    for requirement in data["project"].get("dependencies", []):
+        match = _REQUIREMENT_RE.match(requirement.strip())
+        if not match:
+            continue
+        floor_match = _FLOOR_RE.search(match.group("spec"))
+        if floor_match is None:
+            continue
+        name = match.group("name").lower().replace("_", "-")
+        floors[name] = _version_tuple(floor_match.group("floor"))
+    return floors
+
+
 def _workflow_floors() -> dict[str, tuple[int, ...]]:
     text = AGENT_WORKFLOW.read_text(encoding="utf-8")
     floors: dict[str, tuple[int, ...]] = {}
@@ -81,6 +96,17 @@ def test_agent_ci_floors_are_not_below_pyproject() -> None:
     ]
     assert not violations, "CI dependency floors drifted below pyproject:\n" + "\n".join(
         violations
+    )
+
+
+def test_agent_ci_explicitly_installs_every_core_dependency() -> None:
+    declared = _core_declared_floors()
+    workflow = _workflow_floors()
+
+    missing = sorted(set(declared) - set(workflow))
+    assert not missing, (
+        "research_agent CI uses --no-deps, so every core dependency must be "
+        f"installed explicitly; missing: {missing}"
     )
 
 

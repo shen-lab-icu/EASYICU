@@ -47,13 +47,20 @@ class CompetingRisksCIFContract:
 class CompetingRisksCIFResult:
     """Portable curve result; persistence still belongs to EvidenceStore."""
 
-    status: Literal["estimated", "input_contract_failed", "adapter_unavailable"]
+    status: Literal[
+        "estimated",
+        "input_contract_failed",
+        "data_support_insufficient",
+        "adapter_unavailable",
+    ]
     adapter_version: Optional[str]
     issue_code: Optional[str]
     event_of_interest: int
     event_code_mapping: Tuple[Tuple[int, int], ...]
     n_observations: int
     n_events_of_interest: int
+    unexpected_event_codes: Tuple[int, ...] = ()
+    unobserved_declared_event_codes: Tuple[int, ...] = ()
     time: Tuple[float, ...] = ()
     cumulative_incidence: Tuple[float, ...] = ()
 
@@ -71,7 +78,7 @@ class CompetingRisksCIFResult:
 
     def to_dict(self) -> dict[str, object]:
         return {
-            "schema_version": "easyicu.sksurv_competing_risks_cif/1",
+            "schema_version": "easyicu.sksurv_competing_risks_cif/2",
             "status": self.status,
             "adapter_version": self.adapter_version,
             "issue_code": self.issue_code,
@@ -79,6 +86,10 @@ class CompetingRisksCIFResult:
             "event_code_mapping": [list(pair) for pair in self.event_code_mapping],
             "n_observations": self.n_observations,
             "n_events_of_interest": self.n_events_of_interest,
+            "unexpected_event_codes": list(self.unexpected_event_codes),
+            "unobserved_declared_event_codes": list(
+                self.unobserved_declared_event_codes
+            ),
             "curve_points": len(self.time),
         }
 
@@ -87,6 +98,7 @@ def _input_failure(
     contract: CompetingRisksCIFContract,
     *,
     issue_code: str,
+    unexpected_event_codes: Tuple[int, ...] = (),
 ) -> CompetingRisksCIFResult:
     return CompetingRisksCIFResult(
         status="input_contract_failed",
@@ -96,6 +108,26 @@ def _input_failure(
         event_code_mapping=(),
         n_observations=0,
         n_events_of_interest=0,
+        unexpected_event_codes=unexpected_event_codes,
+    )
+
+
+def _insufficient_support(
+    contract: CompetingRisksCIFContract,
+    *,
+    n_observations: int,
+    n_events_of_interest: int,
+    unobserved_declared_event_codes: Tuple[int, ...],
+) -> CompetingRisksCIFResult:
+    return CompetingRisksCIFResult(
+        status="data_support_insufficient",
+        adapter_version=None,
+        issue_code="competing_risk_declared_event_unobserved",
+        event_of_interest=contract.event_of_interest,
+        event_code_mapping=(),
+        n_observations=n_observations,
+        n_events_of_interest=n_events_of_interest,
+        unobserved_declared_event_codes=unobserved_declared_event_codes,
     )
 
 
@@ -139,10 +171,22 @@ def estimate_declared_cumulative_incidence(
         )
     declared_risks = (contract.event_of_interest, *contract.competing_event_codes)
     observed_positive = set(event_codes[event_codes > 0])
-    if observed_positive != set(declared_risks):
+    unexpected = tuple(sorted(observed_positive - set(declared_risks)))
+    if unexpected:
         return _input_failure(
             contract,
-            issue_code="competing_risk_event_codes_do_not_match_contract",
+            issue_code="competing_risk_event_codes_unexpected",
+            unexpected_event_codes=unexpected,
+        )
+    unobserved = tuple(sorted(set(declared_risks) - observed_positive))
+    if unobserved:
+        return _insufficient_support(
+            contract,
+            n_observations=len(times),
+            n_events_of_interest=int(
+                (event_codes == contract.event_of_interest).sum()
+            ),
+            unobserved_declared_event_codes=unobserved,
         )
 
     # scikit-survival requires consecutive 1..n risk labels.  Remapping is
@@ -162,7 +206,7 @@ def estimate_declared_cumulative_incidence(
     if not runtime.available:
         return CompetingRisksCIFResult(
             status="adapter_unavailable",
-            adapter_version=None,
+            adapter_version=runtime.installed_version,
             issue_code=runtime.issue_code,
             event_of_interest=contract.event_of_interest,
             event_code_mapping=mapping_receipt,

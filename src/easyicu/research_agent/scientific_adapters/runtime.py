@@ -15,6 +15,9 @@ import importlib.util
 from dataclasses import dataclass
 from typing import Iterable, Literal, Optional, Tuple
 
+from packaging.specifiers import InvalidSpecifier, SpecifierSet
+from packaging.version import InvalidVersion, Version
+
 from ..resources.capability import CapabilityRequest, build_capability_request
 
 
@@ -43,7 +46,13 @@ class ExternalAdapterRuntime:
     adapter_id: str
     package_name: str
     import_name: str
-    status: Literal["available", "unavailable"]
+    expected_version_spec: str
+    status: Literal[
+        "available",
+        "unavailable",
+        "incompatible_version",
+        "distribution_unresolved",
+    ]
     installed_version: Optional[str]
     issue_code: Optional[str]
 
@@ -53,10 +62,11 @@ class ExternalAdapterRuntime:
 
     def to_dict(self) -> dict[str, object]:
         return {
-            "schema_version": "easyicu.external_adapter_runtime/1",
+            "schema_version": "easyicu.external_adapter_runtime/2",
             "adapter_id": self.adapter_id,
             "package_name": self.package_name,
             "import_name": self.import_name,
+            "expected_version_spec": self.expected_version_spec,
             "status": self.status,
             "installed_version": self.installed_version,
             "issue_code": self.issue_code,
@@ -151,6 +161,7 @@ def probe_external_adapter(adapter_id: str) -> ExternalAdapterRuntime:
             adapter_id=spec.adapter_id,
             package_name=spec.package_name,
             import_name=spec.import_name,
+            expected_version_spec=spec.version_spec,
             status="unavailable",
             installed_version=None,
             issue_code="external_adapter_dependency_unavailable",
@@ -164,14 +175,48 @@ def probe_external_adapter(adapter_id: str) -> ExternalAdapterRuntime:
             adapter_id=spec.adapter_id,
             package_name=spec.package_name,
             import_name=spec.import_name,
-            status="unavailable",
+            expected_version_spec=spec.version_spec,
+            status="distribution_unresolved",
             installed_version=None,
             issue_code="external_adapter_distribution_unresolved",
+        )
+    try:
+        compatible = Version(version) in SpecifierSet(spec.version_spec)
+    except InvalidSpecifier:
+        return ExternalAdapterRuntime(
+            adapter_id=spec.adapter_id,
+            package_name=spec.package_name,
+            import_name=spec.import_name,
+            expected_version_spec=spec.version_spec,
+            status="incompatible_version",
+            installed_version=version,
+            issue_code="external_adapter_version_spec_invalid",
+        )
+    except InvalidVersion:
+        return ExternalAdapterRuntime(
+            adapter_id=spec.adapter_id,
+            package_name=spec.package_name,
+            import_name=spec.import_name,
+            expected_version_spec=spec.version_spec,
+            status="incompatible_version",
+            installed_version=version,
+            issue_code="external_adapter_installed_version_invalid",
+        )
+    if not compatible:
+        return ExternalAdapterRuntime(
+            adapter_id=spec.adapter_id,
+            package_name=spec.package_name,
+            import_name=spec.import_name,
+            expected_version_spec=spec.version_spec,
+            status="incompatible_version",
+            installed_version=version,
+            issue_code="external_adapter_version_incompatible",
         )
     return ExternalAdapterRuntime(
         adapter_id=spec.adapter_id,
         package_name=spec.package_name,
         import_name=spec.import_name,
+        expected_version_spec=spec.version_spec,
         status="available",
         installed_version=version,
         issue_code=None,

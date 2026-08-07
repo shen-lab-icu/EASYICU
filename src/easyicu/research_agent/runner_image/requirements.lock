@@ -20,3 +20,4 @@ tqdm==4.68.2
 typing-extensions==4.15.0
 duckdb==1.5.3
 patsy==1.0.2
+packaging==26.2
