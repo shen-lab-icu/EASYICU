@@ -58,6 +58,10 @@ from .completion import (
 )
 from ..authority.evidence_store import EvidenceStore, sha256_of_file
 from ..authority.step_recovery import StepRecoverySignature
+from ..planning.capability_registry import (
+    assess_scientific_capability,
+    families_without_deterministic_primary,
+)
 from ..planning.figure_strategy import summarize_article_figure_strategy_coverage
 from ..planning.study_design import study_design_family_for_analysis_type
 from ..research_context.cohort_granularity import format_patient_count
@@ -2186,18 +2190,28 @@ def _compute_readiness_gates(
     # Reaching the cap demotes the run only when it did not otherwise converge.
     # Clean, complete, numerically verified agent-owned analyses treat the cap as
     # advisory; failed or unresolved runs still fail closed.
+    capability_assessment = assess_scientific_capability(
+        analysis_type=(plan.analysis_type if plan is not None else None),
+        context=context,
+    )
+    scientific_capability_errors = (
+        []
+        if plan is None or capability_assessment.publication_eligible
+        else [
+            f"{capability_assessment.issue_code or 'scientific_capability_unavailable'}: "
+            f"{capability_assessment.reason}"
+        ]
+    )
     base_analysis_errors = (
         non_manuscript_errors
         + blocked_outcome_errors
         + plausibility_errors
         + survival_integrity_errors
+        + scientific_capability_errors
     )
     # Primary science is agent-owned across the registry. Fail safe to the strict
     # rule (False) if the family cannot be inferred.
     try:
-        from ..planning.capability_registry import (
-            families_without_deterministic_primary,
-        )
         from ..planning.study_design import infer_study_design_family
 
         _no_det_primary_expected = (
@@ -2297,6 +2311,8 @@ def _compute_readiness_gates(
         "numeric_verified": numeric_verified,
         "analysis_validated": analysis_validated,
         "manuscript_ready": manuscript_ready,
+        "scientific_capability": capability_assessment.to_dict(),
+        "scientific_capability_reportable": capability_assessment.publication_eligible,
         **plan_truncation,
         "replan_budget_exhausted": replan_budget_exhausted,
         "replan_budget_hit": replan_budget_hit,
