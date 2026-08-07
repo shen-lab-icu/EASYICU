@@ -262,7 +262,7 @@ def test_streamed_module_grows_later_batches_from_first_measured_peak(
 
     def fake_load_concepts(**kwargs):
         ids = list(kwargs["patient_ids"]["stay_id"])
-        calls.append(len(ids))
+        calls.append((len(ids), kwargs["batch_size"]))
         return pd.DataFrame(
             {
                 "stay_id": ids,
@@ -288,13 +288,21 @@ def test_streamed_module_grows_later_batches_from_first_measured_peak(
 
     manifest = json.loads((tmp_path / "_manifest.json").read_text())
     assert manifest["errors"] == []
-    assert calls == [40_000, 67_000, 13_000]
+    assert calls == [
+        (40_000, 40_000),
+        (67_000, 67_000),
+        (13_000, 13_000),
+    ]
     assert manifest["initial_batch_size"] == 40_000
     assert manifest["final_planned_batch_size"] == 67_000
     assert manifest["adaptive_batch_growth"] is True
     assert [
         batch["stays"] for batch in manifest["stream_batches"]
-    ] == calls
+    ] == [40_000, 67_000, 13_000]
+    assert [
+        batch["inner_load_batch_size"]
+        for batch in manifest["stream_batches"]
+    ] == [40_000, 67_000, 13_000]
 
 
 def test_streamed_module_preserves_first_schema_without_pandas_reindex(

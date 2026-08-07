@@ -44,7 +44,7 @@ def _get_all_patient_ids(
 
 
 # ============================================================================
-# 全库提取 API — 按模块子进程隔离，16GB 安全
+# 全库提取 API — 按模块子进程隔离与实测内存自适应
 # ============================================================================
 
 # Module definitions are derived from the shared web/export catalog so the
@@ -83,9 +83,8 @@ EXTRACT_MODULE_ORDER: List[str] = [
     if module not in _PREFERRED_EXTRACT_MODULE_ORDER
 ]
 
-# Production cohort boundary used by the default extraction contract.  The
-# five smaller public databases stay below this size and run each module in one
-# pass.  A full eICU cohort crosses it and may use up to three large batches.
+# Production cohort boundary used only to admit a calibrated one-shot fast
+# path on sufficiently large-memory hosts.  Crossing it always uses streaming.
 ONESHOT_MAX_PATIENTS = 150_000
 
 # Streamed export planning is deliberately expressed as a continuous capacity
@@ -95,13 +94,14 @@ ONESHOT_MAX_PATIENTS = 150_000
 # working set is converted to stays with a conservative cross-module planning
 # coefficient, rounded down, and capped at the production-proven 67k batch.
 #
-# At 8 GiB available this yields 40k stays:
+# At 8 GiB available the generic ceiling is 40k stays:
 #   available 8192 - reserve 2048 = 6144 MiB
 #   floor(6144 / 0.15 / 5000) * 5000 = 40,000
 #
-# This is substantially faster than the former "<12 GiB => 10k" cliff while
-# retaining 2 GiB of immediate headroom.  Explicit ``batch_size`` remains
-# authoritative.
+# A database-specific release calibration below may select a smaller initial
+# pilot when the observed source/score working set is heavier; it is not a
+# fixed RAM tier and later batches still adapt from measurement.  Explicit
+# ``batch_size`` remains authoritative.
 _STREAM_BATCH_RESERVE_FRACTION = 0.25
 _STREAM_BATCH_MIN_RESERVE_MB = 2 * 1024
 _STREAM_BATCH_MB_PER_STAY = 0.15
@@ -110,6 +110,57 @@ _STREAM_BATCH_MIN = 5_000
 _STREAM_BATCH_MAX = 67_000
 _STREAM_BATCH_RETRY_FACTOR = 0.75
 _STREAM_BATCH_MAX_RETRIES = 3
+
+# A full-cohort one-shot is not admitted merely because the generic
+# per-stay formula happens to cover the cohort.  The 2026-08-03 full-six run
+# showed that source-table shape and score-grid construction dominate that
+# simple model for several databases: MIMIC-III 61,532 stays reached about
+# 16.83 GiB process-tree RSS, AUMC 23,106 stays reached about 29.31 GiB, and
+# one 67k eICU batch reached about 15.6 GiB in ``other_scores``.  Use rounded-up
+# release measurements as conservative *initial-pilot* references.  Every
+# module can still grow after its first measured batch, so this does not create
+# a fixed low-memory tier.
+_STREAM_ONESHOT_MIN_AVAILABLE_MB = 24 * 1024
+_STREAM_CALIBRATION_QUANTUM = 1_000
+_STREAM_UNMEASURED_ONESHOT_GUARD_DATABASES = frozenset(
+    {"mimic", "miiv", "aumc"}
+)
+_STREAM_CALIBRATED_REFERENCE = {
+    # database: (observed stays, conservative process-tree peak MiB)
+    "mimic": (61_532, 18 * 1024),
+    "miiv": (94_458, 15 * 1024),
+    "eicu": (67_000, 16 * 1024),
+    "aumc": (23_106, 30 * 1024),
+    "hirid": (33_905, 14 * 1024),
+    "sic": (27_386, 10 * 1024),
+}
+
+
+def _normalise_stream_database(database: str) -> str:
+    """Return the canonical stream-planning database name."""
+
+    normalized = str(database).strip().lower()
+    return {
+        "mimiciii": "mimic",
+        "mimic-iii": "mimic",
+        "mimiciv": "miiv",
+        "mimic-iv": "miiv",
+    }.get(normalized, normalized)
+
+
+def _stream_calibration(database: str) -> Optional[tuple[int, float]]:
+    """Return the conservative release calibration for one database alias."""
+
+    return _STREAM_CALIBRATED_REFERENCE.get(
+        _normalise_stream_database(database)
+    )
+
+
+def _quantize_stream_capacity(capacity: float, quantum: int) -> int:
+    """Round a positive stay capacity down without falling below 5k."""
+
+    quantized = (max(0, int(capacity)) // int(quantum)) * int(quantum)
+    return max(_STREAM_BATCH_MIN, min(_STREAM_BATCH_MAX, quantized))
 
 
 def _process_tree_rss_mb() -> float:
@@ -258,18 +309,21 @@ def _resolve_stream_batch_size(
     machine may have only 8 GB available while an IDE, browser, or another
     analysis is open.  Explicit user choices always win.
 
-    Automatic batches use a continuous capacity estimate: reserve 25% of
-    currently available memory (at least 2 GiB), budget 0.15 MiB per stay from
-    the remainder, round down to 5k stays, and cap at 67k.  Streamed cohorts
-    are interleaved across the source-order range before chunking so a dense
-    late eICU era is not concentrated into the final batch.  Under a 14-GiB
-    cgroup, all three 67k respiratory partitions completed after the datasource
-    parallelism was made cgroup-aware; at 8 GiB available the same continuous
-    policy starts at 40k.  If a worker is nevertheless killed under memory
-    pressure, adaptive exports retry only that module at a smaller batch.
-    Databases whose complete cohort fits the capacity stay one-shot; at >=12
-    GiB available the five sub-150k databases retain their established
-    one-shot fast path.
+    Automatic batches reserve 25% of currently available memory (at least
+    2 GiB), then combine the generic 0.15-MiB-per-stay capacity with a
+    conservative database calibration from the latest full-six run.  The
+    initial pilot is rounded down, bounded to 5k--67k stays, and then resized
+    from each module's first measured working set.  This preserves large
+    batches where measurements support them without a fixed 10k tier.
+
+    Below 24 GiB available memory, MIMIC-III, MIMIC-IV and AUMC cannot use an
+    unmeasured one-shot fast path.  Lower-risk calibrated cohorts such as SIC
+    and HiRID may remain one-shot when their conservative full-cohort peak fits
+    the post-reserve budget.  When the high-risk guard alone requires a split,
+    it starts from an even half rather than manufacturing a tiny residual
+    batch.  Streamed cohorts are interleaved across the source-order range
+    before chunking so a dense late eICU era is not concentrated into the
+    final batch.  Explicit user choices remain authoritative.
     """
 
     total = int(num_patients)
@@ -288,21 +342,44 @@ def _resolve_stream_batch_size(
         available_memory_mb = get_available_memory_mb()
     available = max(0.0, float(available_memory_mb))
 
-    # The complete smaller cohorts have a measured one-shot path when at least
-    # 12 GiB is currently available.  Preserve it instead of manufacturing a
-    # nearly-full extra batch from the generic capacity formula.
-    if total <= ONESHOT_MAX_PATIENTS and available >= 12 * 1024:
-        return total
-
     reserve = max(
         float(_STREAM_BATCH_MIN_RESERVE_MB),
         available * _STREAM_BATCH_RESERVE_FRACTION,
     )
     usable = max(0.0, available - reserve)
-    capacity = int(usable / _STREAM_BATCH_MB_PER_STAY)
-    capacity = (capacity // _STREAM_BATCH_QUANTUM) * _STREAM_BATCH_QUANTUM
-    capacity = max(_STREAM_BATCH_MIN, capacity)
-    capacity = min(_STREAM_BATCH_MAX, capacity)
+    capacity = _quantize_stream_capacity(
+        usable / _STREAM_BATCH_MB_PER_STAY,
+        _STREAM_BATCH_QUANTUM,
+    )
+
+    calibration = _stream_calibration(database)
+    calibrated_full_peak_mb = None
+    if calibration is not None:
+        reference_stays, reference_peak_mb = calibration
+        calibrated_capacity = _quantize_stream_capacity(
+            reference_stays * usable / max(1.0, float(reference_peak_mb)),
+            _STREAM_CALIBRATION_QUANTUM,
+        )
+        capacity = min(capacity, calibrated_capacity)
+        calibrated_full_peak_mb = (
+            float(reference_peak_mb) * total / max(1, reference_stays)
+        )
+
+    guarded_unmeasured_one_shot = (
+        available < _STREAM_ONESHOT_MIN_AVAILABLE_MB
+        and _normalise_stream_database(database)
+        in _STREAM_UNMEASURED_ONESHOT_GUARD_DATABASES
+    )
+    if total <= ONESHOT_MAX_PATIENTS and not guarded_unmeasured_one_shot:
+        if calibrated_full_peak_mb is None:
+            one_shot_fits = capacity >= total
+        else:
+            one_shot_fits = calibrated_full_peak_mb <= usable
+        if one_shot_fits:
+            return total
+
+    if guarded_unmeasured_one_shot and capacity >= total:
+        capacity = (total + 1) // 2
     return min(capacity, total)
 
 
@@ -994,6 +1071,12 @@ def _stream_module_batches_to_parquet(
         while start < len(all_ids):
             table = None
             batch_ids = all_ids[start : start + current_batch_size]
+            # Keep the inner ``load_concepts`` boundary identical to the outer
+            # writer boundary.  After first-batch adaptation, retaining the
+            # original value here made an apparent 40k -> 67k growth execute as
+            # hidden 40k + 27k inner loads and repeated the expensive source
+            # scans that the larger outer batch was meant to avoid.
+            batch_load_kwargs["batch_size"] = len(batch_ids)
             batch_sampler = _RSSPeakSampler().start()
             frame = None
             output_rows = 0
@@ -1041,6 +1124,9 @@ def _stream_module_batches_to_parquet(
                     "batch_index": len(batch_telemetry) + 1,
                     "start_offset": start,
                     "stays": len(batch_ids),
+                    "inner_load_batch_size": int(
+                        batch_load_kwargs["batch_size"]
+                    ),
                     "output_rows": output_rows,
                     **batch_memory,
                 }
@@ -2513,6 +2599,100 @@ def _native_export_empty_schema_frame(
     return pd.DataFrame(columns)
 
 
+def _load_eicu_tidal_volume_age_lookup(output_root: Path) -> pd.Series:
+    """Load the canonical eICU age evidence used by the publication gate."""
+
+    import pyarrow.parquet as pq
+
+    path = output_root / "demographics.parquet"
+    if not path.is_file() or path.is_symlink():
+        raise ValueError(
+            "eICU ventilator publication requires demographics.parquet for "
+            "age-aware tidal-volume validation"
+        )
+    names = set(pq.read_schema(path).names)
+    identity = next(
+        (
+            column
+            for column in ("stay_id", "patientunitstayid")
+            if column in names
+        ),
+        None,
+    )
+    if identity is None or "age" not in names:
+        raise ValueError(
+            "eICU demographics lacks stay identity or age for tidal-volume "
+            "publication validation"
+        )
+    demographics = pd.read_parquet(path, columns=[identity, "age"])
+    demographics = demographics.dropna(subset=[identity]).drop_duplicates(
+        subset=[identity], keep="first"
+    )
+    return pd.Series(
+        pd.to_numeric(demographics["age"], errors="coerce").to_numpy(),
+        index=pd.to_numeric(demographics[identity], errors="coerce"),
+        dtype="float64",
+    )
+
+
+def _enforce_eicu_tidal_volume_publication_semantics(
+    frame,
+    *,
+    database: str,
+    module: str,
+    age_lookup: Optional[pd.Series],
+) -> Dict[str, Dict[str, object]]:
+    """Fail closed on implausibly small canonical eICU tidal volumes.
+
+    eICU's respiratoryCharting source mixes L- and mL-scale values, while its
+    separate ``lab.TV`` channel is nominally mL but has a sparse low-value
+    tail.  Source callbacks resolve the raw-source semantics.  This final
+    native-v2 guard prevents an adult or unknown-age value below 50 mL from
+    surviving a later multi-source merge.  Known paediatric measured values
+    remain valid.  Set tidal volume additionally rejects all positive values
+    at or below 2 mL, matching the sealed-release unit gate.
+    """
+
+    if database != "eicu" or module != "ventilator":
+        return {}
+    if age_lookup is None:
+        raise ValueError("eICU tidal-volume publication age lookup is missing")
+    if "stay_id" not in frame.columns:
+        raise ValueError("eICU ventilator publication lacks canonical stay_id")
+
+    ages = pd.to_numeric(frame["stay_id"].map(age_lookup), errors="coerce")
+    adult_or_unknown = ages.ge(18) | ages.isna()
+    audit: Dict[str, Dict[str, object]] = {}
+    for concept in ("tidal_vol", "tidal_vol_set"):
+        if concept not in frame.columns:
+            continue
+        values = pd.to_numeric(frame[concept], errors="coerce")
+        positive_small = values.gt(0) & values.lt(50)
+        invalid = positive_small & adult_or_unknown
+        if concept == "tidal_vol_set":
+            invalid |= values.gt(0) & values.le(2)
+        invalid_count = int(invalid.sum())
+        if invalid_count:
+            frame.loc[invalid, concept] = float("nan")
+        audit[concept] = {
+            "policy": (
+                "known-paediatric measured values may be below 50 mL; "
+                "adult/unknown-age values below 50 mL are quarantined; "
+                "set values at or below 2 mL are always quarantined"
+            ),
+            "excluded_semantically_invalid": invalid_count,
+            "adult_or_unknown_small_rows": int(
+                (positive_small & adult_or_unknown).sum()
+            ),
+            "all_age_set_le_2_rows": int(
+                ((values.gt(0) & values.le(2)).sum())
+                if concept == "tidal_vol_set"
+                else 0
+            ),
+        }
+    return audit
+
+
 def _native_export_arrow_batch_rows() -> int:
     """Resolve a bounded publisher batch without exposing an unbounded knob."""
     raw = os.environ.get("EASYICU_NATIVE_PUBLISH_BATCH_ROWS")
@@ -2648,6 +2828,249 @@ def _native_export_arrow_row_grain_audit(
     }
 
 
+def _native_export_duckdb_consolidate_row_grain(
+    path: Path,
+    *,
+    module: str,
+    requested_concepts: List[str],
+    dictionary,
+    before_audit: Dict[str, object],
+) -> tuple[Dict[str, object], Dict[str, int]]:
+    """Consolidate a large duplicate-bearing longitudinal parquet boundedly.
+
+    Only the old fallback needed a full pandas DataFrame.  DuckDB can perform
+    the same NULL-equal key grouping under the publisher's fixed memory limit
+    and spill beside the output.  A final bounded Arrow pass restores the
+    package's canonical schema metadata without materialising the module.
+    """
+    import tempfile
+
+    import duckdb
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    if module == "demographics":
+        raise ValueError("DuckDB row-grain consolidation is longitudinal-only")
+
+    def quote_identifier(value: str) -> str:
+        return '"' + str(value).replace('"', '""') + '"'
+
+    memory_mb = _native_export_duckdb_memory_mb()
+    target_schema = pq.read_schema(path)
+    duckdb_output = path.with_name(f".{module}.native-v2.duckdb.tmp.parquet")
+    arrow_output = path.with_name(f".{module}.native-v2.arrow.tmp.parquet")
+    for candidate in (duckdb_output, arrow_output):
+        if candidate.exists() or candidate.is_symlink():
+            raise ValueError(
+                f"native_export_v2 refuses stale consolidation file: {candidate}"
+            )
+
+    string_concepts = [
+        concept
+        for concept in requested_concepts
+        if _native_export_storage_kind(concept, dictionary) == "string"
+    ]
+    aggregate_expressions = []
+    for concept in requested_concepts:
+        column = quote_identifier(concept)
+        alias = quote_identifier(concept)
+        kind = _native_export_storage_kind(concept, dictionary)
+        if kind == "boolean":
+            expression = f"bool_or({column})::BOOLEAN AS {alias}"
+        elif kind == "string":
+            expression = (
+                f"first({column} ORDER BY _row_order) "
+                f"FILTER (WHERE {column} IS NOT NULL)::VARCHAR AS {alias}"
+            )
+        else:
+            expression = f"median({column})::DOUBLE AS {alias}"
+        aggregate_expressions.append(expression)
+
+    source_columns = ", ".join(
+        quote_identifier(column)
+        for column in ("stay_id", "charttime", *requested_concepts)
+    )
+    output_columns = ", ".join(
+        quote_identifier(column)
+        for column in ("stay_id", "charttime", *requested_concepts)
+    )
+    aggregate_sql = ",\n                        ".join(aggregate_expressions)
+
+    try:
+        with tempfile.TemporaryDirectory(
+            prefix=f".{module}.native-v2-consolidate-",
+            dir=path.parent,
+        ) as spill_dir:
+            connection = duckdb.connect(
+                database=":memory:",
+                config={
+                    "memory_limit": f"{memory_mb}MB",
+                    "threads": "1",
+                    "temp_directory": spill_dir,
+                    "preserve_insertion_order": "true",
+                },
+            )
+            try:
+                if string_concepts:
+                    conflict_counts = ", ".join(
+                        f"count(DISTINCT s.{quote_identifier(concept)}) "
+                        f"AS {quote_identifier('_conflict_' + concept)}"
+                        for concept in string_concepts
+                    )
+                    conflict_predicate = " OR ".join(
+                        f"{quote_identifier('_conflict_' + concept)} > 1"
+                        for concept in string_concepts
+                    )
+                    conflict_row = connection.execute(
+                        f"""
+                        WITH duplicate_keys AS (
+                            SELECT stay_id, charttime
+                            FROM read_parquet(?)
+                            GROUP BY stay_id, charttime
+                            HAVING count(*) > 1
+                        ), conflicts AS (
+                            SELECT
+                                s.stay_id,
+                                s.charttime,
+                                {conflict_counts}
+                            FROM read_parquet(?) AS s
+                            JOIN duplicate_keys AS d
+                              ON s.stay_id IS NOT DISTINCT FROM d.stay_id
+                             AND s.charttime IS NOT DISTINCT FROM d.charttime
+                            GROUP BY s.stay_id, s.charttime
+                        )
+                        SELECT *
+                        FROM conflicts
+                        WHERE {conflict_predicate}
+                        LIMIT 1
+                        """,
+                        [str(path), str(path)],
+                    ).fetchone()
+                    if conflict_row is not None:
+                        stay_id, charttime, *counts = conflict_row
+                        conflict_index = next(
+                            index for index, count in enumerate(counts) if count > 1
+                        )
+                        concept = string_concepts[conflict_index]
+                        values = connection.execute(
+                            f"""
+                            SELECT DISTINCT {quote_identifier(concept)}
+                            FROM read_parquet(?)
+                            WHERE stay_id IS NOT DISTINCT FROM ?
+                              AND charttime IS NOT DISTINCT FROM ?
+                              AND {quote_identifier(concept)} IS NOT NULL
+                            ORDER BY {quote_identifier(concept)}
+                            """,
+                            [str(path), stay_id, charttime],
+                        ).fetchall()
+                        raise ValueError(
+                            "native export cannot consolidate conflicting string "
+                            f"concept {concept!r} at key {(stay_id, charttime)!r}: "
+                            f"{[value[0] for value in values]!r}"
+                        )
+
+                connection.execute(
+                    f"""
+                    COPY (
+                        WITH source AS (
+                            SELECT
+                                file_row_number::BIGINT AS _row_order,
+                                {source_columns}
+                            FROM read_parquet(?, file_row_number=true)
+                        ), consolidated AS (
+                            SELECT
+                                min(_row_order)::BIGINT AS _row_order,
+                                stay_id::BIGINT AS stay_id,
+                                charttime::DOUBLE AS charttime,
+                                {aggregate_sql}
+                            FROM source
+                            GROUP BY stay_id, charttime
+                        )
+                        SELECT {output_columns}
+                        FROM consolidated
+                        ORDER BY _row_order
+                    ) TO ? (
+                        FORMAT PARQUET,
+                        COMPRESSION SNAPPY,
+                        ROW_GROUP_SIZE 262144
+                    )
+                    """,
+                    # DuckDB binds COPY's TO placeholder before placeholders
+                    # in its SELECT body, irrespective of textual order.
+                    [str(duckdb_output), str(path)],
+                )
+            finally:
+                connection.close()
+
+        # DuckDB deliberately owns the global grouping; Arrow owns the exact
+        # package schema and pandas metadata.  This pass is record-batch bounded.
+        source_file = pq.ParquetFile(duckdb_output)
+        concept_non_null = {concept: 0 for concept in requested_concepts}
+        writer = pq.ParquetWriter(arrow_output, target_schema, compression="snappy")
+        try:
+            for batch in source_file.iter_batches(
+                batch_size=_native_export_arrow_batch_rows(),
+                use_threads=False,
+            ):
+                table = pa.Table.from_batches([batch]).cast(target_schema, safe=True)
+                for concept in requested_concepts:
+                    column = table[concept]
+                    concept_non_null[concept] += int(len(column) - column.null_count)
+                if len(table):
+                    writer.write_table(table)
+                del table
+                _release_stream_batch_memory(pa, trim_native_allocator=False)
+        finally:
+            writer.close()
+        arrow_output.replace(path)
+    except Exception:
+        arrow_output.unlink(missing_ok=True)
+        raise
+    finally:
+        duckdb_output.unlink(missing_ok=True)
+
+    after_audit = _native_export_arrow_row_grain_audit(path, module=module)
+    if int(after_audit["duplicate_excess_rows_after"]):
+        raise RuntimeError(
+            f"native export module {module!r} DuckDB consolidation was not unique"
+        )
+    expected_rows = int(before_audit["source_rows"]) - int(
+        before_audit["duplicate_excess_rows_before"]
+    )
+    if int(after_audit["published_rows"]) != expected_rows:
+        raise RuntimeError(
+            f"native export module {module!r} DuckDB consolidation changed the "
+            f"row count unexpectedly ({after_audit['published_rows']} != "
+            f"{expected_rows})"
+        )
+
+    after_audit.update(
+        {
+            "source_rows": int(before_audit["source_rows"]),
+            "null_charttime_rows_before": int(
+                before_audit["null_charttime_rows_before"]
+            ),
+            "duplicate_key_rows_before": int(
+                before_audit["duplicate_key_rows_before"]
+            ),
+            "duplicate_key_groups_before": int(
+                before_audit["duplicate_key_groups_before"]
+            ),
+            "duplicate_excess_rows_before": int(
+                before_audit["duplicate_excess_rows_before"]
+            ),
+            "rows_consolidated": int(
+                before_audit["duplicate_excess_rows_before"]
+            ),
+            "publication_backend": (
+                "duckdb_bounded_spillable_row_grain_consolidation"
+            ),
+            "consolidation_memory_limit_mb": memory_mb,
+        }
+    )
+    return after_audit, concept_non_null
+
+
 def _try_publish_native_export_arrow_fast_path(
     *,
     source_parquet: Path,
@@ -2656,14 +3079,16 @@ def _try_publish_native_export_arrow_fast_path(
     requested_concepts: List[str],
     dictionary,
     stay_time_upper_bounds: Dict[int, float],
+    database: str,
+    eicu_tidal_volume_age_lookup: Optional[pd.Series],
 ) -> Optional[Dict[str, object]]:
     """Publish a unique longitudinal module without a full pandas payload.
 
     The temporary file is canonicalised and bounded batch-by-batch.  A global
     NULL-equal uniqueness audit is then performed under a fixed DuckDB memory
-    budget.  Small duplicate-bearing modules return ``None`` for the exact
-    pandas consolidation path; a large duplicate-bearing module fails closed
-    rather than silently escaping the documented memory contract.
+    budget. Small duplicate-bearing modules return ``None`` for the exact
+    pandas consolidation path. Large modules use the same aggregation contract
+    in a bounded, spillable DuckDB query.
     """
     import pyarrow as pa
     import pyarrow.parquet as pq
@@ -2706,6 +3131,7 @@ def _try_publish_native_export_arrow_fast_path(
     )
     time_axis_audit: Optional[Dict[str, object]] = None
     bounds_audit: Optional[Dict[str, Dict[str, object]]] = None
+    semantic_audit: Optional[Dict[str, Dict[str, object]]] = None
     concept_non_null = {concept: 0 for concept in requested_concepts}
     writer = None
     try:
@@ -2729,6 +3155,14 @@ def _try_publish_native_export_arrow_fast_path(
                 requested_concepts=requested_concepts,
                 dictionary=dictionary,
             )
+            batch_semantic_audit = (
+                _enforce_eicu_tidal_volume_publication_semantics(
+                    frame,
+                    database=database,
+                    module=module,
+                    age_lookup=eicu_tidal_volume_age_lookup,
+                )
+            )
             frame, batch_time_audit = _enforce_native_export_time_axis(
                 frame,
                 module=module,
@@ -2744,6 +3178,8 @@ def _try_publish_native_export_arrow_fast_path(
             else:
                 for field in (
                     "excluded_rows",
+                    "excluded_untimed_empty_rows",
+                    "excluded_untimed_negative_rrt_criteria_rows",
                     "normalized_stay_level_rows",
                     "rows_with_los_bound",
                 ):
@@ -2761,6 +3197,25 @@ def _try_publish_native_export_arrow_fast_path(
                     bounds_audit[concept]["excluded_out_of_bounds"] = int(
                         bounds_audit[concept]["excluded_out_of_bounds"]
                     ) + int(record["excluded_out_of_bounds"])
+            if semantic_audit is None:
+                semantic_audit = {
+                    concept: dict(record)
+                    for concept, record in batch_semantic_audit.items()
+                }
+            else:
+                for concept, record in batch_semantic_audit.items():
+                    if concept not in semantic_audit:
+                        semantic_audit[concept] = dict(record)
+                        continue
+                    current = semantic_audit[concept]
+                    for field in (
+                        "excluded_semantically_invalid",
+                        "adult_or_unknown_small_rows",
+                        "all_age_set_le_2_rows",
+                    ):
+                        current[field] = int(current.get(field, 0)) + int(
+                            record.get(field, 0)
+                        )
             for concept in requested_concepts:
                 concept_non_null[concept] += int(frame[concept].notna().sum())
             output = pa.Table.from_pandas(
@@ -2795,13 +3250,17 @@ def _try_publish_native_export_arrow_fast_path(
     duplicate_excess = int(row_grain_audit["duplicate_excess_rows_before"])
     if duplicate_excess:
         fallback_size = _native_export_pandas_fallback_size(source_parquet)
-        temporary_parquet.unlink(missing_ok=True)
         if _native_export_pandas_fallback_is_bounded(fallback_size):
+            temporary_parquet.unlink(missing_ok=True)
             return None
-        raise ValueError(
-            "native export row-grain consolidation exceeds the bounded pandas "
-            f"fallback (module={module!r}, {fallback_size=}, "
-            f"duplicate_excess_rows={duplicate_excess})"
+        row_grain_audit, concept_non_null = (
+            _native_export_duckdb_consolidate_row_grain(
+                temporary_parquet,
+                module=module,
+                requested_concepts=requested_concepts,
+                dictionary=dictionary,
+                before_audit=row_grain_audit,
+            )
         )
 
     return {
@@ -2809,6 +3268,7 @@ def _try_publish_native_export_arrow_fast_path(
         "rows": int(row_grain_audit["published_rows"]),
         "time_axis_audit": time_axis_audit,
         "bounds_audit": bounds_audit,
+        "semantic_audit": semantic_audit or {},
         "row_grain_audit": row_grain_audit,
         "concept_non_null": concept_non_null,
     }
@@ -2879,6 +3339,8 @@ def _enforce_native_export_time_axis(
     audit: Dict[str, object] = {
         "policy": "icu_episode_with_24h_pre_post_allowance",
         "excluded_rows": 0,
+        "excluded_untimed_empty_rows": 0,
+        "excluded_untimed_negative_rrt_criteria_rows": 0,
         "normalized_stay_level_rows": 0,
         "fallback_upper_hours": ICU_TIME_FALLBACK_LIMIT_HOURS,
     }
@@ -2906,9 +3368,65 @@ def _enforce_native_export_time_axis(
     audit["rows_with_los_bound"] = int(
         frame["stay_id"].isin(stay_time_upper_bounds).sum()
     )
-    if not bool(invalid.any()):
+    kept = frame.loc[~invalid].copy() if bool(invalid.any()) else frame
+
+    # A full outer merge can retain a dependency-only row with no event time.
+    # In particular, ``rrt_criteria`` is calculated as a boolean expression, so
+    # an otherwise empty row becomes ``False`` instead of remaining missing.
+    # It is not a negative observation at an unknown time; it is a merge
+    # artifact.  The concept callback already removes this case, but the native
+    # publication boundary repeats the guard because later module-wide joins
+    # can recreate it.  Positive untimed criteria fail closed.
+    null_time = kept["charttime"].isna()
+    concept_columns = [
+        column
+        for column in kept.columns
+        if column not in {*_NATIVE_EXPORT_ID_COLUMNS, "charttime"}
+    ]
+    # Fold one column at a time instead of materialising a dense
+    # rows-by-concepts boolean DataFrame at the publication memory peak.
+    any_concept_value = pd.Series(False, index=kept.index)
+    for column in concept_columns:
+        any_concept_value |= kept[column].notna()
+    empty_untimed = null_time & ~any_concept_value
+    audit["excluded_untimed_empty_rows"] = int(empty_untimed.sum())
+
+    negative_rrt_artifact = pd.Series(False, index=kept.index)
+    if module == "renal" and "rrt_criteria" in kept.columns:
+        rrt_criteria = kept["rrt_criteria"].astype("boolean")
+        positive_untimed = null_time & rrt_criteria.eq(True).fillna(False)
+        if bool(positive_untimed.any()):
+            sample_ids = (
+                kept.loc[positive_untimed, "stay_id"]
+                .drop_duplicates()
+                .head(5)
+                .tolist()
+            )
+            raise ValueError(
+                "native renal export contains positive rrt_criteria rows without "
+                f"an event time; sample stay_id={sample_ids}"
+            )
+        other_concepts = [
+            column for column in concept_columns if column != "rrt_criteria"
+        ]
+        other_value = pd.Series(False, index=kept.index)
+        for column in other_concepts:
+            other_value |= kept[column].notna()
+        negative_rrt_artifact = (
+            null_time
+            & rrt_criteria.eq(False).fillna(False)
+            & ~other_value
+        )
+        audit["excluded_untimed_negative_rrt_criteria_rows"] = int(
+            negative_rrt_artifact.sum()
+        )
+
+    excluded_untimed = empty_untimed | negative_rrt_artifact
+    if bool(excluded_untimed.any()):
+        kept = kept.loc[~excluded_untimed].copy()
+    elif kept is frame:
         return frame, audit
-    kept = frame.loc[~invalid].copy()
+
     # Preserve canonical numeric dtype even when every row was excluded.
     kept["charttime"] = pd.to_numeric(
         kept["charttime"], errors="coerce"
@@ -3134,6 +3652,11 @@ def _publish_native_export_v2(
         stay_time_upper_bounds = _native_export_stay_time_upper_bounds(
             pd.read_parquet(outcome_source)
         )
+    eicu_tidal_volume_age_lookup = None
+    if normalized_database == "eicu" and "ventilator" in published_modules:
+        eicu_tidal_volume_age_lookup = _load_eicu_tidal_volume_age_lookup(
+            output_root
+        )
 
     for module in published_modules:
         relative_path = f"{module}.parquet"
@@ -3246,6 +3769,8 @@ def _publish_native_export_v2(
                     requested_concepts=requested_concept_plan[module],
                     dictionary=dictionary,
                     stay_time_upper_bounds=stay_time_upper_bounds,
+                    database=normalized_database,
+                    eicu_tidal_volume_age_lookup=eicu_tidal_volume_age_lookup,
                 )
             if arrow_result is None:
                 # Demographics has a concept-wise nearest-time selection policy;
@@ -3280,6 +3805,14 @@ def _publish_native_export_v2(
                     module=module,
                     requested_concepts=requested_concept_plan[module],
                     dictionary=dictionary,
+                )
+                semantic_audit = (
+                    _enforce_eicu_tidal_volume_publication_semantics(
+                        frame,
+                        database=normalized_database,
+                        module=module,
+                        age_lookup=eicu_tidal_volume_age_lookup,
+                    )
                 )
                 frame, time_axis_audit = _enforce_native_export_time_axis(
                     frame,
@@ -3346,6 +3879,7 @@ def _publish_native_export_v2(
             else:
                 time_axis_audit = arrow_result["time_axis_audit"]
                 bounds_audit = arrow_result["bounds_audit"]
+                semantic_audit = arrow_result["semantic_audit"]
                 row_grain_audit = arrow_result["row_grain_audit"]
                 metadata_frame = arrow_result["schema_frame"]
                 published_rows = int(arrow_result["rows"])
@@ -3393,6 +3927,12 @@ def _publish_native_export_v2(
                     "excluded_out_of_bounds"
                 ],
             }
+            if concept in semantic_audit:
+                status["excluded_semantically_invalid"] = int(
+                    semantic_audit[concept].get(
+                        "excluded_semantically_invalid", 0
+                    )
+                )
             if "declared_bounds" in bounds_audit[concept]:
                 status["declared_bounds"] = bounds_audit[concept]["declared_bounds"]
             concept_status[concept] = status
@@ -3424,6 +3964,7 @@ def _publish_native_export_v2(
                 "row_grain": row_grain_audit["row_grain"],
                 "row_grain_audit": row_grain_audit,
                 "time_axis_audit": time_axis_audit,
+                "semantic_audit": semantic_audit,
                 "concept_status": concept_status,
                 "column_metadata_columns": list(binding.columns),
             }
@@ -3556,6 +4097,7 @@ def extract_database(
     native_export_v2: Optional[bool] = None,
     stream_output_batches: bool = False,
     verbose: bool = True,
+    adaptive_stream_batches: Optional[bool] = None,
 ) -> Dict:
     """按 19 个模块分组、子进程隔离地提取整个数据库的全部特征。
 
@@ -3570,15 +4112,15 @@ def extract_database(
         每组一个子进程、组内用 keep_cache 复用 raw/table 缓存：
         chartevents/labevents 等重表每组只扫一次，而不是每模块重扫一遍；
         SOFA 闭包只算一次并被 sofa1/sofa2/sep3_* 复用。缓存受
-        EASYICU_CACHE_BUDGET_MB 字节预算约束（默认物理内存的 25%），
-        8-16GB 机器安全。
+        EASYICU_CACHE_BUDGET_MB 字节预算约束（默认物理内存的 25%）；
+        低内存整库安全性由下述 streamed pilot 与重试合同共同保证。
       * 每组在独立子进程中运行，组退出后 OS 完整回收内存（含 pymalloc
         arena 碎片），主进程 RSS 几乎不增长。group_modules=False 或环境变量
         EASYICU_EXTRACT_GROUPING=0 退回每模块一个子进程的旧行为。
-      * 五个不超过 15 万患者的数据库默认一次性 in-process 加载；完整 eICU
-        队列超过该边界，按稳定内存预算使用 1–3 个大 batch（16GB 下最重模块
-        为 3 批）。不会切成大量小批而重复扫描共享源表。一次性路径确实 OOM
-        时，worker 仍会降级为最多 3 批。
+      * 流式导出对低于 24 GiB 的 MIMIC-III、MIMIC-IV 和 AUMC 先运行按实测
+        峰值校准的大 pilot，不再未经验证就 one-shot；SIC/HiRID 若保守峰值可
+        放入预留后预算则保留 one-shot。每个模块再根据首批真实工作集调整后续
+        批次，上限为 67,000 stays。
       * 参考实测：MIMIC-III 全量 61,532 stays 的 SOFA-2 六分量 ~6 分钟。
 
     Args:
@@ -3604,6 +4146,10 @@ def extract_database(
             worker 内合并整模块 DataFrame。用于本地磁盘/内存受限且输出位于
             外置盘的完整导出；会牺牲部分源表复用以换取稳定的峰值内存。
         verbose: 是否打印进度
+        adaptive_stream_batches: ``None`` 保持公共默认：自动选择的流式 batch
+            会自适应，用户显式 ``batch_size`` 固定不变。六库 launcher 会同时
+            显式传入有 provenance 的首批计划和 ``True``，从而保证 plan 与实际
+            首批一致，同时允许后续批次继续按实测增长或收缩。
 
     Note:
         提取 worker 在所有平台均使用 ``spawn`` 以隔离 Arrow/DuckDB 原生状态。
@@ -3684,26 +4230,28 @@ def extract_database(
 
     num_patients = len(all_ids)
 
-    # 默认 batch_size：先以不分批的哨兵值传入 worker；worker 对不超过
-    # ONESHOT_MAX_PATIENTS 的五库保持一次完成，对完整 eICU 队列再按稳定内存
-    # 预算收敛到最多 3 个大 batch。
-    # 每个模块已在独立子进程(_extract_module_worker)中运行，模块退出后 OS 完整
-    # 回收内存，所以模块间不会累积碎片。实测单模块峰值 RSS 恒定 ~2-3GB(与队列
-    # 规模无关，因为 load_concepts 按源表流式处理)，五个较小数据库能一次装下。
-    # 主动分批只会让 load_concepts 每批重读共享源表(chartevents/labevents…)，
-    # 数倍变慢——这是用户“怎么这么慢”的根因。故默认用大于任意队列的哨兵值，
-    # 让较小数据库单次扫表完成；eICU 的 worker 会应用三批上限。仅在特殊
-    # 机器/存储条件下由用户显式传 batch_size 覆盖。
+    # 流式导出先选择一个有证据的首批，而不是按数据库大小猜测 one-shot。
+    # 2026-08-03 实测显示小队列也可能很重（AUMC 23,106 stays 约 29.31 GiB），
+    # 所以低于 24 GiB 时高风险库先按数据库校准 pilot；SIC/HiRID 等较低风险库
+    # 仅在保守峰值能放入预留后预算时保留 one-shot。每个模块再用首批 working-set
+    # 自适应。显式用户 batch 仍保持固定；launcher 可以显式传计划值并单独打开
+    # adaptive_stream_batches，使 provenance 与真实首批完全一致。
+    if adaptive_stream_batches and not stream_output_batches:
+        raise ValueError(
+            "adaptive_stream_batches requires stream_output_batches=True"
+        )
+
     if stream_output_batches:
-        # The bounded writer needs a concrete batch.  Resolve it from current
-        # available memory rather than nominal total RAM: a 16 GB laptop with
-        # only 8 GB free starts from a bounded 40k batch and can grow only
-        # after the first batch supplies a measured working-set baseline.
-        _adaptive_stream_batches = batch_size is None
+        automatic_stream_batch = batch_size is None
         batch_size = _resolve_stream_batch_size(
             database,
             num_patients,
             batch_size,
+        )
+        _adaptive_stream_batches = (
+            automatic_stream_batch
+            if adaptive_stream_batches is None
+            else bool(adaptive_stream_batches)
         )
         _auto_one_shot = False
     elif batch_size is None:

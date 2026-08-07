@@ -485,7 +485,6 @@ def distribute_amount(
             return result
         else:
             return data
-    
     else:
         # datetime 逻辑 - 需要转换为相对时间然后展开
         # 
@@ -676,6 +675,272 @@ def distribute_amount(
             return result
         else:
             return data
+
+
+def normalize_volume_to_ml(values: pd.Series, units: pd.Series) -> pd.Series:
+    """Normalize explicit metric volume units to mL, failing closed on unknowns."""
+
+    normalized_units = (
+        units.astype("string")
+        .str.strip()
+        .str.lower()
+        .str.replace("μ", "µ", regex=False)
+    )
+    factors = normalized_units.map(
+        {
+            "ml": 1.0,
+            "milliliter": 1.0,
+            "milliliters": 1.0,
+            "cc": 1.0,
+            "cm3": 1.0,
+            "cm^3": 1.0,
+            "l": 1000.0,
+            "liter": 1000.0,
+            "liters": 1000.0,
+            "litre": 1000.0,
+            "litres": 1000.0,
+            "ul": 0.001,
+            "µl": 0.001,
+            "mm3": 0.001,
+            "mm^3": 0.001,
+            "nl": 0.000001,
+            "pl": 0.000000001,
+        }
+    )
+    unknown = normalized_units.notna() & factors.isna()
+    if unknown.any():
+        labels = sorted(normalized_units.loc[unknown].dropna().unique().tolist())
+        logger.warning(
+            "dropping %d volume row(s) with unknown units: %s",
+            int(unknown.sum()),
+            labels,
+        )
+    return pd.to_numeric(values, errors="coerce") * factors.astype(float)
+
+
+def distribute_volume_hourly(
+    data: pd.DataFrame,
+    val_col: str = "value",
+    end_col: str = "endtime",
+    index_col: str = "starttime",
+    *,
+    id_col: Optional[str] = None,
+    origin_times: Optional[pd.DataFrame] = None,
+    origin_col: Optional[str] = None,
+    numeric_time_unit: str = "hours",
+    output_time_unit: str = "relative_hours",
+    row_chunk_size: int = 100_000,
+) -> pd.DataFrame:
+    """Allocate an interval's total volume exactly across ICU-hour bins.
+
+    ``inputevents.amount`` and AmsterdamUMCdb ``drugitems.fluidin`` are
+    interval totals, not point measurements. Assigning the whole amount to the
+    start creates artificial intake spikes and shifts cumulative balance. This
+    transform allocates each total in proportion to overlap with half-open
+    ICU-hour bins ``[h, h + 1)`` anchored at ICU admission.
+
+    Positive-duration rows conserve volume (apart from floating-point
+    round-off). Zero-duration rows and rows without an end are treated as
+    boluses at their start; negative durations are malformed and dropped.
+
+    ``absolute_minutes`` output exists for AUMC: the generic alignment layer
+    still needs the source's absolute-minute clock in order to subtract
+    ``admittedat`` exactly once.
+    """
+
+    if val_col not in data.columns or index_col not in data.columns:
+        return data
+
+    frame = data.copy()
+    if id_col is None:
+        preferred_ids = (
+            "stay_id",
+            "icustay_id",
+            "admissionid",
+            "patientunitstayid",
+            "patientid",
+            "CaseID",
+        )
+        id_col = next(
+            (column for column in preferred_ids if column in frame.columns),
+            None,
+        )
+    if id_col is None or id_col not in frame.columns:
+        raise ValueError("distribute_volume_hourly requires a stay-level identifier")
+    if numeric_time_unit not in {"hours", "minutes"}:
+        raise ValueError("numeric_time_unit must be 'hours' or 'minutes'")
+    if output_time_unit not in {"relative_hours", "absolute_minutes"}:
+        raise ValueError(
+            "output_time_unit must be 'relative_hours' or 'absolute_minutes'"
+        )
+    if output_time_unit == "absolute_minutes" and (
+        origin_times is None or not origin_col
+    ):
+        raise ValueError("absolute-minute output requires declared origin times")
+    if not isinstance(row_chunk_size, int) or row_chunk_size < 1:
+        raise ValueError("row_chunk_size must be a positive integer")
+
+    raw_end = (
+        frame[end_col]
+        if end_col in frame.columns
+        else pd.Series(pd.NA, index=frame.index, dtype="object")
+    )
+    raw_start = frame[index_col]
+
+    origin_by_id: Optional[pd.Series] = None
+    if origin_times is not None:
+        if (
+            origin_col is None
+            or id_col not in origin_times.columns
+            or origin_col not in origin_times.columns
+        ):
+            raise ValueError(
+                "origin_times must contain the stay identifier and origin column"
+            )
+        origins = origin_times[[id_col, origin_col]].drop_duplicates(
+            subset=[id_col], keep="last"
+        )
+        origin_by_id = origins.set_index(id_col)[origin_col]
+
+    source_is_numeric = pd.api.types.is_numeric_dtype(raw_start)
+    if source_is_numeric:
+        scale = 60.0 if numeric_time_unit == "minutes" else 1.0
+        start = pd.to_numeric(raw_start, errors="coerce") / scale
+        end = pd.to_numeric(raw_end, errors="coerce") / scale
+        if origin_by_id is not None:
+            origin = (
+                pd.to_numeric(frame[id_col].map(origin_by_id), errors="coerce")
+                / scale
+            )
+            start = start - origin
+            end = end - origin
+    else:
+        start_dt = pd.to_datetime(raw_start, errors="coerce", utc=True)
+        end_dt = pd.to_datetime(raw_end, errors="coerce", utc=True)
+        if origin_by_id is None:
+            raise ValueError(
+                "datetime interval allocation requires ICU admission origins"
+            )
+        origin_dt = pd.to_datetime(
+            frame[id_col].map(origin_by_id), errors="coerce", utc=True
+        )
+        start = (start_dt - origin_dt).dt.total_seconds() / 3600.0
+        end = (end_dt - origin_dt).dt.total_seconds() / 3600.0
+
+    amount = pd.to_numeric(frame[val_col], errors="coerce")
+    valid = frame[id_col].notna() & start.notna() & amount.notna()
+    malformed = valid & end.notna() & (end < start)
+    if malformed.any():
+        logger.warning(
+            "dropping %d end-before-start volume interval row(s)",
+            int(malformed.sum()),
+        )
+    valid &= ~malformed
+    if not valid.any():
+        return pd.DataFrame(columns=[id_col, index_col, val_col])
+
+    ids = frame.loc[valid, id_col].reset_index(drop=True)
+    starts = start.loc[valid].astype(float).reset_index(drop=True)
+    ends = end.loc[valid].astype(float).reset_index(drop=True)
+    amounts = amount.loc[valid].astype(float).reset_index(drop=True)
+
+    def _reduce_pieces(pieces: List[pd.DataFrame]) -> pd.DataFrame:
+        if len(pieces) == 1:
+            return pieces[0]
+        return (
+            pd.concat(pieces, ignore_index=True)
+            .groupby([id_col, index_col], as_index=False, sort=False)[val_col]
+            .sum(min_count=1)
+        )
+
+    def _allocate_piece(lo: int, hi: int) -> pd.DataFrame:
+        piece_ids = ids.iloc[lo:hi].reset_index(drop=True)
+        piece_starts = starts.iloc[lo:hi].reset_index(drop=True)
+        piece_ends = ends.iloc[lo:hi].reset_index(drop=True)
+        piece_amounts = amounts.iloc[lo:hi].reset_index(drop=True)
+        bolus = piece_ends.isna() | np.isclose(piece_ends, piece_starts)
+        duration = piece_ends - piece_starts
+        start_bins = np.floor(piece_starts).astype(np.int64)
+        interval_end_bins = (
+            np.ceil(piece_ends.fillna(piece_starts)).astype(np.int64) - 1
+        )
+        end_bins = interval_end_bins.where(~bolus, start_bins)
+        counts = (end_bins - start_bins + 1).clip(lower=1).astype(np.int64)
+
+        counts_array = counts.to_numpy()
+        source_row = np.repeat(
+            np.arange(len(piece_ids), dtype=np.int64), counts_array
+        )
+        starts_repeated = np.repeat(start_bins.to_numpy(), counts_array)
+        block_starts = np.repeat(
+            np.cumsum(counts_array) - counts_array,
+            counts_array,
+        )
+        bins = starts_repeated + (
+            np.arange(len(source_row), dtype=np.int64) - block_starts
+        )
+
+        repeated_start = piece_starts.to_numpy()[source_row]
+        repeated_end = piece_ends.to_numpy()[source_row]
+        repeated_duration = duration.to_numpy()[source_row]
+        repeated_amount = piece_amounts.to_numpy()[source_row]
+        repeated_bolus = bolus.to_numpy()[source_row]
+
+        overlap = np.minimum(repeated_end, bins + 1.0) - np.maximum(
+            repeated_start, bins
+        )
+        overlap = np.clip(overlap, 0.0, 1.0)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            allocated = np.where(
+                repeated_bolus,
+                repeated_amount,
+                repeated_amount * overlap / repeated_duration,
+            )
+
+        piece = pd.DataFrame(
+            {
+                id_col: piece_ids.to_numpy()[source_row],
+                index_col: bins.astype(float),
+                val_col: allocated.astype(float),
+            }
+        )
+        piece = piece[np.isfinite(piece[val_col])]
+        return (
+            piece.groupby([id_col, index_col], as_index=False, sort=False)[val_col]
+            .sum(min_count=1)
+            .reset_index(drop=True)
+        )
+
+    # Binary-tree compaction keeps the largest live intermediate close to the
+    # final hourly output size instead of retaining one expanded array for all
+    # source intervals. This is the important 16-GB portability bound.
+    reduction_levels: List[Optional[pd.DataFrame]] = []
+    for lo in range(0, len(ids), row_chunk_size):
+        carry = _allocate_piece(lo, min(lo + row_chunk_size, len(ids)))
+        level = 0
+        while level < len(reduction_levels) and reduction_levels[level] is not None:
+            carry = _reduce_pieces([reduction_levels[level], carry])
+            reduction_levels[level] = None
+            level += 1
+        if level == len(reduction_levels):
+            reduction_levels.append(carry)
+        else:
+            reduction_levels[level] = carry
+
+    result = _reduce_pieces(
+        [piece for piece in reduction_levels if piece is not None]
+    ).reset_index(drop=True)
+
+    if output_time_unit == "absolute_minutes":
+        if not source_is_numeric:
+            raise ValueError("absolute-minute output is only valid for numeric sources")
+        source_origins = pd.to_numeric(
+            result[id_col].map(origin_by_id), errors="coerce"
+        )
+        result[index_col] = source_origins + result[index_col] * 60.0
+
+    return result
+
 
 def aggregate_fun(agg_func: str, new_unit: str) -> Callable:
     """Create aggregation callback.
@@ -950,7 +1215,13 @@ def vent_flag(
     return frame
 
 def eicu_duration_callback(gap_length: pd.Timedelta) -> Callable:
-    """Create callback equivalent to R's eicu_duration(gap_length)."""
+    """Infer eICU infusion episodes from charted point sequences.
+
+    Consecutive points no more than ``gap_length`` apart belong to the same
+    episode.  A single point establishes that an infusion was charted, but it
+    does *not* establish how long the infusion ran; singleton durations are
+    therefore returned as missing rather than as a false zero-hour exposure.
+    """
     from ..io.ts_utils import group_measurements
 
     if not isinstance(gap_length, pd.Timedelta):
@@ -1058,12 +1329,11 @@ def eicu_duration_callback(gap_length: pd.Timedelta) -> Callable:
         groupby_cols = valid_id_cols + [group_col]
         
         # R ricu: res <- x[, list(min(min_var), max(max_var)), by = c(id_vars, grp_var)]
-        result = grouped.groupby(groupby_cols, dropna=False).agg({
-            index_var: ['min', 'max']
-        }).reset_index()
-        
-        # Flatten column names
-        result.columns = groupby_cols + ['min_time', 'max_time']
+        result = grouped.groupby(groupby_cols, dropna=False).agg(
+            min_time=(index_var, 'min'),
+            max_time=(index_var, 'max'),
+            observation_count=(index_var, 'size'),
+        ).reset_index()
         
         # R ricu: res <- res[, c(val_var) := get(val_var) - get(index_var)]
         # Calculate duration: max - min
@@ -1079,6 +1349,11 @@ def eicu_duration_callback(gap_length: pd.Timedelta) -> Callable:
         else:
             # Other databases: datetime difference gives timedelta, convert to hours
             result[val_col] = (result['max_time'] - result['min_time']).dt.total_seconds() / 3600.0
+
+        # A singleton has no observed end boundary.  Encoding it as 0 h makes
+        # unknown duration indistinguishable from a known zero-length exposure
+        # and can make the point qualify downstream as real vasopressor time.
+        result.loc[result['observation_count'] < 2, val_col] = np.nan
         
         # Use min_time as the index_var value for this duration
         result[index_var] = result['min_time']
@@ -1425,112 +1700,512 @@ def calc_dur(
     
     return result
 
+def _mimic_duration_id_cols(
+    data: pd.DataFrame,
+    id_cols: Optional[list],
+) -> list[str]:
+    """Return only the ICU-stay identifier used by duration callbacks."""
+
+    if id_cols:
+        return [col for col in id_cols if col in data.columns]
+    for candidate in (
+        "icustay_id",
+        "stay_id",
+        "patientunitstayid",
+        "admissionid",
+        "patientid",
+        "CaseID",
+    ):
+        if candidate in data.columns:
+            return [candidate]
+    return []
+
+
+def _mimic_duration_time_col(
+    data: pd.DataFrame,
+    *,
+    stop_var: Optional[str] = None,
+) -> Optional[str]:
+    """Select the administration start/rate-set timestamp deterministically."""
+
+    for candidate in ("starttime", "charttime", "start"):
+        if candidate in data.columns and candidate != stop_var:
+            return candidate
+    return next(
+        (
+            col
+            for col in data.columns
+            if isinstance(col, str)
+            and "time" in col.lower()
+            and col != stop_var
+        ),
+        None,
+    )
+
+
+def _mimic_prepare_time_columns(
+    data: pd.DataFrame,
+    columns: list[str],
+) -> tuple[pd.DataFrame, bool]:
+    """Coerce source clocks while retaining either datetime or numeric hours."""
+
+    result = data.copy()
+    numeric_columns = [
+        pd.api.types.is_numeric_dtype(result[col]) for col in columns
+    ]
+    numeric = all(numeric_columns)
+    if numeric:
+        for col in columns:
+            result[col] = pd.to_numeric(result[col], errors="coerce")
+    else:
+        if any(numeric_columns):
+            raise ValueError(
+                "MIMIC duration received mixed numeric and datetime source clocks"
+            )
+        for col in columns:
+            result[col] = pd.to_datetime(result[col], errors="coerce")
+            if result[col].dt.tz is not None:
+                result[col] = result[col].dt.tz_localize(None)
+    return result, numeric
+
+
+def _mimic_clip_episode_end_to_outtime(
+    data: pd.DataFrame,
+    *,
+    id_col: str,
+    start_col: str,
+    end_col: str,
+    icu_stays: Optional[pd.DataFrame],
+    numeric_time: bool,
+    allow_equal: bool = False,
+) -> pd.DataFrame:
+    """Clip inferred/explicit episode ends to the matching ICU discharge."""
+
+    if icu_stays is None or icu_stays.empty:
+        return data
+    if id_col not in icu_stays.columns or "outtime" not in icu_stays.columns:
+        raise ValueError(
+            "MIMIC duration clipping requires ICU stay id and outtime columns"
+        )
+
+    bound_columns = [id_col]
+    if "intime" in icu_stays.columns:
+        bound_columns.append("intime")
+    bound_columns.append("outtime")
+    bounds = icu_stays[bound_columns].dropna(subset=[id_col]).copy()
+    conflicting = bounds.dropna(subset=["outtime"]).groupby(id_col)[
+        "outtime"
+    ].nunique(dropna=True)
+    if conflicting.gt(1).any():
+        raise ValueError("MIMIC ICU stay table contains conflicting outtimes")
+    bounds = bounds.drop_duplicates(subset=[id_col], keep="last")
+    if numeric_time:
+        raw_outtime = bounds["outtime"]
+        numeric_outtime = pd.to_numeric(raw_outtime, errors="coerce")
+        nonnull_outtime = raw_outtime.notna()
+        bounds_are_numeric = (
+            not pd.api.types.is_datetime64_any_dtype(raw_outtime)
+            and (
+                pd.api.types.is_numeric_dtype(raw_outtime)
+                or numeric_outtime.loc[nonnull_outtime].notna().all()
+            )
+        )
+        if bounds_are_numeric:
+            bounds["__outtime_clock"] = numeric_outtime
+        else:
+            if "intime" not in bounds.columns:
+                raise ValueError(
+                    "MIMIC numeric duration clocks require ICU intime to "
+                    "convert an absolute outtime"
+                )
+            absolute_outtime = pd.to_datetime(
+                bounds["outtime"], errors="coerce", utc=True
+            ).dt.tz_localize(None)
+            absolute_intime = pd.to_datetime(
+                bounds["intime"], errors="coerce", utc=True
+            ).dt.tz_localize(None)
+            bounds["__outtime_clock"] = (
+                absolute_outtime - absolute_intime
+            ).dt.total_seconds() / 3600.0
+    else:
+        if pd.api.types.is_numeric_dtype(bounds["outtime"]):
+            raise ValueError(
+                "MIMIC datetime duration clocks require an absolute ICU outtime"
+            )
+        bounds["__outtime_clock"] = pd.to_datetime(
+            bounds["outtime"], errors="coerce", utc=True
+        ).dt.tz_localize(None)
+    outtime = data[id_col].map(
+        bounds.set_index(id_col)["__outtime_clock"]
+    )
+    result = data.copy()
+    unresolved = outtime.isna()
+    if unresolved.any():
+        logger.warning(
+            "MIMIC duration: dropping %d episodes across %d stays without "
+            "outtime or an intime+LOS fallback",
+            int(unresolved.sum()),
+            int(result.loc[unresolved, id_col].nunique()),
+        )
+        result = result.loc[~unresolved].copy()
+        outtime = outtime.loc[~unresolved]
+    if result.empty:
+        return result
+    has_bound = outtime.notna()
+    starts_before_discharge = ~has_bound | result[start_col].lt(outtime)
+    result.loc[has_bound, end_col] = result.loc[has_bound, end_col].where(
+        result.loc[has_bound, end_col].le(outtime.loc[has_bound]),
+        outtime.loc[has_bound],
+    )
+    valid = (
+        result[end_col].ge(result[start_col])
+        if allow_equal
+        else result[end_col].gt(result[start_col])
+    )
+    return result.loc[starts_before_discharge & valid].copy()
+
+
+def _mimic_exact_duration_hours(
+    end: pd.Series,
+    start: pd.Series,
+    *,
+    numeric_time: bool,
+) -> pd.Series:
+    """Calculate duration without flooring either source clock."""
+
+    if numeric_time:
+        return pd.to_numeric(end, errors="coerce") - pd.to_numeric(
+            start, errors="coerce"
+        )
+    return (end - start).dt.total_seconds() / 3600.0
+
+
+def _mimic_empty_duration(
+    *,
+    id_cols: list[str],
+    index_var: str,
+    val_col: str,
+    unit_col: Optional[str],
+) -> pd.DataFrame:
+    columns = [*id_cols, index_var, val_col]
+    if unit_col:
+        columns.append(unit_col)
+    return pd.DataFrame(columns=list(dict.fromkeys(columns)))
+
+
 def mimic_dur_inmv(
     data: pd.DataFrame,
-    val_col: str = 'value',
+    val_col: str = "value",
     grp_var: Optional[str] = None,
     stop_var: Optional[str] = None,
     id_cols: Optional[list] = None,
     unit_col: Optional[str] = None,
     admission_times: Optional[pd.DataFrame] = None,
-    **kwargs
+    icu_stays: Optional[pd.DataFrame] = None,
+    status_var: str = "statusdescription",
+    cancel_var: Optional[str] = None,
+    excluded_statuses: Optional[list[str]] = None,
+    merge_gap_minutes: float = 5.0,
+    **kwargs,
 ) -> pd.DataFrame:
-    """MIMIC MetaVision infusion duration callback (R ricu mimic_dur_inmv).
-    
-    Calculates total infusion duration for each medication group.
-    
-    Args:
-        data: Input DataFrame with infusion data
-        val_col: Output column for duration
-        grp_var: Grouping variable (e.g., linkorderid)
-        stop_var: End time variable
-        id_cols: ID columns for patient grouping
-        unit_col: Optional unit column to preserve
-        admission_times: DataFrame with id_col and intime columns for relative time calculation
-        **kwargs: Additional arguments
-        
-    Returns:
-        DataFrame with duration calculations
+    """Build exact MIMIC MetaVision continuous-infusion episodes.
+
+    MetaVision provides explicit start/end intervals.  Orders marked rewritten,
+    cancelled, flushed, or bolus were not continuous administrations and are
+    excluded.  Remaining overlapping intervals, or intervals separated by at
+    most ``merge_gap_minutes``, are merged within ICU stay and ``grp_var``.
+    Every interval is clipped to ICU outtime before aggregation, and duration is
+    returned as exact floating-point hours (no absolute-clock flooring).
+
+    ``admission_times`` is retained only for API compatibility with older
+    callers; exact elapsed time does not depend on the ICU admission origin.
     """
-    # Remove duplicate columns first (keep first occurrence)
-    data = data.loc[:, ~data.columns.duplicated(keep='first')]
-    
-    # Infer index variable (start time)
-    time_cols = [col for col in data.columns if 'time' in col.lower() and col != stop_var]
-    if not time_cols:
-        time_cols = [col for col in ['charttime', 'starttime'] if col in data.columns]
-    
-    if not time_cols:
-        return data
-    
-    index_var = time_cols[0]
-    
-    # Call calc_dur (returns hours as numeric, not timedelta)
-    result = calc_dur(
-        data,
-        val_col=val_col,
-        min_var=index_var,
-        max_var=stop_var or index_var,
-        grp_var=grp_var,
-        id_cols=id_cols,
-        unit_col=unit_col,
-        admission_times=admission_times
+
+    del admission_times, kwargs
+    frame = data.loc[:, ~data.columns.duplicated(keep="first")].copy()
+    stay_cols = _mimic_duration_id_cols(frame, id_cols)
+    index_var = _mimic_duration_time_col(frame, stop_var=stop_var)
+    if not stay_cols:
+        raise ValueError("mimic_dur_inmv requires an ICU stay identifier")
+    if not index_var:
+        raise ValueError("mimic_dur_inmv requires a start-time column")
+    if not stop_var or stop_var not in frame.columns:
+        raise ValueError("mimic_dur_inmv requires a declared stop-time column")
+    if status_var not in frame.columns:
+        raise ValueError(
+            f"mimic_dur_inmv requires administration status column '{status_var}'"
+        )
+    if cancel_var and cancel_var not in frame.columns:
+        raise ValueError(
+            f"mimic_dur_inmv requires cancellation column '{cancel_var}'"
+        )
+    try:
+        merge_gap_minutes = float(merge_gap_minutes)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("merge_gap_minutes must be numeric") from exc
+    if not np.isfinite(merge_gap_minutes) or merge_gap_minutes < 0:
+        raise ValueError("merge_gap_minutes must be finite and non-negative")
+
+    excluded = {
+        value.strip().casefold()
+        for value in (
+            excluded_statuses
+            or ["Rewritten", "Cancelled", "Canceled", "Flushed", "Bolus"]
+        )
+    }
+    status = frame[status_var].astype("string").str.strip().str.casefold()
+    invalid = status.isin(excluded)
+    if cancel_var:
+        cancel = frame[cancel_var]
+        numeric_cancel = pd.to_numeric(cancel, errors="coerce")
+        textual_cancel = cancel.astype("string").str.strip().str.casefold()
+        unexpected_text = cancel.notna() & ~textual_cancel.isin(
+            {"", "0", "0.0", "false", "none", "nan"}
+        )
+        invalid |= numeric_cancel.fillna(0).ne(0) | unexpected_text
+
+    keep_cols = [*stay_cols]
+    if grp_var and grp_var in frame.columns:
+        keep_cols.append(grp_var)
+    keep_cols.extend([index_var, stop_var])
+    if unit_col and unit_col in frame.columns:
+        keep_cols.append(unit_col)
+    frame = frame.loc[~invalid, list(dict.fromkeys(keep_cols))].copy()
+    if frame.empty:
+        return _mimic_empty_duration(
+            id_cols=stay_cols,
+            index_var=index_var,
+            val_col=val_col,
+            unit_col=unit_col,
+        )
+
+    frame, numeric_time = _mimic_prepare_time_columns(
+        frame, [index_var, stop_var]
     )
-    
-    # calc_dur now returns hours as numeric (matching ricu behavior)
-    # No need to convert to timedelta
-    
-    return result
+    frame = frame.dropna(subset=[*stay_cols, index_var, stop_var])
+    frame = frame.loc[frame[stop_var].gt(frame[index_var])].copy()
+    frame = _mimic_clip_episode_end_to_outtime(
+        frame,
+        id_col=stay_cols[0],
+        start_col=index_var,
+        end_col=stop_var,
+        icu_stays=icu_stays,
+        numeric_time=numeric_time,
+    )
+    if frame.empty:
+        return _mimic_empty_duration(
+            id_cols=stay_cols,
+            index_var=index_var,
+            val_col=val_col,
+            unit_col=unit_col,
+        )
+
+    group_cols = [*stay_cols]
+    if grp_var and grp_var in frame.columns:
+        group_cols.append(grp_var)
+    frame = frame.sort_values(
+        [*group_cols, index_var, stop_var], kind="stable"
+    )
+    frame["__running_end"] = frame.groupby(
+        group_cols, dropna=False
+    )[stop_var].cummax()
+    previous_end = frame.groupby(group_cols, dropna=False)[
+        "__running_end"
+    ].shift()
+    if numeric_time:
+        gap_tolerance = merge_gap_minutes / 60.0
+    else:
+        gap_tolerance = pd.Timedelta(minutes=merge_gap_minutes)
+    frame["__new_episode"] = previous_end.isna() | frame[index_var].gt(
+        previous_end + gap_tolerance
+    )
+    frame["__episode"] = frame.groupby(group_cols, dropna=False)[
+        "__new_episode"
+    ].cumsum()
+
+    aggregations: dict[str, tuple[str, str]] = {
+        index_var: (index_var, "min"),
+        "__episode_end": (stop_var, "max"),
+    }
+    if unit_col and unit_col in frame.columns:
+        aggregations[unit_col] = (unit_col, "first")
+    episodes = frame.groupby(
+        [*group_cols, "__episode"], as_index=False, dropna=False
+    ).agg(**aggregations)
+    episodes[val_col] = _mimic_exact_duration_hours(
+        episodes["__episode_end"],
+        episodes[index_var],
+        numeric_time=numeric_time,
+    )
+    result_cols = [*stay_cols, index_var, val_col]
+    if unit_col and unit_col in episodes.columns:
+        result_cols.append(unit_col)
+    return episodes[result_cols].reset_index(drop=True)
+
 
 def mimic_dur_incv(
     data: pd.DataFrame,
-    val_col: str = 'value',
+    val_col: str = "value",
     grp_var: Optional[str] = None,
     id_cols: Optional[list] = None,
     unit_col: Optional[str] = None,
-    **kwargs
+    icu_stays: Optional[pd.DataFrame] = None,
+    boundary_var: str = "stopped",
+    merge_gap_hours: float = 5.0,
+    rate_var: str = "rate",
+    **kwargs,
 ) -> pd.DataFrame:
-    """MIMIC CareVue infusion duration callback (R ricu mimic_dur_incv).
-    
-    For CareVue system where there's no stop time, calculates duration
-    using the same time column for both start and end.
-    
-    Args:
-        data: Input DataFrame with infusion data
-        val_col: Output column for duration
-        grp_var: Grouping variable (e.g., linkorderid)
-        id_cols: ID columns for patient grouping
-        unit_col: Optional unit column to preserve
-        **kwargs: Additional arguments
-        
-    Returns:
-        DataFrame with duration calculations
+    """Infer CareVue infusion episode spans from documented rate-set points.
+
+    CareVue has no explicit interval end.  Within ICU stay and the drug concept,
+    consecutive positive-rate timestamps at most ``merge_gap_hours`` apart form
+    one inferred episode even if ``linkorderid`` changes.  Explicit
+    ``Stopped``/``D/C'd`` markers and rate zero terminate the current episode;
+    ``Restart`` forces the next positive rate to start a new one.  A singleton
+    has unknown duration (``NaN``), not zero.  The resulting endpoint is clipped
+    to ICU outtime.  This is a gap-based observed span and must not be
+    interpreted as exact pump-on time.
     """
-    # Infer index variable (time column)
-    time_cols = [col for col in data.columns if 'time' in col.lower()]
-    if not time_cols:
-        time_cols = [col for col in ['charttime', 'starttime'] if col in data.columns]
-    
-    if not time_cols:
-        return data
-    
-    index_var = time_cols[0]
-    
-    # Call calc_dur with same column for min and max (returns hours as numeric)
-    result = calc_dur(
-        data,
-        val_col=val_col,
-        min_var=index_var,
-        max_var=index_var,
-        grp_var=grp_var,
-        id_cols=id_cols,
-        unit_col=unit_col
+
+    del kwargs
+    frame = data.loc[:, ~data.columns.duplicated(keep="first")].copy()
+    stay_cols = _mimic_duration_id_cols(frame, id_cols)
+    index_var = _mimic_duration_time_col(frame)
+    if not stay_cols:
+        raise ValueError("mimic_dur_incv requires an ICU stay identifier")
+    if not index_var:
+        raise ValueError("mimic_dur_incv requires a rate-set timestamp")
+    if boundary_var not in frame.columns:
+        raise ValueError(
+            f"mimic_dur_incv requires explicit boundary column '{boundary_var}'"
+        )
+    rate_col = rate_var if rate_var in frame.columns else val_col
+    if rate_col not in frame.columns:
+        raise ValueError(
+            "mimic_dur_incv requires the source rate to identify active points"
+        )
+    try:
+        merge_gap_hours = float(merge_gap_hours)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("merge_gap_hours must be numeric") from exc
+    if not np.isfinite(merge_gap_hours) or merge_gap_hours < 0:
+        raise ValueError("merge_gap_hours must be finite and non-negative")
+
+    # The official CareVue duration logic follows the stay-plus-drug event
+    # sequence; linkorderid can change during one continuous administration.
+    # The callback already runs once per drug concept, so grouping by stay is
+    # sufficient and ``grp_var`` is deliberately ignored.
+    del grp_var
+    group_cols = [*stay_cols]
+    keep_cols = [*group_cols, index_var, boundary_var, rate_col]
+    if unit_col and unit_col in frame.columns:
+        keep_cols.append(unit_col)
+    frame = frame[list(dict.fromkeys(keep_cols))].copy()
+    frame, numeric_time = _mimic_prepare_time_columns(frame, [index_var])
+    frame = frame.dropna(subset=[*stay_cols, index_var])
+    if frame.empty:
+        return _mimic_empty_duration(
+            id_cols=stay_cols,
+            index_var=index_var,
+            val_col=val_col,
+            unit_col=unit_col,
+        )
+
+    boundary = frame[boundary_var].astype("string").str.strip().str.casefold()
+    rate = pd.to_numeric(frame[rate_col], errors="coerce")
+    frame["__active"] = rate.gt(0)
+    frame["__stop_boundary"] = (
+        boundary.eq("stopped")
+        | boundary.str.startswith("d/c", na=False)
+        | boundary.isin({"discontinued", "discontinue"})
+        | rate.eq(0)
+    ).fillna(False)
+    frame["__restart_boundary"] = boundary.eq("restart").fillna(False)
+    aggregations: dict[str, tuple[str, str]] = {
+        "__active": ("__active", "max"),
+        "__stop_boundary": ("__stop_boundary", "max"),
+        "__restart_boundary": ("__restart_boundary", "max"),
+    }
+    if unit_col and unit_col in frame.columns:
+        aggregations[unit_col] = (unit_col, "first")
+    # Multiple rows at one rate-set timestamp are one observation, but any
+    # explicit stop/restart marker at that timestamp must survive deduplication.
+    frame = frame.groupby(
+        [*group_cols, index_var], as_index=False, dropna=False
+    ).agg(**aggregations)
+    frame = frame.loc[
+        frame["__active"]
+        | frame["__stop_boundary"]
+        | frame["__restart_boundary"]
+    ].copy()
+    if frame.empty:
+        return _mimic_empty_duration(
+            id_cols=stay_cols,
+            index_var=index_var,
+            val_col=val_col,
+            unit_col=unit_col,
+        )
+    frame = frame.sort_values([*group_cols, index_var], kind="stable")
+    previous_time = frame.groupby(group_cols, dropna=False)[index_var].shift()
+    frame["__terminal_boundary"] = (
+        frame["__stop_boundary"] | frame["__restart_boundary"]
     )
-    
-    # calc_dur now returns hours as numeric (matching ricu behavior)
-    # No need to convert to timedelta
-    
-    return result
+    previous_terminal = frame.groupby(group_cols, dropna=False)[
+        "__terminal_boundary"
+    ].shift(fill_value=False)
+    if numeric_time:
+        long_gap = frame[index_var].sub(previous_time).gt(merge_gap_hours)
+    else:
+        long_gap = frame[index_var].sub(previous_time).gt(
+            pd.Timedelta(hours=merge_gap_hours)
+        )
+    frame["__new_episode"] = (
+        previous_time.isna()
+        | long_gap
+        | previous_terminal
+        | frame["__restart_boundary"]
+    )
+    frame["__episode"] = frame.groupby(group_cols, dropna=False)[
+        "__new_episode"
+    ].cumsum()
+
+    frame["__active_time"] = frame[index_var].where(frame["__active"])
+    episode_aggregations: dict[str, tuple[str, str]] = {
+        index_var: ("__active_time", "min"),
+        "__episode_end": (index_var, "max"),
+        "__active_count": ("__active", "sum"),
+        "__has_stop": ("__stop_boundary", "max"),
+    }
+    if unit_col and unit_col in frame.columns:
+        episode_aggregations[unit_col] = (unit_col, "first")
+    episodes = frame.groupby(
+        [*group_cols, "__episode"], as_index=False, dropna=False
+    ).agg(**episode_aggregations)
+    episodes = episodes.loc[
+        episodes["__active_count"].gt(0) & episodes[index_var].notna()
+    ].copy()
+    episodes = _mimic_clip_episode_end_to_outtime(
+        episodes,
+        id_col=stay_cols[0],
+        start_col=index_var,
+        end_col="__episode_end",
+        icu_stays=icu_stays,
+        numeric_time=numeric_time,
+        allow_equal=True,
+    )
+    exact_hours = _mimic_exact_duration_hours(
+        episodes["__episode_end"],
+        episodes[index_var],
+        numeric_time=numeric_time,
+    )
+    duration_known = episodes["__active_count"].gt(1) | (
+        episodes["__has_stop"] & exact_hours.gt(0)
+    )
+    episodes[val_col] = exact_hours.where(duration_known)
+    result_cols = [*stay_cols, index_var, val_col]
+    if unit_col and unit_col in episodes.columns:
+        result_cols.append(unit_col)
+    return episodes[result_cols].reset_index(drop=True)
 
 def create_intervals(
     data: pd.DataFrame,
@@ -2295,7 +2970,7 @@ def grp_mount_to_rate(
     extra_dur: pd.Timedelta,
     unit_val: Optional[Union[str, dict]] = None,
     grp_var: Optional[str] = None,
-    filt_fun: Optional[Callable] = None
+    filt_fun: Optional[Callable] = None,
 ) -> Callable:
     """Create callback for converting grouped amounts to rates (R ricu grp_mount_to_rate).
     
@@ -2331,6 +3006,7 @@ def grp_mount_to_rate(
         unit_col: str = 'unit',
         index_var: Optional[str] = None,
         id_cols: Optional[list] = None,
+        sub_var: Optional[str] = None,
         **kwargs
     ) -> pd.DataFrame:
         if data.empty:
@@ -2354,37 +3030,103 @@ def grp_mount_to_rate(
         # Apply filter if provided
         if filt_fun is not None:
             data = data[filt_fun(data)]
+
+        if data.empty:
+            return data
+
+        required_cols = [index_var, val_col]
+        if grp_var_to_use:
+            required_cols.append(grp_var_to_use)
+        if sub_var:
+            required_cols.append(sub_var)
+        missing_cols = [col for col in required_cols if col not in data.columns]
+        if missing_cols:
+            raise ValueError(
+                "grp_mount_to_rate requires columns "
+                f"{missing_cols}; available columns are {list(data.columns)}"
+            )
+
+        # CSV-backed MIMIC-III can expose AMOUNT as object/VARCHAR even though
+        # the source contract is numeric.  Pandas ``groupby.sum`` concatenates
+        # such strings (``'150' + '150' -> '150150'``), which can then escape
+        # the callback as an apparent infusion rate.  Coerce before grouping,
+        # quarantine every unusable value, and leave an exact audit count in
+        # the extraction log.  Infinite values are just as unusable as text.
+        numeric_values = pd.to_numeric(data[val_col], errors="coerce")
+        finite_values = pd.Series(
+            np.isfinite(numeric_values.to_numpy(dtype=float, na_value=np.nan)),
+            index=data.index,
+        )
+        unusable_values = numeric_values.isna() | ~finite_values
+        if unusable_values.any():
+            logger.warning(
+                "grp_mount_to_rate dropped %d/%d rows with missing, "
+                "non-numeric, or non-finite %s values",
+                int(unusable_values.sum()),
+                len(data),
+                val_col,
+            )
+            numeric_values = numeric_values.mask(unusable_values)
+        data[val_col] = numeric_values.astype(float)
         
         # Build grouping columns
         group_cols = list(id_cols)
-        if grp_var_to_use and grp_var_to_use in data.columns:
+        if grp_var_to_use:
             group_cols.append(grp_var_to_use)
+        # Concentration normalization (for example dex_to_10) runs after this
+        # aggregation.  Keep its discriminator in the output and split mixed
+        # item/pharma groups instead of discarding it or choosing one ID.
+        if sub_var:
+            group_cols.append(sub_var)
+        group_cols = list(dict.fromkeys(group_cols))
+        if not group_cols:
+            raise ValueError(
+                "grp_mount_to_rate requires at least one patient or group column"
+            )
         
         # Sort by group and time
         sort_cols = group_cols + [index_var]
         data = data.sort_values(sort_cols)
         
-        # Aggregate by group
-        agg_dict = {
-            index_var: ['min', 'max'],
-            val_col: 'sum'
-        }
-        
-        # Keep first unit if available
-        if unit_col in data.columns:
-            agg_dict[unit_col] = lambda x: x.dropna().iloc[0] if len(x.dropna()) > 0 else np.nan
-        
-        result = data.groupby(group_cols, dropna=False).agg(agg_dict).reset_index()
-        
-        # Flatten column names
-        result.columns = [
-            col[0] if col[1] == '' or col[1] == '<lambda>' else f"{col[0]}_{col[1]}"
-            for col in result.columns
-        ]
-        
-        # Calculate duration
+        # Aggregate by group.  An unusable amount is excluded from the sum but
+        # its timestamp remains part of the documented infusion span.  This
+        # matters for terminal CareVue rows whose amount is missing: deleting
+        # the whole row shortens the denominator and inflates the rate.
         min_time_col = f"{index_var}_min"
         max_time_col = f"{index_var}_max"
+        sum_col = f"{val_col}_sum"
+        agg_dict = {
+            min_time_col: (index_var, "min"),
+            max_time_col: (index_var, "max"),
+            sum_col: (val_col, lambda values: values.sum(min_count=1)),
+        }
+
+        if unit_col in data.columns:
+            agg_dict[unit_col] = (
+                unit_col,
+                lambda values: (
+                    values.dropna().iloc[0]
+                    if not values.dropna().empty
+                    else np.nan
+                ),
+            )
+
+        result = (
+            data.groupby(group_cols, dropna=False)
+            .agg(**agg_dict)
+            .reset_index()
+        )
+        no_usable_amount = result[sum_col].isna()
+        if no_usable_amount.any():
+            logger.warning(
+                "grp_mount_to_rate dropped %d/%d groups with no usable %s",
+                int(no_usable_amount.sum()),
+                len(result),
+                val_col,
+            )
+            result = result.loc[~no_usable_amount].copy()
+        if result.empty:
+            return result
         
         result['dur_var'] = result[max_time_col] - result[min_time_col]
         
@@ -2421,7 +3163,7 @@ def grp_mount_to_rate(
 
             # Calculate rate: amount / duration (convert to hours for rate/hour)
             dur_hours = result['dur_var'].dt.total_seconds() / 3600
-        result[val_col] = result[f"{val_col}_sum"] / dur_hours
+        result[val_col] = result[sum_col] / dur_hours
         
         # Set units
         if closure_unit_val is not None:
@@ -4413,90 +5155,154 @@ def aumc_dur(
     grp_var: Optional[str],
     index_var: Optional[str],
     concept_name: str,
+    continuous_var: str = "iscontinuous",
+    action_var: str = "action",
+    merge_gap_minutes: float = 5.0,
 ) -> pd.DataFrame:
-    """
-    Calculate duration for AUMC database items.
-    
-    NOTE: AUMC times are preprocessed in datasource.py and converted from 
-    milliseconds to INTEGER MINUTES (floor(ms / 60000)) to match R ricu's as.integer().
-    
-    R ricu's calc_dur behavior:
-    1. Times are first processed by re_time which floors to interval (1 hour)
-    2. Then calc_dur computes: duration = max(stop_floor_hours) - min(start_floor_hours)
-    
-    So: duration = floor(max_stop_min/60) - floor(min_start_min/60)
-    
-    IMPORTANT: This function returns times in MINUTES to allow _align_time_to_admission
-    to perform the final conversion to hours. Only the duration value is in hours.
+    """Build canonical AUMC continuous-infusion episodes.
+
+    ``drugitems`` contains both continuous infusions and bolus/flush rows, and
+    a pump change or rate adjustment commonly creates a new ``orderid``.  An
+    ``orderid`` is therefore a row/order identifier, not a clinical exposure
+    episode.  The canonical episode contract is instead:
+
+    * retain only rows explicitly marked ``iscontinuous == 1`` and exclude
+      administrations labelled flush/bolus/push;
+    * within each stay and canonical drug concept, merge overlapping intervals
+      and intervals separated by at most five minutes; and
+    * report the exact episode span in hours, without flooring absolute source
+      timestamps before computing the difference.
+
+    This callback is invoked once per drug concept, so ``concept_name`` is the
+    drug component of the stay-plus-drug grouping.  ``grp_var`` is accepted for
+    compatibility with older dictionaries but deliberately ignored.
+
+    AUMC start/stop values reach this layer as absolute integer minutes.  The
+    returned start stays in source minutes so the central admission-alignment
+    layer can subtract ``admittedat`` exactly once; only the duration is already
+    expressed in hours.
     
     Args:
         frame: Input dataframe with AUMC data (times in INTEGER MINUTES)
         val_col: Name of the value column (will be replaced with duration)
         stop_var: Column name containing stop timestamps in MINUTES
-        grp_var: Column name for grouping (e.g., 'orderid')
+        grp_var: Deprecated row/order grouping variable; deliberately ignored
         index_var: Column name containing start timestamps in MINUTES
         concept_name: Name of the concept being calculated
+        continuous_var: Source flag identifying continuous administrations
+        action_var: Source administration-action label used to exclude flushes
+        merge_gap_minutes: Maximum gap included in one clinical episode
         
     Returns:
         DataFrame with:
-        - duration column (concept_name) in HOURS (integer)
+        - duration column (concept_name) in HOURS (floating point)
         - start column (index_var) in MINUTES (to be converted by _align_time_to_admission)
     """
-    if frame.empty or not stop_var or stop_var not in frame.columns:
-        return frame
+    # Find start column
+    start_col = index_var if index_var and index_var in frame.columns else None
+    if not start_col:
+        start_col = next(
+            (col for col in ['start', 'charttime', 'time'] if col in frame.columns),
+            None,
+        )
+
+    id_cols = _aumc_get_id_columns(frame)
+    result_cols = list(id_cols)
+    if start_col:
+        result_cols.append(start_col)
+    result_cols.append(concept_name)
+    result_cols = list(dict.fromkeys(result_cols))
+
+    if frame.empty:
+        return pd.DataFrame(columns=result_cols)
+    if not stop_var or stop_var not in frame.columns:
+        raise ValueError("aumc_dur requires a declared stop-time column")
+    if not start_col:
+        raise ValueError("aumc_dur requires a start-time column")
+    if not id_cols:
+        raise ValueError("aumc_dur requires an ICU stay/admission identifier")
+    if continuous_var not in frame.columns:
+        raise ValueError(
+            "aumc_dur requires the source iscontinuous flag; refusing to mix "
+            "bolus/flush rows with continuous infusions"
+        )
+    if action_var not in frame.columns:
+        raise ValueError(
+            "aumc_dur requires the source action label; refusing to retain "
+            "continuous-flagged flush/bolus rows"
+        )
+    try:
+        merge_gap_minutes = float(merge_gap_minutes)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("aumc_dur merge_gap_minutes must be numeric") from exc
+    if not np.isfinite(merge_gap_minutes) or merge_gap_minutes < 0:
+        raise ValueError("aumc_dur merge_gap_minutes must be finite and non-negative")
 
     df = frame.copy()
 
-    # Find start column
-    start_col = index_var if index_var and index_var in df.columns else None
-    if not start_col:
-        start_col = next((col for col in ['start', 'charttime', 'time'] if col in df.columns), None)
-    if not start_col:
-        return df
+    # ``iscontinuous`` is logical in the official AUMC schema, but converted
+    # parquet/custom sources can expose it as 0/1 or a string.  Only explicit
+    # truthy encodings are accepted; missing/unknown values fail closed.
+    continuous = df[continuous_var]
+    if pd.api.types.is_bool_dtype(continuous):
+        continuous_mask = continuous.fillna(False)
+    elif pd.api.types.is_numeric_dtype(continuous):
+        continuous_mask = pd.to_numeric(continuous, errors='coerce').eq(1)
+    else:
+        continuous_mask = (
+            continuous.astype('string').str.strip().str.lower().isin(
+                {'1', 'true', 't', 'yes', 'y'}
+            )
+        )
+    excluded_action = (
+        df[action_var]
+        .astype('string')
+        .str.contains(r'(?i)\b(?:flush|bolus|push)\b', regex=True, na=False)
+    )
 
-    # Get patient ID columns
-    id_cols = _aumc_get_id_columns(df)
-    
-    # Prepare grouping columns
-    group_cols = list(id_cols)
-    if grp_var and grp_var in df.columns:
-        if grp_var not in group_cols:
-            group_cols.append(grp_var)
-    
-    # Times are in INTEGER MINUTES (converted in datasource.py)
     df[start_col] = pd.to_numeric(df[start_col], errors='coerce')
     df[stop_var] = pd.to_numeric(df[stop_var], errors='coerce')
-    
-    # Group by patient (and orderid if available) and aggregate start/stop
-    grouped = df.groupby(group_cols, as_index=False).agg({
-        start_col: 'min',  # earliest start time (minutes)
-        stop_var: 'max',   # latest stop time (minutes)
-    })
-    
-    # R ricu uses floor(hours) for both start and stop before computing duration
-    # duration = floor(max_stop/60) - floor(min_start/60)
-    # 🚀 Vectorized: avoid per-element lambda
-    start_hours_floor = np.floor(grouped[start_col].values / 60.0)
-    stop_hours_floor = np.floor(grouped[stop_var].values / 60.0)
-    duration_hours = stop_hours_floor - start_hours_floor
-    
-    # Create a clean result with the duration in HOURS
-    grouped[concept_name] = duration_hours.astype(float)
-    
-    # IMPORTANT: Keep start time in MINUTES (not hours!)
-    # _align_time_to_admission will convert minutes to hours later
-    # This prevents double conversion: aumc_dur converts to hours, then _align_time_to_admission divides by 60 again
-    # Start time stays as grouped[start_col] which is already in minutes
-    
-    # Keep only necessary columns for the result
-    result_cols = group_cols + [concept_name]
-    # Also keep start_col if it's the index column (e.g., 'start')
-    if start_col not in result_cols:
-        result_cols.append(start_col)
-    
-    result = grouped[result_cols]
-    
-    return result
+    valid = (
+        continuous_mask
+        & ~excluded_action
+        & df[id_cols].notna().all(axis=1)
+        & df[start_col].notna()
+        & df[stop_var].notna()
+        & df[stop_var].gt(df[start_col])
+    )
+    df = df.loc[valid, id_cols + [start_col, stop_var]].copy()
+    if df.empty:
+        return pd.DataFrame(columns=result_cols)
+
+    # Merge against the previous *running* maximum stop, not merely the prior
+    # row's stop.  That distinction is required for nested/overlapping pump
+    # segments: [0, 60], [20, 30], [55, 90] is one episode.
+    df = df.sort_values(id_cols + [start_col, stop_var], kind='stable')
+    running_stop = df.groupby(id_cols, dropna=False)[stop_var].cummax()
+    previous_running_stop = running_stop.groupby(
+        [df[col] for col in id_cols], dropna=False
+    ).shift()
+    first_in_stay = ~df.duplicated(subset=id_cols, keep='first')
+    new_episode = first_in_stay | df[start_col].gt(
+        previous_running_stop + merge_gap_minutes
+    )
+    df['__episode'] = new_episode.groupby(
+        [df[col] for col in id_cols], dropna=False
+    ).cumsum()
+
+    episodes = (
+        df.groupby(id_cols + ['__episode'], as_index=False, dropna=False)
+        .agg(**{start_col: (start_col, 'min'), stop_var: (stop_var, 'max')})
+        .sort_values(id_cols + [start_col], kind='stable')
+    )
+    episodes[concept_name] = (
+        episodes[stop_var] - episodes[start_col]
+    ).astype(float) / 60.0
+
+    # The central loader owns timestamp alignment/flooring.  Returning raw
+    # source minutes here avoids both a second /60 conversion and the old error
+    # of flooring the absolute clock before subtracting admission time.
+    return episodes[id_cols + [start_col, concept_name]].reset_index(drop=True)
 
 
 def hirid_rate_kg(

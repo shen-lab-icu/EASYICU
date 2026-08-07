@@ -363,6 +363,7 @@ _EXPORT_GROUPS: Final[dict[str, tuple[str, ...]]] = {
         "mimic_age",
         "percent_as_numeric",
         "distribute_amount",
+        "distribute_volume_hourly",
         "dex_to_10",
         "mimv_rate",
         "grp_mount_to_rate",

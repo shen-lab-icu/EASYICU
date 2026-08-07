@@ -57,7 +57,7 @@ def _build_synthetic_release(run_root: Path) -> None:
                 table = pa.table(
                     {
                         "stay_id": pa.array([1, 2], type=pa.int64()),
-                        "charttime": pa.array([None, 0.0], type=pa.float64()),
+                        "charttime": pa.array([0.0, 1.0], type=pa.float64()),
                         "value": pa.array([1.0, 2.0], type=pa.float64()),
                     }
                 )
@@ -78,7 +78,7 @@ def _build_synthetic_release(run_root: Path) -> None:
                 "duplicate_excess_rows_after": 0,
             }
             if module != "demographics":
-                audit["null_charttime_rows_after"] = 1
+                audit["null_charttime_rows_after"] = 0
             entries.append(
                 {
                     "file": parquet.name,
@@ -98,7 +98,7 @@ def _build_synthetic_release(run_root: Path) -> None:
             "contract_revision": sealer.CONTRACT_REVISION,
             "database": database,
             "runtime_provenance": {
-                "easyicu_git_commit": (sealer.MINIMUM_CORRECTED_TIME_EASYICU_COMMIT),
+                "easyicu_git_commit": sealer.MINIMUM_HARMONIZED_EASYICU_COMMIT,
                 "easyicu_git_dirty": False,
             },
             "module_timings_seconds": {
@@ -172,11 +172,11 @@ def test_sealer_validates_6_by_19_and_atomically_writes_metadata(
     assert metadata["release_gate"] == {
         "contract": sealer.RELEASE_GATE_CONTRACT,
         "contract_revision": sealer.CONTRACT_REVISION,
-        "minimum_easyicu_commit": (sealer.MINIMUM_CORRECTED_TIME_EASYICU_COMMIT),
-        "required_corrections": list(sealer.REQUIRED_CORRECTED_TIME_CORRECTIONS),
+        "minimum_easyicu_commit": sealer.MINIMUM_HARMONIZED_EASYICU_COMMIT,
+        "required_corrections": list(sealer.REQUIRED_HARMONIZED_CORRECTIONS),
         "affected_database_runtime_commits": {
-            "aumc": sealer.MINIMUM_CORRECTED_TIME_EASYICU_COMMIT,
-            "eicu": sealer.MINIMUM_CORRECTED_TIME_EASYICU_COMMIT,
+            database: sealer.MINIMUM_HARMONIZED_EASYICU_COMMIT
+            for database in sealer.DATABASES
         },
     }
     assert metadata["extraction_execution"]["profile"] == "server-adaptive"
@@ -213,7 +213,7 @@ def test_sealer_validates_6_by_19_and_atomically_writes_metadata(
         if row["module"] not in sealer.SPECIAL_SHARED_TIMING_MODULES
     )
     assert "count that elapsed time once" in module_timing["semantics"]
-    assert metadata["easyicu_commit"] == sealer.MINIMUM_CORRECTED_TIME_EASYICU_COMMIT
+    assert metadata["easyicu_commit"] == sealer.MINIMUM_HARMONIZED_EASYICU_COMMIT
     assert set(metadata["source_manifest_sha256"]) == set(sealer.DATABASES)
     assert metadata["validation"] == {
         "audited_parquet_count": 114,
@@ -221,6 +221,7 @@ def test_sealer_validates_6_by_19_and_atomically_writes_metadata(
         "primary_key_contract_verified_count": 114,
         "primary_key_uniqueness_verified_count": 114,
         "row_grain_contract_verified_count": 114,
+        "null_time_semantics_verified_count": 114,
         "parquet_sha256_verified_count": 114,
         "parquet_bytes_verified_count": 114,
         "exact_schema_module_count": 19,
@@ -290,30 +291,131 @@ def test_null_charttime_keys_are_compared_with_nulls_equal(tmp_path: Path) -> No
     }
 
 
+def test_release_gate_rejects_dynamic_values_at_null_charttime(tmp_path: Path) -> None:
+    parquet = tmp_path / "renal.parquet"
+    pq.write_table(
+        pa.table(
+            {
+                "stay_id": pa.array([1], type=pa.int64()),
+                "charttime": pa.array([None], type=pa.float64()),
+                "rrt": pa.array([True], type=pa.bool_()),
+            }
+        ),
+        parquet,
+    )
+    connection = duckdb.connect(":memory:")
+    try:
+        with pytest.raises(
+            sealer.ReleaseValidationError,
+            match="dynamic or undeclared",
+        ):
+            sealer._validate_null_time_semantics(
+                connection,
+                parquet_path=parquet,
+                database="eicu",
+                module="renal",
+                concepts=["rrt"],
+            )
+    finally:
+        connection.close()
+
+
+def test_release_gate_allows_only_declared_admission_level_null_time_values(
+    tmp_path: Path,
+) -> None:
+    parquet = tmp_path / "other_scores.parquet"
+    pq.write_table(
+        pa.table(
+            {
+                "stay_id": pa.array([1, 2], type=pa.int64()),
+                "charttime": pa.array([None, 0.0], type=pa.float64()),
+                "apache_iv": pa.array([72.0, None], type=pa.float64()),
+                "news": pa.array([None, 3.0], type=pa.float64()),
+            }
+        ),
+        parquet,
+    )
+    connection = duckdb.connect(":memory:")
+    try:
+        audit = sealer._validate_null_time_semantics(
+            connection,
+            parquet_path=parquet,
+            database="eicu",
+            module="other_scores",
+            concepts=["apache_iv", "news"],
+        )
+    finally:
+        connection.close()
+
+    assert audit == {
+        "null_charttime_rows": 1,
+        "empty_null_charttime_rows": 0,
+        "disallowed_null_charttime_rows": 0,
+    }
+
+
+def test_release_gate_rejects_value_less_null_time_artifact(tmp_path: Path) -> None:
+    parquet = tmp_path / "other_scores_empty.parquet"
+    pq.write_table(
+        pa.table(
+            {
+                "stay_id": pa.array([1], type=pa.int64()),
+                "charttime": pa.array([None], type=pa.float64()),
+                "apache_iv": pa.array([None], type=pa.float64()),
+            }
+        ),
+        parquet,
+    )
+    connection = duckdb.connect(":memory:")
+    try:
+        with pytest.raises(sealer.ReleaseValidationError, match="value-less"):
+            sealer._validate_null_time_semantics(
+                connection,
+                parquet_path=parquet,
+                database="eicu",
+                module="other_scores",
+                concepts=["apache_iv"],
+            )
+    finally:
+        connection.close()
+
+
 def test_stable_module_contract_matches_public_extractor() -> None:
     from easyicu.api import EXTRACT_MODULE_ORDER
 
     assert tuple(EXTRACT_MODULE_ORDER) == sealer.MODULES
 
 
-def test_corrected_time_ancestry_rejects_old_and_unknown_runtime_commits() -> None:
+def test_harmonized_ancestry_rejects_old_and_unknown_runtime_commits() -> None:
     commits = {
-        database: sealer.MINIMUM_CORRECTED_TIME_EASYICU_COMMIT
+        database: sealer.MINIMUM_HARMONIZED_EASYICU_COMMIT
         for database in sealer.DATABASES
     }
-    sealer._validate_corrected_time_commit_ancestry(commits)
+    sealer._validate_harmonized_commit_ancestry(commits)
 
-    commits["aumc"] = "ebb802598c8c6d2ae55715dde1699075260f9429"
+    commits = {
+        database: "ebb802598c8c6d2ae55715dde1699075260f9429"
+        for database in sealer.DATABASES
+    }
     with pytest.raises(sealer.ReleaseValidationError, match="predates required"):
-        sealer._validate_corrected_time_commit_ancestry(commits)
+        sealer._validate_harmonized_commit_ancestry(commits)
 
-    commits["aumc"] = sealer.MINIMUM_CORRECTED_TIME_EASYICU_COMMIT
-    commits["eicu"] = "f" * 40
+    commits = {database: "f" * 40 for database in sealer.DATABASES}
     with pytest.raises(
         sealer.ReleaseValidationError,
         match="Fetch full history.*shallow",
     ):
-        sealer._validate_corrected_time_commit_ancestry(commits)
+        sealer._validate_harmonized_commit_ancestry(commits)
+
+
+def test_harmonized_gate_requires_one_identical_six_database_commit() -> None:
+    commits = {
+        database: sealer.MINIMUM_HARMONIZED_EASYICU_COMMIT
+        for database in sealer.DATABASES
+    }
+    commits["sic"] = "ebb802598c8c6d2ae55715dde1699075260f9429"
+    with pytest.raises(sealer.ReleaseValidationError, match="one identical clean"):
+        sealer._validate_harmonized_commit_ancestry(commits)
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -346,31 +448,26 @@ def test_corrected_time_gate_uses_real_git_dag_and_fails_closed(
     root = _commit(repo, "history.txt", "root\n", "root")
     minimum = _commit(repo, "fix.txt", "corrected time\n", "corrected-time")
     descendant = _commit(repo, "runtime.txt", "runtime\n", "runtime")
-    monkeypatch.setattr(
-        sealer,
-        "MINIMUM_CORRECTED_TIME_EASYICU_COMMIT",
-        minimum,
-    )
+    monkeypatch.setattr(sealer, "MINIMUM_HARMONIZED_EASYICU_COMMIT", minimum)
 
     commits = {database: descendant for database in sealer.DATABASES}
-    sealer._validate_corrected_time_commit_ancestry(
+    sealer._validate_harmonized_commit_ancestry(
         commits,
         repository=repo,
     )
 
     _git(repo, "checkout", "--detach", root)
     divergent = _commit(repo, "divergent.txt", "old branch\n", "divergent")
-    commits["aumc"] = divergent
+    commits = {database: divergent for database in sealer.DATABASES}
     with pytest.raises(sealer.ReleaseValidationError, match="predates required"):
-        sealer._validate_corrected_time_commit_ancestry(
+        sealer._validate_harmonized_commit_ancestry(
             commits,
             repository=repo,
         )
 
-    commits["aumc"] = descendant
-    commits["eicu"] = "f" * 40
+    commits = {database: "f" * 40 for database in sealer.DATABASES}
     with pytest.raises(sealer.ReleaseValidationError, match="not available"):
-        sealer._validate_corrected_time_commit_ancestry(
+        sealer._validate_harmonized_commit_ancestry(
             commits,
             repository=repo,
         )
@@ -379,9 +476,9 @@ def test_corrected_time_gate_uses_real_git_dag_and_fails_closed(
 @pytest.mark.parametrize("bad", [None, "abc", "A" * 40])
 def test_corrected_time_gate_rejects_missing_or_noncanonical_sha(bad) -> None:
     commits = {
-        database: sealer.MINIMUM_CORRECTED_TIME_EASYICU_COMMIT
+        database: sealer.MINIMUM_HARMONIZED_EASYICU_COMMIT
         for database in sealer.DATABASES
     }
     commits["eicu"] = bad
     with pytest.raises(sealer.ReleaseValidationError, match="full lowercase"):
-        sealer._validate_corrected_time_commit_ancestry(commits)
+        sealer._validate_harmonized_commit_ancestry(commits)

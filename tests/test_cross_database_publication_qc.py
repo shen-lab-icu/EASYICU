@@ -100,18 +100,57 @@ def test_manifest_metadata_coverage_treats_typed_structural_placeholders_as_clos
 
 
 @pytest.mark.parametrize(
-    ("module_name", "variable", "database", "evidence_fragment"),
+    ("module_name", "variable", "database", "flag", "evidence_fragment"),
     [
-        ("chemistry", "bili_dir", "aumc vs miiv", "375 numeric records"),
-        ("chemistry", "tri", "eicu vs mimic", "192,317 numeric rows"),
-        ("hematology", "bnd", "mimic vs hirid", "40,560 raw values"),
-        ("vasopressors", "epi_dur", "aumc vs mimic", "2,715 order groups"),
+        (
+            "chemistry",
+            "bili_dir",
+            "aumc vs miiv",
+            "median_scale_shift",
+            "375 numeric records",
+        ),
+        (
+            "chemistry",
+            "tri",
+            "eicu vs mimic",
+            "median_scale_shift",
+            "192,317 numeric rows",
+        ),
+        (
+            "hematology",
+            "bnd",
+            "mimic vs hirid",
+            "median_scale_shift",
+            "40,560 raw values",
+        ),
+        (
+            "vasopressors",
+            "epi_dur",
+            "aumc vs mimic",
+            "median_scale_shift",
+            "2,715 order groups",
+        ),
+        (
+            "renal",
+            "fluid_balance",
+            "eicu vs sic",
+            "signed_median_direction_shift",
+            "4,213,568 records/161,074 stays",
+        ),
+        (
+            "renal",
+            "fluid_balance_cumulative",
+            "eicu vs sic",
+            "signed_median_direction_shift",
+            "4,571,309 eICU",
+        ),
     ],
 )
 def test_distribution_adjudication_preserves_each_exact_flag_and_source_trace(
     module_name: str,
     variable: str,
     database: str,
+    flag: str,
     evidence_fragment: str,
 ) -> None:
     module = _load_script(AUDIT_SCRIPT, "easyicu_qc_a02_adjudication")
@@ -121,7 +160,7 @@ def test_distribution_adjudication_preserves_each_exact_flag_and_source_trace(
                 "module": module_name,
                 "variable": variable,
                 "database": database,
-                "flag": "median_scale_shift",
+                "flag": flag,
                 "severity": "review",
                 "evidence": "positive median ratio=63.45",
                 "origin_classification": "candidate",
@@ -189,6 +228,32 @@ def test_distribution_adjudication_rejects_non_exact_run_or_flag(
     )
 
     assert result.iloc[0]["adjudication_status"] == "unadjudicated"
+
+
+def test_signed_distribution_never_uses_positive_median_ratio_as_unit_evidence() -> None:
+    module = _load_script(AUDIT_SCRIPT, "easyicu_qc_a02_signed_distribution")
+    audit = pd.DataFrame(
+        {
+            "module": ["renal"] * 4,
+            "variable": ["fluid_balance_cumulative"] * 4,
+            "database": ["aumc", "eicu", "miiv", "sic"],
+            "plot_kind": ["continuous"] * 4,
+            "non_null_or_finite": [1000] * 4,
+            "median_sample": [-57.5, -1000.0, 3850.0, 5432.0],
+            "minimum": [-5000.0, -9000.0, -2000.0, -1000.0],
+            "maximum": [8000.0, 3000.0, 12000.0, 15000.0],
+            "catalog_min": [-100000.0] * 4,
+            "catalog_max": [100000.0] * 4,
+        }
+    )
+
+    flags = module._distribution_flags(audit)
+
+    assert "median_scale_shift" not in set(flags["flag"])
+    signed = flags[flags["flag"] == "signed_median_direction_shift"]
+    assert signed.shape[0] == 1
+    assert signed.iloc[0]["database"] == "eicu vs sic"
+    assert "cross zero" in signed.iloc[0]["evidence"]
 
 
 def test_source_manifest_hashes_are_required_and_verified(tmp_path: Path) -> None:
@@ -317,6 +382,200 @@ def test_row_grain_receipt_binds_primary_key_audit_and_parquet_bytes(
     assert not tampered["parquet_sha256_matches"]
     assert not tampered["parquet_bytes_matches"]
     assert not tampered["row_grain_contract_valid"]
+
+
+def test_null_time_contract_allows_only_declared_admission_level_static_values(
+    tmp_path: Path,
+) -> None:
+    module = _load_script(AUDIT_SCRIPT, "easyicu_qc_a02_null_time_static")
+    parquet = tmp_path / "other_scores.parquet"
+    pd.DataFrame(
+        {
+            "stay_id": [1],
+            "charttime": [None],
+            "qsofa": [None],
+            "charlson": [2.0],
+        }
+    ).to_parquet(parquet, index=False)
+
+    checks, details = module._null_time_concept_contract_checks(
+        module="other_scores",
+        database="mimic",
+        parquet_path=parquet,
+        expected_concepts=["qsofa", "charlson"],
+        manifest_null_charttime_rows=1,
+    )
+
+    assert checks["null_time_concept_contract_valid"]
+    assert checks["null_time_observed_rows"] == 1
+    assert checks["null_time_allowed_non_null_cells"] == 1
+    assert checks["null_time_disallowed_non_null_cells"] == 0
+    assert details == [
+        {
+            "database": "mimic",
+            "module": "other_scores",
+            "concept": "charlson",
+            "null_time_non_null_count": 1,
+            "allowed": True,
+            "classification": "admission_level_static_score",
+            "evidence": "Charlson is derived once per linked hospital/ICU admission.",
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("module_name", "database", "values", "expected_concepts", "classification"),
+    [
+        (
+            "renal",
+            "eicu",
+            {"rrt_criteria": False},
+            ["rrt_criteria"],
+            "unapproved_or_time_dependent_concept",
+        ),
+        (
+            "medications",
+            "eicu",
+            {"phenytoin": True},
+            ["phenytoin"],
+            "unapproved_or_time_dependent_concept",
+        ),
+        (
+            "sepsis_shared",
+            "aumc",
+            {"samp": True},
+            ["samp"],
+            "unapproved_or_time_dependent_concept",
+        ),
+        (
+            "other_scores",
+            "eicu",
+            {"qsofa": None},
+            ["qsofa"],
+            "outer_merge_empty_artifact",
+        ),
+    ],
+)
+def test_null_time_contract_fails_closed_on_dynamic_or_empty_rows(
+    tmp_path: Path,
+    module_name: str,
+    database: str,
+    values: dict[str, object],
+    expected_concepts: list[str],
+    classification: str,
+) -> None:
+    module = _load_script(
+        AUDIT_SCRIPT,
+        f"easyicu_qc_a02_null_time_negative_{module_name}_{database}",
+    )
+    parquet = tmp_path / f"{module_name}_{database}.parquet"
+    pd.DataFrame(
+        {"stay_id": [1], "charttime": [None], **{k: [v] for k, v in values.items()}}
+    ).to_parquet(parquet, index=False)
+
+    checks, details = module._null_time_concept_contract_checks(
+        module=module_name,
+        database=database,
+        parquet_path=parquet,
+        expected_concepts=expected_concepts,
+        manifest_null_charttime_rows=1,
+    )
+
+    assert not checks["null_time_concept_contract_valid"]
+    assert details[0]["allowed"] is False
+    assert details[0]["classification"] == classification
+
+
+def test_null_time_contract_rejects_manifest_count_mismatch(tmp_path: Path) -> None:
+    module = _load_script(AUDIT_SCRIPT, "easyicu_qc_a02_null_time_count")
+    parquet = tmp_path / "sepsis_shared.parquet"
+    pd.DataFrame(
+        {
+            "stay_id": [1],
+            "charttime": [None],
+            "culture_positive": [False],
+        }
+    ).to_parquet(parquet, index=False)
+
+    checks, _ = module._null_time_concept_contract_checks(
+        module="sepsis_shared",
+        database="eicu",
+        parquet_path=parquet,
+        expected_concepts=["culture_positive"],
+        manifest_null_charttime_rows=0,
+    )
+
+    assert not checks["null_time_manifest_count_matches"]
+    assert not checks["null_time_concept_contract_valid"]
+
+
+def test_eicu_tidal_volume_unit_gate_allows_only_paediatric_measured_low_value(
+    tmp_path: Path,
+) -> None:
+    module = _load_script(AUDIT_SCRIPT, "easyicu_qc_a02_tidal_volume_pass")
+    eicu_root = tmp_path / "eicu"
+    eicu_root.mkdir()
+    pd.DataFrame(
+        {
+            "stay_id": [1, 2],
+            "age": [50.0, 4.0],
+        }
+    ).to_parquet(eicu_root / "demographics.parquet", index=False)
+    pd.DataFrame(
+        {
+            "stay_id": [1, 2],
+            "tidal_vol": [400.0, 0.5],
+            "tidal_vol_set": [500.0, 50.0],
+        }
+    ).to_parquet(eicu_root / "ventilator.parquet", index=False)
+
+    gate = module._eicu_tidal_volume_unit_gate(tmp_path)
+
+    assert gate["passed"].all()
+    measured = gate.set_index("concept").loc["tidal_vol"]
+    assert measured["positive_le_2_rows"] == 1
+    assert measured["adult_positive_le_2_rows"] == 0
+    assert gate.set_index("concept").loc["tidal_vol_set", "positive_le_2_rows"] == 0
+
+
+def test_eicu_tidal_volume_unit_gate_fails_on_adult_mixed_scale_and_set_decimal(
+    tmp_path: Path,
+) -> None:
+    module = _load_script(AUDIT_SCRIPT, "easyicu_qc_a02_tidal_volume_fail")
+    eicu_root = tmp_path / "eicu"
+    eicu_root.mkdir()
+    pd.DataFrame({"stay_id": [1], "age": [50.0]}).to_parquet(
+        eicu_root / "demographics.parquet", index=False
+    )
+    pd.DataFrame(
+        {
+            "stay_id": [1, 1, 1],
+            "tidal_vol": [0.3, 300.0, 10.0],
+            "tidal_vol_set": [0.5, 500.0, 500.0],
+        }
+    ).to_parquet(eicu_root / "ventilator.parquet", index=False)
+
+    gate = module._eicu_tidal_volume_unit_gate(tmp_path)
+    measured = gate.set_index("concept").loc["tidal_vol"]
+    setting = gate.set_index("concept").loc["tidal_vol_set"]
+
+    assert not gate["passed"].any()
+    assert measured["adult_mixed_scale_stays"] == 1
+    assert measured["adult_gt_2_lt_50_rows"] == 1
+    assert setting["positive_le_2_rows"] == 1
+    with pytest.raises(ValueError, match="tidal-volume unit gate failed closed"):
+        module._raise_for_eicu_tidal_volume_unit_gate(gate)
+
+
+def test_verified_findings_registers_eicu_tidal_volume_unit_defect() -> None:
+    module = _load_script(AUDIT_SCRIPT, "easyicu_qc_a02_tidal_volume_finding")
+    findings = module._resolved_findings().set_index("issue_id")
+
+    finding = findings.loc["EICU-QC-P0-013"]
+    assert finding["severity"] == "critical"
+    assert "publication guard" in finding["status"]
+    assert "release gate required" in finding["status"]
+    assert "stay 168728" in finding["evidence"]
 
 
 def test_qc_a02_fails_closed_on_end_to_end_metadata_gap(

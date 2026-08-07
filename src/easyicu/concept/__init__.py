@@ -2392,6 +2392,8 @@ class ConceptResolver:
                         extra_columns.append(source.value_var)
                     if getattr(source, 'index_var', None):
                         extra_columns.append(source.index_var)
+                    if getattr(source, 'dur_var', None):
+                        extra_columns.append(source.dur_var)
                     if getattr(source, 'unit_var', None):
                         extra_columns.append(source.unit_var)
                     # Some callbacks need a second, explicitly declared source column
@@ -4246,9 +4248,12 @@ class ConceptResolver:
             if (source_index_column and
                     source_index_column not in frame.columns and
                     len(frame) > 0):
+                consumed_source_index = source_index_column
                 for fallback_time in ['charttime', 'starttime', 'datetime']:
                     if fallback_time in frame.columns:
                         source_index_column = fallback_time
+                        if index_column == consumed_source_index:
+                            index_column = fallback_time
                         break
             
             # 单位过滤（在回调之后）
@@ -4663,7 +4668,8 @@ class ConceptResolver:
             # All possible eICU time offset columns
             eicu_time_cols = [
                 'labresultoffset', 'observationoffset', 'nursingchartoffset', 
-                'respiratorycharting_offset', 'intakeoutput_offset', 'respchartoffset',
+                'respiratorycharting_offset', 'intakeoutput_offset',
+                'intakeoutputoffset', 'respchartoffset',
                 'infusionoffset', 'drugstartoffset', 'drugstopoffset', 'drugorderoffset',
                 'culturetakenoffset', 'cultureoffset',
                 # 🔥 添加 respiratorycare 表的时间列
@@ -4737,6 +4743,37 @@ class ConceptResolver:
                 
                 if DEBUG_MODE:
                     print(f"   🔧 [AUMC] 时间列统一完成, charttime 有效值: {combined['charttime'].notna().sum()}/{len(combined)}")
+
+        # MIMIC-IV multi-source concepts can combine charted point events
+        # (``charttime``) with procedure/input windows (``starttime`` plus
+        # ``endtime``).  pd.concat keeps both start columns, while the first
+        # source fixes ``index_column`` to charttime.  Without coalescing,
+        # procedure rows have a null start and disappear during expansion.
+        elif db_name in ['miiv', 'miiv_demo']:
+            miiv_start_cols = [
+                col for col in ('charttime', 'starttime')
+                if col in combined.columns
+            ]
+            if miiv_start_cols:
+                if 'charttime' not in combined.columns:
+                    combined = combined.rename(
+                        columns={miiv_start_cols[0]: 'charttime'}
+                    )
+                for col in miiv_start_cols:
+                    if col == 'charttime' or col not in combined.columns:
+                        continue
+                    combined['charttime'] = combined['charttime'].fillna(
+                        combined[col]
+                    )
+                    combined = combined.drop(columns=[col])
+                index_column = 'charttime'
+
+                if DEBUG_MODE:
+                    print(
+                        "   🔧 [MIMIC-IV] 时间列统一完成, "
+                        f"charttime 有效值: "
+                        f"{combined['charttime'].notna().sum()}/{len(combined)}"
+                    )
         
         # 🔧 CRITICAL FIX 2026-02-09: MIMIC-III 多源时间列统一
         # MIMIC-III 的 inputevents_cv 使用 charttime，inputevents_mv 使用 starttime
@@ -5173,7 +5210,11 @@ class ConceptResolver:
             # 🔧 FIX: Only expand true window concepts, NOT point event concepts
             # POINT_EVENT_CONCEPTS like 'abx' have endtime/stoptime columns from source tables
             # but should NOT be expanded - they use set_val(TRUE) callback for point events
-            from ..utils.compat import POINT_EVENT_CONCEPTS, DURATION_CONCEPTS
+            from ..utils.compat import (
+                DURATION_CONCEPTS,
+                MIXED_POINT_WINDOW_CONCEPTS,
+                POINT_EVENT_CONCEPTS,
+            )
             is_point_event = concept_name in POINT_EVENT_CONCEPTS
             is_duration_concept = concept_name in DURATION_CONCEPTS or concept_name.endswith('_dur')
             
@@ -5189,6 +5230,8 @@ class ConceptResolver:
                 # 🔧 FIX 2026-02-05: distribute_amount 内部已经处理时间展开，不需要再次 expand
                 # MIMIC-III ins 概念使用 inputevents_mv 的 distribute_amount callback
                 'distribute_amount',
+                # Interval totals are allocated into ICU-hour bins internally.
+                'distribute_volume_hourly',
             ]
             callback_already_expanded = False
             if sources:
@@ -5309,17 +5352,58 @@ class ConceptResolver:
                 
                 # Expand windows to hourly time series
                 try:
+                    # RRT deliberately combines active point evidence (for
+                    # example MIMIC-IV CRRT charting) with explicit treatment
+                    # windows (procedureevents).  ``expand`` drops rows whose
+                    # end time is null, so partition the mixed frame and add
+                    # the point rows back after expanding only true windows.
+                    point_rows = pd.DataFrame()
+                    expansion_input = combined
+                    if (
+                        concept_name in MIXED_POINT_WINDOW_CONCEPTS
+                        and end_col in combined.columns
+                        and index_column in combined.columns
+                    ):
+                        point_mask = (
+                            combined[index_column].notna()
+                            & combined[end_col].isna()
+                        )
+                        if concept_name in combined.columns:
+                            point_mask &= combined[concept_name].notna()
+                        if point_mask.any():
+                            point_columns = list(dict.fromkeys([
+                                *id_columns,
+                                index_column,
+                                *keep_vars,
+                            ]))
+                            point_columns = [
+                                col for col in point_columns
+                                if col in combined.columns and col != end_col
+                            ]
+                            point_rows = combined.loc[
+                                point_mask, point_columns
+                            ].copy()
+                            expansion_input = combined.loc[~point_mask].copy()
+
                     if DEBUG_MODE:
-                        print(f"   🔍 DEBUG: expand前, 行数={len(combined)}, start_var={index_column}, end_var={end_col}")
-                        print(f"   🔍 DEBUG: endtime样本: {combined[end_col].head(3).tolist() if end_col in combined.columns else 'N/A'}")
-                    combined = expand(
-                        combined,
+                        print(f"   🔍 DEBUG: expand前, 行数={len(expansion_input)}, start_var={index_column}, end_var={end_col}")
+                        print(f"   🔍 DEBUG: endtime样本: {expansion_input[end_col].head(3).tolist() if end_col in expansion_input.columns else 'N/A'}")
+                    expanded = expand(
+                        expansion_input,
                         start_var=index_column,
                         end_var=end_col,
                         step_size=interval,
                         id_cols=id_columns,
                         keep_vars=keep_vars,
                     )
+                    if not point_rows.empty:
+                        combined = pd.concat(
+                            [expanded, point_rows],
+                            ignore_index=True,
+                            sort=False,
+                        )
+                    else:
+                        combined = expanded
                     if DEBUG_MODE:
                         print(f"   🔍 DEBUG: expand后, 行数={len(combined)}")
                     if verbose:
@@ -5703,21 +5787,22 @@ class ConceptResolver:
                 if admittedat.abs().median(skipna=True) > 1_000_000_000
                 else 60.0
             )
-            origin_hours = admittedat / admittedat_scale
             discharge_hours = None
             if "dischargedat" in frame.columns:
                 discharge_hours = (
                     pd.to_numeric(frame["dischargedat"], errors="coerce")
-                    / admittedat_scale
-                    - origin_hours
-                )
+                    - admittedat
+                ) / admittedat_scale
             for col in cols_to_convert:
                 if col in frame.columns and pd.api.types.is_numeric_dtype(frame[col]):
                     # Source columns reach this layer as absolute minutes.
+                    # Subtract on the source clock before scaling.  Dividing
+                    # two large absolute offsets separately can turn an exact
+                    # integer hour into e.g. 634.9999999999999, which floors to
+                    # the preceding ICU hour at a clinical window boundary.
                     frame[col] = (
-                        pd.to_numeric(frame[col], errors="coerce") / 60.0
-                        - origin_hours
-                    )
+                        pd.to_numeric(frame[col], errors="coerce") - admittedat
+                    ) / admittedat_scale
             if (
                 not source_contains_admission_origin
                 and index_column
@@ -8595,9 +8680,20 @@ class ConceptResolver:
         # 🚀 优化：不再 .copy()。merge_concepts_r_style 的 rename/drop_duplicates 
         # 都会创建新对象，不会修改原始 DataFrame。缓存在顶层 finally 中清空。
         concept_data: Dict[str, pd.DataFrame] = {}
+        # Preserve producer-owned time metadata while unwrapping ICUTable /
+        # TsTbl objects.  Falling back only to a hand-maintained list of column
+        # names made valid event concepts look static whenever a source used a
+        # less common index name (for example eICU ``drugoffset`` for
+        # phenytoin, AUMC ``registeredat`` for sampling, or MIMIC
+        # ``chartdate``).  Those concepts then created a synthetic null-time
+        # row during the outer merge.  The table metadata is the authoritative
+        # time binding and must travel with the frame until names are aligned.
+        declared_time_columns: Dict[str, str] = {}
         for name, table in tables.items():
             if isinstance(table, ICUTable):
                 df = table.data
+                if table.index_column and table.index_column in df.columns:
+                    declared_time_columns[name] = table.index_column
                 # 重命名值列为概念名
                 if name not in df.columns:
                     # 查找可能的值列 - 优先使用 ICUTable 元数据中的 value_column
@@ -8613,6 +8709,9 @@ class ConceptResolver:
             elif hasattr(table, 'data') and isinstance(table.data, pd.DataFrame):
                 # Handle WinTbl/TsTbl/IdTbl which have .data but don't inherit from ICUTable
                 df = table.data
+                declared_index = getattr(table, 'index_column', None) or getattr(table, 'index_var', None)
+                if declared_index and declared_index in df.columns:
+                    declared_time_columns[name] = declared_index
                 if name not in df.columns:
                     # For WinTbl, try index_var as value column candidate
                     value_candidates = ['value', 'valuenum']
@@ -8661,6 +8760,9 @@ class ConceptResolver:
                      'Offset', 'offset',  # SICdb: Offset (uppercase)
                      'nursingchartoffset', 'labresultoffset', 'observationoffset',
                      'respchartoffset', 'intakeoutputoffset', 'infusionoffset']
+        for declared_time in declared_time_columns.values():
+            if declared_time not in _time_candidates:
+                _time_candidates.append(declared_time)
         for df in concept_data.values():
             if df is None or df.empty:
                 continue
@@ -8688,9 +8790,34 @@ class ConceptResolver:
             df = concept_data[name]
             if df is None or df.empty:
                 continue
+            # The table's declared index is authoritative.  Multi-source
+            # concepts can retain an auxiliary column whose name happens to
+            # equal the time key selected from an earlier concept.  For
+            # example, eICU ``rrt`` declares ``charttime`` after coalescing
+            # treatment/intake-output sources but can also retain a boolean
+            # ``intakeoutputoffset`` helper column.  Treating that helper as
+            # the merge time collapses every RRT event to hour zero.
+            declared_time = declared_time_columns.get(name)
+            if (
+                declared_time
+                and declared_time != time_col
+                and declared_time in df.columns
+            ):
+                if time_col in df.columns:
+                    df = df.drop(columns=[time_col])
+                concept_data[name] = df.rename(
+                    columns={declared_time: time_col}
+                )
+                continue
             if time_col in df.columns:
                 continue
-            for cand in _time_candidates:
+            candidates = [
+                declared_time_columns.get(name),
+                *_time_candidates,
+            ]
+            for cand in candidates:
+                if not cand:
+                    continue
                 if cand in df.columns:
                     concept_data[name] = df.rename(columns={cand: time_col})
                     break

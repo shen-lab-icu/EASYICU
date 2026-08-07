@@ -22,6 +22,8 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 
@@ -36,10 +38,55 @@ ID_COLUMNS = {
 }
 INDEX_COLUMNS = ID_COLUMNS | {"charttime"}
 NATIVE_SCHEMA_VERSION = "easyicu_native_export_v2"
-CURRENT_QC_SOURCE_RUN_ID = "full6_native_v2_rowgrain_a9f8464e_20260803"
+CURRENT_QC_SOURCE_RUN_ID = "full6_native_v2_harmonized_e142e66a_20260804_r6"
 CURRENT_QC_SOURCE_RUN_METADATA_SHA256 = (
-    "72a0469451f22bc7c7954fbc1f46ec2b3b6925cc04efe7e91ddf1c5bd5a3c4c2"
+    "f969fd0c1570da8b97b2d0f9379cae21e3276dbdf21ee0f4816dabe462851200"
 )
+
+
+# A longitudinal export may carry charttime=NULL only for a concept whose
+# producer explicitly defines a stay/admission-level value.  Everything else
+# is rejected, including a future concept not listed here.  This small positive
+# allowlist is intentionally semantic rather than count-based: a row-grain
+# receipt saying "nulls equal" proves uniqueness, not that an untimed value is
+# clinically meaningful.
+NULL_TIME_CONCEPT_POLICIES: dict[tuple[str, str], dict[str, Any]] = {
+    ("other_scores", "apache_iv"): {
+        "databases": ("eicu",),
+        "classification": "admission_level_static_score",
+        "evidence": "Native APACHE IVa score is defined for the ICU admission, not an event hour.",
+    },
+    ("other_scores", "apache_iv_pred_hosp_mort"): {
+        "databases": ("eicu",),
+        "classification": "admission_level_static_score",
+        "evidence": "Native APACHE IVa predicted mortality is an admission-level result.",
+    },
+    ("other_scores", "saps3"): {
+        "databases": ("sic",),
+        "classification": "admission_level_static_score",
+        "evidence": "SICdb SAPS-3 is a native admission severity score.",
+    },
+    ("other_scores", "charlson"): {
+        "databases": ("eicu", "mimic", "miiv", "sic"),
+        "classification": "admission_level_static_score",
+        "evidence": "Charlson is derived once per linked hospital/ICU admission.",
+    },
+    ("other_scores", "elixhauser"): {
+        "databases": ("eicu", "mimic", "miiv", "sic"),
+        "classification": "admission_level_static_score",
+        "evidence": "Elixhauser is derived once per linked hospital/ICU admission.",
+    },
+    ("sepsis_shared", "culture_positive"): {
+        "databases": ("eicu", "mimic", "miiv"),
+        "classification": "admission_level_static_flag",
+        "evidence": "Microbiology loader defines any positive culture as one per-stay flag.",
+    },
+    ("sepsis_shared", "bld_culture_positive"): {
+        "databases": ("eicu", "mimic", "miiv"),
+        "classification": "admission_level_static_flag",
+        "evidence": "Microbiology loader defines positive blood culture as one per-stay flag.",
+    },
+}
 
 
 # Direct source traces for the review-only shifts retained by the sealed
@@ -135,6 +182,59 @@ DISTRIBUTION_ADJUDICATIONS: dict[
             "database-specific infusion-record construction in pooled models."
         ),
     },
+    (
+        CURRENT_QC_SOURCE_RUN_ID,
+        CURRENT_QC_SOURCE_RUN_METADATA_SHA256,
+        "renal",
+        "fluid_balance",
+        "eicu vs sic",
+        "signed_median_direction_shift",
+    ): {
+        "adjudication_status": "source_trace_complete",
+        "adjudicated_origin": (
+            "source_coverage_and_recording_definition_heterogeneity"
+        ),
+        "adjudication_evidence": (
+            "Raw eICU matched input rows cover 3,092,548 records/98,282 "
+            "stays (median 50 mL), whereas matched urine rows cover "
+            "4,213,568 records/161,074 stays (median 140 mL). SIC uses paired "
+            "native hourly channels: DataID 2200 input has 1,965,368 "
+            "records/27,282 stays (median 82 mL) and DataID 725 urine has "
+            "1,691,793 records/22,926 stays (median 50 mL). The resulting "
+            "full-export medians are -50 mL in eICU and +28.33 mL in SIC."
+        ),
+        "required_action": (
+            "Do not rescale. Report the source-coverage difference, retain "
+            "database-stratified summaries and avoid interpreting pooled "
+            "absolute fluid-balance levels without coverage sensitivity."
+        ),
+    },
+    (
+        CURRENT_QC_SOURCE_RUN_ID,
+        CURRENT_QC_SOURCE_RUN_METADATA_SHA256,
+        "renal",
+        "fluid_balance_cumulative",
+        "eicu vs sic",
+        "signed_median_direction_shift",
+    ): {
+        "adjudication_status": "source_trace_complete",
+        "adjudicated_origin": (
+            "propagated_source_coverage_and_case_mix_heterogeneity"
+        ),
+        "adjudication_evidence": (
+            "Cumulative balance is the within-stay sum of the audited hourly "
+            "balance from ICU hour 0. This identity holds within 0.01 mL for "
+            "all 4,571,309 eICU and 2,074,074 SIC cumulative rows. Full-export "
+            "medians are -890 mL and +5,420.54 mL, respectively, so the sign "
+            "difference propagates the verified hourly source-coverage and "
+            "recording difference rather than a unit conversion."
+        ),
+        "required_action": (
+            "Do not rescale. Use database-stratified or within-database "
+            "change analyses, disclose input/output coverage and include a "
+            "coverage-sensitive pooled analysis if this variable is modeled."
+        ),
+    },
 }
 
 
@@ -196,6 +296,17 @@ RESOLUTION_UPDATES: dict[str, dict[str, str]] = {
         "required_action": (
             "Keep OUTurine/h as mL/h, backfill each observed rate only over its preceding "
             "observation interval and require complete 6/12/24-hour coverage for KDIGO."
+        ),
+    },
+    "EICU-QC-P0-013": {
+        "status": (
+            "fixed by source normalization plus age-aware native-v2 "
+            "publication guard; release gate required"
+        ),
+        "required_action": (
+            "Rerun the eICU ventilator module and require the tidal-volume unit gate: "
+            "zero unresolved (0, 2] mL set values, zero adult (0, 2] or (2, 50) mL "
+            "values, and zero adult mixed-scale stays."
         ),
     },
 }
@@ -451,6 +562,34 @@ VERIFIED_FINDINGS: tuple[dict[str, Any], ...] = (
             "hand-calculated 6/12/24 h windows before declaring comparability."
         ),
     },
+    {
+        "issue_id": "EICU-QC-P0-013",
+        "severity": "critical",
+        "classification": "mixed-unit extraction defect",
+        "database": "eicu",
+        "module": "ventilator",
+        "concept": "tidal_vol, tidal_vol_set",
+        "status": "fixed in current code; eICU ventilator rerun required",
+        "evidence": (
+            "Raw respiratoryCharting contains 12,668 measured tidal-volume rows in "
+            "(0, 2] across 845 stays; the sealed export retains 11,163 such rows across "
+            "789 stays, including stay 168728 where 0.3 coexists with 300-550 mL. "
+            "Set Vt (Drager) contributes 17,039 positive values <=2 (median 0.4734), "
+            "and the sealed tidal_vol_set export retains 18,485/937,002 values <=2."
+        ),
+        "root_cause": (
+            "eICU respiratoryCharting exposes no unit column. L-scale decimals and mL "
+            "values were pooled under measured labels, while the L-scale Drager set-TV "
+            "interface was grouped with predominantly mL set labels without a source callback."
+        ),
+        "required_action": (
+            "Normalize raw rows before hourly aggregation: convert Drager values in "
+            "(0, 2] from L to mL while retaining its >=50 mL tail, use "
+            "same-stay mL evidence or adult age for mixed labels, preserve explicit "
+            "paediatric mL, quarantine ambiguous/implausible values, and enforce the "
+            "publication-export tidal-volume unit gate."
+        ),
+    },
 )
 
 
@@ -653,6 +792,46 @@ def _distribution_flags(audit: pd.DataFrame) -> pd.DataFrame:
                         "origin_classification": "conversion_or_source_outlier_requires_traceback",
                     }
                 )
+        # A ratio of positive medians is meaningful only for a structurally
+        # non-negative measurement scale.  Applying it to signed quantities
+        # such as net/cumulative fluid balance can turn an arbitrary sampled
+        # sign change around zero into a spurious 10x/100x "unit mismatch".
+        # Preserve signed heterogeneity as a direction/location review signal,
+        # without claiming a multiplicative scale error.
+        declared_signed = bool(
+            pd.to_numeric(available["catalog_min"], errors="coerce").lt(0).any()
+        )
+        observed_signed = bool(
+            pd.to_numeric(available["minimum"], errors="coerce").lt(0).any()
+        )
+        if declared_signed or observed_signed:
+            negative_medians = available[available["median_sample"] < 0]
+            positive_medians = available[available["median_sample"] > 0]
+            if not negative_medians.empty and not positive_medians.empty:
+                lowest = available.loc[available["median_sample"].idxmin()]
+                highest = available.loc[available["median_sample"].idxmax()]
+                rows.append(
+                    {
+                        "module": module,
+                        "variable": variable,
+                        "database": (
+                            f"{lowest['database']} vs {highest['database']}"
+                        ),
+                        "flag": "signed_median_direction_shift",
+                        "severity": "review",
+                        "evidence": (
+                            "cross-database medians cross zero; "
+                            f"{lowest['database']}={lowest['median_sample']:.6g}; "
+                            f"{highest['database']}={highest['median_sample']:.6g}"
+                        ),
+                        "origin_classification": (
+                            "signed_location_source_definition_or_case_mix_"
+                            "heterogeneity_requires_traceback"
+                        ),
+                    }
+                )
+            continue
+
         positive = available[available["median_sample"] > 0]
         if len(positive) >= 2:
             lowest = positive.loc[positive["median_sample"].idxmin()]
@@ -927,6 +1106,206 @@ def _row_grain_contract_checks(
     return checks
 
 
+def _arrow_true_count(mask: pa.Array) -> int:
+    """Count true values in a null-free Arrow BooleanArray."""
+
+    if len(mask) == 0:
+        return 0
+    return int(pc.sum(pc.cast(mask, pa.int64())).as_py() or 0)
+
+
+def _null_time_policy(
+    *, module: str, concept: str, database: str
+) -> dict[str, Any] | None:
+    policy = NULL_TIME_CONCEPT_POLICIES.get((module, concept))
+    if not isinstance(policy, dict):
+        return None
+    databases = policy.get("databases")
+    if not isinstance(databases, tuple) or database not in databases:
+        return None
+    return policy
+
+
+def _null_time_concept_contract_checks(
+    *,
+    module: str,
+    database: str,
+    parquet_path: Path,
+    expected_concepts: list[str],
+    manifest_null_charttime_rows: Any,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Audit every NULL-time value against a positive semantic allowlist.
+
+    Parquet row-group statistics avoid reading the 305-million-row full-six
+    payload when a file has no null time.  Only row groups that may contain a
+    NULL charttime are streamed, and every non-null concept cell on those rows
+    must have an explicit database/module/concept policy.  A completely empty
+    row is always invalid because it is an outer-merge artifact, not data.
+    """
+
+    manifest_count = (
+        int(manifest_null_charttime_rows)
+        if isinstance(manifest_null_charttime_rows, int)
+        else None
+    )
+    base: dict[str, Any] = {
+        "null_time_manifest_rows": manifest_count,
+        "null_time_observed_rows": None,
+        "null_time_manifest_count_matches": False,
+        "null_time_empty_rows": None,
+        "null_time_allowed_non_null_cells": None,
+        "null_time_disallowed_non_null_cells": None,
+        "null_time_rows_with_disallowed_concepts": None,
+        "null_time_concept_contract_valid": False,
+    }
+    if module == "demographics":
+        return (
+            {
+                **base,
+                "null_time_observed_rows": 0,
+                "null_time_manifest_count_matches": manifest_count is None,
+                "null_time_empty_rows": 0,
+                "null_time_allowed_non_null_cells": 0,
+                "null_time_disallowed_non_null_cells": 0,
+                "null_time_rows_with_disallowed_concepts": 0,
+                "null_time_concept_contract_valid": manifest_count is None,
+            },
+            [],
+        )
+    if not parquet_path.is_file():
+        return base, []
+
+    parquet = pq.ParquetFile(parquet_path)
+    schema_names = parquet.schema_arrow.names
+    if "charttime" not in schema_names:
+        return base, []
+    physical_concepts = [
+        concept for concept in expected_concepts if concept in schema_names
+    ]
+    selected_columns = ["charttime", *physical_concepts]
+    charttime_index = schema_names.index("charttime")
+    candidate_row_groups: list[int] = []
+    statistics_null_rows = 0
+    statistics_complete = True
+    for row_group_index in range(parquet.metadata.num_row_groups):
+        column = parquet.metadata.row_group(row_group_index).column(charttime_index)
+        statistics = column.statistics
+        if statistics is None or not statistics.has_null_count:
+            statistics_complete = False
+            candidate_row_groups.append(row_group_index)
+            continue
+        null_count = int(statistics.null_count)
+        statistics_null_rows += null_count
+        if null_count:
+            candidate_row_groups.append(row_group_index)
+
+    observed_rows = 0
+    empty_rows = 0
+    allowed_cells = 0
+    disallowed_cells = 0
+    disallowed_rows = 0
+    concept_counts = {concept: 0 for concept in physical_concepts}
+    detail_rows: list[dict[str, Any]] = []
+
+    for batch in parquet.iter_batches(
+        row_groups=candidate_row_groups,
+        columns=selected_columns,
+        batch_size=65_536,
+    ):
+        charttime = batch.column(batch.schema.get_field_index("charttime"))
+        null_time = pc.is_null(charttime)
+        batch_null_rows = _arrow_true_count(null_time)
+        if batch_null_rows == 0:
+            continue
+        observed_rows += batch_null_rows
+        has_any_value = pa.array([False] * len(batch), type=pa.bool_())
+        has_disallowed_value = pa.array([False] * len(batch), type=pa.bool_())
+        for concept in physical_concepts:
+            column = batch.column(batch.schema.get_field_index(concept))
+            value_at_null_time = pc.and_(null_time, pc.is_valid(column))
+            count = _arrow_true_count(value_at_null_time)
+            concept_counts[concept] += count
+            has_any_value = pc.or_(has_any_value, value_at_null_time)
+            if _null_time_policy(
+                module=module,
+                concept=concept,
+                database=database,
+            ) is None:
+                has_disallowed_value = pc.or_(
+                    has_disallowed_value,
+                    value_at_null_time,
+                )
+                disallowed_cells += count
+            else:
+                allowed_cells += count
+        empty_rows += _arrow_true_count(
+            pc.and_(null_time, pc.invert(has_any_value))
+        )
+        disallowed_rows += _arrow_true_count(has_disallowed_value)
+
+    # Complete row-group statistics are an independent exact count.  Missing
+    # statistics fall back to the streamed value above.
+    if statistics_complete and observed_rows != statistics_null_rows:
+        base["null_time_observed_rows"] = observed_rows
+        return base, []
+
+    for concept, count in concept_counts.items():
+        if count == 0:
+            continue
+        policy = _null_time_policy(
+            module=module,
+            concept=concept,
+            database=database,
+        )
+        detail_rows.append(
+            {
+                "database": database,
+                "module": module,
+                "concept": concept,
+                "null_time_non_null_count": count,
+                "allowed": policy is not None,
+                "classification": (
+                    policy["classification"]
+                    if policy is not None
+                    else "unapproved_or_time_dependent_concept"
+                ),
+                "evidence": (
+                    policy["evidence"]
+                    if policy is not None
+                    else "No explicit NULL-time semantic policy; audit fails closed."
+                ),
+            }
+        )
+    if empty_rows:
+        detail_rows.append(
+            {
+                "database": database,
+                "module": module,
+                "concept": "__empty_row__",
+                "null_time_non_null_count": empty_rows,
+                "allowed": False,
+                "classification": "outer_merge_empty_artifact",
+                "evidence": "NULL-time row has no non-null concept value.",
+            }
+        )
+
+    count_matches = manifest_count == observed_rows
+    valid = bool(count_matches and empty_rows == 0 and disallowed_rows == 0)
+    return (
+        {
+            **base,
+            "null_time_observed_rows": observed_rows,
+            "null_time_manifest_count_matches": count_matches,
+            "null_time_empty_rows": empty_rows,
+            "null_time_allowed_non_null_cells": allowed_cells,
+            "null_time_disallowed_non_null_cells": disallowed_cells,
+            "null_time_rows_with_disallowed_concepts": disallowed_rows,
+            "null_time_concept_contract_valid": valid,
+        },
+        detail_rows,
+    )
+
+
 def _metadata_gap_mask(manifests: pd.DataFrame) -> pd.Series:
     complete_metadata = (
         manifests["concept_metadata_complete"].fillna(False).astype(bool)
@@ -1016,6 +1395,169 @@ def _raise_for_row_grain_gaps(manifests: pd.DataFrame) -> None:
         "Manifest row-grain contract gaps detected; audit failed closed: "
         + json.dumps(
             gaps.to_dict(orient="records"),
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    )
+
+
+def _raise_for_null_time_contract_gaps(manifests: pd.DataFrame) -> None:
+    gaps = manifests.loc[
+        ~manifests["null_time_concept_contract_valid"].fillna(False).astype(bool),
+        [
+            "database",
+            "module",
+            "null_time_manifest_rows",
+            "null_time_observed_rows",
+            "null_time_manifest_count_matches",
+            "null_time_empty_rows",
+            "null_time_disallowed_non_null_cells",
+            "null_time_rows_with_disallowed_concepts",
+        ],
+    ]
+    if gaps.empty:
+        return
+    raise ValueError(
+        "NULL charttime concept contract gaps detected; audit failed closed: "
+        + json.dumps(
+            gaps.to_dict(orient="records"),
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    )
+
+
+EICU_TIDAL_VOLUME_GATE_COLUMNS = (
+    "database",
+    "module",
+    "concept",
+    "non_null_rows",
+    "positive_le_2_rows",
+    "positive_le_2_stays",
+    "adult_positive_le_2_rows",
+    "adult_positive_le_2_stays",
+    "adult_gt_2_lt_50_rows",
+    "adult_gt_2_lt_50_stays",
+    "adult_mixed_scale_stays",
+    "unknown_age_gt_0_lt_50_rows",
+    "unknown_age_gt_0_lt_50_stays",
+    "passed",
+    "failure_reason",
+)
+
+
+def _eicu_tidal_volume_unit_gate(export_root: Path) -> pd.DataFrame:
+    """Audit canonical eICU tidal-volume values after source normalization."""
+
+    eicu_root = export_root / "eicu"
+    ventilator_path = eicu_root / "ventilator.parquet"
+    demographics_path = eicu_root / "demographics.parquet"
+    for path in (ventilator_path, demographics_path):
+        if not path.is_file():
+            raise FileNotFoundError(f"Missing eICU tidal-volume gate input: {path}")
+
+    ventilator_schema = set(pq.read_schema(ventilator_path).names)
+    demographics_schema = set(pq.read_schema(demographics_path).names)
+    required_ventilator = {"stay_id", "tidal_vol", "tidal_vol_set"}
+    required_demographics = {"stay_id", "age"}
+    if not required_ventilator.issubset(ventilator_schema):
+        missing = sorted(required_ventilator - ventilator_schema)
+        raise ValueError(f"eICU ventilator gate columns missing: {missing}")
+    if not required_demographics.issubset(demographics_schema):
+        missing = sorted(required_demographics - demographics_schema)
+        raise ValueError(f"eICU demographics gate columns missing: {missing}")
+
+    ventilator = pd.read_parquet(
+        ventilator_path,
+        columns=["stay_id", "tidal_vol", "tidal_vol_set"],
+    )
+    demographics = pd.read_parquet(
+        demographics_path,
+        columns=["stay_id", "age"],
+    ).drop_duplicates(subset=["stay_id"], keep="first")
+    age_lookup = pd.Series(
+        pd.to_numeric(demographics["age"], errors="coerce").to_numpy(),
+        index=demographics["stay_id"],
+    )
+    ages = pd.to_numeric(ventilator["stay_id"].map(age_lookup), errors="coerce")
+    adult = ages.ge(18)
+
+    rows: list[dict[str, Any]] = []
+    for concept in ("tidal_vol", "tidal_vol_set"):
+        values = pd.to_numeric(ventilator[concept], errors="coerce")
+        non_null = values.notna()
+        low = values.gt(0) & values.le(2)
+        adult_low = low & adult
+        adult_mid = values.gt(2) & values.lt(50) & adult
+        unknown_age_at_risk = ages.isna() & values.gt(0) & values.lt(50)
+
+        by_stay = pd.DataFrame(
+            {
+                "stay_id": ventilator["stay_id"],
+                "adult": adult,
+                "low": low,
+                "high": values.ge(100),
+            }
+        ).groupby("stay_id", dropna=False).agg(
+            adult=("adult", "max"),
+            low=("low", "max"),
+            high=("high", "max"),
+        )
+        adult_mixed_stays = int(
+            (by_stay["adult"] & by_stay["low"] & by_stay["high"]).sum()
+        )
+
+        failures: list[str] = []
+        if int(unknown_age_at_risk.sum()):
+            failures.append(
+                "unknown_age_gt_0_lt_50_rows="
+                f"{int(unknown_age_at_risk.sum())}"
+            )
+        if int(adult_low.sum()):
+            failures.append(f"adult_positive_le_2_rows={int(adult_low.sum())}")
+        if int(adult_mid.sum()):
+            failures.append(f"adult_gt_2_lt_50_rows={int(adult_mid.sum())}")
+        if adult_mixed_stays:
+            failures.append(f"adult_mixed_scale_stays={adult_mixed_stays}")
+        if concept == "tidal_vol_set" and int(low.sum()):
+            failures.append(f"positive_le_2_rows={int(low.sum())}")
+
+        rows.append(
+            {
+                "database": "eicu",
+                "module": "ventilator",
+                "concept": concept,
+                "non_null_rows": int(non_null.sum()),
+                "positive_le_2_rows": int(low.sum()),
+                "positive_le_2_stays": int(ventilator.loc[low, "stay_id"].nunique()),
+                "adult_positive_le_2_rows": int(adult_low.sum()),
+                "adult_positive_le_2_stays": int(
+                    ventilator.loc[adult_low, "stay_id"].nunique()
+                ),
+                "adult_gt_2_lt_50_rows": int(adult_mid.sum()),
+                "adult_gt_2_lt_50_stays": int(
+                    ventilator.loc[adult_mid, "stay_id"].nunique()
+                ),
+                "adult_mixed_scale_stays": adult_mixed_stays,
+                "unknown_age_gt_0_lt_50_rows": int(unknown_age_at_risk.sum()),
+                "unknown_age_gt_0_lt_50_stays": int(
+                    ventilator.loc[unknown_age_at_risk, "stay_id"].nunique()
+                ),
+                "passed": not failures,
+                "failure_reason": "; ".join(failures),
+            }
+        )
+    return pd.DataFrame(rows, columns=EICU_TIDAL_VOLUME_GATE_COLUMNS)
+
+
+def _raise_for_eicu_tidal_volume_unit_gate(gate: pd.DataFrame) -> None:
+    failures = gate.loc[~gate["passed"].fillna(False).astype(bool)]
+    if failures.empty:
+        return
+    raise ValueError(
+        "eICU tidal-volume unit gate failed closed: "
+        + json.dumps(
+            failures.to_dict(orient="records"),
             ensure_ascii=False,
             sort_keys=True,
         )
@@ -1594,6 +2136,7 @@ def main() -> None:
     field_rows: list[dict[str, Any]] = []
     module_rows: list[dict[str, Any]] = []
     manifest_rows: list[dict[str, Any]] = []
+    null_time_detail_rows: list[dict[str, Any]] = []
 
     for module, expected in module_concepts.items():
         schemas: dict[str, dict[str, str]] = {}
@@ -1672,6 +2215,24 @@ def main() -> None:
                 parquet_path=parquet,
                 actual_row_count=actual_row_count,
             )
+            row_grain_audit = entry.get("row_grain_audit")
+            row_grain_audit = (
+                row_grain_audit if isinstance(row_grain_audit, dict) else {}
+            )
+            null_time_checks, null_time_details = (
+                _null_time_concept_contract_checks(
+                    module=module,
+                    database=database,
+                    parquet_path=parquet,
+                    expected_concepts=expected,
+                    manifest_null_charttime_rows=(
+                        None
+                        if module == "demographics"
+                        else row_grain_audit.get("null_charttime_rows_after")
+                    ),
+                )
+            )
+            null_time_detail_rows.extend(null_time_details)
             saved_path = str(parquet)
             manifest_rows.append(
                 {
@@ -1696,6 +2257,7 @@ def main() -> None:
                     "concept_metadata_complete": concept_metadata_complete,
                     **structural_checks,
                     **row_grain_checks,
+                    **null_time_checks,
                     "merge_key_count": int("stay_id" in names)
                     + int("charttime" in names),
                     "manifest_schema_matches_parquet": manifest_schema_matches_parquet,
@@ -1796,6 +2358,18 @@ def main() -> None:
     fields = pd.DataFrame(field_rows)
     modules = pd.DataFrame(module_rows)
     manifests = pd.DataFrame(manifest_rows)
+    null_time_details = pd.DataFrame(
+        null_time_detail_rows,
+        columns=[
+            "database",
+            "module",
+            "concept",
+            "null_time_non_null_count",
+            "allowed",
+            "classification",
+            "evidence",
+        ],
+    )
 
     availability = (
         audit.groupby(
@@ -1821,10 +2395,31 @@ def main() -> None:
     )
     availability["available_all_six"] = availability["databases_available"] == 6
 
+    # The gate joins ventilator values to demographics, so a deliberately
+    # partial QC run must contain both modules before this release-level check
+    # is activated. Full-six publication audits always include both.
+    tidal_volume_gate_required = {
+        "ventilator",
+        "demographics",
+    }.issubset(module_concepts)
+    tidal_volume_gate = (
+        _eicu_tidal_volume_unit_gate(args.export_root)
+        if tidal_volume_gate_required
+        else pd.DataFrame(columns=EICU_TIDAL_VOLUME_GATE_COLUMNS)
+    )
+
     fields.to_csv(args.output_dir / "field_contract_audit.csv", index=False)
     modules.to_csv(args.output_dir / "module_schema_summary.csv", index=False)
     manifests.to_csv(args.output_dir / "manifest_audit.csv", index=False)
+    null_time_details.to_csv(
+        args.output_dir / "null_time_concept_audit.csv",
+        index=False,
+    )
     availability.to_csv(args.output_dir / "concept_availability.csv", index=False)
+    tidal_volume_gate.to_csv(
+        args.output_dir / "eicu_tidal_volume_unit_gate.csv",
+        index=False,
+    )
     findings = _resolved_findings()
     findings.to_csv(args.output_dir / "verified_issue_register.csv", index=False)
     distribution_flags = _adjudicate_distribution_flags(
@@ -1888,6 +2483,28 @@ def main() -> None:
         "manifest_row_grain_contract_gap_rows": int(
             (~manifests["row_grain_contract_valid"]).sum()
         ),
+        "manifest_null_time_concept_contract_verified_rows": int(
+            manifests["null_time_concept_contract_valid"].sum()
+        ),
+        "manifest_null_time_concept_contract_gap_rows": int(
+            (~manifests["null_time_concept_contract_valid"]).sum()
+        ),
+        "observed_null_charttime_rows": int(
+            pd.to_numeric(
+                manifests["null_time_observed_rows"], errors="coerce"
+            ).fillna(0).sum()
+        ),
+        "null_charttime_empty_rows": int(
+            pd.to_numeric(
+                manifests["null_time_empty_rows"], errors="coerce"
+            ).fillna(0).sum()
+        ),
+        "null_charttime_disallowed_non_null_cells": int(
+            pd.to_numeric(
+                manifests["null_time_disallowed_non_null_cells"],
+                errors="coerce",
+            ).fillna(0).sum()
+        ),
         "parquet_sha256_verified_rows": int(
             manifests["parquet_sha256_matches"].sum()
         ),
@@ -1924,6 +2541,15 @@ def main() -> None:
         "distribution_unadjudicated_flag_count": int(
             (distribution_flags["adjudication_status"] == "unadjudicated").sum()
         ),
+        "eicu_tidal_volume_unit_gate_required": tidal_volume_gate_required,
+        "eicu_tidal_volume_unit_gate_passed": (
+            bool(tidal_volume_gate["passed"].all())
+            if tidal_volume_gate_required
+            else None
+        ),
+        "eicu_tidal_volume_unit_gate_failed_concepts": int(
+            (~tidal_volume_gate["passed"].astype(bool)).sum()
+        ),
         "verified_findings_by_severity": (
             findings["severity"].value_counts().to_dict()
         ),
@@ -1941,7 +2567,10 @@ def main() -> None:
     )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     _raise_for_row_grain_gaps(manifests)
+    _raise_for_null_time_contract_gaps(manifests)
     _raise_for_metadata_gaps(manifests)
+    if tidal_volume_gate_required:
+        _raise_for_eicu_tidal_volume_unit_gate(tidal_volume_gate)
 
 
 if __name__ == "__main__":

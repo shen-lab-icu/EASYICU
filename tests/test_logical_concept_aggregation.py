@@ -11,6 +11,7 @@ from easyicu.concept.callbacks import CALLBACK_REGISTRY, register_callback
 from easyicu.concept.expr_parser import _default_aggregator_for_dtype
 from easyicu.concept.parser import default_aggregator_for_dtype
 from easyicu.concept.schema import ConceptDefinition, ConceptDictionary, ConceptSource
+from easyicu.resources import load_data_sources
 from easyicu.table import ICUTable
 from easyicu.io.ts_utils import change_interval
 from easyicu.utils import compat
@@ -48,6 +49,216 @@ def test_bool_auto_aggregation_is_occurrence_not_count_or_majority() -> None:
 
     assert result["rrt"].tolist() == [True]
     assert str(result["rrt"].dtype) == "bool"
+
+
+def test_miiv_rrt_keeps_charted_points_and_expands_procedure_windows() -> None:
+    """A mixed MIIV RRT source must not erase either source representation."""
+
+    class DataSource:
+        config = load_data_sources().get("miiv")
+        base_path = None
+
+        def __init__(self) -> None:
+            intime = pd.Timestamp("2180-01-01 00:00:00")
+            self.frames = {
+                "chartevents": pd.DataFrame(
+                    {
+                        "stay_id": [1],
+                        "charttime": [intime + pd.Timedelta(hours=2)],
+                        "itemid": [224149],
+                        "valuenum": [10.0],
+                    }
+                ),
+                "procedureevents": pd.DataFrame(
+                    {
+                        "stay_id": [1],
+                        "starttime": [intime + pd.Timedelta(hours=4)],
+                        "endtime": [intime + pd.Timedelta(hours=6)],
+                        "itemid": [225441],
+                        "value": [120.0],
+                    }
+                ),
+                "icustays": pd.DataFrame(
+                    {
+                        "stay_id": [1],
+                        "intime": [intime],
+                        "outtime": [intime + pd.Timedelta(days=1)],
+                        "los": [1.0],
+                    }
+                ),
+            }
+
+        def load_table(self, table_name, columns=None, filters=None, verbose=False):
+            del columns, verbose
+            frame = self.frames[table_name].copy()
+            for filter_spec in filters or []:
+                frame = filter_spec.apply(frame)
+            defaults = self.config.get_table(table_name).defaults
+            return ICUTable(
+                data=frame,
+                id_columns=[defaults.id_var],
+                index_column=(
+                    defaults.index_var
+                    if defaults.index_var in frame.columns
+                    else None
+                ),
+                value_column=(
+                    defaults.val_var if defaults.val_var in frame.columns else None
+                ),
+                time_columns=[
+                    column
+                    for column in defaults.time_vars or []
+                    if column in frame.columns
+                ],
+            )
+
+    dictionary = ConceptDictionary(
+        {
+            "rrt": ConceptDefinition(
+                name="rrt",
+                class_name="lgl_cncpt",
+                sources={
+                    "miiv": [
+                        ConceptSource(
+                            table="chartevents",
+                            sub_var="itemid",
+                            ids=[224149],
+                            value_var="valuenum",
+                            index_var="charttime",
+                            callback="transform_fun(set_val(TRUE))",
+                        ),
+                        ConceptSource(
+                            table="procedureevents",
+                            sub_var="itemid",
+                            ids=[225441],
+                            value_var="value",
+                            index_var="starttime",
+                            callback="transform_fun(set_val(TRUE))",
+                        ),
+                    ]
+                },
+            )
+        }
+    )
+
+    loaded = ConceptResolver(dictionary).load_concepts(
+        ["rrt"],
+        DataSource(),
+        merge=False,
+        interval=pd.Timedelta(hours=1),
+        r_compatible=False,
+        verbose=False,
+        concept_workers=1,
+    )
+    result = loaded["rrt"].data.sort_values("charttime").reset_index(drop=True)
+
+    assert result["charttime"].tolist() == [2.0, 4.0, 5.0, 6.0]
+    assert result["rrt"].tolist() == [True, True, True, True]
+
+
+def test_eicu_rrt_coalesces_treatment_and_intake_output_offsets() -> None:
+    """Every eICU RRT source must retain its own ICU-relative event time."""
+
+    class DataSource:
+        config = DataSourceConfig(
+            name="eicu",
+            tables={
+                "treatment": {
+                    "defaults": {
+                        "id_var": "patientunitstayid",
+                        "index_var": "treatmentoffset",
+                        "val_var": "value",
+                        "time_vars": ["treatmentoffset"],
+                    }
+                },
+                "intakeoutput": {
+                    "defaults": {
+                        "id_var": "patientunitstayid",
+                        "index_var": "intakeoutputoffset",
+                        "val_var": "value",
+                        "time_vars": ["intakeoutputoffset"],
+                    }
+                },
+            },
+        )
+        base_path = None
+
+        def __init__(self) -> None:
+            self.frames = {
+                "treatment": pd.DataFrame(
+                    {
+                        "patientunitstayid": [1],
+                        "treatmentoffset": [120],
+                        "kind": ["rrt"],
+                        "value": [1.0],
+                    }
+                ),
+                "intakeoutput": pd.DataFrame(
+                    {
+                        "patientunitstayid": [1],
+                        "intakeoutputoffset": [300],
+                        "kind": ["rrt"],
+                        "value": [1.0],
+                    }
+                ),
+            }
+
+        def load_table(self, table_name, columns=None, filters=None, verbose=False):
+            del columns, verbose
+            frame = self.frames[table_name].copy()
+            for filter_spec in filters or []:
+                frame = filter_spec.apply(frame)
+            defaults = self.config.get_table(table_name).defaults
+            return ICUTable(
+                data=frame,
+                id_columns=[defaults.id_var],
+                index_column=defaults.index_var,
+                value_column=defaults.val_var,
+                time_columns=list(defaults.time_vars or []),
+            )
+
+    dictionary = ConceptDictionary(
+        {
+            "rrt": ConceptDefinition(
+                name="rrt",
+                class_name="lgl_cncpt",
+                sources={
+                    "eicu": [
+                        ConceptSource(
+                            table="treatment",
+                            sub_var="kind",
+                            ids=["rrt"],
+                            value_var="value",
+                            index_var="treatmentoffset",
+                            callback="transform_fun(set_val(TRUE))",
+                        ),
+                        ConceptSource(
+                            table="intakeoutput",
+                            sub_var="kind",
+                            ids=["rrt"],
+                            value_var="value",
+                            index_var="intakeoutputoffset",
+                            callback="transform_fun(set_val(TRUE))",
+                        ),
+                    ]
+                },
+            )
+        }
+    )
+
+    loaded = ConceptResolver(dictionary).load_concepts(
+        ["rrt"],
+        DataSource(),
+        merge=False,
+        interval=pd.Timedelta(hours=1),
+        r_compatible=False,
+        verbose=False,
+        concept_workers=1,
+    )
+    result = loaded["rrt"].data.sort_values("charttime").reset_index(drop=True)
+
+    assert result["charttime"].tolist() == [2.0, 5.0]
+    assert result["rrt"].tolist() == [True, True]
 
 
 def test_recursive_bool_callback_load_concepts_uses_any_after_callback() -> None:
@@ -181,6 +392,141 @@ def test_r_style_merge_preserves_requested_empty_event_concept_column() -> None:
     assert "urine" in result.columns
     assert "rrt" in result.columns
     assert result["rrt"].isna().all()
+
+
+def test_r_style_merge_uses_each_table_declared_time_index() -> None:
+    """Uncommon source index names must not turn event concepts static."""
+
+    class DataSource:
+        config = DataSourceConfig(name="eicu", tables={})
+
+    resolver = ConceptResolver(ConceptDictionary({}))
+    tables = {
+        "abx": ICUTable(
+            data=pd.DataFrame(
+                {
+                    "patientunitstayid": [1],
+                    "charttime": [0.0],
+                    "abx": [True],
+                }
+            ),
+            id_columns=["patientunitstayid"],
+            index_column="charttime",
+            value_column="abx",
+        ),
+        "phenytoin": ICUTable(
+            data=pd.DataFrame(
+                {
+                    "patientunitstayid": [2],
+                    "drugoffset": [6.0],
+                    "phenytoin": [True],
+                }
+            ),
+            id_columns=["patientunitstayid"],
+            index_column="drugoffset",
+            value_column="phenytoin",
+        ),
+    }
+
+    result = resolver._to_r_format_merged_enhanced(
+        tables,
+        ["abx", "phenytoin"],
+        data_source=DataSource(),
+    ).sort_values(["patientunitstayid", "charttime"])
+
+    assert result[["patientunitstayid", "charttime"]].to_dict("records") == [
+        {"patientunitstayid": 1, "charttime": 0.0},
+        {"patientunitstayid": 2, "charttime": 6.0},
+    ]
+    assert bool(result.loc[result["patientunitstayid"].eq(2), "phenytoin"].iloc[0])
+
+
+def test_r_style_merge_prefers_declared_time_over_auxiliary_name_collision() -> None:
+    """An auxiliary column must not replace another concept's declared time."""
+
+    class DataSource:
+        config = DataSourceConfig(name="eicu", tables={})
+
+    resolver = ConceptResolver(ConceptDictionary({}))
+    tables = {
+        "urine": ICUTable(
+            data=pd.DataFrame(
+                {
+                    "patientunitstayid": [1],
+                    "intakeoutputoffset": [3.0],
+                    "urine": [25.0],
+                }
+            ),
+            id_columns=["patientunitstayid"],
+            index_column="intakeoutputoffset",
+            value_column="urine",
+        ),
+        "rrt": ICUTable(
+            data=pd.DataFrame(
+                {
+                    "patientunitstayid": [1],
+                    "charttime": [13.0],
+                    "intakeoutputoffset": [False],
+                    "rrt": [True],
+                }
+            ),
+            id_columns=["patientunitstayid"],
+            index_column="charttime",
+            value_column="rrt",
+        ),
+    }
+
+    result = resolver._to_r_format_merged_enhanced(
+        tables,
+        ["urine", "rrt"],
+        data_source=DataSource(),
+    ).sort_values("charttime")
+
+    assert result["charttime"].tolist() == [3.0, 13.0]
+    assert result.loc[result["rrt"].fillna(False), "charttime"].tolist() == [
+        13.0
+    ]
+
+
+def test_r_style_merge_drops_value_less_static_outer_artifact() -> None:
+    class DataSource:
+        config = DataSourceConfig(name="eicu", tables={})
+
+    resolver = ConceptResolver(ConceptDictionary({}))
+    tables = {
+        "qsofa": ICUTable(
+            data=pd.DataFrame(
+                {
+                    "patientunitstayid": [1],
+                    "charttime": [0.0],
+                    "qsofa": [1.0],
+                }
+            ),
+            id_columns=["patientunitstayid"],
+            index_column="charttime",
+            value_column="qsofa",
+        ),
+        "apache_iv": ICUTable(
+            data=pd.DataFrame(
+                {
+                    "patientunitstayid": [2],
+                    "apache_iv": [None],
+                }
+            ),
+            id_columns=["patientunitstayid"],
+            index_column=None,
+            value_column="apache_iv",
+        ),
+    }
+
+    result = resolver._to_r_format_merged_enhanced(
+        tables,
+        ["qsofa", "apache_iv"],
+        data_source=DataSource(),
+    )
+
+    assert result["patientunitstayid"].tolist() == [1]
+    assert result["charttime"].tolist() == [0.0]
 
 
 def test_r_style_sparse_merge_does_not_materialise_unused_time_grid(
