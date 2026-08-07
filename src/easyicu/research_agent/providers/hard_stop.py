@@ -59,7 +59,7 @@ class HardStopClient:
         *,
         max_tokens: int = 2048,
         temperature: float = 0.2,
-    ) -> tuple[str, Optional[Dict[str, int]]]:
+    ) -> tuple[str, Optional[Dict[str, Any]]]:
         with provider_hard_stop_call_scope(
             task=self._task,
             role=self._role,
@@ -85,15 +85,10 @@ class HardStopClient:
                         max_tokens=max_tokens,
                         temperature=temperature,
                     )
-                    usage = (
-                        {
-                            str(key): int(value)
-                            for key, value in raw_usage.items()
-                            if isinstance(value, (int, float))
-                        }
-                        if isinstance(raw_usage, dict)
-                        else None
-                    )
+                    # Usage doubles as the call-scoped model-provenance
+                    # carrier. Keep non-numeric metadata intact; the hard-stop
+                    # ledger reads only its numeric token fields.
+                    usage = dict(raw_usage) if isinstance(raw_usage, dict) else None
                 else:
                     complete = self._inner.complete
                     kwargs: Dict[str, Any] = {

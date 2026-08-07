@@ -493,6 +493,19 @@ def _post_upstream(
 ) -> requests.Response:
     headers = _build_upstream_headers(request)
     upstream_url = f"{OPENROUTER_BASE_URL}/chat/completions"
+    requested_model = str(upstream_payload.get("model") or "")
+
+    def with_model_provenance(
+        response: requests.Response,
+        *,
+        attempted_model: str,
+    ) -> requests.Response:
+        # ``requests.Response`` permits local attributes.  Keeping provenance
+        # beside the response lets the HTTP boundary disclose a fallback while
+        # preserving the OpenAI-compatible response body for ordinary callers.
+        response.easyicu_requested_model = requested_model  # type: ignore[attr-defined]
+        response.easyicu_attempted_model = attempted_model  # type: ignore[attr-defined]
+        return response
 
     try:
         upstream_response = requests.post(
@@ -508,7 +521,10 @@ def _post_upstream(
         ) from exc
 
     if stream or not _should_retry_with_fallback(upstream_response):
-        return upstream_response
+        return with_model_provenance(
+            upstream_response,
+            attempted_model=requested_model,
+        )
 
     fallback_payload = dict(upstream_payload)
     for fallback_model in _fallback_models_for(str(upstream_payload.get("model", ""))):
@@ -527,9 +543,15 @@ def _post_upstream(
         if upstream_response.status_code < 400 or not _should_retry_with_fallback(
             upstream_response
         ):
-            return upstream_response
+            return with_model_provenance(
+                upstream_response,
+                attempted_model=fallback_model,
+            )
 
-    return upstream_response
+    return with_model_provenance(
+        upstream_response,
+        attempted_model=str(fallback_payload.get("model") or requested_model),
+    )
 
 
 def _json_or_text(response: requests.Response) -> Any:
@@ -633,6 +655,29 @@ async def chat_completions(request: Request):
             _post_upstream, request, upstream_payload, stream=False
         )
     data = _json_or_text(upstream_response)
+    if isinstance(data, dict) and upstream_response.status_code < 400:
+        requested_model = str(
+            getattr(upstream_response, "easyicu_requested_model", "") or ""
+        )
+        attempted_model = str(
+            getattr(upstream_response, "easyicu_attempted_model", "") or ""
+        )
+        upstream_reported_model = str(data.get("model") or "")
+        actual_model = upstream_reported_model or attempted_model
+        if actual_model:
+            # OpenAI-compatible clients read the top-level model field.  It
+            # therefore represents the actual upstream response model rather
+            # than the model requested before a hosted fallback.
+            data["model"] = actual_model
+        data["easyicu_model_provenance"] = {
+            "schema_version": "easyicu.hosted_model_provenance/1",
+            "requested_model": requested_model,
+            "attempted_model": attempted_model,
+            "upstream_reported_model": upstream_reported_model or None,
+            "fallback_used": bool(
+                requested_model and attempted_model and requested_model != attempted_model
+            ),
+        }
     return JSONResponse(status_code=upstream_response.status_code, content=data)
 
 
@@ -668,7 +713,16 @@ async def _bounded_streaming_response(request: Request, upstream_payload: dict):
     return StreamingResponse(
         _release_after(_stream_upstream(upstream_response)),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "X-EasyICU-Requested-Model": str(
+                getattr(upstream_response, "easyicu_requested_model", "") or ""
+            ),
+            "X-EasyICU-Attempted-Model": str(
+                getattr(upstream_response, "easyicu_attempted_model", "") or ""
+            ),
+        },
     )
 
 

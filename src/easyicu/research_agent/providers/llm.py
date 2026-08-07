@@ -258,7 +258,15 @@ def _response_namespace_from_payload(payload: Dict[str, Any]) -> Any:
         )
     usage = payload.get("usage")
     usage_ns = SimpleNamespace(**usage) if isinstance(usage, dict) else None
-    return SimpleNamespace(choices=choices, usage=usage_ns)
+    # Keep relay-supplied model provenance with the normalised response.  The
+    # local no-auth path otherwise used to discard the only evidence that a
+    # hosted relay had substituted a fallback model.
+    return SimpleNamespace(
+        choices=choices,
+        usage=usage_ns,
+        model=payload.get("model"),
+        easyicu_model_provenance=payload.get("easyicu_model_provenance"),
+    )
 
 
 def _response_namespace_from_stream(stream: Any) -> Any:
@@ -274,9 +282,13 @@ def _response_namespace_from_stream(stream: Any) -> Any:
     reasoning_parts: List[str] = []
     finish_reason: Optional[str] = None
     usage = None
+    response_model = None
     saw_choice = False
     try:
         for chunk in stream:
+            chunk_model = getattr(chunk, "model", None)
+            if isinstance(chunk_model, str) and chunk_model.strip():
+                response_model = chunk_model.strip()
             chunk_usage = getattr(chunk, "usage", None)
             if chunk_usage is not None:
                 usage = chunk_usage
@@ -302,7 +314,7 @@ def _response_namespace_from_stream(stream: Any) -> Any:
             close()
 
     if not saw_choice:
-        return SimpleNamespace(choices=[], usage=usage)
+        return SimpleNamespace(choices=[], usage=usage, model=response_model)
     reasoning = "".join(reasoning_parts)
     message = SimpleNamespace(
         content="".join(content_parts),
@@ -310,7 +322,7 @@ def _response_namespace_from_stream(stream: Any) -> Any:
         reasoning=reasoning or None,
     )
     choice = SimpleNamespace(message=message, finish_reason=finish_reason)
-    return SimpleNamespace(choices=[choice], usage=usage)
+    return SimpleNamespace(choices=[choice], usage=usage, model=response_model)
 
 
 # ---------------------------------------------------------------------------
@@ -612,7 +624,7 @@ class OpenAIClient:
         temperature: float = 0.2,
         seed: Optional[int] = None,
         top_p: Optional[float] = None,
-    ) -> tuple[str, Optional[Dict[str, int]]]:
+    ) -> tuple[str, Optional[Dict[str, Any]]]:
         """Return text and usage from the same provider response.
 
         The tuple is call-scoped: concurrent callers never have to read the
@@ -801,7 +813,7 @@ class OpenAIClient:
         # ``MeteredClient`` can pull authoritative token counts instead of
         # falling back to the chars/4 heuristic. Defensive: not every
         # provider populates ``usage`` on every response.
-        call_usage: Optional[Dict[str, int]] = None
+        call_usage: Optional[Dict[str, Any]] = None
         try:
             usage = getattr(resp, "usage", None)
             if usage is not None:
@@ -812,6 +824,16 @@ class OpenAIClient:
                     ),
                     "total_tokens": int(getattr(usage, "total_tokens", 0) or 0),
                 }
+            actual_model = getattr(resp, "model", None)
+            if isinstance(actual_model, str) and actual_model.strip():
+                if call_usage is None:
+                    call_usage = {}
+                call_usage["actual_model"] = actual_model.strip()
+            relay_provenance = getattr(resp, "easyicu_model_provenance", None)
+            if isinstance(relay_provenance, dict):
+                if call_usage is None:
+                    call_usage = {}
+                call_usage["model_provenance"] = dict(relay_provenance)
         except Exception:
             call_usage = None
         # Compatibility only; cost attribution uses the call-scoped return.
@@ -1157,7 +1179,7 @@ class FallbackLLMClient:
         temperature: float = 0.2,
         seed: Optional[int] = None,
         top_p: Optional[float] = None,
-    ) -> tuple[str, Optional[Dict[str, int]]]:
+    ) -> tuple[str, Optional[Dict[str, Any]]]:
         """Return usage from the same successful fallback call, when available."""
         errors: List[str] = []
         last_exc: Optional[Exception] = None

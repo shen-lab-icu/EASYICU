@@ -79,6 +79,42 @@ def test_recording_client_records_prompt_and_response_hashes(ra):
     assert rec.response_sha256 == hashlib.sha256(out.encode("utf-8")).hexdigest()
 
 
+def test_recording_client_preserves_hosted_actual_model_provenance(ra):
+    from easyicu.research_agent.providers.llm import LLMMessage
+
+    class _HostedFallback:
+        name = "openai"
+        _model = "configured-model"
+
+        def complete_with_usage(self, messages, **_kwargs):  # noqa: ANN003
+            return "OK", {
+                "prompt_tokens": 3,
+                "completion_tokens": 1,
+                "actual_model": "provider/served-model",
+                "model_provenance": {
+                    "requested_model": "configured-model",
+                    "attempted_model": "fallback-model",
+                    "fallback_used": True,
+                },
+            }
+
+    env = ra.ReproEnvelope(run_id="hosted-fallback")
+    recorder = ra.ReproRecordingClient(
+        _HostedFallback(), role="planner", envelope=env
+    )
+    recorder.complete([LLMMessage(role="user", content="hello")])
+
+    record = env.calls[0]
+    assert record.model == "provider/served-model"
+    assert record.requested_model == "configured-model"
+    assert record.actual_model == "provider/served-model"
+    assert record.model_provenance == {
+        "requested_model": "configured-model",
+        "attempted_model": "fallback-model",
+        "fallback_used": True,
+    }
+
+
 def test_recording_client_forwards_seed_when_inner_accepts_it(ra):
     from easyicu.research_agent.providers.llm import LLMMessage
 
