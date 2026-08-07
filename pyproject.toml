@@ -87,6 +87,14 @@ methods = [
   "shap>=0.44",
   "xgboost>=2.0"
 ]
+# Optional adapters are deliberately separate from ``methods``: installing one
+# does not advertise it to the Coder or promote a scientific capability.  It
+# must still pass the capability-request / immutable-image approval path.
+scientific-adapters = [
+  "pandera[pandas]>=0.28,<0.33",
+  "dowhy>=0.13,<0.14",
+  "scikit-survival>=0.28,<0.29"
+]
 all = [
   "easyicu[dev,viz,webapp,llmserver,agentic,mcp,cli,methods]"
 ]
