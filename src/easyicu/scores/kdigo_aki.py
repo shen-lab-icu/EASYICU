@@ -36,6 +36,7 @@ import numpy as np
 import logging
 
 from easyicu.io.ts_utils import _infer_numeric_time_unit
+from easyicu.urine_weight_linkage import resolve_unkeyed_single_entity_weight
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +58,8 @@ def kdigo_creatinine(
     - Stage 3: creat ≥ 3x baseline (7-day) OR (creat ≥ 4.0 with acute rise ≥0.3/48h or ≥1.5x)
     - Stage 2: creat ≥ 2x baseline (7-day)
     - Stage 1: creat ≥ 1.5x baseline (7-day) OR creat ≥ (48h min + 0.3)
-    - Stage 0: No AKI
+    - Stage 0: No AKI after at least one eligible baseline comparison
+    - ``<NA>``: Not assessable from the available baseline history
     
     Args:
         crea_df: DataFrame with creatinine values
@@ -175,7 +177,14 @@ def _calc_aki_stage_creat(
     - Stage 1: creat ≥ 1.5x baseline OR (creat ≥ baseline + 0.3 within 48h)
     - Stage 0: No AKI
     """
-    stage = pd.Series(0, index=creat.index, dtype=int)
+    # A first creatinine value has no prior value to compare against.  It is
+    # not evidence of "no AKI" and must remain unknown rather than becoming a
+    # stage 0 through an integer default.
+    stage = pd.Series(pd.NA, index=creat.index, dtype="Int64")
+    assessable = creat.notna() & (
+        creat_low_48hr.notna() | creat_low_7day.notna()
+    )
+    stage.loc[assessable] = 0
     
     # Stage 1: ≥1.5x baseline (7-day) OR ≥0.3 increase in 48h
     mask_1_fold = creat >= (creat_low_7day * 1.5)
@@ -259,12 +268,20 @@ def kdigo_uo(
     if result.empty:
         return pd.DataFrame()
     
-    # Calculate AKI stage based on urine output
+    # Calculate AKI stage based on urine output.  A missing complete window
+    # stays unassessable; it is never coerced into a non-oliguric stage 0.
     result['aki_stage_uo'] = _calc_aki_stage_uo(
         result.get('uo_rt_6hr'),
         result.get('uo_rt_12hr'),
         result.get('uo_rt_24hr')
     )
+    result['uo_assessable'] = result['aki_stage_uo'].notna()
+    result['uo_assessment_reason'] = pd.Series(
+        pd.NA, index=result.index, dtype="string"
+    )
+    result.loc[
+        ~result['uo_assessable'], 'uo_assessment_reason'
+    ] = "uo_window_or_weight_unavailable"
     
     # Rename columns for consistency
     result = result.rename(columns={
@@ -404,14 +421,25 @@ def _calculate_uo_rates_simple(
     if weight_col in weight.columns:
         weight[weight_col] = pd.to_numeric(weight[weight_col], errors='coerce')
     
-    # Get first weight per patient for simplicity
+    # Resolve weight only through a patient key.  The exceptional unkeyed
+    # one-entity path is explicitly proved below; selecting ``iloc[0]`` from a
+    # multi-patient table would silently apply one patient's weight to another.
     global_weight = np.nan
     if weight_id_col and weight_id_col in weight.columns:
         weight_per_patient = weight.groupby(weight_id_col)[weight_col].first().to_dict()
     else:
-        # Single weight value applies to all rows if no patient ID is present.
-        if weight_col in weight.columns and len(weight) > 0:
-            global_weight = weight[weight_col].iloc[0]
+        resolution = resolve_unkeyed_single_entity_weight(
+            urine,
+            weight,
+            urine_id_columns=[id_col],
+            weight_column=weight_col,
+        )
+        global_weight = resolution.weight if resolution.weight is not None else np.nan
+        if resolution.diagnostic_code:
+            logger.info(
+                "Leaving urine-output rates unassessable: %s",
+                resolution.diagnostic_code,
+            )
         weight_per_patient = {}
     
     # Sort urine by patient and time
@@ -525,16 +553,24 @@ def _calc_aki_stage_uo(
     - Stage 3: UO < 0.3 mL/kg/h for ≥24h OR anuria (0) for ≥12h
     - Stage 2: UO < 0.5 mL/kg/h for ≥12h
     - Stage 1: UO < 0.5 mL/kg/h for 6-12h (i.e., 6h avg < 0.5 but 12h avg ≥ 0.5)
-    - Stage 0: No AKI
+    - Stage 0: No AKI after at least one complete eligible window
+    - ``<NA>``: Not assessable from the available urine/weight history
     """
     if uo_6h is None:
-        return pd.Series(0, dtype=int)
+        return pd.Series(dtype="Int64")
     
-    stage = pd.Series(0, index=uo_6h.index, dtype=int)
+    stage = pd.Series(pd.NA, index=uo_6h.index, dtype="Int64")
     
     uo_6h_num = pd.to_numeric(uo_6h, errors='coerce')
     uo_12h_num = pd.to_numeric(uo_12h, errors='coerce') if uo_12h is not None else pd.Series(np.nan, index=uo_6h.index)
     uo_24h_num = pd.to_numeric(uo_24h, errors='coerce') if uo_24h is not None else pd.Series(np.nan, index=uo_6h.index)
+
+    # Any complete UO window can establish a non-oliguric stage 0.  Missing
+    # windows cannot: they may reflect insufficient coverage, missing weight,
+    # or an unprovable linkage.
+    stage.loc[
+        uo_6h_num.notna() | uo_12h_num.notna() | uo_24h_num.notna()
+    ] = 0
     
     # Stage 1: UO < 0.5 for 6h but NOT for 12h
     mask_1 = (uo_6h_num < 0.5) & ((uo_12h_num >= 0.5) | uo_12h_num.isna())
@@ -612,7 +648,9 @@ def kdigo_stages(
     - Urine output-based staging (6h, 12h, 24h rates)
     - RRT initiation (automatic Stage 3)
     
-    The final AKI stage is the MAXIMUM of creatinine and urine output stages.
+    The final AKI stage is the maximum of assessable creatinine, urine-output,
+    and documented RRT stages.  ``<NA>`` means the available source evidence
+    cannot establish either AKI or no AKI; it is intentionally not a stage 0.
     
     Args:
         crea_df: DataFrame with creatinine values
@@ -648,6 +686,7 @@ def kdigo_stages(
         return pd.DataFrame()
     
     result = crea_staging.copy()
+    result['creat_assessable'] = result['aki_stage_creat'].notna()
     
     # Calculate urine output-based staging if data available
     if urine_df is not None and weight_df is not None and not urine_df.empty:
@@ -684,18 +723,41 @@ def kdigo_stages(
                         f"available cols: {list(uo_staging.columns)}"
                     )
                 result = result.merge(
-                    uo_staging[[id_col, time_col, 'uo_rt_6hr', 'uo_rt_12hr', 'uo_rt_24hr', 'aki_stage_uo']],
+                    uo_staging[[
+                        id_col,
+                        time_col,
+                        'uo_rt_6hr',
+                        'uo_rt_12hr',
+                        'uo_rt_24hr',
+                        'aki_stage_uo',
+                        'uo_assessable',
+                        'uo_assessment_reason',
+                    ]],
                     on=[id_col, time_col],
                     how='outer'
                 )
         except Exception as e:
             logger.warning(f"Failed to calculate UO-based AKI staging: {e}")
-            result['aki_stage_uo'] = 0
+            result['aki_stage_uo'] = pd.Series(pd.NA, index=result.index, dtype="Int64")
+            result['uo_assessable'] = False
+            result['uo_assessment_reason'] = "uo_calculation_error"
     else:
-        result['aki_stage_uo'] = 0
+        result['aki_stage_uo'] = pd.Series(pd.NA, index=result.index, dtype="Int64")
+        result['uo_assessable'] = False
+        result['uo_assessment_reason'] = "urine_or_weight_unavailable"
+
+    # An outer UO merge can add times that have no creatinine row.  Preserve
+    # the distinction between an unavailable baseline and a proven negative.
+    result['creat_assessable'] = result['aki_stage_creat'].notna()
+    result['uo_assessable'] = result['uo_assessable'].fillna(False).astype(bool)
+    result['uo_assessment_reason'] = result['uo_assessment_reason'].astype("string")
+    result.loc[
+        ~result['uo_assessable'] & result['uo_assessment_reason'].isna(),
+        'uo_assessment_reason',
+    ] = "uo_window_or_weight_unavailable"
     
     # Handle RRT - automatic Stage 3
-    result['aki_stage_rrt'] = 0  # Default: no RRT
+    result['aki_stage_rrt'] = pd.Series(0, index=result.index, dtype="Int64")
     if rrt_df is not None and not rrt_df.empty:
         rrt_id_col = _detect_id_col(rrt_df, id_col)
         rrt_time_col = _detect_time_col(rrt_df, time_col)
@@ -706,10 +768,7 @@ def kdigo_stages(
             )
             rrt_mask = _rrt_active_from_initiation(result, rrt_view, id_col, time_col)
             result["rrt"] = rrt_mask
-            result.loc[rrt_mask, 'aki_stage_creat'] = np.maximum(
-                result.loc[rrt_mask, 'aki_stage_creat'].fillna(0), 3
-            )
-            # aki_stage_rrt: 3 if RRT active, 0 otherwise
+            # RRT is its own component; do not rewrite the creatinine stage.
             result.loc[rrt_mask, 'aki_stage_rrt'] = 3
         else:
             logger.warning(
@@ -717,20 +776,21 @@ def kdigo_stages(
                 list(rrt_df.columns),
             )
     
-    # Calculate combined AKI stage
-    result['aki_stage_creat'] = result['aki_stage_creat'].fillna(0).astype(int)
-    result['aki_stage_uo'] = result['aki_stage_uo'].fillna(0).astype(int)
-    result['aki_stage_rrt'] = result['aki_stage_rrt'].fillna(0).astype(int)
-    result['aki_stage'] = np.maximum.reduce(
-        [
-            result['aki_stage_creat'].to_numpy(),
-            result['aki_stage_uo'].to_numpy(),
-            result['aki_stage_rrt'].to_numpy(),
-        ]
+    # Calculate combined AKI stage.  Inactive/undocumented RRT is deliberately
+    # excluded as negative evidence: a zero placeholder must not turn a row
+    # with unknown creatinine and UO components into "no AKI".
+    result['aki_stage_creat'] = result['aki_stage_creat'].astype("Int64")
+    result['aki_stage_uo'] = result['aki_stage_uo'].astype("Int64")
+    result['aki_stage_rrt'] = result['aki_stage_rrt'].astype("Int64")
+    rrt_positive = result['aki_stage_rrt'].where(
+        result['aki_stage_rrt'] > 0, pd.NA
     )
-    
-    # Boolean AKI indicator
-    result['aki'] = result['aki_stage'] > 0
+    components = pd.concat(
+        [result['aki_stage_creat'], result['aki_stage_uo'], rrt_positive],
+        axis=1,
+    )
+    result['aki_stage'] = components.max(axis=1, skipna=True).astype("Int64")
+    result['aki'] = (result['aki_stage'] > 0).astype("boolean")
     
     return result
 

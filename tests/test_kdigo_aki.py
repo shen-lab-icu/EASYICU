@@ -1,7 +1,12 @@
 import pandas as pd
 import pytest
 
-from easyicu.scores.kdigo_aki import _calculate_uo_rates_simple, kdigo_stages, kdigo_uo
+import easyicu.scores.kdigo_aki as kdigo_aki
+from easyicu.scores.kdigo_aki import (
+    _calculate_uo_rates_simple,
+    kdigo_stages,
+    kdigo_uo,
+)
 
 
 def test_kdigo_uo_requires_minimum_documented_window_hours():
@@ -86,7 +91,11 @@ def test_kdigo_uo_missing_patient_weight_leaves_rates_missing():
 
     staged = kdigo_uo(urine, weight, "stay_id", "charttime")
     assert staged["uo_rt_6hr"].isna().all()
-    assert staged["aki_stage_uo"].eq(0).all()
+    assert staged["aki_stage_uo"].isna().all()
+    assert not staged["uo_assessable"].any()
+    assert staged["uo_assessment_reason"].eq(
+        "uo_window_or_weight_unavailable"
+    ).all()
 
 
 def test_kdigo_uo_invalid_weight_does_not_fall_back_to_70kg():
@@ -104,6 +113,46 @@ def test_kdigo_uo_invalid_weight_does_not_fall_back_to_70kg():
     assert result["uo_rt_6hr"].isna().all()
 
 
+def test_kdigo_missing_baseline_is_unknown_not_stage_zero():
+    creatinine = pd.DataFrame(
+        {"stay_id": [1], "charttime": [0], "crea": [1.2]}
+    )
+
+    result = kdigo_stages(creatinine, id_col="stay_id", time_col="charttime")
+
+    assert pd.isna(result["aki_stage_creat"].iloc[0])
+    assert pd.isna(result["aki_stage_uo"].iloc[0])
+    assert pd.isna(result["aki_stage"].iloc[0])
+    assert pd.isna(result["aki"].iloc[0])
+    assert result["uo_assessment_reason"].iloc[0] == "urine_or_weight_unavailable"
+
+
+def test_kdigo_uo_calculation_error_is_unknown_not_stage_zero(monkeypatch):
+    creatinine = pd.DataFrame(
+        {"stay_id": [1, 1], "charttime": [0, 60], "crea": [1.0, 1.1]}
+    )
+    urine = pd.DataFrame(
+        {"stay_id": [1], "charttime": [0], "urine": [10.0]}
+    )
+    weight = pd.DataFrame({"stay_id": [1], "weight": [70.0]})
+
+    def broken_uo(*args, **kwargs):
+        raise RuntimeError("source decoding failed")
+
+    monkeypatch.setattr(kdigo_aki, "kdigo_uo", broken_uo)
+    result = kdigo_stages(
+        creatinine,
+        urine_df=urine,
+        weight_df=weight,
+        id_col="stay_id",
+        time_col="charttime",
+    )
+
+    assert result["aki_stage_uo"].isna().all()
+    assert not result["uo_assessable"].any()
+    assert result["uo_assessment_reason"].eq("uo_calculation_error").all()
+
+
 def test_kdigo_uo_global_weight_without_id_applies_to_all_rows():
     urine = pd.DataFrame(
         {
@@ -117,6 +166,23 @@ def test_kdigo_uo_global_weight_without_id_applies_to_all_rows():
     result = _calculate_uo_rates_simple(urine, weight, "stay_id", "charttime")
 
     assert result["uo_rt_6hr"].iloc[-1] == pytest.approx(0.2)
+
+
+def test_kdigo_uo_refuses_unkeyed_weight_for_multiple_urine_entities():
+    urine = pd.DataFrame(
+        {
+            "stay_id": [1] * 6 + [2] * 6,
+            "charttime": list(range(0, 360, 60)) * 2,
+            "urine": [10.0] * 12,
+        }
+    )
+    # A different identifier namespace is not a join key.  Before this guard,
+    # the first 50 kg row was broadcast to both stays.
+    weight = pd.DataFrame({"patientid": [10, 20], "weight": [50.0, 100.0]})
+
+    result = _calculate_uo_rates_simple(urine, weight, "stay_id", "charttime")
+
+    assert result["uo_rt_6hr"].isna().all()
 
 
 def test_kdigo_hirid_direct_rate_uses_full_clock_time_coverage():
@@ -178,7 +244,8 @@ def test_kdigo_hirid_direct_rate_covers_only_observed_chart_span():
     assert result["uo_rt_6hr"].iloc[-1] == pytest.approx(10.0)
     assert result["uo_rt_12hr"].isna().all()
     assert result["uo_rt_24hr"].isna().all()
-    assert result["aki_stage_uo"].eq(0).all()
+    assert pd.isna(result["aki_stage_uo"].iloc[0])
+    assert result["aki_stage_uo"].iloc[1] == 0
 
 
 def test_kdigo_rrt_stage_applies_from_first_active_rrt_time():
@@ -194,8 +261,14 @@ def test_kdigo_rrt_stage_applies_from_first_active_rrt_time():
     result = kdigo_stages(creatinine, rrt_df=rrt, id_col="stay_id", time_col="charttime")
 
     assert result["aki_stage_rrt"].tolist() == [0, 0, 3]
-    assert result["aki_stage"].tolist() == [0, 0, 3]
-    assert result["aki"].tolist() == [False, False, True]
+    # Before a comparison baseline exists, the documented creatinine values do
+    # not prove no AKI.  RRT still establishes stage 3 from its initiation.
+    assert pd.isna(result["aki_stage"].iloc[0])
+    assert result["aki_stage"].iloc[1] == 0
+    assert result["aki_stage"].iloc[2] == 3
+    assert pd.isna(result["aki"].iloc[0])
+    assert bool(result["aki"].iloc[1]) is False
+    assert bool(result["aki"].iloc[2]) is True
 
 
 def test_kdigo_rrt_exact_timestamp_match_is_not_required():
