@@ -8,8 +8,8 @@ manifests — is a typed pydantic model. This buys us:
   pipeline run);
 * validation at the boundary, so a hallucinated field from the LLM
   fails fast instead of contaminating downstream analysis;
-* a single place to evolve the contract — both agents and validators
-  consume these types.
+* domain-owned contract modules with this file as a compatibility facade, so
+  agents and validators consume one public type without importing owner internals.
 
 The models are intentionally small and self-describing. They are not
 the final word on what an ICU research package should contain — but
@@ -35,6 +35,14 @@ from pydantic import (
     model_validator,
 )
 
+from .contracts.model_tokens import (
+    normalise_model_contract_token as _normalise_model_contract_token,
+)
+from .contracts.family_primary import FamilyPrimaryResultRequirement
+from .contracts.survival import (
+    SURVIVAL_ANALYSIS_RECEIPT_PRODUCT,
+    SurvivalAnalysisReceipt,
+)
 from .planning.cohort_contract import (
     CohortDefinition,
     CohortSchemaError,
@@ -986,10 +994,6 @@ PLANNED_MODEL_REQUIREMENTS_OUTPUT_KIND = "table"
 PLANNED_MODEL_REQUIREMENTS_OUTPUT = "adjusted_association_estimates"
 
 
-def _normalise_model_contract_token(value: Any) -> str:
-    return re.sub(r"[^a-z0-9]+", "_", str(value or "").lower()).strip("_")
-
-
 class PlannedModelRequirement(BaseModel):
     """Planner-owned obligation for a supported adjusted-association model.
 
@@ -1162,207 +1166,6 @@ class PlannedModelRequirement(BaseModel):
         if primary == reference:
             raise ValueError("primary_contrast_level must not be the reference level")
 
-
-class FamilyPrimaryResultRequirement(BaseModel):
-    """Planner-owned headline-result contract for causal and survival studies.
-
-    This contract deliberately does not reuse :class:`PlannedModelRequirement`:
-    an adjusted association model roster cannot represent a causal estimand or
-    the time-origin/censoring semantics of a survival effect.  The planner
-    declares the scientific target here; the execution gate reconciles the
-    declared product with a materialised result table before the step can pass.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    analysis_family: Literal["causal_inference", "survival"]
-    exposure_source: str
-    outcome: str
-    expected_result_product: str
-    estimator: str
-    effect_scale: str
-    uncertainty_method: str
-    population: str
-    estimand: Optional[str] = None
-    treatment: Optional[str] = None
-    comparator: Optional[str] = None
-    adjustment_strategy: Optional[str] = None
-    overlap_diagnostic: Optional[str] = None
-    time_origin: Optional[str] = None
-    time_column: Optional[str] = None
-    event_column: Optional[str] = None
-    event_definition: Optional[str] = None
-    censoring_strategy: Optional[str] = None
-    competing_risk_strategy: Optional[str] = None
-    time_horizon: Optional[str] = None
-    effect_measure: Optional[str] = None
-    proportional_hazards_diagnostic: Optional[str] = None
-
-    @field_validator(
-        "exposure_source",
-        "outcome",
-        "expected_result_product",
-        "estimator",
-        "effect_scale",
-        "uncertainty_method",
-        "population",
-    )
-    @classmethod
-    def _require_nonblank_contract_text(cls, value: str) -> str:
-        text = str(value or "").strip()
-        if not text:
-            raise ValueError("family primary-result contract fields must be non-empty")
-        return text
-
-    @model_validator(mode="after")
-    def _require_family_specific_scientific_fields(
-        self,
-    ) -> "FamilyPrimaryResultRequirement":
-        product = str(self.expected_result_product).strip()
-        if not product.startswith("table:"):
-            raise ValueError(
-                "family primary-result expected_result_product must be a typed table"
-            )
-
-        if self.analysis_family == "causal_inference":
-            missing = [
-                name
-                for name in (
-                    "estimand",
-                    "treatment",
-                    "comparator",
-                    "adjustment_strategy",
-                    "overlap_diagnostic",
-                )
-                if not str(getattr(self, name) or "").strip()
-            ]
-            if missing:
-                raise ValueError(
-                    "causal primary-result contract requires " + ", ".join(missing)
-                )
-        else:
-            missing = [
-                name
-                for name in (
-                    "time_origin",
-                    "time_column",
-                    "event_column",
-                    "event_definition",
-                    "censoring_strategy",
-                    "competing_risk_strategy",
-                    "time_horizon",
-                    "effect_measure",
-                )
-                if not str(getattr(self, name) or "").strip()
-            ]
-            if missing:
-                raise ValueError(
-                    "survival primary-result contract requires " + ", ".join(missing)
-                )
-            estimator = _normalise_model_contract_token(self.estimator)
-            if "cox" in estimator and not str(
-                self.proportional_hazards_diagnostic or ""
-            ).strip():
-                raise ValueError(
-                    "a Cox primary-result contract requires "
-                    "proportional_hazards_diagnostic"
-                )
-        return self
-
-
-SURVIVAL_ANALYSIS_RECEIPT_PRODUCT = "log:survival_analysis_receipt"
-"""Typed execution receipt required beside a survival headline result table."""
-
-
-class SurvivalAnalysisReceipt(BaseModel):
-    """Execution-owned record of the survival analysis behind one headline.
-
-    A survival plan can state a time origin and censoring policy without the
-    generated analysis ever applying them.  This receipt is deliberately a
-    separate, typed output: the execution gate can compare it with both the
-    Planner-owned requirement and the declared endpoint before the headline
-    table becomes reportable evidence.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    result_product: str
-    exposure_source: str
-    outcome: str
-    effect_scale: str
-    analysis_population: str
-    n_analysis_rows: int = Field(ge=1)
-    n_events: int = Field(ge=0)
-    time_origin: str
-    time_column: str
-    event_column: str
-    event_definition: str
-    censoring_strategy: str
-    competing_risk_strategy: str
-    time_horizon: str
-    estimator: str
-    effect_measure: str
-    proportional_hazards_diagnostic: Optional[str] = None
-    proportional_hazards_tested: Optional[bool] = None
-    proportional_hazards_p_value: Optional[float] = Field(default=None, ge=0, le=1)
-
-    @field_validator(
-        "result_product",
-        "exposure_source",
-        "outcome",
-        "effect_scale",
-        "analysis_population",
-        "time_origin",
-        "time_column",
-        "event_column",
-        "event_definition",
-        "censoring_strategy",
-        "competing_risk_strategy",
-        "time_horizon",
-        "estimator",
-        "effect_measure",
-    )
-    @classmethod
-    def _require_nonblank_receipt_text(cls, value: str) -> str:
-        text = str(value or "").strip()
-        if not text:
-            raise ValueError("survival analysis receipt text fields must be non-empty")
-        return text
-
-    @model_validator(mode="after")
-    def _require_cox_execution_diagnostic(self) -> "SurvivalAnalysisReceipt":
-        if self.n_events > self.n_analysis_rows:
-            raise ValueError("n_events cannot exceed n_analysis_rows")
-        if not self.result_product.startswith("table:"):
-            raise ValueError("result_product must name the materialised result table")
-
-        is_cox = "cox" in _normalise_model_contract_token(self.estimator)
-        ph_fields = {
-            "proportional_hazards_diagnostic": self.proportional_hazards_diagnostic,
-            "proportional_hazards_tested": self.proportional_hazards_tested,
-            "proportional_hazards_p_value": self.proportional_hazards_p_value,
-        }
-        if is_cox:
-            missing = [
-                name
-                for name, value in ph_fields.items()
-                if value is None or (isinstance(value, str) and not value.strip())
-            ]
-            if missing:
-                raise ValueError(
-                    "a Cox survival analysis receipt requires " + ", ".join(missing)
-                )
-            if self.proportional_hazards_tested is not True:
-                raise ValueError(
-                    "a Cox survival analysis receipt must record that the "
-                    "proportional-hazards diagnostic was executed"
-                )
-        elif any(value is not None for value in ph_fields.values()):
-            raise ValueError(
-                "non-Cox survival analysis receipts must not claim a "
-                "proportional-hazards diagnostic"
-            )
-        return self
 
 _DEFAULT_STABILITY_BASE_SEED = 1729
 """Recorded starting seed when the study does not pick one.

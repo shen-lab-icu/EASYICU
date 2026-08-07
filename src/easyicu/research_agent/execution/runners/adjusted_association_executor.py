@@ -42,6 +42,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from ...authority.declared_levels import execution_model_requirement, level_spelling
 from ...authority.plausibility import FlagOnlyPlausibilityScope
 from ...contracts.host_scaffold import HostScaffoldedScript
+from ...contracts.model_tokens import normalise_model_contract_token
 from ...contracts.ownership_verdict import OwnershipVerdict
 from ...robustness.estimators import fit_estimator
 from ...schema import (
@@ -51,7 +52,6 @@ from ...schema import (
     PLANNED_MODEL_REQUIREMENTS_STEP_METHOD,
     AnalysisStep,
     PlannedModelRequirement,
-    _normalise_model_contract_token,
 )
 from .plausibility_receipt import render_standard_plausibility_receipt_code
 from .typed_input_binding import load_step_cohort_frame, sole_typed_cohort_input
@@ -211,7 +211,7 @@ def _requirement(step: AnalysisStep) -> Optional[PlannedModelRequirement]:
 
 
 def _estimator_kind(requirement: PlannedModelRequirement) -> str:
-    family = _normalise_model_contract_token(requirement.method_family)
+    family = normalise_model_contract_token(requirement.method_family)
     if requirement.outcome_type == "binary":
         return (
             "logistic" if family in ADJUSTED_ASSOCIATION_BINARY_METHOD_FAMILIES else ""
@@ -262,7 +262,7 @@ def adjusted_association_executor_verdict(step: AnalysisStep) -> OwnershipVerdic
       contracts this owner does not have.
     """
 
-    method = _normalise_model_contract_token(
+    method = normalise_model_contract_token(
         str(step.method or "").lower().split(" with ", 1)[0]
     )
     if method != PLANNED_MODEL_REQUIREMENTS_STEP_METHOD:

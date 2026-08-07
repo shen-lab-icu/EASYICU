@@ -67,6 +67,11 @@ from .prevalence_mortality_figure_executor import (
     prevalence_mortality_figure_executor_owns_step,
 )
 from .table_one_executor import table_one_executor_code, table_one_executor_owns_step
+from .survival_primary_executor import (
+    SURVIVAL_PRIMARY_ANALYSIS_KIND,
+    survival_primary_executor_code,
+    survival_primary_executor_verdict,
+)
 from .trajectory_stability_executor import (
     STABILITY_EXECUTOR_INPUTS,
     trajectory_stability_executor_code,
@@ -483,6 +488,24 @@ def select_standard_executor(
             )
         )
     _missed("trajectory_cluster_stability")
+    survival_verdict = survival_primary_executor_verdict(step)
+    if survival_verdict.claimed:
+        survival_requirement = step.family_primary_result_requirement
+        assert survival_requirement is not None
+        typed_cohort_inputs = (str(survival_requirement.input_product),)
+        return _selected(
+            StandardExecutorSelection(
+                analysis_kind=SURVIVAL_PRIMARY_ANALYSIS_KIND,
+                selection_reason="survival_primary_contract_preflight",
+                progress_message="Using planner-declared primary Cox executor",
+                code=survival_primary_executor_code(
+                    step,
+                    plausibility_scope=plausibility_scope,
+                ),
+                consumed_input_keys=typed_cohort_inputs,
+            )
+        )
+    _declined(survival_verdict)
     adjusted_association_verdict = adjusted_association_executor_verdict(step)
     if adjusted_association_verdict.claimed:
         # This owner renders the flag-only receipt itself, like the cohort

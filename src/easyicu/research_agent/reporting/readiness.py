@@ -57,6 +57,8 @@ from .completion import (
 )
 from ..authority.evidence_store import EvidenceStore, sha256_of_file
 from ..authority.step_recovery import StepRecoverySignature
+from ..contracts.survival_execution import SURVIVAL_PRIMARY_ANALYSIS_KIND
+from ..contracts.survival import SURVIVAL_PRIMARY_OWNER
 from ..planning.capability_registry import (
     assess_scientific_capability,
     families_without_deterministic_primary,
@@ -1451,18 +1453,14 @@ def _partition_findings_by_supersession(
     return active, superseded
 
 
-# Primary scientific analyses are agent-owned.  The empty set remains for
-# backward-compatible inspection of legacy records, not live dispatch.
-_PRIMARY_DETERMINISTIC_RUNNERS: frozenset[str] = frozenset()
+# Exact primary owners that may bind a deterministic headline result.
+_PRIMARY_DETERMINISTIC_RUNNERS: frozenset[str] = frozenset(
+    {SURVIVAL_PRIMARY_ANALYSIS_KIND}
+)
 
 
 def _deterministic_primary_estimate_bound(per_step_records: Any) -> bool:
-    """Inspect legacy records without granting retired runners primary ownership.
-
-    The live capability registry has no deterministic primary runner.  This
-    compatibility predicate therefore stays false even when an old run record
-    carries a historical runner marker and a finite estimate.
-    """
+    """Require a complete primary effect emitted by a currently registered owner."""
     from ..robustness.primary_effect import (
         _extract_primary_effect_payload_from_records,
     )
@@ -1475,9 +1473,14 @@ def _deterministic_primary_estimate_bound(per_step_records: Any) -> bool:
         if not isinstance(record, dict):
             continue
         if str(record.get("step_id") or "") == step_id:
-            return (
-                record.get("deterministic_standard_analysis")
-                in _PRIMARY_DETERMINISTIC_RUNNERS
+            kind = record.get("deterministic_standard_analysis")
+            if kind not in _PRIMARY_DETERMINISTIC_RUNNERS:
+                return False
+            summary = record.get("step_summary")
+            return bool(
+                kind == SURVIVAL_PRIMARY_ANALYSIS_KIND
+                and isinstance(summary, Mapping)
+                and summary.get("receipt_issuer") == SURVIVAL_PRIMARY_OWNER
             )
     return False
 
@@ -1501,8 +1504,8 @@ def _replan_budget_demotes(
     is churny-but-successful. A cap hit on an unresolved run still fails closed.
 
     ``no_deterministic_primary_expected`` is derived from the capability
-    registry. Primary science is agent-owned, so a clean run is not penalized
-    merely because no auxiliary renderer can bind an estimand. If family
+    registry. Agent-owned families are not penalized merely because no sealed
+    primary owner is expected; a family that declares one must bind it. If family
     inference fails, the conservative default remains false.
     """
     if not hit:
@@ -1857,7 +1860,7 @@ def _compute_readiness_gates(
     )
     scientific_capability_errors = (
         []
-        if plan is None or capability_assessment.publication_eligible
+        if plan is None or capability_assessment.claim_ceiling_allows_reportable
         else [
             f"{capability_assessment.issue_code or 'scientific_capability_unavailable'}: "
             f"{capability_assessment.reason}"
@@ -1870,8 +1873,8 @@ def _compute_readiness_gates(
         + survival_integrity_errors
         + scientific_capability_errors
     )
-    # Primary science is agent-owned across the registry. Fail safe to the strict
-    # rule (False) if the family cannot be inferred.
+    # Some families are agent-owned and survival has a sealed primary owner.
+    # Fail safe to the strict rule (False) if the family cannot be inferred.
     try:
         from ..planning.study_design import infer_study_design_family
 
@@ -1973,7 +1976,9 @@ def _compute_readiness_gates(
         "analysis_validated": analysis_validated,
         "manuscript_ready": manuscript_ready,
         "scientific_capability": capability_assessment.to_dict(),
-        "scientific_capability_reportable": capability_assessment.publication_eligible,
+        "scientific_capability_claim_ceiling_allows_reportable": (
+            capability_assessment.claim_ceiling_allows_reportable
+        ),
         **plan_truncation,
         "replan_budget_exhausted": replan_budget_exhausted,
         "replan_budget_hit": replan_budget_hit,

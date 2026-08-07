@@ -15,11 +15,10 @@ this registry, that test fails — the matrix cannot silently rot.
 
 Two design points this registry makes explicit:
 
-* **The agent owns every primary scientific analysis.** Deterministic code may
-  validate calculations or render a declared standardized product, but it does
-  not preflight-replace the agent's cohort, exposure, outcome, method, or
-  estimand. ``primary_analysis`` and ``figure`` stay separate for exactly this
-  reason.
+* **Every primary analysis has one explicit owner.** Most families remain
+  agent-coded. A fully declared binary-endpoint Cox contract is owned by the
+  sealed host executor, which chooses no cohort, exposure, outcome, adjustment,
+  horizon or diagnostic. ``primary_analysis`` and ``figure`` stay separate.
 * **A capability gap is always REPORTED, never silently filled.** When no valid
   runner/data contract exists the pipeline fails closed with a specific reason
   (see ``FAIL_CLOSED_LADDER``); it never fabricates a result or degrades a
@@ -99,12 +98,12 @@ FamilyCapability = ScientificCapability
 
 @dataclass(frozen=True)
 class ScientificCapabilityAssessment:
-    """Run-status-facing answer to what one scientific capability can support."""
+    """Pre-execution ceiling on what one scientific capability may support."""
 
     capability_id: Optional[str]
     analysis_type: Optional[str]
     question_present: bool
-    question_grounded: bool
+    question_coordinates_resolved: bool
     input_contract_resolved: bool
     # This pre-execution receipt cannot truthfully say whether source rows or
     # a provider/backend were available. Those facts belong to execution
@@ -113,29 +112,49 @@ class ScientificCapabilityAssessment:
     runtime_data_available: Optional[bool]
     execution_backend_available: Optional[bool]
     scientific_validator_available: bool
-    status: Literal["reportable", "analysis_only", "unsupported"]
+    claim_ceiling: Literal["reportable", "analysis_only", "unsupported"]
     issue_code: Optional[str] = None
     reason: str = ""
 
     @property
+    def claim_ceiling_allows_reportable(self) -> bool:
+        return self.claim_ceiling == "reportable"
+
+    @property
+    def question_grounded(self) -> bool:
+        """Compatibility alias; no full semantic grounding is asserted."""
+
+        return self.question_coordinates_resolved
+
+    @property
+    def status(self) -> Literal["reportable", "analysis_only", "unsupported"]:
+        """Compatibility alias for callers reading the pre-v3 receipt."""
+
+        return self.claim_ceiling
+
+    @property
     def publication_eligible(self) -> bool:
-        return self.status == "reportable"
+        """Compatibility alias; final publication readiness is a separate gate."""
+
+        return self.claim_ceiling_allows_reportable
 
     def to_dict(self) -> dict[str, object]:
         """Return a stable, JSON-ready readiness receipt."""
 
         return {
-            "schema_version": "easyicu.scientific_capability_assessment/2",
+            "schema_version": "easyicu.scientific_capability_assessment/3",
             "capability_id": self.capability_id,
             "analysis_type": self.analysis_type,
             "question_present": self.question_present,
-            "question_grounded": self.question_grounded,
+            "question_coordinates_resolved": self.question_coordinates_resolved,
             "input_contract_resolved": self.input_contract_resolved,
             "runtime_data_available": self.runtime_data_available,
             "execution_backend_available": self.execution_backend_available,
             "scientific_validator_available": self.scientific_validator_available,
-            "status": self.status,
-            "publication_eligible": self.publication_eligible,
+            "claim_ceiling": self.claim_ceiling,
+            "claim_ceiling_allows_reportable": (
+                self.claim_ceiling_allows_reportable
+            ),
             "issue_code": self.issue_code,
             "reason": self.reason,
         }
@@ -161,25 +180,25 @@ CAPABILITY_REGISTRY: Tuple[ScientificCapability, ...] = (
     ScientificCapability(
         family="time_to_event",
         label="Survival / time-to-event",
-        primary_analysis="llm_coded",
-        primary_estimand="Agent-coded time-to-event estimand under the declared survival method; value/provenance checked",
-        primary_runner=None,
-        primary_runner_module=None,
+        primary_analysis="deterministic",
+        primary_estimand="Host-computed Cox hazard ratio under an exact Planner-owned, digest-bound survival contract",
+        primary_runner="survival_primary_cox",
+        primary_runner_module="execution.runners.survival_primary_executor",
         figure="deterministic",
         figure_renderer="time_to_event",
         data_contract=(
             "exposure column",
-            "Agent-declared, authority-bound follow-up time",
-            "Agent-declared, authority-bound event indicator",
+            "Planner-declared, authority-bound follow-up time and unit",
+            "Planner-declared, authority-bound event indicator/value",
+            "Exact covariate set, horizon and complete-case policy",
         ),
         fail_closed=(
-            "The agent step fails when verified follow-up/event inputs are absent, "
-            "and survival plausibility/provenance gates reject invalid event counts, "
-            "effect scales, or unsupported estimands."
+            "Plan validation refuses any primary survival contract the sealed Cox "
+            "owner cannot execute; digest, fit, PH or evidence mismatch fails closed."
         ),
-        notes="The deterministic survival component renders declared Cox/KM products; it does not choose the time origin, method, exposure, or outcome.",
+        notes="The sealed primary owner fits only the exact declared Cox contract; the survival renderer remains a separate consumer.",
         capability_id="survival_time_to_event_v1",
-        result_contract="family_primary_result_requirement + registered primary CSV",
+        result_contract="host-issued digest-bound survival receipt + primary CSV + PH table",
         required_diagnostics=(
             "event/censoring closure",
             "time-origin binding",
@@ -414,11 +433,10 @@ _DISPLAY_ONLY_ANALYSIS_TYPES = frozenset(
 
 FAIL_CLOSED_LADDER: Tuple[Tuple[str, str], ...] = (
     (
-        "1. Agent method and product contract",
-        "The planner/coder owns the scientific method, cohort, exposure and outcome. "
-        "Deterministic code is limited to validated calculation primitives or an "
-        "explicit auxiliary product contract; it does not preflight-replace a "
-        "primary estimand.",
+        "1. Declared method, product and owner contract",
+        "The Planner fixes the scientific method, cohort, exposure and outcome. "
+        "Each capability declares whether the primary owner is the agent or a "
+        "sealed executor; neither may substitute undeclared science.",
     ),
     (
         "2. Runner contract unmet",
@@ -429,10 +447,10 @@ FAIL_CLOSED_LADDER: Tuple[Tuple[str, str], ...] = (
         "legitimately absent.",
     ),
     (
-        "3. Agent execution",
-        "The agent generates the planned primary analysis; code repair and "
-        "statistical validators may repair implementation faults but never replace "
-        "the declared scientific method.",
+        "3. Owned execution",
+        "The declared primary owner executes the analysis. Code repair and "
+        "statistical validators may repair agent implementation faults but never "
+        "rewrite a sealed host primary or replace the declared method.",
     ),
     (
         "4. Output / validity gates (fail-closed)",
@@ -499,7 +517,7 @@ def assess_scientific_capability(
     analysis_type: Optional[str],
     context: "ResearchContext",
 ) -> ScientificCapabilityAssessment:
-    """State whether the declared question can make a reportable claim.
+    """State the maximum claim allowed by the declared pre-execution contract.
 
     This is a *capability* receipt, not an estimator or a data-quality check.
     ``input_contract_resolved`` means that the typed context names the input
@@ -518,12 +536,12 @@ def assess_scientific_capability(
             capability_id=None,
             analysis_type=None,
             question_present=question_present,
-            question_grounded=False,
+            question_coordinates_resolved=False,
             input_contract_resolved=False,
             runtime_data_available=None,
             execution_backend_available=None,
             scientific_validator_available=False,
-            status="unsupported",
+            claim_ceiling="unsupported",
             issue_code="analysis_family_unresolved",
             reason="No canonical analysis family was declared for this run.",
         )
@@ -542,12 +560,12 @@ def assess_scientific_capability(
                 capability_id=None,
                 analysis_type=canonical,
                 question_present=question_present,
-                question_grounded=False,
+                question_coordinates_resolved=False,
                 input_contract_resolved=False,
                 runtime_data_available=None,
                 execution_backend_available=None,
                 scientific_validator_available=False,
-                status="unsupported",
+                claim_ceiling="unsupported",
                 issue_code="scientific_capability_unregistered",
                 reason=(
                     f"{canonical!r} has no registered scientific capability; "
@@ -564,12 +582,12 @@ def assess_scientific_capability(
             capability_id=None,
             analysis_type=canonical,
             question_present=question_present,
-            question_grounded=False,
+            question_coordinates_resolved=False,
             input_contract_resolved=False,
             runtime_data_available=None,
             execution_backend_available=None,
             scientific_validator_available=False,
-            status="unsupported",
+            claim_ceiling="unsupported",
             issue_code="scientific_capability_unregistered",
             reason=f"No scientific capability is registered for {canonical!r}.",
         )
@@ -620,12 +638,14 @@ def assess_scientific_capability(
                 capability_id=capability.capability_id,
                 analysis_type=canonical,
                 question_present=question_present,
-                question_grounded=bool(question_present and input_contract_resolved),
+                question_coordinates_resolved=bool(
+                    question_present and input_contract_resolved
+                ),
                 input_contract_resolved=input_contract_resolved,
                 runtime_data_available=None,
                 execution_backend_available=None,
                 scientific_validator_available=False,
-                status="unsupported",
+                claim_ceiling="unsupported",
                 issue_code="competing_risk_estimator_unavailable",
                 reason=(
                     "The endpoint declares multiple event types, but EasyICU has "
@@ -639,12 +659,12 @@ def assess_scientific_capability(
             capability_id=capability.capability_id,
             analysis_type=canonical,
             question_present=False,
-            question_grounded=False,
+            question_coordinates_resolved=False,
             input_contract_resolved=input_contract_resolved,
             runtime_data_available=None,
             execution_backend_available=None,
             scientific_validator_available=False,
-            status="analysis_only",
+            claim_ceiling="analysis_only",
             issue_code="research_question_unresolved",
             reason="A scientific capability cannot validate an empty research question.",
         )
@@ -653,12 +673,12 @@ def assess_scientific_capability(
             capability_id=capability.capability_id,
             analysis_type=canonical,
             question_present=True,
-            question_grounded=False,
+            question_coordinates_resolved=False,
             input_contract_resolved=False,
             runtime_data_available=None,
             execution_backend_available=None,
             scientific_validator_available=False,
-            status="analysis_only",
+            claim_ceiling="analysis_only",
             issue_code="scientific_capability_data_contract_unresolved",
             reason=(
                 "The typed context does not declare the exposure/outcome inputs "
@@ -670,12 +690,12 @@ def assess_scientific_capability(
             capability_id=capability.capability_id,
             analysis_type=canonical,
             question_present=True,
-            question_grounded=True,
+            question_coordinates_resolved=True,
             input_contract_resolved=True,
             runtime_data_available=None,
             execution_backend_available=None,
             scientific_validator_available=False,
-            status="analysis_only",
+            claim_ceiling="analysis_only",
             issue_code="scientific_validator_unavailable",
             reason=(
                 "The analysis can execute, but no registered deterministic "
@@ -686,13 +706,16 @@ def assess_scientific_capability(
         capability_id=capability.capability_id,
         analysis_type=canonical,
         question_present=True,
-        question_grounded=True,
+        question_coordinates_resolved=True,
         input_contract_resolved=True,
         runtime_data_available=None,
         execution_backend_available=None,
         scientific_validator_available=True,
-        status="reportable",
-        reason="The registered result and diagnostic contracts can support a claim.",
+        claim_ceiling="reportable",
+        reason=(
+            "The registered contracts permit a reportable claim ceiling; runtime "
+            "execution, evidence, numeric and manuscript gates must still pass."
+        ),
     )
 
 
@@ -713,10 +736,8 @@ def llm_coded_primary_families() -> Tuple[str, ...]:
 def families_without_deterministic_primary() -> frozenset:
     """StudyDesignFamily values where EVERY capability record is LLM-coded.
 
-    Every current family is agent-primary by design, so a deterministic primary
-    can never be required merely to survive the replan-budget gate. The helper
-    remains explicit and will automatically exclude a family if a future
-    architecture deliberately introduces a true primary owner.
+    This is derived per family because survival now has a sealed primary owner
+    while other current families remain agent-primary.
     """
     by_family: dict = {}
     for c in CAPABILITY_REGISTRY:
@@ -768,7 +789,7 @@ def render_capability_matrix_markdown() -> str:
         "scientific validator for a publication claim. `analysis_only` is an "
         "explicit fail-closed boundary, not an error the Agent may write around.",
         "",
-        "| Capability | Result contract | Required diagnostics | Claim status |",
+        "| Capability | Result contract | Required diagnostics | Claim ceiling |",
         "| --- | --- | --- | --- |",
     ]
     for c in CAPABILITY_REGISTRY:

@@ -35,6 +35,8 @@ from ..audits.validators import (
 )
 from ..authority.plausibility import FlagOnlyPlausibilityScope
 from ..contracts.runtime import ValidationFinding
+from ..contracts.survival import SURVIVAL_PRIMARY_OWNER
+from ..contracts.survival_execution import SURVIVAL_PRIMARY_ANALYSIS_KIND
 from ..gates.contract import _step_deterministic_contract_findings
 from ..gates.plausibility_receipt import plausibility_audit_receipt_findings
 from ..schema import AnalysisPlan, AnalysisStep, ResearchContext
@@ -49,10 +51,7 @@ from .envelope_sealing import (
 from .figure_preparation import _family_has_deterministic_figure_renderer
 
 
-# No deterministic runner owns a primary scientific estimand.  This remains a
-# mutable compatibility surface because historical manifests and focused tests
-# may exercise the legacy record format, but new execution never populates it.
-_PRIMARY_DETERMINISTIC_RUNNERS: set[str] = set()
+_PRIMARY_DETERMINISTIC_RUNNERS: set[str] = {SURVIVAL_PRIMARY_ANALYSIS_KIND}
 
 
 def _bind_findings_to_step_attempt(
@@ -81,18 +80,17 @@ def _bind_findings_to_step_attempt(
 def _primary_runner_core_estimate_present(
     kind: Optional[str], step_summary: Mapping[str, Any]
 ) -> bool:
-    """Whether a historical primary runner emitted its core estimate.
-
-    The set is intentionally empty in current execution.  The compatibility
-    logic remains narrowly testable so a resumed historical record cannot be
-    mistaken for a newly supported primary scientific runner.
-    """
+    """Whether a registered host owner emitted its bound core estimate."""
 
     if kind not in _PRIMARY_DETERMINISTIC_RUNNERS:
         return False
     if not isinstance(step_summary, Mapping):
         return False
     if str(step_summary.get("status") or "").lower() != "ok":
+        return False
+    if kind == SURVIVAL_PRIMARY_ANALYSIS_KIND and (
+        step_summary.get("receipt_issuer") != SURVIVAL_PRIMARY_OWNER
+    ):
         return False
     if kind in ("causal_primary_iptw", "ordinal_dose_response"):
         return step_summary.get("adjusted_effect") is not None

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 
 import pytest
@@ -23,6 +24,14 @@ from easyicu.research_agent.schema import (
     ResearchContext,
     SURVIVAL_ANALYSIS_RECEIPT_PRODUCT,
     VariableRole,
+)
+from easyicu.research_agent.contracts.survival import (
+    SURVIVAL_PH_DIAGNOSTIC_PRODUCT,
+    SURVIVAL_PRIMARY_OWNER,
+    canonical_survival_applied_filter,
+)
+from easyicu.research_agent.contracts.survival_execution import (
+    SURVIVAL_PRIMARY_ANALYSIS_KIND,
 )
 
 
@@ -163,6 +172,7 @@ def test_cox_contract_requires_the_ph_diagnostic() -> None:
             exposure_source="treatment",
             outcome="death",
             expected_result_product="table:survival_effect_estimates",
+            input_product="table:analysis_cohort",
             estimator="cox_proportional_hazards",
             effect_scale="hazard_ratio",
             uncertainty_method="wald_95ci",
@@ -175,6 +185,12 @@ def test_cox_contract_requires_the_ph_diagnostic() -> None:
             competing_risk_strategy="none",
             time_horizon="28 days",
             effect_measure="hazard ratio",
+            covariates=[],
+            exposure_encoding="numeric_linear",
+            missing_data_policy="complete_case",
+            time_unit="days",
+            event_value=1,
+            time_horizon_value=28,
         )
 
 
@@ -214,6 +230,7 @@ def _survival_requirement() -> FamilyPrimaryResultRequirement:
         exposure_source="treatment",
         outcome="death",
         expected_result_product="table:survival_effect_estimates",
+        input_product="table:analysis_cohort",
         estimator="cox_proportional_hazards",
         effect_scale="hazard_ratio",
         uncertainty_method="wald_95ci",
@@ -227,6 +244,12 @@ def _survival_requirement() -> FamilyPrimaryResultRequirement:
         time_horizon="28 days",
         effect_measure="hazard ratio",
         proportional_hazards_diagnostic="global Schoenfeld residual test",
+        covariates=[],
+        exposure_encoding="numeric_linear",
+        missing_data_policy="complete_case",
+        time_unit="days",
+        event_value=1,
+        time_horizon_value=28,
     )
 
 
@@ -238,10 +261,11 @@ def _survival_plan(requirement: FamilyPrimaryResultRequirement) -> AnalysisPlan:
             AnalysisStep(
                 step_id="04_primary",
                 intent="Estimate the survival contrast.",
-                inputs=["treatment", "death", "follow_up_days"],
+                inputs=["table:analysis_cohort"],
                 expected_outputs=[
                     "table:survival_effect_estimates",
                     SURVIVAL_ANALYSIS_RECEIPT_PRODUCT,
+                    SURVIVAL_PH_DIAGNOSTIC_PRODUCT,
                 ],
                 method="cox_proportional_hazards",
                 planned_analysis_role="primary",
@@ -251,27 +275,73 @@ def _survival_plan(requirement: FamilyPrimaryResultRequirement) -> AnalysisPlan:
     )
 
 
-def _write_survival_receipt(tmp_path, requirement: FamilyPrimaryResultRequirement) -> str:
+def _sha256(path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _write_survival_receipt(
+    tmp_path,
+    requirement: FamilyPrimaryResultRequirement,
+    result_path,
+) -> tuple[str, str]:
+    ph_path = tmp_path / "survival_ph_diagnostic.csv"
+    ph_path.write_text(
+        "covariate,test_statistic,p_value\ntreatment,0.5,0.48\nglobal,0.5,0.48\n",
+        encoding="utf-8",
+    )
     receipt_path = tmp_path / "survival_analysis_receipt.json"
     receipt_path.write_text(
         json.dumps(
             {
+                "issuer": SURVIVAL_PRIMARY_OWNER,
+                "execution_mode": "deterministic_standard",
                 "result_product": requirement.expected_result_product,
+                "result_evidence_id": f"sha256:{_sha256(result_path)}",
+                "result_sha256": _sha256(result_path),
+                "input_product": requirement.input_product,
+                "input_evidence_id": "evidence-analysis-cohort",
+                "input_sha256": "a" * 64,
+                "analysis_frame_sha256": "b" * 64,
+                "ph_diagnostic_product": SURVIVAL_PH_DIAGNOSTIC_PRODUCT,
+                "ph_diagnostic_evidence_id": f"sha256:{_sha256(ph_path)}",
+                "ph_diagnostic_sha256": _sha256(ph_path),
                 "exposure_source": requirement.exposure_source,
                 "outcome": requirement.outcome,
                 "effect_scale": requirement.effect_scale,
                 "analysis_population": requirement.population,
                 "n_analysis_rows": 8,
+                "n_source_rows": 8,
+                "n_complete_case_dropped": 0,
+                "n_censored_at_horizon": 0,
                 "n_events": 3,
                 "time_origin": requirement.time_origin,
                 "time_column": requirement.time_column,
+                "time_unit": requirement.time_unit,
                 "event_column": requirement.event_column,
+                "event_value": requirement.event_value,
                 "event_definition": requirement.event_definition,
                 "censoring_strategy": requirement.censoring_strategy,
                 "competing_risk_strategy": requirement.competing_risk_strategy,
                 "time_horizon": requirement.time_horizon,
+                "time_horizon_value": requirement.time_horizon_value,
                 "estimator": requirement.estimator,
                 "effect_measure": requirement.effect_measure,
+                "formula": "Surv(follow_up_days, death==1) ~ treatment",
+                "covariates": requirement.covariates,
+                "applied_filter": canonical_survival_applied_filter(
+                    time_column=str(requirement.time_column),
+                    event_column=str(requirement.event_column),
+                    event_value=int(requirement.event_value),
+                    exposure_source=requirement.exposure_source,
+                    covariates=list(requirement.covariates or ()),
+                    time_horizon_value=float(requirement.time_horizon_value),
+                    time_unit=str(requirement.time_unit),
+                ),
+                "package_versions": {
+                    "easyicu": "1.0.0",
+                    "lifelines": "0.30.3",
+                    "pandas": "2.0.0",
+                },
                 "proportional_hazards_diagnostic": requirement.proportional_hazards_diagnostic,
                 "proportional_hazards_tested": True,
                 "proportional_hazards_p_value": 0.42,
@@ -279,7 +349,7 @@ def _write_survival_receipt(tmp_path, requirement: FamilyPrimaryResultRequiremen
         ),
         encoding="utf-8",
     )
-    return receipt_path.name
+    return receipt_path.name, ph_path.name
 
 
 def test_survival_headline_requires_an_execution_receipt(tmp_path) -> None:
@@ -299,6 +369,8 @@ def test_survival_headline_requires_an_execution_receipt(tmp_path) -> None:
         plan=plan,
         context=context,
         step_summary={
+            "deterministic_standard_analysis": SURVIVAL_PRIMARY_ANALYSIS_KIND,
+            "receipt_issuer": SURVIVAL_PRIMARY_OWNER,
             "output_files": {requirement.expected_result_product: result_path.name}
         },
         out_dir=tmp_path,
@@ -307,15 +379,22 @@ def test_survival_headline_requires_an_execution_receipt(tmp_path) -> None:
         "survival_execution_receipt_unregistered"
     ]
 
-    receipt_name = _write_survival_receipt(tmp_path, requirement)
+    receipt_name, ph_name = _write_survival_receipt(
+        tmp_path, requirement, result_path
+    )
     findings = family_primary_result_reconciliation_findings(
         step=plan.steps[0],
         plan=plan,
         context=context,
         step_summary={
+            "deterministic_standard_analysis": SURVIVAL_PRIMARY_ANALYSIS_KIND,
+            "receipt_issuer": SURVIVAL_PRIMARY_OWNER,
+            "input_evidence_id": "evidence-analysis-cohort",
+            "input_sha256": "a" * 64,
             "output_files": {
                 requirement.expected_result_product: result_path.name,
                 SURVIVAL_ANALYSIS_RECEIPT_PRODUCT: receipt_name,
+                SURVIVAL_PH_DIAGNOSTIC_PRODUCT: ph_name,
             }
         },
         out_dir=tmp_path,
@@ -333,7 +412,9 @@ def test_survival_receipt_cannot_relabel_the_endpoint_or_skip_ph(tmp_path) -> No
         "treatment,death,hazard_ratio,0.81,0.66,0.98\n",
         encoding="utf-8",
     )
-    receipt_name = _write_survival_receipt(tmp_path, requirement)
+    receipt_name, ph_name = _write_survival_receipt(
+        tmp_path, requirement, result_path
+    )
     receipt_path = tmp_path / receipt_name
     receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
     receipt["time_column"] = "guessed_time"
@@ -345,9 +426,14 @@ def test_survival_receipt_cannot_relabel_the_endpoint_or_skip_ph(tmp_path) -> No
         plan=plan,
         context=context,
         step_summary={
+            "deterministic_standard_analysis": SURVIVAL_PRIMARY_ANALYSIS_KIND,
+            "receipt_issuer": SURVIVAL_PRIMARY_OWNER,
+            "input_evidence_id": "evidence-analysis-cohort",
+            "input_sha256": "a" * 64,
             "output_files": {
                 requirement.expected_result_product: result_path.name,
                 SURVIVAL_ANALYSIS_RECEIPT_PRODUCT: receipt_name,
+                SURVIVAL_PH_DIAGNOSTIC_PRODUCT: ph_name,
             }
         },
         out_dir=tmp_path,
