@@ -39,7 +39,7 @@ import pytest
 from easyicu.research_agent.execution.runners.deterministic_robustness import (
     robustness_replay_declaration_verdict,
 )
-from easyicu.research_agent.gates.owner_declaration import (
+from easyicu.research_agent.execution.owner_declaration import (
     _declared_choice,
     _prohibited_choices,
 )

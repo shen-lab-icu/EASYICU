@@ -63,7 +63,7 @@ from easyicu.research_agent.execution.runners.exposure_outcome_distribution_exec
     exposure_outcome_distribution_declaration_verdict,
     exposure_outcome_distribution_executor_owns_step,
 )
-from easyicu.research_agent.gates.owner_declaration import (
+from easyicu.research_agent.execution.owner_declaration import (
     _declared_choice,
     _prohibited_choices,
 )

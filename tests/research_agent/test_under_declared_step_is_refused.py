@@ -34,7 +34,7 @@ import pytest
 from easyicu.research_agent.execution.runners.selection import (
     select_standard_executor,
 )
-from easyicu.research_agent.gates.owner_declaration import (
+from easyicu.research_agent.execution.owner_declaration import (
     execution_declaration_refusal,
 )
 from easyicu.research_agent.providers.mocks import PatternScriptedMockLLMClient
