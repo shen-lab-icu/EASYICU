@@ -4594,7 +4594,9 @@ class ResearchAgentPipeline:
                 pipeline_config_sha256=self._config.canonical_digest(),
                 submission_profile_ref=submission_profile_ref,
                 capability_activation_sha256=canonical_sha256(
-                    self._config.capability_activation
+                    self._capability_runtime.activation.model_dump(mode="json")
+                    if self._capability_runtime.activation is not None
+                    else None
                 ),
                 run_input_capsule_sha256=str(capsule_record.sha256),
             )

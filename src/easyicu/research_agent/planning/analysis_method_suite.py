@@ -308,11 +308,11 @@ _SURVIVAL = MethodSuite(
             name="Cox proportional-hazards hazard ratio",
             purpose="Primary adjusted effect of exposure on the event hazard.",
             tier="primary",
-            implementation="llm_coded",
-            produces="agent-declared Cox result (hazard_ratio, ci_low, ci_high) + deterministic forest panel",
-            runner="time_to_event",
+            implementation="deterministic",
+            produces="host-bound Cox result + PH diagnostic + digest receipt",
+            runner="survival_primary_cox",
             reporting_items=("STROBE 16",),
-            notes="The agent owns time zero, censoring, exposure, adjustment, and fit; the runner renders registered Cox/KM products only.",
+            notes="The Planner fixes time zero, censoring, exposure, adjustment and horizon; the sealed host owner fits and receipts that exact contract.",
         ),
         AnalysisMethod(
             key="km_logrank",
@@ -329,17 +329,15 @@ _SURVIVAL = MethodSuite(
             name="Proportional-hazards check (Schoenfeld residuals / PH test)",
             purpose="Test the core Cox assumption; a violated PH makes a single HR misleading.",
             tier="standard_supporting",
-            implementation="llm_coded",
+            implementation="deterministic",
             produces="schoenfeld_test.csv (covariate, chi2, p) + schoenfeld_plot (diagnostics panel slot)",
-            runner=None,
+            runner="survival_primary_cox",
             reporting_items=("STROBE 12a",),
             notes=(
                 "`methods.ph_schoenfeld` (ph_test / run_ph_test, over "
                 "lifelines.statistics.proportional_hazard_test) is a reviewed, "
-                "tested kernel offered to the Coder via CURATED_METHOD_KERNELS. "
-                "The survival figure's diagnostics panel already ACCEPTS a "
-                "schoenfeld_plot; a deterministic runner that OWNS filling it "
-                "is still planned."
+                "tested kernel executed by the sealed primary Cox owner. The "
+                "diagnostic table and its SHA are bound into the host receipt."
             ),
         ),
         AnalysisMethod(

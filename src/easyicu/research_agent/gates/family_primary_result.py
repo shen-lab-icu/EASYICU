@@ -8,6 +8,7 @@ table named by that contract, never a chart artist or a free-text summary.
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import math
 import re
@@ -16,15 +17,20 @@ from typing import Any, List, Mapping
 
 from pydantic import ValidationError
 
+from ..contracts.family_primary import FamilyPrimaryResultRequirement
 from ..contracts.runtime import ValidationFinding
 from ..schema import (
     SURVIVAL_ANALYSIS_RECEIPT_PRODUCT,
     AnalysisPlan,
     AnalysisStep,
-    FamilyPrimaryResultRequirement,
     ResearchContext,
     SurvivalAnalysisReceipt,
 )
+from ..contracts.survival import (
+    SURVIVAL_PH_DIAGNOSTIC_PRODUCT,
+    SURVIVAL_PRIMARY_OWNER,
+)
+from ..contracts.survival_execution import SURVIVAL_PRIMARY_ANALYSIS_KIND
 
 
 _EFFECT_COLUMNS = (
@@ -85,15 +91,31 @@ def _materialised_path(
     return candidate
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _survival_receipt_findings(
     *,
     step: AnalysisStep,
     requirement: FamilyPrimaryResultRequirement,
     context: ResearchContext,
+    step_summary: Mapping[str, Any],
     output_files: Mapping[str, Any],
     out_dir: Path,
 ) -> List[ValidationFinding]:
     """Reconcile execution-owned survival design with plan and endpoint."""
+
+    if (
+        step_summary.get("deterministic_standard_analysis")
+        != SURVIVAL_PRIMARY_ANALYSIS_KIND
+        or step_summary.get("receipt_issuer") != SURVIVAL_PRIMARY_OWNER
+    ):
+        return [_finding(step, "survival_primary_not_host_executed")]
 
     endpoint = context.endpoint
     if endpoint is None or endpoint.kind != "time_to_event":
@@ -151,21 +173,50 @@ def _survival_receipt_findings(
             )
         ]
 
+    result_raw_path = output_files.get(requirement.expected_result_product)
+    result_path = _materialised_path(
+        out_dir=out_dir,
+        raw_path=result_raw_path,
+        expected_suffix=".csv",
+    )
+    ph_raw_path = output_files.get(SURVIVAL_PH_DIAGNOSTIC_PRODUCT)
+    ph_path = _materialised_path(
+        out_dir=out_dir,
+        raw_path=ph_raw_path,
+        expected_suffix=".csv",
+    )
+    if result_path is None or ph_path is None:
+        return [
+            _finding(
+                step,
+                "survival_host_evidence_unregistered",
+                result_path=result_raw_path,
+                ph_diagnostic_path=ph_raw_path,
+            )
+        ]
+
     expected_values = {
         "result_product": requirement.expected_result_product,
+        "input_product": requirement.input_product,
         "exposure_source": requirement.exposure_source,
         "outcome": requirement.outcome,
         "effect_scale": requirement.effect_scale,
         "analysis_population": requirement.population,
         "time_origin": requirement.time_origin,
         "time_column": requirement.time_column,
+        "time_unit": requirement.time_unit,
         "event_column": requirement.event_column,
+        "event_value": requirement.event_value,
+        "censor_value": 0,
         "event_definition": requirement.event_definition,
         "censoring_strategy": requirement.censoring_strategy,
         "competing_risk_strategy": requirement.competing_risk_strategy,
         "time_horizon": requirement.time_horizon,
+        "time_horizon_value": requirement.time_horizon_value,
         "estimator": requirement.estimator,
         "effect_measure": requirement.effect_measure,
+        "covariates": list(requirement.covariates or ()),
+        "ph_diagnostic_product": SURVIVAL_PH_DIAGNOSTIC_PRODUCT,
     }
     mismatches = {
         field: {"expected": expected, "reported": getattr(receipt, field)}
@@ -180,12 +231,31 @@ def _survival_receipt_findings(
             "expected": requirement.proportional_hazards_diagnostic,
             "reported": receipt.proportional_hazards_diagnostic,
         }
+    for field in ("input_evidence_id", "input_sha256"):
+        if getattr(receipt, field) != step_summary.get(field):
+            mismatches[field] = {
+                "expected": step_summary.get(field),
+                "reported": getattr(receipt, field),
+            }
     if mismatches:
         return [
             _finding(
                 step,
                 "survival_execution_receipt_contract_mismatch",
                 mismatches=mismatches,
+            )
+        ]
+    digest_mismatches = {}
+    if receipt.result_sha256 != _sha256_file(result_path):
+        digest_mismatches["result_sha256"] = receipt.result_sha256
+    if receipt.ph_diagnostic_sha256 != _sha256_file(ph_path):
+        digest_mismatches["ph_diagnostic_sha256"] = receipt.ph_diagnostic_sha256
+    if digest_mismatches:
+        return [
+            _finding(
+                step,
+                "survival_host_receipt_binding_mismatch",
+                mismatches=digest_mismatches,
             )
         ]
     return []
@@ -301,6 +371,7 @@ def family_primary_result_reconciliation_findings(
                     step=step,
                     requirement=requirement,
                     context=context,
+                    step_summary=step_summary,
                     output_files=output_files,
                     out_dir=out_dir,
                 )

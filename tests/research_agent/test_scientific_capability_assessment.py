@@ -85,14 +85,14 @@ def test_causal_execution_is_honest_about_missing_identification_validator() -> 
     )
 
     assert assessment.question_present is True
-    assert assessment.question_grounded is True
+    assert assessment.question_coordinates_resolved is True
     assert assessment.input_contract_resolved is True
     assert assessment.runtime_data_available is None
     assert assessment.execution_backend_available is None
     assert assessment.scientific_validator_available is False
-    assert assessment.status == "analysis_only"
+    assert assessment.claim_ceiling == "analysis_only"
     assert assessment.issue_code == "scientific_validator_unavailable"
-    assert assessment.publication_eligible is False
+    assert assessment.claim_ceiling_allows_reportable is False
 
 
 def test_ordinary_survival_is_distinguished_from_a_competing_risk_endpoint() -> None:
@@ -105,9 +105,9 @@ def test_ordinary_survival_is_distinguished_from_a_competing_risk_endpoint() -> 
         context=_context(endpoint=_survival_endpoint([0, 1, 2])),
     )
 
-    assert ordinary.status == "reportable"
+    assert ordinary.claim_ceiling == "reportable"
     assert ordinary.scientific_validator_available is True
-    assert competing.status == "unsupported"
+    assert competing.claim_ceiling == "unsupported"
     assert competing.issue_code == "competing_risk_estimator_unavailable"
     assert competing.execution_backend_available is None
 
@@ -139,7 +139,7 @@ def test_ordinal_association_uses_its_directly_declared_capability() -> None:
     )
 
     assert assessment.capability_id == "association_ordinal_trend_v1"
-    assert assessment.status == "reportable"
+    assert assessment.claim_ceiling == "reportable"
 
 
 def test_ordinal_association_fails_closed_without_a_declared_ordinal_input() -> None:
@@ -148,7 +148,7 @@ def test_ordinal_association_fails_closed_without_a_declared_ordinal_input() -> 
     )
 
     assert assessment.capability_id == "association_ordinal_trend_v1"
-    assert assessment.status == "analysis_only"
+    assert assessment.claim_ceiling == "analysis_only"
     assert assessment.issue_code == "scientific_capability_data_contract_unresolved"
 
 
@@ -168,7 +168,7 @@ def test_neutral_display_fallback_is_not_mistaken_for_a_scientific_capability(
         analysis_type=analysis_type, context=_context()
     )
 
-    assert assessment.status == "unsupported"
+    assert assessment.claim_ceiling == "unsupported"
     assert assessment.issue_code == "scientific_capability_unregistered"
 
 
@@ -200,9 +200,13 @@ def test_readiness_keeps_causal_run_analysis_only_without_validator(
     )
 
     receipt = gates["scientific_capability"]
-    assert receipt["status"] == "analysis_only"
+    assert receipt["claim_ceiling"] == "analysis_only"
+    assert receipt["question_coordinates_resolved"] is True
+    assert "status" not in receipt
     assert receipt["issue_code"] == "scientific_validator_unavailable"
-    assert gates["scientific_capability_reportable"] is False
+    assert (
+        gates["scientific_capability_claim_ceiling_allows_reportable"] is False
+    )
     assert gates["analysis_validated"] is False
     assert any(
         "scientific_validator_unavailable" in error

@@ -13,9 +13,9 @@ A `planned` method carries no runner. It must fail closed if requested as a prim
 
 | Method | Tier | Implementation | Produces | Runner |
 | --- | --- | --- | --- | --- |
-| Cox proportional-hazards hazard ratio | primary | LLM-coded ⚠️ | agent-declared Cox result (hazard_ratio, ci_low, ci_high) + deterministic forest panel | `time_to_event` |
+| Cox proportional-hazards hazard ratio | primary | deterministic ✅ | host-bound Cox result + PH diagnostic + digest receipt | `survival_primary_cox` |
 | Kaplan-Meier curves + log-rank by exposure | standard_supporting | deterministic ✅ | kaplan_meier curve data + log-rank; KM panel | `time_to_event` |
-| Proportional-hazards check (Schoenfeld residuals / PH test) | standard_supporting | LLM-coded ⚠️ | schoenfeld_test.csv (covariate, chi2, p) + schoenfeld_plot (diagnostics panel slot) | — |
+| Proportional-hazards check (Schoenfeld residuals / PH test) | standard_supporting | deterministic ✅ | schoenfeld_test.csv (covariate, chi2, p) + schoenfeld_plot (diagnostics panel slot) | `survival_primary_cox` |
 | Subgroup hazard ratios / interaction forest | standard_supporting | LLM-coded ⚠️ | subgroup HR forest | — |
 | Restricted mean survival time (RMST) | standard_supporting | LLM-coded ⚠️ | rmst.csv (group, rmst, ci) + difference | — |
 | Competing-risks cumulative incidence (Fine-Gray / CIF) | planned | planned ⛔ | cause-specific CIF | — |
@@ -106,4 +106,3 @@ A `planned` method carries no runner. It must fail closed if requested as a prim
 | phenotyping | Mixed-effects / growth-mixture trajectory models | Random-effects longitudinal models with latent classes. |
 | phenotyping | DTW / time-series distance clustering | Cluster raw trajectories under a shape-aware (dynamic time warping) distance. |
 | phenotyping | Landmark trajectory prediction | Predict outcome from trajectory shape up to a landmark time. |
-

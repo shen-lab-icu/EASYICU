@@ -30,9 +30,12 @@ from easyicu.research_agent.reporting.readiness import (
 )
 from easyicu.research_agent.planning.study_design_playbook import StudyDesignFamily
 
-# No deterministic primary-analysis runner is shipped. Primary science remains
-# LLM-coded; only the auxiliary, planner-scoped runners in the registry are live.
-_RUNNER_ENTRYPOINTS: dict[str, tuple[str, str]] = {}
+_RUNNER_ENTRYPOINTS: dict[str, tuple[str, str]] = {
+    "survival_primary_cox": (
+        "execution.runners.survival_primary_executor",
+        "survival_primary_executor_code",
+    ),
+}
 
 
 def _registry_primary_runners() -> set:
@@ -69,8 +72,8 @@ def test_registry_runner_entrypoints_are_importable_and_callable():
         mod_name, fn_name = _RUNNER_ENTRYPOINTS[name]
         mod = importlib.import_module(f"easyicu.research_agent.{mod_name}")
         fn = getattr(mod, fn_name)
-        code = fn()
-        assert isinstance(code, str) and len(code) > 200
+        assert callable(fn)
+        assert "step" in inspect.signature(fn).parameters
 
 
 # --- deterministic figure renderers ----------------------------------------
@@ -111,15 +114,15 @@ def test_every_study_design_family_is_covered():
 def test_partition_helpers_are_consistent():
     det = set(cr.deterministic_primary_families())
     llm = set(cr.llm_coded_primary_families())
-    assert det == set(), "primary scientific analyses must remain agent-owned"
+    assert det == {"Survival / time-to-event"}
     assert llm
     assert det.isdisjoint(llm)
     assert len(det) + len(llm) == len(cr.CAPABILITY_REGISTRY)
 
 
-def test_every_family_is_without_a_deterministic_primary_owner():
+def test_only_survival_has_a_deterministic_primary_owner():
     fams = cr.families_without_deterministic_primary()
-    assert fams == set(get_args(StudyDesignFamily))
+    assert fams == set(get_args(StudyDesignFamily)) - {"time_to_event"}
 
 
 # --- renderer ---------------------------------------------------------------

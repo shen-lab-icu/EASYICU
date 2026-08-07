@@ -10,6 +10,8 @@ from ..schema import (
     AnalysisStep,
     ResearchContext,
 )
+from ..contracts.survival import SURVIVAL_PH_DIAGNOSTIC_PRODUCT
+from ..contracts.survival_execution import survival_execution_verdict
 from .analysis_types import infer_analysis_type
 
 
@@ -27,7 +29,9 @@ def primary_result_contract_guide() -> str:
         "Causal contracts additionally name estimand, treatment/comparator, "
         "adjustment and overlap diagnostic; survival contracts name time origin, "
         "event, censoring, competing-risk strategy, horizon, effect measure, "
-        "and a PH diagnostic when using Cox.\n\n"
+        "a numeric horizon/unit, event value, exact adjustment set, input product, "
+        "and a PH diagnostic when using Cox. Primary Cox execution and its "
+        "receipt are host-owned, not Coder-authored.\n\n"
         "Missingness is scientific design: Do not impute the primary exposure or "
         "outcome. For prediction, split first and fit every imputer/scaler only on "
         "the training split/fold. For longitudinal data, never use future "
@@ -122,6 +126,41 @@ def validate_required_primary_result(
                     f"{SURVIVAL_ANALYSIS_RECEIPT_PRODUCT!r} so execution can "
                     "record the applied time/event/censoring design"
                 )
+            if SURVIVAL_PH_DIAGNOSTIC_PRODUCT not in primary.expected_outputs:
+                raise ValueError(
+                    "A survival primary step must declare "
+                    f"{SURVIVAL_PH_DIAGNOSTIC_PRODUCT!r} so the executed PH "
+                    "diagnostic is materialised as evidence"
+                )
+            levels = list(endpoint.levels or [])
+            try:
+                numeric_levels = [float(value) for value in levels]
+                integral_levels = {
+                    int(value) for value in numeric_levels if value.is_integer()
+                }
+            except (TypeError, ValueError):
+                integral_levels = set()
+            if (
+                len(levels) != 2
+                or len(integral_levels) != 2
+                or integral_levels != {0, int(requirement.event_value)}
+            ):
+                raise ValueError(
+                    "The host Cox executor requires a binary EndpointSpec whose "
+                    "closed levels are exactly censor code 0 and "
+                    "family_primary_result_requirement.event_value"
+                )
+            verdict = survival_execution_verdict(
+                requirement=requirement,
+                planned_analysis_role=primary.planned_analysis_role,
+                expected_outputs=primary.expected_outputs,
+                inputs=primary.inputs,
+            )
+            if not verdict.claimed:
+                raise ValueError(
+                    "The primary survival contract is not executable by the "
+                    f"host-owned survival runner: {verdict.reason}"
+                )
         return
 
     method = re.sub(r"[^a-z0-9]+", "_", str(primary.method or "").lower()).strip("_")
@@ -166,6 +205,13 @@ def family_primary_result_execution_guide(step: AnalysisStep) -> str:
     requirement = step.family_primary_result_requirement
     if requirement is None:
         return ""
+    if requirement.analysis_family == "survival":
+        return (
+            "\nHOST-OWNED SURVIVAL PRIMARY CONTRACT:\n"
+            "- Do not implement or rewrite this step and do not create a survival "
+            "receipt. The sealed EasyICU survival executor fits the declared Cox "
+            "model, runs the PH diagnostic, and issues the digest-bound receipt.\n"
+        )
     return (
         "\nFAMILY PRIMARY-RESULT EXECUTION CONTRACT:\n"
         f"- Materialise `{requirement.expected_result_product}` as a CSV inside "
@@ -180,17 +226,6 @@ def family_primary_result_execution_guide(step: AnalysisStep) -> str:
         f"outcome={requirement.outcome!r}, and effect_scale={requirement.effect_scale!r}. "
         "Do not substitute chart geometry, prose, or an unregistered side file "
         "for this evidence table.\n"
-        + (
-            "- Also materialise `log:survival_analysis_receipt` as JSON inside "
-            "OUTPUT_DIR and register it in `summary['output_files']`. It must "
-            "validate as `SurvivalAnalysisReceipt`, repeat the exact declared "
-            "time origin, time/event columns, event definition, censoring, "
-            "competing-risk strategy, horizon, estimator, effect measure, "
-            "population and result product, and record n_analysis_rows/n_events. "
-            "For Cox, it MUST record the executed PH diagnostic and its p value.\n"
-            if requirement.analysis_family == "survival"
-            else ""
-        )
     )
 
 

@@ -6,7 +6,7 @@ _Generated from `easyicu.research_agent.planning.capability_registry`. Do not ed
 
 | Study-design family | Primary analysis | Primary estimand | Runner | Figure | Fail-closed when contract unmet |
 | --- | --- | --- | --- | --- | --- |
-| Survival / time-to-event | LLM-coded ⚠️ | Agent-coded time-to-event estimand under the declared survival method; value/provenance checked | — | deterministic ✅ (`time_to_event`) | The agent step fails when verified follow-up/event inputs are absent, and survival plausibility/provenance gates reject invalid event counts, effect scales, or unsupported estimands. |
+| Survival / time-to-event | deterministic ✅ | Host-computed Cox hazard ratio under an exact Planner-owned, digest-bound survival contract | `survival_primary_cox` | deterministic ✅ (`time_to_event`) | Plan validation refuses any primary survival contract the sealed Cox owner cannot execute; digest, fit, PH or evidence mismatch fails closed. |
 | Causal inference / target-trial emulation | LLM-coded ⚠️ | Agent-coded causal contrast under a declared target-trial/identification strategy; assumptions and balance checked | — | deterministic ✅ (`causal_emulation`) | The agent step fails when its declared exposure, outcome, time zero, or adjustment inputs cannot be resolved; balance, positivity, and causal-language gates reject unsupported claims. |
 | Association — graded ordinal exposure (dose-response) | LLM-coded ⚠️ | Agent-coded ordered-exposure association under the declared trend method; per-stage products value-checked | — | deterministic ✅ (`base_association_skill`) | The ordered-product contract rejects fewer than three declared levels, invalid level ordering, cohort drift, or missing trend statistics; a binary/continuous exposure is never coerced into an ordinal gradient. |
 | Association — general (non-graded) | LLM-coded ⚠️ | LLM-coded adjusted association (logistic/linear); bound via NumericClaim + primary-effect extractor | — | deterministic ✅ (`base_association_skill`) | LLM code failure -> mechanical code_repair only (no deterministic association refit or estimator substitution) -> if still failing the step fails, the execution gate floors the status to diagnostic_only, and the specific error is surfaced (never a silent pass). |
@@ -18,9 +18,9 @@ _Generated from `easyicu.research_agent.planning.capability_registry`. Do not ed
 
 A capability can execute an analysis without having a sufficient scientific validator for a publication claim. `analysis_only` is an explicit fail-closed boundary, not an error the Agent may write around.
 
-| Capability | Result contract | Required diagnostics | Claim status |
+| Capability | Result contract | Required diagnostics | Claim ceiling |
 | --- | --- | --- | --- |
-| `survival_time_to_event_v1` | family_primary_result_requirement + registered primary CSV | event/censoring closure; time-origin binding; proportional-hazards diagnostic when Cox is declared | reportable ✅ |
+| `survival_time_to_event_v1` | host-issued digest-bound survival receipt + primary CSV + PH table | event/censoring closure; time-origin binding; proportional-hazards diagnostic when Cox is declared | reportable ✅ |
 | `causal_target_trial_v1` | family_primary_result_requirement + registered primary CSV | target-trial time-zero and treatment-strategy protocol; identification/refutation; positivity and balance | analysis_only ⚠️ |
 | `association_ordinal_trend_v1` | planned_model_requirement + registered adjusted estimate | declared levels; primary contrast; model contract | reportable ✅ |
 | `association_adjusted_v1` | planned_model_requirement + registered adjusted estimate | primary model contract; effect/interval reconciliation | reportable ✅ |
@@ -47,8 +47,8 @@ Deliberately out of scope — these must **fail closed**, not be approximated by
 
 What happens when no valid runner or data contract exists — the pipeline fails **closed** with a surfaced reason, never open:
 
-- **1. Agent method and product contract** — The planner/coder owns the scientific method, cohort, exposure and outcome. Deterministic code is limited to validated calculation primitives or an explicit auxiliary product contract; it does not preflight-replace a primary estimand.
+- **1. Declared method, product and owner contract** — The Planner fixes the scientific method, cohort, exposure and outcome. Each capability declares whether the primary owner is the agent or a sealed executor; neither may substitute undeclared science.
 - **2. Runner contract unmet** — An auxiliary runner writes status=blocked + a specific blocking_reason when its declared standardized inputs are missing or invalid. It never guesses scientific variables or a surrogate method. Optional auxiliary steps degrade to status=skipped + not_applicable when their input is legitimately absent.
-- **3. Agent execution** — The agent generates the planned primary analysis; code repair and statistical validators may repair implementation faults but never replace the declared scientific method.
+- **3. Owned execution** — The declared primary owner executes the analysis. Code repair and statistical validators may repair agent implementation faults but never rewrite a sealed host primary or replace the declared method.
 - **4. Output / validity gates (fail-closed)** — execution_complete (any failed step -> False); evidence_complete (STRICT: unbound citations blocked); numeric_verified (value-level provenance: hallucinated numbers blocked); analysis_validated (plausibility + survival-estimand + figure-credit + headline==primary-estimand gates); replan_budget (runaway loop -> advisory only after a clean, bound primary result, else demote).
 - **5. Verdict** — The status ladder (publication_ready > manuscript_ready > analysis_only > diagnostic_only) and the scorecard tristate (gate_reportable / analysis_only / diagnostic_only) floor to diagnostic_only whenever a gate fails, with the specific reason surfaced. INVARIANT: a capability gap is always reported, never silently filled with a fabricated result.
