@@ -5,28 +5,42 @@ from __future__ import annotations
 from typing import Any, Dict
 
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, ConfigDict, StrictBool
 
 from easyicu.webserver import copilot_sessions, study_intent
+from easyicu.webserver import settings as settings_store
 
 router = APIRouter()
 
 
+class StudyIntentRequest(BaseModel):
+    """Bounded wire contract for optional Copilot intent extraction."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    question: Any = None
+    llm_provider: str = "offline"
+    external_llm_opt_in: StrictBool = False
+    language: str = "en"
+
+
 @router.post("/api/copilot/study-intent")
-def post_copilot_study_intent(body: Dict[str, Any]) -> dict:
+def post_copilot_study_intent(body: StudyIntentRequest) -> dict:
     """Read a typed study-contract proposal from the user's own question.
 
     Never rewrites the question and never fills a slot it could not read: the
     response names every unread slot so the caller has to ask rather than
     substitute a default.
     """
-    payload = body or {}
     try:
         return study_intent.extract_study_intent(
-            payload.get("question"),
-            llm_provider=str(payload.get("llm_provider") or "offline"),
-            external_llm_opt_in=bool(payload.get("external_llm_opt_in")),
-            ai_enabled=bool(payload.get("ai_enabled")),
-            language=str(payload.get("language") or "en"),
+            body.question,
+            llm_provider=body.llm_provider,
+            external_llm_opt_in=body.external_llm_opt_in,
+            # Browser request data cannot grant the server-wide external-call
+            # permission.  That authority belongs to the local settings store.
+            ai_enabled=bool(settings_store.load_settings().get("ai_enabled")),
+            language=body.language,
         )
     except study_intent.StudyIntentError as exc:
         raise HTTPException(status_code=400, detail=exc.detail) from exc
