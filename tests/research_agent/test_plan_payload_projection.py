@@ -24,6 +24,7 @@ these five schemas grows a field, without naming any field itself.
 from __future__ import annotations
 
 import dataclasses
+import inspect
 
 import pytest
 
@@ -40,6 +41,15 @@ from easyicu.research_agent.schema import (
     TableOneSpec,
     TableOneVariableSpec,
 )
+
+
+def test_plan_payload_owner_is_separate_from_agent_orchestration() -> None:
+    """The compatibility export stays stable while the non-agent owner holds logic."""
+
+    from easyicu.research_agent.agents import core, plan_payload
+
+    assert core._normalise_plan_payload is plan_payload._normalise_plan_payload
+    assert "def _normalise_plan_payload" not in inspect.getsource(core)
 
 
 def _schema_fields(model: type) -> set:
