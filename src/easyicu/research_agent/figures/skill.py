@@ -446,6 +446,7 @@ class PublicationFigureSkill:
         out_dir.mkdir(parents=True, exist_ok=True)
 
         source_copy_ids: List[str] = []
+        source_copy_names: List[str] = []
         for name, frame in rendered.source_frames.items():
             try:
                 copy_path = out_dir / f"publication_figure_source_{name}.csv"
@@ -461,18 +462,23 @@ class PublicationFigureSkill:
                     "publication_figure_source_data",
                     f"publication_figure_source_{name}",
                 ],
+                inputs=rendered.source_evidence_ids,
                 producer=self.name,
                 generation_mode="deterministic_figure_skill",
                 prompt_pack_version=prompt_pack_version,
                 on_sha_change="new_id",
             )
             source_copy_ids.append(record.evidence_id)
+            source_copy_names.append(copy_path.name)
 
         contract = make_figure_contract(
             figure_id=rendered.figure_id,
             core_claim=rendered.core_claim,
             panels=rendered.panels,
-            source_data=rendered.source_evidence_ids or source_copy_ids,
+            # ``source_data`` is the publication-facing local CSV bundle, not
+            # an EvidenceStore id. The registered upstream and derived source
+            # ids remain explicit inputs to the evidence bundle below.
+            source_data=source_copy_names,
             statistics_note=rendered.statistics_note,
         )
         paths = save_publication_figure(
@@ -495,6 +501,7 @@ class PublicationFigureSkill:
             paths=paths,
             contract=contract,
             prompt_pack_version=prompt_pack_version,
+            source_evidence_ids=[*rendered.source_evidence_ids, *source_copy_ids],
         )
         contract_evidence_id = contract_record.evidence_id
         figure_ids = [record.evidence_id for record in figure_records]
@@ -2263,12 +2270,20 @@ def _register_publication_figure_bundle(
     paths: Dict[str, Path],
     contract: Any,
     prompt_pack_version: Optional[str],
+    source_evidence_ids: Optional[Sequence[str]] = None,
     contract_metadata: Optional[Dict[str, Any]] = None,
     figure_metadata: Optional[Dict[str, Any]] = None,
 ) -> Tuple[EvidenceRecord, List[EvidenceRecord]]:
     """Register a contract and every export with strict provenance links."""
 
-    source_ids = _figure_contract_source_ids(contract)
+    raw_source_ids = (
+        source_evidence_ids
+        if source_evidence_ids is not None
+        else _figure_contract_source_ids(contract)
+    )
+    source_ids = list(
+        dict.fromkeys(str(item) for item in raw_source_ids if str(item).strip())
+    )
     source_metadata = _source_fingerprint_metadata(evidence, source_ids)
     privacy_audit = _aggregate_disclosure_audit(
         contract, evidence=evidence, source_ids=source_ids
