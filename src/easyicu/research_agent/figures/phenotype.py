@@ -418,10 +418,29 @@ def render_phenotype_figure(
     ax_stab.set_title(title, loc="left", pad=4)
     add_panel_label(ax_stab, "C", x=-0.3)
 
+    if has_complete_sizes and silhouette is not None:
+        stability_claim = (
+            "Cluster sizes and the qualified overall silhouette value are shown "
+            "as descriptive clustering diagnostics."
+        )
+    elif has_complete_sizes:
+        stability_claim = (
+            "Cluster sizes are shown; no qualified overall silhouette value was "
+            "available from the registered stability evidence."
+        )
+    elif silhouette is not None:
+        stability_claim = (
+            "The qualified overall silhouette value is shown; cluster sizes were "
+            "unavailable from the registered profile evidence."
+        )
+    else:
+        stability_claim = (
+            "Neither cluster sizes nor a qualified overall silhouette value were "
+            "available from the registered clustering evidence."
+        )
     core_claim = (
-        "Unsupervised phenotypes are shown as a standardised cluster-profile "
-        "heatmap, centroid parallel coordinates, and cluster sizes with a "
-        "stability annotation, rendered from registered clustering evidence."
+        "Unsupervised phenotypes are shown as standardised cluster profiles and "
+        "descriptive clustering diagnostics, rendered from registered evidence."
     )
 
     def _ids(rec: Optional[EvidenceRecord]) -> List[str]:
@@ -455,13 +474,46 @@ def render_phenotype_figure(
             "title": "Cluster stability",
             "role": "stability",
             "chart_type": "stability_grid",
-            "claim": "Cluster sizes and the silhouette score guard against arbitrary cluster cuts.",
+            "claim": stability_claim,
             "evidence_ids": profile_and_stability_ids,
             "review_risk": "A low silhouette or a tiny cluster warns that the partition may be unstable.",
         },
     ]
 
-    source_frames: Dict[str, pd.DataFrame] = {"cluster_profiles": profiles}
+    # These are the final analytical frames consumed by the renderer, rather
+    # than a copy of the parent table presented as though it alone explained the
+    # plot.  The profile frame preserves both the raw centroid and the exact
+    # standardised value drawn in panels A/B; the stability frame carries the
+    # exact bar heights and qualified overall silhouette annotation in panel C.
+    raw_profile_values = profiles[[cluster_col, *features]].melt(
+        id_vars=[cluster_col],
+        var_name="feature",
+        value_name="centroid_value",
+    )
+    standardised_profile_values = z.copy()
+    standardised_profile_values.insert(0, cluster_col, cluster_labels)
+    standardised_profile_values = standardised_profile_values.melt(
+        id_vars=[cluster_col],
+        var_name="feature",
+        value_name="standardised_value",
+    )
+    profile_plot_data = raw_profile_values.merge(
+        standardised_profile_values,
+        on=[cluster_col, "feature"],
+        how="inner",
+        validate="one_to_one",
+    )
+    stability_plot_data = pd.DataFrame(
+        {
+            cluster_col: cluster_labels,
+            "cluster_size": sizes if has_complete_sizes else [None] * len(cluster_labels),
+            "overall_silhouette": [silhouette] * len(cluster_labels),
+        }
+    )
+    source_frames: Dict[str, pd.DataFrame] = {
+        "phenotype_profile_plot_data": profile_plot_data,
+        "phenotype_stability_plot_data": stability_plot_data,
+    }
 
     return RenderedFigure(
         fig=fig,

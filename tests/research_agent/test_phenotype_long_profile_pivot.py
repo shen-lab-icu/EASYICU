@@ -172,11 +172,14 @@ def test_renderer_on_long_table_uses_clinical_variables(tmp_path: Path):
     )
     assert fig is not None
     assert len(fig.panels) == 3
-    profiles = fig.source_frames["cluster_profiles"]
-    cols = set(profiles.columns)
-    # the heatmap's feature axis is the clinical variables, not stat columns
-    assert {"lactate", "creatinine", "map"} <= cols
-    assert "sd" not in cols and "median" not in cols
+    profiles = fig.source_frames["phenotype_profile_plot_data"]
+    # The source bundle records both the raw centroids and the exact z-scored
+    # values drawn in panels A/B, rather than treating the parent table as the
+    # final plot source.
+    assert {"lactate", "creatinine", "map"} <= set(profiles["feature"])
+    assert {"centroid_value", "standardised_value"} <= set(profiles.columns)
+    stability = fig.source_frames["phenotype_stability_plot_data"]
+    assert {"cluster_size", "overall_silhouette"} <= set(stability.columns)
     plt.close(fig.fig)
 
 
@@ -269,6 +272,12 @@ def test_renderer_accepts_canonical_phenotype_product_names(tmp_path: Path):
         "phenotype_profiles",
         "cluster_stability",
     ]
+    assert rendered.panels[2]["claim"] == (
+        "The qualified overall silhouette value is shown; cluster sizes were "
+        "unavailable from the registered profile evidence."
+    )
+    stability_source = rendered.source_frames["phenotype_stability_plot_data"]
+    assert stability_source["overall_silhouette"].tolist() == [0.2774, 0.2774]
     assert any(
         text.get_text() == "silhouette 0.28"
         for axis in rendered.fig.axes
