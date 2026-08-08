@@ -2639,6 +2639,41 @@ class AnalysisPlan(BaseModel):
                 "analysis plan may declare at most one step with "
                 "planned_analysis_role='primary'; found " + ", ".join(primary_step_ids)
             )
+        # ``scientific_capability`` is execution authority, not an open-ended
+        # label. Validate ids and family compatibility against the owner
+        # registry while keeping the field itself extensible (rather than a
+        # schema Literal that must be edited for every new registered owner).
+        from .planning.analysis_types import (
+            canonical_analysis_family,
+            get_analysis_type,
+        )
+        from .planning.capability_registry import get_capability_by_id
+
+        default_capability = None
+        canonical_family = canonical_analysis_family(self.analysis_type)
+        if canonical_family is not None:
+            default_capability = get_capability_by_id(
+                get_analysis_type(canonical_family).capability_id
+            )
+        for step in self.steps:
+            declared_id = str(step.scientific_capability or "").strip()
+            if not declared_id:
+                continue
+            declared = get_capability_by_id(declared_id)
+            if declared is None:
+                raise ValueError(
+                    "scientific_capability_unknown: "
+                    f"{declared_id!r} is not registered"
+                )
+            if (
+                default_capability is not None
+                and declared.family != default_capability.family
+            ):
+                raise ValueError(
+                    "scientific_capability_family_mismatch: "
+                    f"{declared_id!r} belongs to {declared.family!r}, not "
+                    f"{default_capability.family!r}"
+                )
         for step in self.steps:
             if step.planned_analysis_role != "primary":
                 continue

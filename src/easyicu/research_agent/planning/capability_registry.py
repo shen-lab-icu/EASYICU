@@ -319,6 +319,11 @@ CAPABILITY_REGISTRY: Tuple[ScientificCapability, ...] = (
             "method-specific contract",
             "effect/interval reconciliation",
         ),
+        # Reachable and executable is not the same as publication-validated.
+        # This capability has no typed exposure/outcome/contrast/adjustment
+        # contract yet, so it cannot receive a higher claim ceiling than the
+        # more constrained deterministic association owner.
+        scientific_validation="analysis_only",
     ),
     ScientificCapability(
         family="prediction",
@@ -737,11 +742,7 @@ def resolve_primary_capability(
             detail=f"No scientific capability is registered for {raw_type!r}.",
         )
 
-    if (
-        capability is None
-        or capability.capability_id != "association_adjusted_v1"
-        or plan is None
-    ):
+    if capability is None or plan is None:
         return _verdict_for(capability, analysis_family=canonical)
 
     primary_steps = [
@@ -756,6 +757,42 @@ def resolve_primary_capability(
 
     primary = primary_steps[0]
     declared = str(getattr(primary, "scientific_capability", "") or "").strip()
+    if declared:
+        declared_capability = get_capability_by_id(declared)
+        if declared_capability is None:
+            return _verdict_for(
+                capability,
+                analysis_family=canonical,
+                failure_reason="scientific_capability_unknown",
+                detail=(
+                    f"The primary step declares unknown scientific_capability "
+                    f"{declared!r}; declare a capability id from the registry."
+                ),
+            )
+        if declared_capability.family != capability.family:
+            return _verdict_for(
+                capability,
+                analysis_family=canonical,
+                failure_reason="scientific_capability_family_mismatch",
+                detail=(
+                    f"scientific_capability {declared!r} belongs to family "
+                    f"{declared_capability.family!r}, not {capability.family!r}."
+                ),
+            )
+
+    if capability.capability_id != "association_adjusted_v1":
+        if declared and declared != capability.capability_id:
+            return _verdict_for(
+                capability,
+                analysis_family=canonical,
+                failure_reason="scientific_capability_step_incompatible",
+                detail=(
+                    f"scientific_capability {declared!r} is not compatible with "
+                    f"the primary capability {capability.capability_id!r}."
+                ),
+            )
+        return _verdict_for(capability, analysis_family=canonical)
+
     if declared == "association_freeform_v1":
         # Free-form is *declared*, never inferred. Inferring it from "this step
         # does not match the exact contract" would make a feasibility audit and
@@ -786,10 +823,30 @@ def resolve_primary_capability(
             owner_reason="the primary step declares the agent-coded association kernel",
         )
 
+    if declared and declared != capability.capability_id:
+        return _verdict_for(
+            capability,
+            analysis_family=canonical,
+            failure_reason="scientific_capability_step_incompatible",
+            detail=(
+                f"scientific_capability {declared!r} is registered for the "
+                "association family but is not compatible with this primary "
+                "step shape."
+            ),
+        )
+
     if not _claims_host_association_product(primary):
-        # Not the host contract and not a declared free-form kernel: the exact
-        # single-model validator owns this and produces its own precise error.
-        return _verdict_for(capability, analysis_family=canonical)
+        return _verdict_for(
+            capability,
+            analysis_family=canonical,
+            failure_reason="scientific_capability_declaration_required",
+            detail=(
+                "The association primary step is neither the exact host-owned "
+                "adjusted-association contract nor an explicitly declared "
+                "association_freeform_v1 step. Declare which registered "
+                "scientific capability owns it."
+            ),
+        )
 
     verdict = association_execution_verdict(primary)
     if verdict.claimed:
@@ -910,12 +967,14 @@ def assess_scientific_capability(
             )
         verdict = resolve_primary_capability(analysis_type=canonical, plan=plan)
         capability = verdict.capability
-        # A capability label whose execution owner is not the one it names must
-        # never reach ``run_status.json`` as an executable ceiling. Plan
-        # validation refuses this plan outright; if a caller assesses one
-        # anyway (a stale plan, a replay), the assessment says so rather than
-        # reporting the deterministic label the runtime will not honour.
-        if verdict.failure_reason == "primary_capability_owner_mismatch":
+        # Every resolver failure is fail-closed here. Planner validation is not
+        # a substitute for readiness/replay safety: stale or hand-built plans
+        # can reach this assessment without passing the normal parse path.
+        if verdict.failure_reason is not None:
+            repairable = verdict.failure_reason in {
+                "primary_owner_declaration_incomplete",
+                "scientific_capability_declaration_required",
+            }
             return ScientificCapabilityAssessment(
                 capability_id=verdict.capability_id,
                 analysis_type=canonical,
@@ -925,8 +984,8 @@ def assess_scientific_capability(
                 runtime_data_available=None,
                 execution_backend_available=None,
                 scientific_validator_available=False,
-                claim_ceiling="unsupported",
-                issue_code="primary_capability_owner_mismatch",
+                claim_ceiling="analysis_only" if repairable else "unsupported",
+                issue_code=verdict.failure_reason,
                 reason=verdict.detail,
             )
     except (TypeError, ValueError):

@@ -180,6 +180,7 @@ def _step_scientific_signature(step: AnalysisStep) -> Tuple[Any, ...]:
     nothing.  What it newly refuses is a plan that changed it.
     """
 
+    structured_payload = _analysis_step_scientific_authority_payload(step)
     return (
         step.step_id,
         step.method,
@@ -189,47 +190,78 @@ def _step_scientific_signature(step: AnalysisStep) -> Tuple[Any, ...]:
         tuple(step.icu_rule_refs),
         step.planned_analysis_role,
         step.scientific_capability,
-        tuple(
-            (
-                requirement.requirement_id,
-                requirement.outcome,
-                requirement.outcome_type,
-                requirement.method_family,
-                requirement.exposure_source,
-                requirement.analysis_role,
-                requirement.analysis_set,
-                requirement.required_for_step_success,
-            )
-            for requirement in step.model_requirements
-        ),
-        tuple(
-            json.dumps(
-                contract.model_dump(mode="json"),
-                sort_keys=True,
-                separators=(",", ":"),
-            )
-            for contract in step.input_consumption_contracts
-        ),
-        *(
-            (
-                json.dumps(
-                    step.family_primary_result_requirement.model_dump(mode="json"),
-                    sort_keys=True,
-                    separators=(",", ":"),
-                ),
-            )
-            if step.family_primary_result_requirement is not None
-            else ()
-        ),
-        (
-            json.dumps(
-                step.trajectory_stability_spec.model_dump(mode="json"),
-                sort_keys=True,
-                separators=(",", ":"),
-            )
-            if step.trajectory_stability_spec is not None
-            else None
-        ),
+        json.dumps(structured_payload, sort_keys=True, separators=(",", ":")),
+    )
+
+
+# Every public AnalysisStep field belongs to exactly one authority class.  Most
+# of the step is scientific authority today; the empty classes are deliberate,
+# not omissions.  Keeping the classification explicit means a newly added
+# public field cannot silently become invisible to seal/resume identity.
+_ANALYSIS_STEP_CORE_SCIENTIFIC_AUTHORITY_FIELDS = frozenset(
+    {
+        "step_id",
+        "method",
+        "inputs",
+        "expected_outputs",
+        "intent",
+        "icu_rule_refs",
+        "planned_analysis_role",
+        "scientific_capability",
+    }
+)
+_ANALYSIS_STEP_STRUCTURED_SCIENTIFIC_AUTHORITY_FIELDS = frozenset(
+    {
+        "model_requirements",
+        "family_primary_result_requirement",
+        "input_consumption_contracts",
+        "table_one_spec",
+        "trajectory_stability_spec",
+        "exposure_outcome_distribution_spec",
+        "cohort_definition_spec",
+        "measurement_audit_spec",
+        "robustness_replay_spec",
+    }
+)
+_ANALYSIS_STEP_PRESENTATION_ONLY_FIELDS = frozenset()
+_ANALYSIS_STEP_RUNTIME_ONLY_FIELDS = frozenset()
+
+
+def _analysis_step_scientific_authority_payload(
+    step: AnalysisStep,
+) -> dict[str, Any]:
+    """Return the canonical structured portion of one step's authority.
+
+    The previous fingerprint hand-copied eight fields from each
+    ``PlannedModelRequirement`` and therefore omitted its covariates, model
+    terms, level/reference and primary-contrast declarations.  It also stopped
+    after ``trajectory_stability_spec`` and missed every later ``*_spec``.
+    Serializing the classified fields through Pydantic keeps nested contracts
+    complete and gives schema drift one fail-closed diagnostic surface.
+    """
+
+    classes = (
+        _ANALYSIS_STEP_CORE_SCIENTIFIC_AUTHORITY_FIELDS,
+        _ANALYSIS_STEP_STRUCTURED_SCIENTIFIC_AUTHORITY_FIELDS,
+        _ANALYSIS_STEP_PRESENTATION_ONLY_FIELDS,
+        _ANALYSIS_STEP_RUNTIME_ONLY_FIELDS,
+    )
+    classified: set[str] = set()
+    overlaps: set[str] = set()
+    for fields in classes:
+        overlaps.update(classified.intersection(fields))
+        classified.update(fields)
+    public_fields = set(AnalysisStep.model_fields)
+    if overlaps or classified != public_fields:
+        missing = sorted(public_fields - classified)
+        unknown = sorted(classified - public_fields)
+        raise RuntimeError(
+            "AnalysisStep authority classification drift: "
+            f"missing={missing!r}, unknown={unknown!r}, overlaps={sorted(overlaps)!r}"
+        )
+    return step.model_dump(
+        mode="json",
+        include=_ANALYSIS_STEP_STRUCTURED_SCIENTIFIC_AUTHORITY_FIELDS,
     )
 
 

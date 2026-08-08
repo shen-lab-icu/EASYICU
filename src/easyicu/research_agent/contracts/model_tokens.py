@@ -11,7 +11,7 @@ ASSOCIATION_LOGIT_ESTIMATOR = "statsmodels_logit_mle"
 ASSOCIATION_GLM_BINOMIAL_ESTIMATOR = "statsmodels_glm_binomial"
 ASSOCIATION_OLS_ESTIMATOR = "statsmodels_ols"
 SURVIVAL_COX_ESTIMATOR = "cox_proportional_hazards"
-SURVIVAL_PH_DIAGNOSTIC = "schoenfeld_global_test"
+SURVIVAL_PH_DIAGNOSTIC = "schoenfeld_per_covariate_with_bonferroni_summary"
 
 #: The exact step method and product key that name the host-owned primary
 #: adjusted-association contract.  They live beside the estimator tokens rather
@@ -52,6 +52,10 @@ _SURVIVAL_ESTIMATOR_ALIASES = {
 
 _SURVIVAL_PH_ALIASES = {
     "schoenfeld": SURVIVAL_PH_DIAGNOSTIC,
+    # Historical plans called the whole contract a "global" test. Keep them
+    # readable, but canonicalize to the statistic actually implemented: one
+    # Schoenfeld test per covariate plus a Bonferroni family-wise summary.
+    "schoenfeld_global_test": SURVIVAL_PH_DIAGNOSTIC,
     "schoenfeld_global": SURVIVAL_PH_DIAGNOSTIC,
     "global_schoenfeld": SURVIVAL_PH_DIAGNOSTIC,
     "global_schoenfeld_test": SURVIVAL_PH_DIAGNOSTIC,
@@ -81,7 +85,7 @@ def canonical_survival_estimator(value: Any) -> str:
 
 
 def canonical_survival_ph_diagnostic(value: Any) -> str:
-    """Canonicalise only aliases for the implemented global Schoenfeld test."""
+    """Canonicalise aliases for the implemented per-covariate PH diagnostic."""
 
     token = normalise_model_contract_token(value)
     return _SURVIVAL_PH_ALIASES.get(token, token)

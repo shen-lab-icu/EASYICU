@@ -2029,6 +2029,8 @@ def write_readiness_artifacts(
     writer_probe_failed_steps: Optional[Sequence[str]] = None,
     force_diagnostic_only: bool = False,
     execution_paper_eligible: bool = False,
+    plan_authority_verified: bool = False,
+    plan_authority_sha256: Optional[str] = None,
 ) -> tuple[Dict[str, Any], Dict[str, str]]:
     gates = _compute_readiness_gates(
         context=context,
@@ -2060,8 +2062,19 @@ def write_readiness_artifacts(
     )
     gates["publication_artifacts_ready"] = publication_artifacts_ready
     gates["execution_paper_eligible"] = bool(execution_paper_eligible)
-    gates["paper_authorized"] = publication_artifacts_ready and bool(
-        execution_paper_eligible
+    verified_plan_digest = str(plan_authority_sha256 or "").strip().lower()
+    plan_authority_bound = bool(
+        plan_authority_verified
+        and re.fullmatch(r"[0-9a-f]{64}", verified_plan_digest)
+    )
+    gates["plan_authority_verified"] = plan_authority_bound
+    gates["plan_authority_sha256"] = (
+        verified_plan_digest if plan_authority_bound else None
+    )
+    gates["paper_authorized"] = (
+        publication_artifacts_ready
+        and bool(execution_paper_eligible)
+        and plan_authority_bound
     )
 
     artifact_paths: Dict[str, str] = {}

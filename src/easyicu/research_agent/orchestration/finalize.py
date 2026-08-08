@@ -112,6 +112,10 @@ def _active_step_evidence_ids(
 class _EValueBaselineUnresolved(RuntimeError):
     """Internal: the E-value block has nothing real to convert an OR with."""
 
+    def __init__(self, resolved: "ObservedEventRate") -> None:
+        super().__init__(resolved.reason)
+        self.resolved = resolved
+
 
 @dataclass(frozen=True)
 class ObservedEventRate:
@@ -122,6 +126,18 @@ class ObservedEventRate:
     reason: str  # one sentence for the finding message
     candidates: Tuple[float, ...] = ()
     source_column: str = ""
+
+
+@dataclass(frozen=True)
+class EValueArtifacts:
+    """Digest-registered O23 outputs from current semantic authorities."""
+
+    csv_path: Path
+    markdown_path: Path
+    evidence_id: str
+    row_count: int
+    baseline_prevalence: float
+    baseline_source_column: str
 
 
 # Columns an outcome-rate product may use for its rate. This is a reading
@@ -215,6 +231,93 @@ def resolve_observed_event_rate(path: Optional[Path]) -> ObservedEventRate:
     )
 
 
+def _primary_association_evalue_rows(
+    path: Path,
+    *,
+    baseline_prevalence: float,
+) -> List[Dict[str, Any]]:
+    """Convert the verified primary-association CSV into E-value rows.
+
+    The deterministic adjusted-association owner publishes the typed columns
+    ``estimate``, ``ci_low``, ``ci_high`` and ``effect_scale``.  Finalization
+    previously read only legacy column aliases such as ``odds_ratio`` and
+    therefore produced no E-value for the host-owned primary result.  A typed
+    scale declaration takes precedence: only ``effect_scale=odds_ratio`` is
+    converted; another declared scale is never guessed from its magnitude.
+    Legacy alias-shaped agent outputs remain readable only when no typed scale
+    is present.
+    """
+
+    import csv as _csv
+
+    rows_out: List[Dict[str, Any]] = []
+    with path.open("r", encoding="utf-8") as fh:
+        for row in _csv.DictReader(fh):
+            scale = str(row.get("effect_scale") or "").strip().casefold()
+            scale = scale.replace("-", "_").replace(" ", "_")
+            estimate_keys: Tuple[str, ...]
+            low_keys: Tuple[str, ...]
+            high_keys: Tuple[str, ...]
+            if scale:
+                if scale != "odds_ratio":
+                    continue
+                estimate_keys = ("estimate",)
+                low_keys = ("ci_low",)
+                high_keys = ("ci_high",)
+            else:
+                estimate_keys = ("odds_ratio", "or", "OR")
+                low_keys = ("or_lower", "ci_lower")
+                high_keys = ("or_upper", "ci_upper")
+
+            def _first_finite(keys: Tuple[str, ...]) -> Optional[float]:
+                for key in keys:
+                    value = row.get(key)
+                    if value in (None, "", "nan"):
+                        continue
+                    try:
+                        number = float(value)
+                    except (TypeError, ValueError):
+                        continue
+                    if number > 0.0 and number not in {float("inf"), float("-inf")}:
+                        return number
+                return None
+
+            odds_ratio = _first_finite(estimate_keys)
+            if odds_ratio is None:
+                continue
+            ci_low = _first_finite(low_keys)
+            ci_high = _first_finite(high_keys)
+            ci = (
+                (ci_low, ci_high)
+                if ci_low is not None and ci_high is not None and ci_low <= ci_high
+                else None
+            )
+            result = compute_e_value(
+                estimate=odds_ratio,
+                ci=ci,
+                estimate_type="or",
+                baseline_prevalence=baseline_prevalence,
+            )
+            rows_out.append(
+                {
+                    "term": row.get("term")
+                    or row.get("variable")
+                    or row.get("predictor")
+                    or row.get("contrast")
+                    or row.get("exposure")
+                    or "",
+                    "odds_ratio": odds_ratio,
+                    "ci_lower": ci[0] if ci else "",
+                    "ci_upper": ci[1] if ci else "",
+                    "baseline_prevalence": baseline_prevalence,
+                    "e_value": result.e_value,
+                    "e_value_lower_bound": result.e_value_lower_bound,
+                    "note": result.note or "",
+                }
+            )
+    return rows_out
+
+
 def _current_verified_semantic_csv(
     *,
     evidence: EvidenceStore,
@@ -265,6 +368,126 @@ def _current_verified_semantic_csv(
     if len(unique) != 1:
         return None
     return next(iter(unique.values()))
+
+
+def _write_primary_association_evalue_artifacts(
+    *,
+    evidence: EvidenceStore,
+    per_step_records: List[Dict[str, Any]],
+    run_dir: Path,
+) -> Optional[EValueArtifacts]:
+    """Write O23 from the current primary and outcome-rate authorities.
+
+    This is the finalization boundary, not merely a CSV parser: both inputs
+    must resolve through the current successful-step ledger and pass evidence
+    digest verification before the typed association schema can produce and
+    register ``e_values.csv``.
+    """
+
+    primary_source = _current_verified_semantic_csv(
+        evidence=evidence,
+        per_step_records=per_step_records,
+        run_dir=run_dir,
+        semantic_id="primary_association",
+    )
+    if primary_source is None:
+        return None
+    primary_record, primary_path = primary_source
+    outcome_rate_source = _current_verified_semantic_csv(
+        evidence=evidence,
+        per_step_records=per_step_records,
+        run_dir=run_dir,
+        semantic_id="outcome_rate",
+    )
+    resolved = resolve_observed_event_rate(
+        None if outcome_rate_source is None else outcome_rate_source[1]
+    )
+    baseline_prevalence = resolved.value
+    if baseline_prevalence is None:
+        raise _EValueBaselineUnresolved(resolved)
+
+    rows = _primary_association_evalue_rows(
+        primary_path,
+        baseline_prevalence=baseline_prevalence,
+    )
+    if not rows:
+        return None
+
+    import csv as _csv
+
+    csv_path = run_dir / "e_values.csv"
+    markdown_path = run_dir / "e_values.md"
+    with csv_path.open("w", newline="", encoding="utf-8") as fh:
+        writer = _csv.writer(fh)
+        writer.writerow(list(rows[0].keys()))
+        for row in rows:
+            writer.writerow([row[key] for key in rows[0].keys()])
+
+    markdown_lines = [
+        "# E-values for primary effects (O23)",
+        "",
+        f"Baseline event prevalence used: **{baseline_prevalence:.4f}** "
+        f"— this run's observed event rate, read from column "
+        f"`{resolved.source_column}` of its outcome-rate product.",
+        "",
+        "| Term | OR | 95% CI | E-value | E-value (CI bound) |",
+        "|---|---|---|---|---|",
+    ]
+    for row in rows:
+        ci_display = (
+            f"{row['ci_lower']:.2f} – {row['ci_upper']:.2f}"
+            if row["ci_lower"] != "" and row["ci_upper"] != ""
+            else "—"
+        )
+        markdown_lines.append(
+            "| {term} | {odds_ratio:.2f} | {ci} | {e_value:.2f} | {bound} |".format(
+                term=str(row["term"])[:40],
+                odds_ratio=row["odds_ratio"],
+                ci=ci_display,
+                e_value=row["e_value"],
+                bound=(
+                    f"{row['e_value_lower_bound']:.2f}"
+                    if row["e_value_lower_bound"] is not None
+                    else "—"
+                ),
+            )
+        )
+    markdown_path.write_text(
+        "\n".join(markdown_lines) + "\n",
+        encoding="utf-8",
+    )
+
+    source_ids = [str(primary_record.evidence_id)]
+    if outcome_rate_source is not None:
+        source_ids.append(str(outcome_rate_source[0].evidence_id))
+    csv_record = evidence.register_file(
+        kind="statistic",
+        description="VanderWeele–Ding E-values for every primary effect row (O23).",
+        source_path=csv_path,
+        evidence_id="e_values",
+        inputs=source_ids,
+        producer="pipeline",
+        generation_mode="system",
+        on_sha_change="new_id",
+    )
+    evidence.register_file(
+        kind="log",
+        description="Human-readable E-value summary (O23).",
+        source_path=markdown_path,
+        evidence_id="e_values_summary",
+        inputs=source_ids,
+        producer="pipeline",
+        generation_mode="system",
+        on_sha_change="new_id",
+    )
+    return EValueArtifacts(
+        csv_path=csv_path,
+        markdown_path=markdown_path,
+        evidence_id=str(csv_record.evidence_id),
+        row_count=len(rows),
+        baseline_prevalence=baseline_prevalence,
+        baseline_source_column=resolved.source_column,
+    )
 
 
 def _register_multiple_testing_outputs(
@@ -601,182 +824,55 @@ def finalise_success(
     # Baseline prevalence defaults to observed outcome rate when
     # an ``outcome_rate.csv`` was registered.
     try:
-        primary_source = _current_verified_semantic_csv(
+        evalue_artifacts = _write_primary_association_evalue_artifacts(
             evidence=evidence,
             per_step_records=per_step_records,
             run_dir=run_dir,
-            semantic_id="primary_association",
         )
-        if primary_source is not None:
-            import csv as _csv
-
-            primary_record, primary_path = primary_source
-            outcome_rate_source = _current_verified_semantic_csv(
-                evidence=evidence,
-                per_step_records=per_step_records,
-                run_dir=run_dir,
-                semantic_id="outcome_rate",
-            )
-            resolved = resolve_observed_event_rate(
-                None if outcome_rate_source is None else outcome_rate_source[1]
-            )
-            baseline_prev = resolved.value
-            if baseline_prev is None:
-                # No invented rate. An E-value computed at a guessed baseline is
-                # a reported number nobody can trace to this cohort, and it
-                # reads exactly like one that can.
-                findings.append(
-                    ValidationFinding(
-                        validator="e_value",
-                        severity="warning",
-                        message=(
-                            "E-values were not computed: "
-                            f"{resolved.reason} An odds ratio cannot be converted "
-                            "to a risk ratio without this run's observed event "
-                            "rate, and the host does not substitute one."
-                        ),
-                        detail={
-                            "reason": "e_value_baseline_prevalence_unresolved",
-                            "cause": resolved.cause,
-                            "candidates": list(resolved.candidates),
-                        },
-                    )
-                )
-                raise _EValueBaselineUnresolved(resolved.reason)
-
-            rows_out: List[Dict[str, Any]] = []
-            with primary_path.open("r", encoding="utf-8") as fh:
-                reader = _csv.DictReader(fh)
-                for row in reader:
-                    # Accept OR or odds_ratio column; skip age / intercept etc.
-                    or_val = None
-                    for key in ("odds_ratio", "or", "OR"):
-                        if key in row and row[key] not in (None, "", "nan"):
-                            try:
-                                or_val = float(row[key])
-                                break
-                            except (TypeError, ValueError):
-                                continue
-                    if or_val is None:
-                        continue
-                    try:
-                        ci_lo = float(row.get("or_lower") or row.get("ci_lower") or 0.0)
-                        ci_hi = float(row.get("or_upper") or row.get("ci_upper") or 0.0)
-                        ci = (ci_lo, ci_hi) if ci_lo > 0 and ci_hi > 0 else None
-                    except (TypeError, ValueError):
-                        ci = None
-                    ev = compute_e_value(
-                        estimate=or_val,
-                        ci=ci,
-                        estimate_type="or",
-                        baseline_prevalence=baseline_prev,
-                    )
-                    row_out = {
-                        "term": row.get("term")
-                        or row.get("variable")
-                        or row.get("predictor")
-                        or "",
-                        "odds_ratio": or_val,
-                        "ci_lower": ci[0] if ci else "",
-                        "ci_upper": ci[1] if ci else "",
-                        "baseline_prevalence": baseline_prev,
-                        "e_value": ev.e_value,
-                        "e_value_lower_bound": ev.e_value_lower_bound,
-                        "note": ev.note or "",
-                    }
-                    rows_out.append(row_out)
-
-            if rows_out:
-                ev_csv = run_dir / "e_values.csv"
-                ev_md = run_dir / "e_values.md"
-                with ev_csv.open("w", newline="", encoding="utf-8") as fh:
-                    writer = _csv.writer(fh)
-                    writer.writerow(list(rows_out[0].keys()))
-                    for row in rows_out:
-                        writer.writerow([row[k] for k in rows_out[0].keys()])
-                ev_md_lines = [
-                    "# E-values for primary effects (O23)",
-                    "",
-                    # State the provenance, not just the value. An OR-derived
-                    # E-value is only as defensible as the rate it was
-                    # converted at, and a bare number gives a reader no way to
-                    # tell a measured rate from an assumed one.
-                    f"Baseline event prevalence used: **{baseline_prev:.4f}** "
-                    f"— this run's observed event rate, read from column "
-                    f"`{resolved.source_column}` of its outcome-rate product.",
-                    "",
-                    "| Term | OR | 95% CI | E-value | E-value (CI bound) |",
-                    "|---|---|---|---|---|",
-                ]
-                for row in rows_out:
-                    ci_disp = (
-                        f"{row['ci_lower']:.2f} – {row['ci_upper']:.2f}"
-                        if row["ci_lower"] != "" and row["ci_upper"] != ""
-                        else "—"
-                    )
-                    ev_md_lines.append(
-                        "| {t} | {orv:.2f} | {ci} | {ev:.2f} | {evb} |".format(
-                            t=str(row["term"])[:40],
-                            orv=row["odds_ratio"],
-                            ci=ci_disp,
-                            ev=row["e_value"],
-                            evb=(
-                                f"{row['e_value_lower_bound']:.2f}"
-                                if row["e_value_lower_bound"] is not None
-                                else "—"
-                            ),
-                        )
-                    )
-                ev_md.write_text("\n".join(ev_md_lines) + "\n", encoding="utf-8")
-                source_ids = [str(primary_record.evidence_id)]
-                if outcome_rate_source is not None:
-                    source_ids.append(str(outcome_rate_source[0].evidence_id))
-                ev_record = evidence.register_file(
-                    kind="statistic",
-                    description=(
-                        "VanderWeele–Ding E-values for every primary "
-                        "effect row (O23)."
+        if evalue_artifacts is not None:
+            findings.append(
+                ValidationFinding(
+                    validator="e_value",
+                    severity="info",
+                    message=(
+                        f"Computed E-values for {evalue_artifacts.row_count} primary "
+                        "effect row(s) at this run's observed event rate "
+                        f"{evalue_artifacts.baseline_prevalence:.4f} (column "
+                        f"'{evalue_artifacts.baseline_source_column}')."
                     ),
-                    source_path=ev_csv,
-                    evidence_id="e_values",
-                    inputs=source_ids,
-                    producer="pipeline",
-                    generation_mode="system",
-                    on_sha_change="new_id",
-                )
-                evidence.register_file(
-                    kind="log",
-                    description="Human-readable E-value summary (O23).",
-                    source_path=ev_md,
-                    evidence_id="e_values_summary",
-                    inputs=source_ids,
-                    producer="pipeline",
-                    generation_mode="system",
-                    on_sha_change="new_id",
-                )
-                findings.append(
-                    ValidationFinding(
-                        validator="e_value",
-                        severity="info",
-                        message=(
-                            f"Computed E-values for {len(rows_out)} primary "
-                            "effect row(s) at this run's observed event rate "
-                            f"{baseline_prev:.4f} (column "
-                            f"'{resolved.source_column}')."
+                    evidence_ids=[evalue_artifacts.evidence_id],
+                    detail={
+                        "baseline_prevalence": (
+                            evalue_artifacts.baseline_prevalence
                         ),
-                        evidence_ids=[ev_record.evidence_id],
-                        detail={
-                            "baseline_prevalence": baseline_prev,
-                            "baseline_prevalence_source": "observed_outcome_rate",
-                            "baseline_prevalence_column": resolved.source_column,
-                        },
-                    )
+                        "baseline_prevalence_source": "observed_outcome_rate",
+                        "baseline_prevalence_column": (
+                            evalue_artifacts.baseline_source_column
+                        ),
+                    },
                 )
-    except _EValueBaselineUnresolved:
-        # The precise finding was already appended where the cause is known.
-        # Re-reporting it here as a generic "computation failed" would bury the
-        # one fact a reader needs: no rate was available, and none was invented.
-        pass
+            )
+    except _EValueBaselineUnresolved as exc:
+        # Keep the structured cause instead of collapsing it into the generic
+        # exception handler below: no rate was available, and none was invented.
+        resolved = exc.resolved
+        findings.append(
+            ValidationFinding(
+                validator="e_value",
+                severity="warning",
+                message=(
+                    "E-values were not computed: "
+                    f"{resolved.reason} An odds ratio cannot be converted "
+                    "to a risk ratio without this run's observed event rate, "
+                    "and the host does not substitute one."
+                ),
+                detail={
+                    "reason": "e_value_baseline_prevalence_unresolved",
+                    "cause": resolved.cause,
+                    "candidates": list(resolved.candidates),
+                },
+            )
+        )
     except Exception as exc:
         findings.append(
             ValidationFinding(
@@ -959,6 +1055,15 @@ def finalise_success(
     # prompt readable without losing audit information.
     findings = dedupe_findings(findings)
     execution_identity = execution_identity_for_pipeline(pipeline)
+    # Resolve the immutable scientific plan before writing run_status.json.
+    # Otherwise a later authority failure can leave a durable
+    # ``paper_authorized=true`` status even though no final manifest exists.
+    current_plan_authority = resolve_registered_plan_authority(
+        run_dir=run_dir,
+        evidence=evidence,
+        plan=plan,
+        plan_path=plan_result.plan_path,
+    )
 
     readiness, artifact_paths = write_readiness_artifacts(
         context=context,
@@ -973,6 +1078,8 @@ def finalise_success(
         writer_probe_failed_steps=write_result.writer_probe_failed_steps,
         force_diagnostic_only=bool(getattr(pipeline, "_development_diagnostic", False)),
         execution_paper_eligible=execution_identity.paper_eligible,
+        plan_authority_verified=True,
+        plan_authority_sha256=current_plan_authority.sha256,
     )
 
     report_path.write_text(
@@ -992,12 +1099,6 @@ def finalise_success(
     # final current snapshots before both durable manifests are serialized.
     execute_result.flush_partial_manifest()
     step_attempt_history = list(execute_result.step_attempt_history)
-    current_plan_authority = resolve_registered_plan_authority(
-        run_dir=run_dir,
-        evidence=evidence,
-        plan=plan,
-        plan_path=plan_result.plan_path,
-    )
     step_attempt_history_ref = None
     if step_attempt_history:
         history_record = evidence.register_text(
