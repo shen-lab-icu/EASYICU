@@ -31,6 +31,10 @@ from __future__ import annotations
 import pytest
 
 from easyicu.research_agent.authority.plan_scope import (
+    _ANALYSIS_STEP_CORE_SCIENTIFIC_AUTHORITY_FIELDS,
+    _ANALYSIS_STEP_PRESENTATION_ONLY_FIELDS,
+    _ANALYSIS_STEP_RUNTIME_ONLY_FIELDS,
+    _ANALYSIS_STEP_STRUCTURED_SCIENTIFIC_AUTHORITY_FIELDS,
     _plan_signature,
     _step_scientific_signature,
 )
@@ -136,7 +140,8 @@ def test_the_field_changes_the_execution_owner() -> None:
     with_it = resolve_primary_capability(
         analysis_type="association_study", plan=_freeform_plan()
     )
-    assert without.execution_owner == "host_deterministic"
+    assert without.execution_owner == "unresolved"
+    assert without.failure_reason == "scientific_capability_declaration_required"
     assert with_it.execution_owner == "agent_coded"
     assert without.capability_id != with_it.capability_id
 
@@ -157,6 +162,42 @@ def test_flipping_only_this_field_changes_the_scientific_plan_signature(
         b.steps[0]
     )
     assert _plan_signature(a) != _plan_signature(b)
+
+
+def test_every_public_step_field_has_one_explicit_authority_class() -> None:
+    classes = (
+        _ANALYSIS_STEP_CORE_SCIENTIFIC_AUTHORITY_FIELDS,
+        _ANALYSIS_STEP_STRUCTURED_SCIENTIFIC_AUTHORITY_FIELDS,
+        _ANALYSIS_STEP_PRESENTATION_ONLY_FIELDS,
+        _ANALYSIS_STEP_RUNTIME_ONLY_FIELDS,
+    )
+    flattened = [field for fields in classes for field in fields]
+    assert set(flattened) == set(AnalysisStep.model_fields)
+    assert len(flattened) == len(set(flattened))
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("covariates", []),
+        ("exposure_levels", ["low", "high"]),
+        ("exposure_reference_level", "low"),
+        ("primary_contrast_level", "high"),
+    ],
+)
+def test_every_nested_model_requirement_authority_change_moves_the_signature(
+    field: str, value: object
+) -> None:
+    base = _host_plan()
+    requirement = base.steps[0].model_requirements[0].model_copy(
+        update={field: value}
+    )
+    changed_step = base.steps[0].model_copy(
+        update={"model_requirements": [requirement]}
+    )
+    assert _step_scientific_signature(base.steps[0]) != _step_scientific_signature(
+        changed_step
+    )
 
 
 def test_the_human_review_authority_digest_also_moves() -> None:
@@ -240,6 +281,8 @@ def test_every_layer_agrees_a_declared_freeform_plan_is_freeform() -> None:
     assessment = assess_scientific_capability(
         analysis_type="association_study", context=context, plan=plan
     )
+    assert assessment.claim_ceiling == "analysis_only"
+    assert assessment.issue_code == "scientific_validator_unavailable"
     assert assessment.capability_id == "association_freeform_v1"
     # ... and the sealed host executor does not claim the step.
     from easyicu.research_agent.contracts.association_execution import (
@@ -349,3 +392,42 @@ def test_execution_identity_is_deliberately_not_a_plan_digest() -> None:
     from easyicu.research_agent.authority.execution_identity import ExecutionIdentity
 
     assert "plan" not in set(ExecutionIdentity.model_fields)
+
+
+def test_the_final_manifest_binds_both_plan_authority_and_execution_identity():
+    """Two identities that never converge would be two identities for nothing.
+
+    ``ExecutionIdentity`` deliberately excludes the plan (previous test), so the
+    guarantee "different science cannot inherit the same paper authority" only
+    holds if the final authority binds *both* coordinates. It does:
+    ``orchestration.finalize`` builds ``AnalysisManifest`` with
+    ``current_plan_authority`` (whose payload is content-addressed by
+    ``sha256_of_file(plan_path)``) **and** ``execution_identity``, and passes
+    ``execution_identity.paper_eligible`` into readiness.
+
+    Asserted against the manifest schema rather than a live run so it stays a
+    structural invariant: dropping either field from the manifest fails here.
+    """
+
+    from easyicu.research_agent.schema import AnalysisManifest
+
+    fields = set(AnalysisManifest.model_fields)
+    assert "current_plan_authority" in fields
+    assert "execution_identity" in fields
+
+
+def test_finalize_feeds_paper_eligibility_from_the_execution_identity():
+    import inspect
+
+    from easyicu.research_agent.orchestration import finalize
+
+    source = inspect.getsource(finalize)
+    assert "execution_paper_eligible=execution_identity.paper_eligible" in source
+    assert "plan_authority_verified=True" in source
+    assert "plan_authority_sha256=current_plan_authority.sha256" in source
+    assert 'execution_identity=execution_identity.model_dump(mode="json")' in source
+    assert "current_plan_authority=current_plan_authority.to_dict()" in source
+
+    resolve_at = source.index("current_plan_authority = resolve_registered_plan_authority")
+    readiness_at = source.index("readiness, artifact_paths = write_readiness_artifacts")
+    assert resolve_at < readiness_at

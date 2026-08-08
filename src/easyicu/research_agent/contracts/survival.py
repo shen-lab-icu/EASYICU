@@ -17,6 +17,7 @@ from .model_terms import ModelTermSpec, validate_model_term_roster
 from .model_tokens import (
     SURVIVAL_COX_ESTIMATOR,
     SURVIVAL_PH_DIAGNOSTIC,
+    canonical_survival_ph_diagnostic,
 )
 
 
@@ -159,6 +160,13 @@ class SurvivalAnalysisReceipt(BaseModel):
     #: pipeline lets a plan make about itself.
     paper_authorization_allowed: bool
 
+    @field_validator("proportional_hazards_diagnostic", mode="before")
+    @classmethod
+    def _canonical_ph_diagnostic(cls, value: object) -> str:
+        """Keep historical receipts readable while emitting the honest token."""
+
+        return canonical_survival_ph_diagnostic(value)
+
     @field_validator(
         "result_product",
         "result_evidence_id",
@@ -280,7 +288,8 @@ class SurvivalAnalysisReceipt(BaseModel):
             raise ValueError("the host survival receipt currently supports Cox only")
         if self.proportional_hazards_diagnostic != SURVIVAL_PH_DIAGNOSTIC:
             raise ValueError(
-                "the host survival receipt requires the exact global Schoenfeld test"
+                "the host survival receipt requires the exact per-covariate "
+                "Schoenfeld tests with Bonferroni summary"
             )
         exposure_term, _ = validate_model_term_roster(
             terms=self.model_terms,

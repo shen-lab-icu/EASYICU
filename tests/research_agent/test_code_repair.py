@@ -1920,11 +1920,23 @@ class TestStripColumnsFromListLiterals:
 
 
 class TestPatchJsonDumpNumpyKeySanitizer:
-    def test_prepends_helper_when_absent(self):
+    def test_prepends_helper_and_binds_this_scripts_call_sites(self):
+        """The helper is prepended AND the script's own calls are rewritten.
+
+        This used to assert ``patched.endswith(code)`` -- the body left
+        untouched -- because the repair reached the script by rebinding
+        ``json.dump``/``json.dumps`` on the stdlib module. That reach also
+        redefined serialization for every EasyICU helper the script imports,
+        turning ``cohort_row_identity_sha256``'s ``allow_nan=False`` guard
+        fail-open. The repair is now scoped to the call sites it is repairing;
+        see ``test_json_sanitizer_does_not_disable_failclosed_guards.py``.
+        """
+
         code = "import json\njson.dump({1: 2}, open('x', 'w'))"
         patched = _patch_json_dump_numpy_key_sanitizer(code)
         assert "_easyicu_json_sanitize_v1" in patched
-        assert patched.endswith(code)
+        assert patched.endswith("_easyicu_json_dump_v1({1: 2}, open('x', 'w'))")
+        assert "_easyicu_json_module_v1.dump =" not in patched
 
     def test_idempotent_when_helper_already_present(self):
         code = "import json\njson.dump({1: 2}, open('x', 'w'))"

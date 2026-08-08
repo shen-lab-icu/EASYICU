@@ -18,13 +18,20 @@ Both are "the E-value for OR=2.0". Only one of them is about this cohort.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
+from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.methods.sensitivity import (
     BaselinePrevalenceRequiredError,
     compute_e_value,
 )
-from easyicu.research_agent.orchestration.finalize import resolve_observed_event_rate
+from easyicu.research_agent.orchestration.finalize import (
+    _primary_association_evalue_rows,
+    _write_primary_association_evalue_artifacts,
+    resolve_observed_event_rate,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -50,6 +57,74 @@ def test_rr_and_hr_need_no_baseline_rate():
 
     assert compute_e_value(estimate=2.0, estimate_type="rr").e_value > 1.0
     assert compute_e_value(estimate=2.0, estimate_type="hr").e_value > 1.0
+
+
+def test_typed_deterministic_association_output_reaches_evalue_finalization(
+    tmp_path: Path,
+) -> None:
+    """Typed owner -> semantic evidence authority -> O23 registered artefact."""
+
+    primary_path = (
+        tmp_path / "steps" / "primary" / "outputs" / "adjusted_association_estimates.csv"
+    )
+    primary_path.parent.mkdir(parents=True)
+    primary_path.write_text(
+        "fit_status,estimate,ci_low,ci_high,effect_scale,exposure,contrast\n"
+        "fitted,1.8,1.2,2.7,odds_ratio,sep3,\n",
+        encoding="utf-8",
+    )
+    outcome_path = tmp_path / "steps" / "outcome" / "outputs" / "outcome_rate.csv"
+    outcome_path.parent.mkdir(parents=True)
+    outcome_path.write_text("outcome_rate\n0.2\n", encoding="utf-8")
+    evidence = EvidenceStore(tmp_path)
+    primary = evidence.register_file(
+        kind="table",
+        description="Typed deterministic primary association",
+        source_path=primary_path,
+        evidence_id="primary_association",
+        produced_by_step="primary",
+        producer="adjusted_association_executor",
+        generation_mode="system",
+    )
+    outcome = evidence.register_file(
+        kind="table",
+        description="Observed outcome rate",
+        source_path=outcome_path,
+        evidence_id="outcome_rate",
+        produced_by_step="outcome",
+        producer="deterministic_descriptive",
+        generation_mode="system",
+    )
+
+    artifacts = _write_primary_association_evalue_artifacts(
+        evidence=evidence,
+        per_step_records=[
+            {"step_id": "primary", "status": "ok", "evidence_ids": [primary.evidence_id]},
+            {"step_id": "outcome", "status": "ok", "evidence_ids": [outcome.evidence_id]},
+        ],
+        run_dir=tmp_path,
+    )
+
+    assert artifacts is not None
+    assert artifacts.csv_path == tmp_path / "e_values.csv"
+    assert artifacts.csv_path.is_file()
+    assert artifacts.markdown_path.is_file()
+    assert artifacts.row_count == 1
+    assert evidence.get("e_values") is not None
+    text = artifacts.csv_path.read_text(encoding="utf-8")
+    assert "sep3" in text
+    assert "1.8" in text
+
+
+def test_typed_non_odds_ratio_is_not_reinterpreted_as_an_or(tmp_path: Path) -> None:
+    path = tmp_path / "adjusted_association_estimates.csv"
+    path.write_text(
+        "estimate,ci_low,ci_high,effect_scale,exposure\n"
+        "1.8,1.2,2.7,mean_difference,sep3\n",
+        encoding="utf-8",
+    )
+
+    assert _primary_association_evalue_rows(path, baseline_prevalence=0.2) == []
 
 
 def test_the_assumed_rate_really_did_move_the_reported_number():

@@ -25,7 +25,7 @@ A capability can execute an analysis without having a sufficient scientific vali
 | `causal_target_trial_v1` | family_primary_result_requirement + registered primary CSV | target-trial time-zero and treatment-strategy protocol; identification/refutation; positivity and balance | analysis_only ⚠️ |
 | `association_ordinal_trend_v1` | planned_model_requirement + registered adjusted estimate | declared levels; primary contrast; model contract | reportable ✅ |
 | `association_adjusted_v1` | typed planned_model_requirement + host model contract + registered adjusted estimate | model-term coding receipt; primary model contract; effect/interval reconciliation | reportable ✅ |
-| `association_freeform_v1` | agent-authored registered result under deterministic gates | method-specific contract; effect/interval reconciliation | reportable ✅ |
+| `association_freeform_v1` | agent-authored registered result under deterministic gates | method-specific contract; effect/interval reconciliation | analysis_only ⚠️ |
 | `prediction_risk_model_v1` | registered discrimination and calibration products | split/leakage; discrimination; calibration | reportable ✅ |
 | `phenotyping_cluster_v1` | registered clustering, profile, and stability products | representation; cluster stability; descriptive outcome use | reportable ✅ |
 | `descriptive_measurement_v1` | registered summary/source-data products | denominators; measurement availability | reportable ✅ |

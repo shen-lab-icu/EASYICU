@@ -27,6 +27,10 @@ _STRUCTURAL_CAPABILITY_REFUSALS = frozenset(
     {
         "primary_capability_owner_mismatch",
         "freeform_step_claims_host_product",
+        "scientific_capability_declaration_required",
+        "scientific_capability_unknown",
+        "scientific_capability_family_mismatch",
+        "scientific_capability_step_incompatible",
     }
 )
 

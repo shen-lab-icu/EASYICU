@@ -207,6 +207,8 @@ def _readiness_with_all_content_gates_passing(
     manuscript.write_text("Publishable-looking manuscript.\n", encoding="utf-8")
 
     kwargs.setdefault("execution_paper_eligible", True)
+    kwargs.setdefault("plan_authority_verified", True)
+    kwargs.setdefault("plan_authority_sha256", "a" * 64)
     write_readiness_artifacts(
         context=context,
         plan=_plan(),
@@ -279,4 +281,20 @@ def test_content_ready_run_without_paper_eligible_identity_is_not_authorized(
     assert status["status"] == "publication_ready"
     assert status["gates"]["publication_artifacts_ready"] is True
     assert status["gates"]["execution_paper_eligible"] is False
+    assert status["gates"]["paper_authorized"] is False
+
+
+def test_content_ready_run_without_verified_plan_authority_is_not_authorized(
+    tmp_path: Path, monkeypatch
+) -> None:
+    status = _readiness_with_all_content_gates_passing(
+        tmp_path,
+        monkeypatch=monkeypatch,
+        extra_gates={},
+        plan_authority_verified=False,
+        plan_authority_sha256=None,
+    )
+
+    assert status["gates"]["execution_paper_eligible"] is True
+    assert status["gates"]["plan_authority_verified"] is False
     assert status["gates"]["paper_authorized"] is False

@@ -225,9 +225,78 @@ def test_freeform_is_declared_not_inferred_from_a_non_matching_method() -> None:
     plan = plan.model_copy(update={"steps": [undeclared]})
 
     verdict = resolve_primary_capability(analysis_type="association_study", plan=plan)
-    assert verdict.capability_id == "association_adjusted_v1"
-    with pytest.raises(ValueError, match="adjusted_association_models"):
+    assert verdict.execution_owner == "unresolved"
+    assert verdict.failure_reason == "scientific_capability_declaration_required"
+    with pytest.raises(ValueError, match="Declare which registered"):
         validate_required_primary_result(plan=plan, context=_context())
+
+
+def test_unknown_capability_id_is_rejected_by_the_plan_schema() -> None:
+    step = _freeform_plan().steps[0].model_copy(
+        update={"scientific_capability": "assocation_freform_v1"}
+    )
+    with pytest.raises(ValueError, match="scientific_capability_unknown"):
+        AnalysisPlan(
+            research_question=QUESTION,
+            analysis_type="association_study",
+            steps=[step],
+        )
+
+
+def test_capability_family_mismatch_is_rejected_by_the_plan_schema() -> None:
+    step = _freeform_plan().steps[0].model_copy(
+        update={"scientific_capability": "survival_time_to_event_v1"}
+    )
+    with pytest.raises(ValueError, match="scientific_capability_family_mismatch"):
+        AnalysisPlan(
+            research_question=QUESTION,
+            analysis_type="association_study",
+            steps=[step],
+        )
+
+
+@pytest.mark.parametrize(
+    ("capability", "outputs", "expected_reason", "expected_ceiling"),
+    [
+        (
+            None,
+            ("table:interaction_model_estimates",),
+            "scientific_capability_declaration_required",
+            "analysis_only",
+        ),
+        (
+            "association_freeform_v1",
+            ("table:adjusted_association_estimates",),
+            "freeform_step_claims_host_product",
+            "unsupported",
+        ),
+    ],
+)
+def test_every_resolver_failure_is_fail_closed_in_capability_assessment(
+    capability: str | None,
+    outputs: tuple[str, ...],
+    expected_reason: str,
+    expected_ceiling: str,
+) -> None:
+    plan = _freeform_plan(outputs=outputs)
+    step = plan.steps[0].model_copy(update={"scientific_capability": capability})
+    stale_or_hand_built = plan.model_copy(update={"steps": [step]})
+    verdict = resolve_primary_capability(
+        analysis_type="association_study", plan=stale_or_hand_built
+    )
+    assert verdict.failure_reason == expected_reason
+
+    from easyicu.research_agent.planning.capability_registry import (
+        assess_scientific_capability,
+    )
+
+    assessment = assess_scientific_capability(
+        analysis_type="association_study",
+        context=_context(),
+        plan=stale_or_hand_built,
+    )
+    assert assessment.issue_code == expected_reason
+    assert assessment.claim_ceiling == expected_ceiling
 
 
 # --- the rule has one definition ---------------------------------------------
