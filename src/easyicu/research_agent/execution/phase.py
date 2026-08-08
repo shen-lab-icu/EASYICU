@@ -91,7 +91,6 @@ from ..audits.validators import (
 )
 from ..audits.patterns import AnalysisPatternAuditor
 from ..audits.step_summary_integrity import StepSummaryIntegrityValidator
-from ..audits.envelope_consumers import StepSummaryFractionEnvelopeDualReader
 from ..repairs.source import (
     _deterministic_runner_repair,
     _deterministic_summary_repair,
@@ -4589,7 +4588,7 @@ def run_execute_phase(
     )
     owner_declaration_preflight = owner_declaration_plan_findings(plan=plan)
     product_promise_preflight = product_promise_plan_findings(plan=plan)
-    endpoint_preflight = endpoint_contract_findings(plan, severity="error")
+    endpoint_preflight = endpoint_contract_findings(plan, context=context, severity="error")
     trajectory_directive = None
     typed_plan_directive = None
     declared_input_directive = None
@@ -4686,13 +4685,12 @@ def run_execute_phase(
         product_promise_preflight
     )
     endpoint_directive = None
-    if endpoint_preflight:
+    if endpoint_preflight and (endpoint_preflight[0].detail or {}).get("reason") == "endpoint_projection_mismatch":
         endpoint_directive = (
-            "Repair the plan's typed study endpoint without changing the "
-            "research question, cohort, estimand, or analysis family. Declare "
-            "the endpoint fields named by the contract finding; do not infer "
-            "follow-up, time origin, censoring, or event levels from column "
-            "names, dtypes, or step prose. Contract findings: "
+            "Repair or remove the plan's stale endpoint projection without "
+            "changing the sealed ResearchContext endpoint or any other science. "
+            "The projection may equal the context exactly; it is not a second "
+            "authority. Contract findings: "
             + json.dumps(
                 [
                     {"message": finding.message, "detail": finding.detail}
@@ -4748,7 +4746,7 @@ def run_execute_phase(
         or None,
         force=bool(
             typed_plan_preflight
-            or endpoint_preflight
+            or endpoint_directive
             or primary_cohort_preflight
             or trajectory_preflight
             or declared_input_preflight
@@ -4776,7 +4774,7 @@ def run_execute_phase(
                 }
             }
         )
-        for finding in endpoint_contract_findings(plan, severity="error")
+        for finding in endpoint_contract_findings(plan, context=context, severity="error")
     ]
     if final_endpoint_findings:
         endpoint_contract_blocked = True
@@ -5712,11 +5710,9 @@ def run_execute_phase(
                     )
                 )
             ),
-            # From the locked plan, which is where the endpoint is declared.
-            # Every step of one study shares one endpoint, so this is the same
-            # record in each step's capsule rather than a per-step choice.
+            # From the sealed context, the study's unique endpoint authority.
             study_endpoint=study_endpoint_declaration_entry(
-                getattr(plan_result.plan, "endpoint", None)
+                context.endpoint
             ),
             # Which of this step's bound columns are ranks rather than interval
             # measurements. From the unscoped context: the roles are a property
@@ -7310,7 +7306,7 @@ def run_execute_phase(
                 ),
                 enable_llm_audit=pipeline._enable_llm_concept_audit,
                 study_endpoint=study_endpoint_declaration_entry(
-                    getattr(plan_result.plan, "endpoint", None)
+                    context.endpoint
                 ),
                 # Every step of the locked plan, so a requirement the plan
                 # assigned to another step stops looking like this script's

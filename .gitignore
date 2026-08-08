@@ -159,6 +159,9 @@ pilot_runs/
 !docs/capability_matrix.md
 !docs/analysis_method_suite.md
 !docs/deprecation_policy.md
+!docs/pi_copilot_integration_architecture.md
+!src/easyicu/webserver/pi_copilot/node_app/README.md
+!src/easyicu/webserver/pi_copilot/node_app/THIRD_PARTY_NOTICES.md
 !benchmarks/meta_generalization/README.md
 !benchmarks/agent_experiments/README.md
 # Internal audit dumps — kept locally, not part of the public docs tree.
@@ -167,6 +170,7 @@ docs/_internal/
 docs/*.json
 docs/*.txt
 .easyicu-runtime/
+src/easyicu/webserver/pi_copilot/node_app/node_modules/
 # Local IDE / Claude Code launch configs (machine-specific paths)
 .claude/
 

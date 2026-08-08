@@ -232,8 +232,10 @@ def test_freeform_is_declared_not_inferred_from_a_non_matching_method() -> None:
 
 
 def test_unknown_capability_id_is_rejected_by_the_plan_schema() -> None:
-    step = _freeform_plan().steps[0].model_copy(
-        update={"scientific_capability": "assocation_freform_v1"}
+    step = (
+        _freeform_plan()
+        .steps[0]
+        .model_copy(update={"scientific_capability": "assocation_freform_v1"})
     )
     with pytest.raises(ValueError, match="scientific_capability_unknown"):
         AnalysisPlan(
@@ -243,16 +245,24 @@ def test_unknown_capability_id_is_rejected_by_the_plan_schema() -> None:
         )
 
 
-def test_capability_family_mismatch_is_rejected_by_the_plan_schema() -> None:
-    step = _freeform_plan().steps[0].model_copy(
-        update={"scientific_capability": "survival_time_to_event_v1"}
+def test_capability_family_mismatch_is_rejected_by_the_planning_resolver() -> None:
+    step = (
+        _freeform_plan()
+        .steps[0]
+        .model_copy(update={"scientific_capability": "survival_time_to_event_v1"})
     )
-    with pytest.raises(ValueError, match="scientific_capability_family_mismatch"):
-        AnalysisPlan(
-            research_question=QUESTION,
-            analysis_type="association_study",
-            steps=[step],
-        )
+    plan = AnalysisPlan(
+        research_question=QUESTION,
+        analysis_type="association_study",
+        steps=[step],
+    )
+
+    verdict = resolve_primary_capability(
+        analysis_type=plan.analysis_type,
+        plan=plan,
+    )
+    assert verdict.failure_reason == "scientific_capability_family_mismatch"
+    assert verdict.execution_owner == "unresolved"
 
 
 @pytest.mark.parametrize(

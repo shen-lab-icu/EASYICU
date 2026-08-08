@@ -94,7 +94,7 @@ methods = [
 scientific-adapters = [
   "pandera[pandas]>=0.28,<0.33",
   "dowhy>=0.13,<0.14",
-  "scikit-survival>=0.28,<0.29"
+  "scikit-survival>=0.28,<0.29; python_version >= '3.11'"
 ]
 all = [
   "easyicu[dev,viz,webapp,llmserver,agentic,mcp,cli,methods]"
@@ -106,6 +106,7 @@ easyicu-webapp = "easyicu.webserver.__main__:main"
 easyicu-llm-server = "easyicu.hosted_llm_server:main"
 easyicu-research-agent = "easyicu.research_agent.cli:main"
 easyicu-research-replication = "easyicu.research_agent.replication_cli:main"
+easyicu-copilot-install = "easyicu.webserver.pi_copilot.install:main"
 
 [project.urls]
 Homepage = "https://github.com/shen-lab-icu/easyicu"
@@ -123,9 +124,18 @@ where = ["src"]
 easyicu = ["data/*.json", "data/research_know_how/*.json"]
 "easyicu.webserver" = [
   "static/index.html",
+  "static/THIRD_PARTY_NOTICES.md",
   "static/css/*.css",
   "static/js/*.js",
-  "static/vendor/echarts/*"
+  "static/vendor/echarts/*",
+  "pi_copilot/node_app/package.json",
+  "pi_copilot/node_app/package-lock.json",
+  "pi_copilot/node_app/README.md",
+  "pi_copilot/node_app/THIRD_PARTY_NOTICES.md",
+  "pi_copilot/node_app/src/main.mjs",
+  "pi_copilot/node_app/src/event-projection.mjs",
+  "pi_copilot/node_app/src/shell-budget.mjs",
+  "pi_copilot/node_app/src/skills/web-prototype/SKILL.md"
 ]
 "easyicu.research_agent.providers.prompts" = ["v1/*.txt"]
 # The DockerRunner docstring tells users to build the sandbox image from

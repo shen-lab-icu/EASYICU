@@ -51,6 +51,7 @@ from .completion import (
     count_missing_evidence_markers as _count_missing_evidence_markers,
     count_writer_attempts,
     has_figure_only_output_contract,
+    paper_authority_gates,
     publication_authorized,
     run_completion_axes,
     step_completion_projection,
@@ -2062,20 +2063,7 @@ def write_readiness_artifacts(
     )
     gates["publication_artifacts_ready"] = publication_artifacts_ready
     gates["execution_paper_eligible"] = bool(execution_paper_eligible)
-    verified_plan_digest = str(plan_authority_sha256 or "").strip().lower()
-    plan_authority_bound = bool(
-        plan_authority_verified
-        and re.fullmatch(r"[0-9a-f]{64}", verified_plan_digest)
-    )
-    gates["plan_authority_verified"] = plan_authority_bound
-    gates["plan_authority_sha256"] = (
-        verified_plan_digest if plan_authority_bound else None
-    )
-    gates["paper_authorized"] = (
-        publication_artifacts_ready
-        and bool(execution_paper_eligible)
-        and plan_authority_bound
-    )
+    gates.update(paper_authority_gates(publication_artifacts_ready, execution_paper_eligible, plan_authority_verified, plan_authority_sha256))
 
     artifact_paths: Dict[str, str] = {}
 

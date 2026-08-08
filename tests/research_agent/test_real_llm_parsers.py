@@ -311,6 +311,18 @@ def test_planner_retry_projection_keeps_structure_and_bounds_prose() -> None:
                     "missing_override": {"strategy": "complete_case"},
                 }
             ],
+            "evalue_conversion_spec": {
+                "baseline_risk_evidence_id": "outcome_rate",
+                "baseline_risk_column": "event_rate",
+                "population_column": "population",
+                "baseline_population": "unexposed",
+            },
+            "subgroup_analysis_spec": {
+                "predictor": "exposure_max",
+                "outcome": "death",
+                "subgroup_columns": ["sex"],
+                "multiplicity_family_id": "secondary:subgroups",
+            },
         }
     )
 
@@ -321,6 +333,8 @@ def test_planner_retry_projection_keeps_structure_and_bounds_prose() -> None:
     assert payload["steps"][0]["inputs"] == ["exposure_max", "death"]
     assert payload["steps"][0]["model_requirements"][0]["outcome"] == "death"
     assert payload["robustness_specs"][0]["spec_id"] == "complete_case"
+    assert payload["evalue_conversion_spec"]["baseline_population"] == "unexposed"
+    assert payload["subgroup_analysis_spec"]["subgroup_columns"] == ["sex"]
     assert "rationale" not in payload
     assert "intent" not in payload["steps"][0]
 

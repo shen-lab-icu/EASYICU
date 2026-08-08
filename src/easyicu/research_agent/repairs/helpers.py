@@ -448,7 +448,16 @@ def _patch_json_dump_numpy_key_sanitizer(code: str) -> str:
             except Exception:
                 pd = None
             if isinstance(value, dict):
-                return {str(_easyicu_json_sanitize_v1(k)): _easyicu_json_sanitize_v1(v) for k, v in value.items()}
+                sanitized = {}
+                for original_key, original_value in value.items():
+                    canonical_key = str(_easyicu_json_sanitize_v1(original_key))
+                    if canonical_key in sanitized:
+                        raise ValueError(
+                            "easyicu_json_key_collision: distinct mapping keys "
+                            f"canonicalize to {canonical_key!r}"
+                        )
+                    sanitized[canonical_key] = _easyicu_json_sanitize_v1(original_value)
+                return sanitized
             if isinstance(value, (list, tuple)):
                 return [_easyicu_json_sanitize_v1(v) for v in value]
             if np is not None and isinstance(value, np.integer):

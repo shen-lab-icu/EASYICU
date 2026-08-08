@@ -154,3 +154,14 @@ def test_the_tomli_fallback_is_actually_installed_on_310() -> None:
         "research_agent CI installs an explicit list without extras, so the "
         "fallback has to be named there too"
     )
+
+
+def test_optional_sksurv_adapter_does_not_break_python_310_resolution() -> None:
+    """scikit-survival 0.28 requires Python 3.11, while core supports 3.10."""
+
+    data = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))
+    adapters = data["project"]["optional-dependencies"]["scientific-adapters"]
+    requirement = next(
+        item for item in adapters if item.startswith("scikit-survival")
+    )
+    assert "python_version >= '3.11'" in requirement
