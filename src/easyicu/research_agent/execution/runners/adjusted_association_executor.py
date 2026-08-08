@@ -41,6 +41,10 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from ...authority.declared_levels import execution_model_requirement
 from ...authority.plausibility import FlagOnlyPlausibilityScope
+from ...contracts.association_execution import (
+    association_estimator_kind,
+    association_execution_verdict,
+)
 from ...contracts.host_scaffold import HostScaffoldedScript
 from ...contracts.model_terms import (
     ModelTermSpec,
@@ -52,7 +56,6 @@ from ...contracts.model_tokens import (
     ASSOCIATION_LOGIT_ESTIMATOR,
     ASSOCIATION_OLS_ESTIMATOR,
     canonical_association_method,
-    normalise_model_contract_token,
 )
 from ...contracts.ownership_verdict import OwnershipVerdict
 from ..model_matrix import ModelTermCompilationError, compile_model_terms
@@ -60,7 +63,6 @@ from ...robustness.estimators import fit_estimator
 from ...schema import (
     PLANNED_MODEL_REQUIREMENTS_OUTPUT,
     PLANNED_MODEL_REQUIREMENTS_OUTPUT_KIND,
-    PLANNED_MODEL_REQUIREMENTS_STEP_METHOD,
     AnalysisStep,
     PlannedModelRequirement,
 )
@@ -218,13 +220,15 @@ def _requirement(step: AnalysisStep) -> Optional[PlannedModelRequirement]:
 
 
 def _estimator_kind(requirement: PlannedModelRequirement) -> str:
-    family = canonical_association_method(requirement.method_family)
-    if requirement.outcome_type == "binary":
-        return "logistic" if family == ASSOCIATION_LOGIT_ESTIMATOR else ""
-    # The continuous families include quantile regression, which fit_estimator
-    # does not implement.  Claiming it and fitting OLS instead would answer a
-    # different question under the declared method's name.
-    return "linear" if family == ASSOCIATION_OLS_ESTIMATOR else ""
+    """Delegate to the shared claim boundary.
+
+    This rule used to live here alone, which is how the capability registry and
+    plan validation could answer "deterministic" for a GLM-binomial contract
+    this owner declines.  ``contracts.association_execution`` is now the single
+    statement of what is implemented; see its module docstring.
+    """
+
+    return association_estimator_kind(requirement)
 
 
 def _effect_scale(kind: str) -> str:
@@ -232,124 +236,17 @@ def _effect_scale(kind: str) -> str:
 
 
 def adjusted_association_executor_verdict(step: AnalysisStep) -> OwnershipVerdict:
-    """Own only a single, completely declared adjusted-association model.
+    """Delegate to the shared claim boundary in ``contracts``.
 
-    Every clause is a thing the host would otherwise have to decide:
-
-    * exactly one model requirement, because ``bind_primary_output`` binds a
-      one-row table; a two-model step is a different product shape, not a
-      bigger version of this one;
-    * a declared adjustment set, because reconstructing one from ``step.inputs``
-      is inference (see the contract's own tests);
-    * an estimator this module actually implements -- a quantile-regression
-      family fitted as OLS would answer a different question under the declared
-      method's name;
-    * one typed cohort input at most, so the frame that was analysed is the
-      digest-bound one.
-
-    The clauses are unchanged from when this returned ``bool``; what is new is
-    that each one says *which kind* of decline it is.  Measured over 553
-    recorded steps, 54 of the 59 declines here were a field the Planner simply
-    never filled in -- and a bool sent every one of them to the coder without
-    telling anyone.  See :mod:`..contracts.ownership_verdict`.
-
-    Two clauses are deliberately **not** reported as incomplete declarations,
-    because more declaring is not what would fix them:
-
-    * a step bundling this product with others is task #105's question of
-      whether an owner's claim may depend on Planner bundling at all, and
-      calling it "missing" would misname an over-declaration;
-    * more than one typed input, or an unimplemented estimator family, are
-      contracts this owner does not have.
+    The clauses moved to :func:`...contracts.association_execution
+    .association_execution_verdict` unchanged.  They had to move because plan
+    validation, the capability registry and readiness all need this same
+    answer, and while it lived in an execution runner each of them re-derived
+    an approximation of it -- which is how a GLM-binomial contract was labelled
+    a deterministic host capability and then executed by the LLM coder.
     """
 
-    method = normalise_model_contract_token(
-        str(step.method or "").lower().split(" with ", 1)[0]
-    )
-    if method != PLANNED_MODEL_REQUIREMENTS_STEP_METHOD:
-        return OwnershipVerdict.wrong_shape(
-            ADJUSTED_ASSOCIATION_ANALYSIS_KIND,
-            reason=f"step method {method!r} is not {PLANNED_MODEL_REQUIREMENTS_STEP_METHOD!r}",
-        )
-    declared_outputs = [
-        str(value or "").strip() for value in step.expected_outputs or []
-    ]
-    if declared_outputs != [ADJUSTED_ASSOCIATION_OUTPUT]:
-        return OwnershipVerdict.wrong_shape(
-            ADJUSTED_ASSOCIATION_ANALYSIS_KIND,
-            reason=(
-                f"step declares {len(declared_outputs)} expected output(s), not "
-                f"exactly [{ADJUSTED_ASSOCIATION_OUTPUT}]"
-            ),
-        )
-    requirements = list(step.model_requirements or [])
-    if not requirements:
-        return OwnershipVerdict.incomplete_declaration(
-            ADJUSTED_ASSOCIATION_ANALYSIS_KIND,
-            missing=("model_requirements",),
-            reason=(
-                "the step declares the primary adjusted-association product but "
-                "no model requirement, so the outcome, outcome type, method "
-                "family and exposure are undeclared"
-            ),
-        )
-    if len(requirements) != 1:
-        return OwnershipVerdict.wrong_shape(
-            ADJUSTED_ASSOCIATION_ANALYSIS_KIND,
-            reason=(
-                f"step declares {len(requirements)} model requirements; a "
-                "multi-model step is a different product shape"
-            ),
-        )
-    requirement = requirements[0]
-    if requirement.covariates is None:
-        return OwnershipVerdict.incomplete_declaration(
-            ADJUSTED_ASSOCIATION_ANALYSIS_KIND,
-            missing=("model_requirements[0].covariates",),
-            reason=(
-                "the model requirement declares no adjustment set, and "
-                "reconstructing one from step.inputs would be inference"
-            ),
-        )
-    if requirement.model_terms is None:
-        return OwnershipVerdict.incomplete_declaration(
-            ADJUSTED_ASSOCIATION_ANALYSIS_KIND,
-            missing=("model_requirements[0].model_terms",),
-            reason=(
-                "the model requirement names variables but does not declare "
-                "their coding, levels, references and transforms"
-            ),
-        )
-    if not _estimator_kind(requirement):
-        return OwnershipVerdict.wrong_shape(
-            ADJUSTED_ASSOCIATION_ANALYSIS_KIND,
-            reason=(
-                f"method family {requirement.method_family!r} for outcome type "
-                f"{requirement.outcome_type!r} is not an estimator this owner implements"
-            ),
-        )
-    if sole_typed_cohort_input(step) == "":
-        return OwnershipVerdict.wrong_shape(
-            ADJUSTED_ASSOCIATION_ANALYSIS_KIND,
-            reason=(
-                "the step declares more than one typed input, or one this "
-                "executor family does not support"
-            ),
-        )
-    for spec_name in (
-        "table_one_spec",
-        "trajectory_stability_spec",
-        "exposure_outcome_distribution_spec",
-    ):
-        if getattr(step, spec_name) is not None:
-            return OwnershipVerdict.wrong_shape(
-                ADJUSTED_ASSOCIATION_ANALYSIS_KIND,
-                reason=f"the step also declares {spec_name}, which another owner claims",
-            )
-    return OwnershipVerdict.claim(
-        ADJUSTED_ASSOCIATION_ANALYSIS_KIND,
-        reason="a single, completely declared adjusted-association model",
-    )
+    return association_execution_verdict(step)
 
 
 def adjusted_association_executor_owns_step(step: AnalysisStep) -> bool:

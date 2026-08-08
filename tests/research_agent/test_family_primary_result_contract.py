@@ -376,6 +376,14 @@ def _write_survival_receipt(
                 "proportional_hazards_diagnostic": requirement.proportional_hazards_diagnostic,
                 "proportional_hazards_tested": True,
                 "proportional_hazards_p_value": 0.42,
+                # The host now issues the primary exposure's own PH p-value and
+                # names the decision rule, because the Bonferroni global row
+                # alone cannot see a time-varying effect in the one coefficient
+                # the manuscript reports. A receipt without them cannot support
+                # the verdict it carries, so the fields are required rather
+                # than defaulted -- see test_ph_policy_authority.py.
+                "proportional_hazards_exposure_p_value": 0.51,
+                "proportional_hazards_decision_rule": "exposure_or_global",
                 "proportional_hazards_alpha": requirement.proportional_hazards_alpha,
                 "proportional_hazards_policy": requirement.proportional_hazards_policy,
                 "proportional_hazards_status": "not_rejected",

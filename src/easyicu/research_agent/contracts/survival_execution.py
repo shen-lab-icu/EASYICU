@@ -90,7 +90,6 @@ def survival_execution_verdict(
     if requirement.proportional_hazards_policy not in {
         "report_only",
         "block_paper_authorization",
-        "human_review",
     }:
         unsupported.append("proportional_hazards_policy")
     if requirement.exposure_encoding != "declared_model_terms":

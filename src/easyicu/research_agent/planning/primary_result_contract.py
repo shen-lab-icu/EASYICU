@@ -14,6 +14,21 @@ from ..contracts.survival import SURVIVAL_PH_DIAGNOSTIC_PRODUCT
 from ..contracts.survival_execution import survival_execution_verdict
 from ..contracts.time_units import canonical_time_unit
 from .analysis_types import infer_analysis_type
+from .capability_registry import resolve_primary_capability
+
+
+#: Capability verdicts a plan cannot repair by declaring a missing field: the
+#: plan is asking for one capability and structurally describing another.
+#: ``primary_owner_declaration_incomplete`` is deliberately absent -- the
+#: plan-time owner-declaration gate already turns that into one focused
+#: replan directive, and raising here would convert a repairable gap into a
+#: parse failure.
+_STRUCTURAL_CAPABILITY_REFUSALS = frozenset(
+    {
+        "primary_capability_owner_mismatch",
+        "freeform_step_claims_host_product",
+    }
+)
 
 
 def primary_result_contract_guide() -> str:
@@ -184,6 +199,39 @@ def validate_required_primary_result(
                     f"host-owned survival runner: {verdict.reason}"
                 )
         return
+
+    # Which association contract this plan declared is the capability
+    # resolver's answer, not a second copy of the routing rule here. The
+    # registry advertises two association capabilities; validating every one of
+    # them against the exact single-model contract made the registered
+    # free-form capability unreachable through Planner parse, so a plan could
+    # only ever be labelled with a capability it was forbidden to declare.
+    verdict = resolve_primary_capability(analysis_type=declared_family, plan=plan)
+    if verdict.failure_reason in _STRUCTURAL_CAPABILITY_REFUSALS:
+        raise ValueError(verdict.detail)
+    if verdict.capability_id == "association_freeform_v1":
+        # The agent-coded kernel carries no typed model contract to validate:
+        # ``AnalysisStep`` already refuses ``model_requirements`` on any step
+        # that is not the exact host method/product pair, and ``AnalysisPlan``
+        # already requires every primary step to declare a typed non-rendering
+        # result product. The one obligation that is specific to this
+        # capability -- not borrowing the sealed executor's product key -- is
+        # the resolver's ``freeform_step_claims_host_product`` above. A
+        # separate free-form validator here would only restate checks that
+        # already ran, which reads as coverage it does not provide.
+        return
+    _validate_exact_adjusted_association(
+        primary=primary, exposure=exposure, outcome=outcome
+    )
+
+
+def _validate_exact_adjusted_association(
+    *,
+    primary: AnalysisStep,
+    exposure: str,
+    outcome: str,
+) -> None:
+    """The host-owned single-model contract: one model, declared coding."""
 
     method = re.sub(r"[^a-z0-9]+", "_", str(primary.method or "").lower()).strip("_")
     products: set[tuple[str, str]] = set()

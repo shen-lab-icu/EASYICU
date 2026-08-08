@@ -197,6 +197,11 @@ def test_plan_contract_selects_exact_or_freeform_association_capability(ra):
                 intent="Fit the declared interaction model.",
                 method="association_interaction_model",
                 expected_outputs=["table:interaction_estimates"],
+                # Declared, not inferred: "does not match the exact contract"
+                # is the shape of a feasibility audit too, so inferring
+                # free-form from it handed every under-declared association
+                # plan the looser agent-coded obligations.
+                scientific_capability="association_freeform_v1",
             )
         ],
     )

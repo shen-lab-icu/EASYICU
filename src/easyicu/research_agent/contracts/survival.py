@@ -120,17 +120,43 @@ class SurvivalAnalysisReceipt(BaseModel):
     package_versions: Dict[str, str]
     proportional_hazards_diagnostic: str
     proportional_hazards_tested: Literal[True] = True
+    #: The Bonferroni family-wise ``global`` row: min(1, k * min_j p_j).
     proportional_hazards_p_value: float = Field(ge=0, le=1)
+    #: The primary exposure's own PH p-value.
+    #:
+    #: Recorded and acted on because the global row alone cannot see a
+    #: time-varying exposure effect in an adjusted model. With k covariate rows
+    #: the Bonferroni global is k times the smallest p, so an exposure at
+    #: p=0.01 leaves the global at 0.05 for k=5 and 0.08 for k=8 -- both
+    #: "not_rejected" at alpha=0.05 while the one coefficient the manuscript
+    #: reports is the one violating PH. Five covariates is an ordinary adjusted
+    #: ICU Cox model, so this is the common case, not a corner.
+    proportional_hazards_exposure_p_value: float = Field(ge=0, le=1)
+    #: Fixed here so no consumer re-derives its own PH verdict.
+    proportional_hazards_decision_rule: Literal["exposure_or_global"] = (
+        "exposure_or_global"
+    )
     proportional_hazards_alpha: float = Field(gt=0, lt=1)
-    proportional_hazards_policy: Literal[
-        "report_only", "block_paper_authorization", "human_review"
-    ]
+    proportional_hazards_policy: Literal["report_only", "block_paper_authorization"]
     proportional_hazards_status: Literal[
         "not_rejected",
         "violation_report_only",
         "violation_block_paper_authorization",
-        "violation_human_review",
     ]
+    #: NEVER true when PH is rejected, whatever the declared policy.
+    #:
+    #: ``report_only`` used to keep this true, which made the Planner the
+    #: authority on whether its own assumption violation blocked publication:
+    #: it chose the policy before execution, execution then found the
+    #: violation, and the earlier choice authorized the paper anyway. Declaring
+    #: the loosest policy was therefore a way to pre-authorize a result the
+    #: diagnostic had not yet examined.
+    #:
+    #: ``report_only`` remains meaningful as a *disclosure* setting -- it is
+    #: recorded, and it is what tells a reader the plan intended to report and
+    #: interpret the violation rather than abandon the estimate -- but granting
+    #: paper authorization after a rejected assumption is not a decision this
+    #: pipeline lets a plan make about itself.
     paper_authorization_allowed: bool
 
     @field_validator(
@@ -267,24 +293,26 @@ class SurvivalAnalysisReceipt(BaseModel):
             )
         if self.exposure_design_column not in self.design_columns:
             raise ValueError("exposure_design_column must be in design_columns")
-        violation = self.proportional_hazards_p_value < self.proportional_hazards_alpha
+        # exposure_or_global: the reported coefficient's own PH test, or the
+        # family-wise summary. Either one rejecting is a rejection.
+        violation = (
+            self.proportional_hazards_p_value < self.proportional_hazards_alpha
+            or self.proportional_hazards_exposure_p_value
+            < self.proportional_hazards_alpha
+        )
         if not violation:
             expected_status = "not_rejected"
         elif self.proportional_hazards_policy == "report_only":
             expected_status = "violation_report_only"
-        elif self.proportional_hazards_policy == "block_paper_authorization":
-            expected_status = "violation_block_paper_authorization"
         else:
-            expected_status = "violation_human_review"
+            expected_status = "violation_block_paper_authorization"
         if self.proportional_hazards_status != expected_status:
             raise ValueError("PH receipt status does not follow the declared policy")
-        expected_authorization = expected_status in {
-            "not_rejected",
-            "violation_report_only",
-        }
-        if self.paper_authorization_allowed != expected_authorization:
+        if self.paper_authorization_allowed != (not violation):
             raise ValueError(
-                "PH paper_authorization_allowed does not follow the declared policy"
+                "PH paper_authorization_allowed must be false whenever the "
+                "proportional-hazards assumption is rejected; no declared "
+                "policy authorizes the paper past its own assumption violation"
             )
         if self.exposure_source in self.covariates:
             raise ValueError("covariates must not repeat the exposure")

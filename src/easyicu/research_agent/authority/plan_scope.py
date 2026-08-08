@@ -162,6 +162,22 @@ def _step_scientific_signature(step: AnalysisStep) -> Tuple[Any, ...]:
     are fully structured, ordinary semantic paraphrases cannot safely be
     distinguished from a changed estimand.  Only case/whitespace normalization
     is ignored.
+
+    ``scientific_capability`` is here because it selects the *execution owner*.
+    It was added to ``AnalysisStep`` without being added here, and the omission
+    was demonstrable rather than theoretical: flipping only that field on an
+    association primary step moved the resolved owner from
+    ``host_deterministic`` to ``agent_coded`` while this signature stayed
+    byte-identical.  A step whose result would be computed by the LLM coder
+    instead of the sealed host executor is not the same step, and a
+    seal/resume comparison that cannot see the difference would accept the
+    substitution under the approved plan's identity.
+
+    This is a comparison between two signatures computed by the same code --
+    the sealed record is re-validated through ``AnalysisStep`` before it is
+    fingerprinted -- so no stored digest changes: a pre-existing record
+    validates the field to ``None`` and matches a live plan that still declares
+    nothing.  What it newly refuses is a plan that changed it.
     """
 
     return (
@@ -172,6 +188,7 @@ def _step_scientific_signature(step: AnalysisStep) -> Tuple[Any, ...]:
         " ".join(str(step.intent or "").split()).casefold(),
         tuple(step.icu_rule_refs),
         step.planned_analysis_role,
+        step.scientific_capability,
         tuple(
             (
                 requirement.requirement_id,

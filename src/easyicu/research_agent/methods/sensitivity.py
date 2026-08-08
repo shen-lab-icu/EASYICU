@@ -148,9 +148,20 @@ def compute_e_value(
             bound_rr = _rr_from_or(bound, baseline_prevalence)
         else:
             bound_rr = bound
-        # If the CI crosses the null (e.g. OR 0.95 → RR ~1), E-value of
-        # the bound closer to the null is ~1. Keep as-is.
-        ev_bound = _e_value_for_rr(bound_rr)
+        # An interval that already contains the null has a CI E-value of
+        # exactly 1: the data are compatible with no effect, so a confounder of
+        # no strength is "needed" to explain the finding away (VanderWeele &
+        # Ding 2017).
+        #
+        # This used to fall through to _e_value_for_rr, whose protective branch
+        # inverts anything below 1. With a point estimate above the null and a
+        # lower bound of 0.90 that reflected to 1/0.90 and reported 1.46 -- an
+        # interval spanning the null presented as needing a confounder half
+        # again as strong as the null to explain away. The comment here
+        # asserted the fall-through was "~1", which holds only for a bound very
+        # close to 1 and was never the general case.
+        crosses_null = bound_rr <= 1.0 if rr_point >= 1 else bound_rr >= 1.0
+        ev_bound = 1.0 if crosses_null else _e_value_for_rr(bound_rr)
     return EValueResult(
         estimate=estimate,
         estimate_type=kind,

@@ -13,6 +13,17 @@ ASSOCIATION_OLS_ESTIMATOR = "statsmodels_ols"
 SURVIVAL_COX_ESTIMATOR = "cox_proportional_hazards"
 SURVIVAL_PH_DIAGNOSTIC = "schoenfeld_global_test"
 
+#: The exact step method and product key that name the host-owned primary
+#: adjusted-association contract.  They live beside the estimator tokens rather
+#: than in ``schema`` so that the ownership predicate reading them
+#: (:mod:`.association_execution`) stays dependency-neutral; ``schema``
+#: re-exports both, so every existing caller is unchanged.
+PLANNED_MODEL_REQUIREMENTS_STEP_METHOD = "adjusted_association_models"
+PLANNED_MODEL_REQUIREMENTS_OUTPUT_KIND = "table"
+ADJUSTED_ASSOCIATION_OUTPUT = (
+    f"{PLANNED_MODEL_REQUIREMENTS_OUTPUT_KIND}:{ADJUSTED_ASSOCIATION_ANALYSIS_KIND}"
+)
+
 _ASSOCIATION_METHOD_ALIASES = {
     "binary_logistic_regression": ASSOCIATION_LOGIT_ESTIMATOR,
     "binomial_logistic_regression": ASSOCIATION_LOGIT_ESTIMATOR,
@@ -78,6 +89,9 @@ def canonical_survival_ph_diagnostic(value: Any) -> str:
 
 __all__ = [
     "ADJUSTED_ASSOCIATION_ANALYSIS_KIND",
+    "ADJUSTED_ASSOCIATION_OUTPUT",
+    "PLANNED_MODEL_REQUIREMENTS_OUTPUT_KIND",
+    "PLANNED_MODEL_REQUIREMENTS_STEP_METHOD",
     "ASSOCIATION_GLM_BINOMIAL_ESTIMATOR",
     "ASSOCIATION_LOGIT_ESTIMATOR",
     "ASSOCIATION_OLS_ESTIMATOR",
