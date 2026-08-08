@@ -4443,6 +4443,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       guidedDraftParentDir,
       guidedFolderBrowser,
       guidedKnownProjectsOpen,
+      selectedGuidedDraft,
       pendingGuidedGoal,
       localDraftRows,
       guidedKnownProjectRows,
@@ -5052,35 +5053,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
   };
 
   function renderSessions() {
-    const host = document.getElementById('gdSessions');
-    if (!host) return;
-    const drafts = localDraftRows();
-    const draftHtml = guidedDrafts.loading
-      ? `<div class="gd-empty-local"><div class="ss-t">${t('Loading study folders', '正在加载研究文件夹')}</div><div class="ss-m">${t('Reading metadata-only Guided folder registry.', '正在读取仅元数据的 Guided 文件夹 registry。')}</div></div>`
-      : guidedDrafts.error
-        ? `<div class="gd-empty-local warn"><div class="ss-t">${t('Study folders unavailable', '研究文件夹不可用')}</div><div class="ss-m">${esc(guidedDrafts.error)}</div></div>`
-        : drafts.length
-          ? drafts.slice(0, 8).map((row, i) => `
-            <div class="gd-sessline">
-              <button class="gd-sess draft ${selectedGuidedDraft && selectedGuidedDraft.id === row.id ? 'active' : ''}" data-localdraft="${i}" title="${t('Open this research project', '打开这个研究项目')}">
-                <span class="ss-fold">${icon('file', 15)}</span>
-                <span>
-                  <span class="ss-t">${esc(row.title || 'Guided draft')}</span>
-                  <span class="ss-m">${esc(row.status || 'metadata_only')} · ${esc(row.depth || 'full')} · ${esc(row.data_mode || 'demo')}</span>
-                  <span class="ss-m mono">${row.project_dir ? esc(compactPath(row.project_dir)) : 'legacy registry-only draft'}</span>
-                  <span class="ss-m mono">${esc(fmtRunTime(row.updated_at || row.created_at))}</span>
-                </span>
-              </button>
-              <button class="gd-sess-action danger" type="button" data-remove-localdraft="${i}" title="${t('Remove from Guided draft list', '从草稿列表移除')}" aria-label="${t('Remove from Guided draft list', '从草稿列表移除')}">${icon('close', 12)}</button>
-            </div>`).join('')
-          : `<div class="gd-empty-local">
-              <div class="ss-t">${t('No study folders yet', '还没有研究文件夹')}</div>
-              <div class="ss-m">${t('Create or open a research project before starting a Pi conversation.', '开始 Pi 对话前，请先创建或打开一个研究项目。')}</div>
-            </div>`;
-    host.innerHTML = `
-      <div class="gd-rail-sec in-list">${t('Research projects', '研究项目')} <button class="gd-refresh-mini" data-refreshdrafts title="${t('Refresh research projects', '刷新研究项目')}">${icon('refresh', 10)}</button></div>
-      <div class="gd-rail-note"><strong>${t('Project storage', '项目存储')}</strong><span>${t('EasyICU keeps study setup, runs, and evidence here. Pi manages conversations separately.', 'EasyICU 在这里保存研究配置、运行和证据；对话由 Pi 单独管理。')}</span></div>
-      ${draftHtml}`;
+    guidedProjectRenderer('renderProjectRail');
   }
 
   /* ============== screen ============== */
@@ -5113,7 +5086,6 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         <div class="gd-main threecol">
           <aside class="gd-rail">
             <div class="gd-rail-top" id="gdFolderControls"></div>
-            <div class="gd-rail-sec">Workspace</div>
             <div class="gd-rail-list" id="gdSessions"></div>
             <div class="gd-rail-foot">
               <div class="gd-rail-utils" aria-label="${t('Guided Copilot utilities', '研究引导工具')}">

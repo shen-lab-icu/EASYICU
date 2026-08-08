@@ -335,13 +335,13 @@ def test_native_guided_and_page_guide_messages_are_bilingual() -> None:
     assert "htmlOf(t.html)" in dock_js
     assert "htmlOf(label)" in dock_js
     assert (
-        "js/screens-guided-projects.js?v=20260808-pi-project1" in index_html
+        "js/screens-guided-projects.js?v=20260808-project-rail1" in index_html
     )
     assert (
         "js/screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
         in index_html
     )
-    assert "js/screens-guided.js?v=20260808-pi-project1" in index_html
+    assert "js/screens-guided.js?v=20260808-project-rail1" in index_html
     assert "js/copilot-dock.js?v=20260712-ux-fixes" in index_html
 
 
@@ -532,11 +532,12 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     guided_plan_css = _static_css("guided-idea-plan.css")
     redesign_css = _static_css("redesign.css")
 
-    assert "css/guided.css?v=20260712-ux-fixes" in index_html
+    assert "css/guided.css?v=20260808-project-rail1" in index_html
+    assert "css/guided-projects.css?v=20260808-project-rail1" in index_html
     assert "css/guided-idea-plan.css?v=20260627-ideas-feasibility-plan" in index_html
     assert "js/api.js?v=20260808-pi-project1" in index_html
     assert (
-        "js/screens-guided-projects.js?v=20260808-pi-project1" in index_html
+        "js/screens-guided-projects.js?v=20260808-project-rail1" in index_html
     )
     provider_pos = index_html.find("screens-guided-idea-provider.js")
     projects_pos = index_html.find("screens-guided-projects.js")
@@ -630,7 +631,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert ".gdi-plan-details" in guided_plan_css
     assert ".gdi-feature-row.one" in guided_plan_css
     assert ".gdi-plan-details" not in redesign_css
-    assert "js/screens-guided.js?v=20260808-pi-project1" in index_html
+    assert "js/screens-guided.js?v=20260808-project-rail1" in index_html
 
 
 def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
@@ -2270,6 +2271,7 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     projects_js = _static_js("screens-guided-projects.js")
     guided_project_surface = guided_js + projects_js
     guided_css = _static_css("guided.css")
+    projects_css = _static_css("guided-projects.css")
     api_js = _static_js("api.js")
     index_html = _static_html("index.html")
 
@@ -2319,8 +2321,12 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert "Find a Study Idea" in guided_js
     assert "Prepare Data" in guided_js
     assert "Run a Research Project" in guided_js
-    assert "Research projects" in guided_js
-    assert "Project storage" in guided_js
+    assert "Research projects" in projects_js
+    assert "Local research workspace" in projects_js
+    assert "renderProjectRail" in projects_js
+    assert "guidedProjectRenderer('renderProjectRail')" in guided_js
+    assert "button class=\"gd-sess draft" not in guided_js
+    assert "row.project_dir ? esc(compactPath(row.project_dir))" not in guided_project_surface
     assert "Conversation memory" not in guided_js
     assert "data-localdraft" in guided_js
     assert "Agent run artifacts" not in guided_js
@@ -2330,7 +2336,7 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert "data-refreshruns" not in guided_js
     assert "loadAgentRunHistory({ limit: 20 })" not in guided_js
     assert "existing Agent run folder" in guided_js
-    assert ".gd-rail-note" in guided_css
+    assert ".gd-project-summary" in projects_css
     assert "~/easyicu/projects" in guided_js
     assert "/Users/haibo" not in guided_js
     assert "Seeded example · not a local project" not in guided_js
@@ -2430,19 +2436,17 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert "data-lang-toggle" in guided_js
     assert "Switch language" in guided_js
     assert "${t('Data workspace', '数据工作台')}" in guided_js
-    assert ".gd-empty-local" in guided_css
-    assert ".gd-sessline" in guided_css
-    assert ".gd-sess-action" in guided_css
-    assert ".gd-sess.draft.active" in guided_css
-    assert ".gd-sess.local.active" in guided_css
-    assert ".gd-sess.example.active" in guided_css
+    assert ".gd-empty-local" in projects_css
+    assert ".gd-sessline" in projects_css
+    assert ".gd-sess-action" in projects_css
+    assert ".gd-sess.active" in projects_css
     assert ".gd-home-link" in guided_css
-    assert ".gd-rail-utils" in guided_css
-    assert ".gd-utilbtn.lang" in guided_css
-    assert ".gd-data-workspace" in guided_css
+    assert ".gd-rail-utils" in projects_css
+    assert ".gd-utilbtn.lang" in projects_css
+    assert ".gd-data-workspace" in projects_css
     assert ".gd-draft-setup" in guided_css
-    assert ".gd-folder-picker" in guided_css
-    assert ".gd-folder-menu" in guided_css
+    assert ".gd-folder-picker" in projects_css
+    assert ".gd-folder-menu" in projects_css
     assert ".gd-folder-dialog" in guided_css
     assert ".gd-folder-tabs" in guided_css
     assert ".gds-known" in guided_css
@@ -2461,14 +2465,28 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert ".gdf-memory" in guided_css
     assert ".gdf-card" in guided_css
     assert ".gd-handoff-ready" in guided_css
+    for selector in (
+        ".gd-main.threecol",
+        ".gd-rail",
+        ".gd-project-summary",
+        ".gd-sessline",
+        ".gd-rail-utils",
+    ):
+        assert selector in projects_css
+        assert selector not in guided_css
+    for foreign in (".gpi-", ".gdx-", ".gd-pipeline-", ".patient-", ".cohort-"):
+        assert foreign not in projects_css
+    assert "!important" not in projects_css
+    assert ":has(" not in projects_css
     assert "api.js?v=20260808-pi-project1" in index_html
-    assert "screens-guided-projects.js?v=20260808-pi-project1" in index_html
+    assert "screens-guided-projects.js?v=20260808-project-rail1" in index_html
     assert (
         "screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
         in index_html
     )
-    assert "screens-guided.js?v=20260808-pi-project1" in index_html
-    assert "guided.css?v=20260712-ux-fixes" in index_html
+    assert "screens-guided.js?v=20260808-project-rail1" in index_html
+    assert "guided.css?v=20260808-project-rail1" in index_html
+    assert "guided-projects.css?v=20260808-project-rail1" in index_html
     assert "gd-name\">${t('Guided Copilot', '研究引导')}</span>" in guided_js
     assert "Guided Copilot · local first · nothing leaves your machine" in guided_js
     assert "[t('Review Data', '审阅已有数据'), '@guidedGoal:review_data']" in guided_js
