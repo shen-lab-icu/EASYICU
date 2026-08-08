@@ -323,6 +323,41 @@ def test_nonnumeric_creatinine_is_not_downgraded_to_patient_data_absent():
     assert error.value.reason_code == "kdigo_creatinine_numeric_encoding_invalid"
 
 
+def test_out_of_range_creatinine_is_dropped_without_losing_valid_kdigo_series():
+    creatinine = pd.DataFrame(
+        {
+            "stay_id": [1, 1, 1],
+            "charttime": [0, 60, 120],
+            "crea": [1.0, 999.0, 1.5],
+        }
+    )
+
+    result = kdigo_aki.kdigo_creatinine(
+        creatinine,
+        id_col="stay_id",
+        time_col="charttime",
+    )
+
+    assert result["charttime"].tolist() == [0, 120]
+    assert result.loc[result["charttime"] == 120, "aki_stage_creat"].item() == 1
+
+
+def test_negative_urine_observation_is_dropped_without_invalidating_valid_window():
+    urine = pd.DataFrame(
+        {
+            "stay_id": [1] * 7,
+            "charttime": [0, 60, 120, 180, 240, 300, 360],
+            "urine": [10.0, 10.0, -1.0, 10.0, 10.0, 10.0, 10.0],
+        }
+    )
+    weight = pd.DataFrame({"stay_id": [1], "weight": [100.0]})
+
+    result = _calculate_uo_rates_simple(urine, weight, "stay_id", "charttime")
+
+    assert 120 not in result["charttime"].tolist()
+    assert result["uo_rt_6hr"].notna().any()
+
+
 def test_kdigo_uo_global_weight_without_id_applies_to_all_rows():
     urine = pd.DataFrame(
         {

@@ -239,11 +239,18 @@ def kdigo_creatinine(
         (df[value_col] <= 0) | (df[value_col] > 150)
     )
     if invalid_range.any():
-        raise KDIGOComponentSchemaError(
-            component="creatinine",
-            reason_code="kdigo_creatinine_value_out_of_range",
-            message="Creatinine source contains a value outside (0, 150] mg/dL",
+        # A physiologically impossible numeric value is a bad *observation*,
+        # not evidence that the complete component table has the wrong
+        # contract.  Failing the whole component here made one malformed
+        # record turn every stay in a source into an unavailable KDIGO result.
+        # Keep the fail-closed behaviour for non-numeric/non-finite encodings
+        # above, but exclude only the impossible measurements below.
+        logger.warning(
+            "Dropping %d creatinine observation(s) outside (0, 150] mg/dL "
+            "before KDIGO staging",
+            int(invalid_range.sum()),
         )
+        df.loc[invalid_range, value_col] = np.nan
     df[time_col] = _strict_time_component(
         df[time_col],
         component="creatinine",
@@ -554,12 +561,17 @@ def _calculate_uo_rates_simple(
         reason_code="kdigo_urine_output_numeric_encoding_invalid",
         field_name="urine output",
     )
-    if (urine[urine_col].dropna() < 0).any():
-        raise KDIGOComponentSchemaError(
-            component="urine_output",
-            reason_code="kdigo_urine_output_value_negative",
-            message="Urine-output source contains a negative value",
+    negative_output = urine[urine_col].notna() & (urine[urine_col] < 0)
+    if negative_output.any():
+        # As for creatinine, retain all valid urine observations.  A negative
+        # volume is physiologically impossible but does not invalidate a
+        # correctly structured source table or the remaining time series.
+        logger.warning(
+            "Dropping %d negative urine-output observation(s) before KDIGO "
+            "staging",
+            int(negative_output.sum()),
         )
+        urine.loc[negative_output, urine_col] = np.nan
     urine[time_col] = _strict_time_component(
         urine[time_col],
         component="urine_output",
