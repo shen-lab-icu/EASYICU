@@ -163,6 +163,13 @@ def _clean_text(value: Any, fallback: str = "", max_len: int = 220) -> str:
     return text[:max_len]
 
 
+def _exact_path_text(value: Any, *, max_len: int = 4096) -> str:
+    """Bound a filesystem path without changing its internal identity."""
+
+    text = str(value if value is not None else "").strip()
+    return text[:max_len]
+
+
 def _choice(value: Any, allowed: set[str], fallback: str) -> str:
     text = str(value or "").strip().lower()
     return text if text in allowed else fallback
@@ -193,7 +200,11 @@ def _slot_key(raw: Any) -> str | None:
     return key
 
 
-def _bounded_slot_value(value: Any, depth: int = 0) -> Any:
+def _bounded_slot_value(
+    value: Any,
+    depth: int = 0,
+    field_path: tuple[str, ...] = (),
+) -> Any:
     if depth > _MAX_SLOT_DEPTH:
         return None
     if isinstance(value, dict):
@@ -202,14 +213,14 @@ def _bounded_slot_value(value: Any, depth: int = 0) -> Any:
             key = _slot_key(raw_key)
             if key is None:
                 continue
-            bounded = _bounded_slot_value(child, depth + 1)
+            bounded = _bounded_slot_value(child, depth + 1, (*field_path, key))
             if bounded is not None:
                 out[key] = bounded
         return out
     if isinstance(value, list):
         rows = []
         for child in value[:_MAX_SLOT_ITEMS]:
-            bounded = _bounded_slot_value(child, depth + 1)
+            bounded = _bounded_slot_value(child, depth + 1, field_path)
             if bounded is not None:
                 rows.append(bounded)
         return rows
@@ -219,6 +230,8 @@ def _bounded_slot_value(value: Any, depth: int = 0) -> Any:
         return value
     if isinstance(value, float):
         return value if value == value and abs(value) != float("inf") else None
+    if field_path in {("active_export", "path"), ("extraction", "export_dir")}:
+        return _exact_path_text(value, max_len=4096)
     return _clean_text(value, max_len=_MAX_SLOT_TEXT)
 
 
@@ -292,6 +305,27 @@ def _first_text(*values: Any, max_len: int = 500) -> str:
         if clean:
             return clean
     return ""
+
+
+def _first_exact_path(*values: Any, max_len: int = 4096) -> str:
+    for value in values:
+        text = _exact_path_text(value, max_len=max_len)
+        if text:
+            return text
+    return ""
+
+
+def _first_time_window(*values: Any) -> Dict[str, Any]:
+    for value in values:
+        if isinstance(value, dict):
+            bounded = _bounded_slot_value(value)
+            if isinstance(bounded, dict) and bounded:
+                return bounded
+        else:
+            text = _clean_text(value, max_len=500)
+            if text:
+                return {"preset": text, "label": text}
+    return {}
 
 
 def read_project_study_setup(project_id: str) -> GuidedProjectStudySetup | None:
@@ -382,12 +416,11 @@ def read_project_study_setup(project_id: str) -> GuidedProjectStudySetup | None:
         params.get("outcome"),
         slots.get("outcome_hint"),
     )
-    window_text = _first_text(
+    time_window = _first_time_window(
         params.get("window"),
         design.get("window"),
         slots.get("time_window_hint"),
     )
-    time_window = {"preset": window_text, "label": window_text} if window_text else {}
     comparator = _first_text(
         design.get("comparator_label"),
         design.get("comparator_custom"),
@@ -413,7 +446,7 @@ def read_project_study_setup(project_id: str) -> GuidedProjectStudySetup | None:
         module = _clean_text(value, max_len=80)
         if module and module not in modules:
             modules.append(module)
-    source_path = _first_text(
+    source_path = _first_exact_path(
         export.get("path"), extraction.get("export_dir"), max_len=4096
     )
     source_label = _first_text(

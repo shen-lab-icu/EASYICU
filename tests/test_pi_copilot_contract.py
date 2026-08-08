@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -489,6 +490,7 @@ def test_existing_guided_project_migrates_exact_study_coordinates(
             "title": draft["title"],
         }
     )
+    exact_export_path = tmp_path / "ICU  研究 (A)" / "aggregate-export"
     saved = guided_sessions.execute_guided_action(
         {
             "action": "update_slots",
@@ -496,7 +498,7 @@ def test_existing_guided_project_migrates_exact_study_coordinates(
             "slots": {
                 "study_design": {
                     "outcome_label": "Hospital mortality",
-                    "window": "First 24 hours",
+                    "window": {"hours": 24, "anchor": "ICU admission"},
                     "comparator_label": "Lower lactate",
                     "collected": True,
                 },
@@ -509,7 +511,7 @@ def test_existing_guided_project_migrates_exact_study_coordinates(
                 "active_export": {
                     "label": "MIMIC-IV research export",
                     "database": "mimiciv",
-                    "path": str(tmp_path / "aggregate-export"),
+                    "path": str(exact_export_path),
                 },
             },
         }
@@ -518,6 +520,11 @@ def test_existing_guided_project_migrates_exact_study_coordinates(
     setup = guided_sessions.read_project_study_setup(draft["id"])
     assert setup is not None
     assert setup.missing_required == []
+    assert setup.data_source == {
+        "path": str(exact_export_path),
+        "label": "MIMIC-IV research export",
+        "database": "mimiciv",
+    }
 
     captured: dict[str, Any] = {}
 
@@ -549,15 +556,116 @@ def test_existing_guided_project_migrates_exact_study_coordinates(
     assert initialized["migration_receipt"]["source_digest"] == setup.source_digest
     assert captured["question"] == "Is lactate associated with hospital mortality?"
     assert captured["outcome"] == "Hospital mortality"
-    assert captured["time_window"] == {
-        "preset": "First 24 hours",
-        "label": "First 24 hours",
-    }
+    assert captured["time_window"] == {"hours": 24, "anchor": "ICU admission"}
     assert captured["modules"] == ["lactate", "demographics", "sofa"]
     assert captured["cohort"] == {
         "preset": "Adult first ICU stay",
         "label": "Adult first ICU stay",
     }
+    assert captured["data_source"]["path"] == str(exact_export_path)
+
+
+@pytest.mark.parametrize(
+    ("window_slots", "expected"),
+    [
+        (
+            {"time_window_hint": "First 24 hours"},
+            {"preset": "First 24 hours", "label": "First 24 hours"},
+        ),
+        (
+            {"study_params": {"window": {"hours": 24, "anchor": "ICU admission"}}},
+            {"hours": 24, "anchor": "ICU admission"},
+        ),
+    ],
+    ids=["guided-v1-text", "guided-v2-typed"],
+)
+def test_guided_legacy_time_window_schemas_migrate_without_stringifying(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    window_slots: dict[str, Any],
+    expected: dict[str, Any],
+) -> None:
+    config_path = tmp_path / "guided.json"
+    monkeypatch.setattr(guided_sessions, "_CONFIG_PATH", config_path)
+    monkeypatch.setattr(guided_sessions, "_CONFIG_DIR", tmp_path)
+    slots = {
+        "question_hint": "Does lactate vary in the first ICU day?",
+        "outcome_hint": "Lactate distribution",
+        "extraction": {
+            "cohort": "Adult first ICU stay",
+            "modules": ["lactate"],
+        },
+        **window_slots,
+    }
+    config_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "drafts": [],
+                "sessions": [
+                    {
+                        "id": "guided-legacy-window",
+                        "draft_id": "project-legacy-window",
+                        "project_title": "Legacy window project",
+                        "slots": slots,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    setup = guided_sessions.read_project_study_setup("project-legacy-window")
+
+    assert setup is not None
+    assert setup.time_window == expected
+    assert setup.missing_required == []
+
+
+def test_concurrent_project_initialization_creates_one_study_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = PiCopilotService(
+        store_path=tmp_path / "sessions.json",
+        gateway=FakeGateway(),
+    )
+    created: dict[str, dict[str, Any]] = {}
+    created_lock = threading.Lock()
+
+    def upsert(raw: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+        with created_lock:
+            context_id = f"study-concurrent-{len(created) + 1}"
+            context = {**raw, "id": context_id, "revision": 1}
+            created[context_id] = context
+        time.sleep(0.05)
+        return context
+
+    monkeypatch.setattr(service_module.study_contexts, "upsert_context", upsert)
+    monkeypatch.setattr(
+        service_module.study_contexts,
+        "get_context",
+        lambda context_id: created.get(context_id),
+    )
+    monkeypatch.setattr(
+        service_module.agent_runs,
+        "list_run_history",
+        lambda **kwargs: {"runs": []},
+    )
+
+    def initialize() -> dict[str, Any]:
+        return service.initialize_project(
+            project_id="project-concurrent",
+            title="Concurrent project",
+            confirm_initialization=True,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(lambda _: initialize(), range(2)))
+
+    assert len(created) == 1
+    assert {row["study_context_id"] for row in results} == {"study-concurrent-1"}
+    assert service.project_store.resolve("project-concurrent") == "study-concurrent-1"
 
 
 def test_pi_conversations_are_immutably_scoped_to_one_project(

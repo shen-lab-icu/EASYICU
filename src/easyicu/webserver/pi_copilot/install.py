@@ -25,7 +25,7 @@ RUNTIME_SOURCE_FILES = (
     "src/shell-budget.mjs",
 )
 RUNTIME_MANIFEST_FILE = "runtime-manifest.json"
-INSTALLATION_SCHEMA_VERSION = "easyicu.pi-runtime-installation/1"
+INSTALLATION_SCHEMA_VERSION = "easyicu.pi-runtime-installation/2"
 _EXECUTABLE_SUFFIXES = frozenset({".js", ".mjs", ".cjs"})
 
 
@@ -80,24 +80,21 @@ def runtime_manifest(source: Optional[Path] = None) -> dict[str, object]:
 
 def _installed_executable_hashes(
     root: Path,
-    pi_packages: Mapping[str, str],
 ) -> dict[str, str]:
+    """Hash the complete installed production JavaScript dependency tree."""
+
     files: dict[str, str] = {}
-    for relative in sorted(pi_packages):
-        package_root = root / relative
-        package_json = package_root / "package.json"
-        if not package_json.is_file():
-            raise RuntimeError(f"Installed Pi package is missing: {relative}")
-        files[package_json.relative_to(root).as_posix()] = _sha256(package_json)
-        for candidate in sorted(package_root.rglob("*")):
-            if not candidate.is_file() or candidate.suffix not in _EXECUTABLE_SUFFIXES:
-                continue
-            inside = candidate.relative_to(package_root)
-            if "node_modules" in inside.parts:
-                continue
-            files[candidate.relative_to(root).as_posix()] = _sha256(candidate)
+    node_modules = root / "node_modules"
+    if not node_modules.is_dir():
+        raise RuntimeError("Installed Pi runtime has no production dependency tree")
+    for candidate in sorted(node_modules.rglob("*")):
+        if not candidate.is_file():
+            continue
+        if candidate.name != "package.json" and candidate.suffix not in _EXECUTABLE_SUFFIXES:
+            continue
+        files[candidate.relative_to(root).as_posix()] = _sha256(candidate)
     if not files:
-        raise RuntimeError("Installed Pi runtime has no executable package files")
+        raise RuntimeError("Installed Pi runtime has no executable dependency files")
     return files
 
 
@@ -107,10 +104,7 @@ def _installation_manifest(
     *,
     node_version: str,
 ) -> dict[str, object]:
-    executable_files = _installed_executable_hashes(
-        installed_root,
-        dict(source_manifest["pi_packages"]),
-    )
+    executable_files = _installed_executable_hashes(installed_root)
     return {
         **dict(source_manifest),
         "installation": {
@@ -122,7 +116,7 @@ def _installation_manifest(
 
 
 PI_RUNTIME_REVISION = (
-    f"{PI_PACKAGE_VERSION}-{str(runtime_manifest()['runtime_manifest_sha256'])[:12]}"
+    f"{PI_PACKAGE_VERSION}-{str(runtime_manifest()['runtime_manifest_sha256'])[:12]}-install2"
 )
 
 
@@ -162,10 +156,7 @@ def runtime_is_installed(path: Path, *, source: Optional[Path] = None) -> bool:
         executable_files = installation.get("executable_files")
         if not isinstance(
             executable_files, dict
-        ) or executable_files != _installed_executable_hashes(
-            root,
-            dict(expected["pi_packages"]),
-        ):
+        ) or executable_files != _installed_executable_hashes(root):
             return False
     except (
         KeyError,
@@ -260,7 +251,7 @@ def install_runtime(
             shutil.copy2(source_dir / name, staging / name)
         shutil.copytree(source_dir / "src", staging / "src")
         subprocess.run(
-            [npm, "ci", "--ignore-scripts"],
+            [npm, "ci", "--ignore-scripts", "--omit=dev"],
             cwd=staging,
             env=_installer_environment(source_environment),
             check=True,

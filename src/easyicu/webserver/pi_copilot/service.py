@@ -71,6 +71,14 @@ class PiCopilotService:
         self._active_message_jobs: Dict[str, str] = {}
         self._busy_sessions: set[str] = set()
         self._pending_retirements: Dict[str, PiSessionRecord] = {}
+        self._project_initialization_locks: Dict[str, threading.RLock] = {}
+
+    def _project_initialization_lock(self, project_id: str) -> threading.RLock:
+        with self._lock:
+            return self._project_initialization_locks.setdefault(
+                project_id,
+                threading.RLock(),
+            )
 
     def _read_records(self) -> list[PiSessionRecord]:
         try:
@@ -521,12 +529,29 @@ class PiCopilotService:
         """Explicitly migrate/bind Guided metadata before any session GET."""
 
         clean_project = str(project_id or "").strip()
-        if not clean_project:
+        if not clean_project or len(clean_project) > 160:
             raise PiCopilotError(
                 "pi_project_binding_required",
                 "A research project is required for Pi initialization.",
                 status_code=409,
             )
+        with self._project_initialization_lock(clean_project):
+            return self._initialize_project_locked(
+                project_id=clean_project,
+                title=title,
+                confirm_initialization=confirm_initialization,
+            )
+
+    def _initialize_project_locked(
+        self,
+        *,
+        project_id: str,
+        title: str,
+        confirm_initialization: bool,
+    ) -> Dict[str, Any]:
+        """Run resolve/create/bind as one per-project initialization transaction."""
+
+        clean_project = project_id
         with self._lock:
             existing_rows = [
                 row for row in self._read_records() if row.project_id == clean_project
