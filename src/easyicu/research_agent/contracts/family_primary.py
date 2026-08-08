@@ -49,8 +49,23 @@ class FamilyPrimaryResultRequirement(BaseModel):
     effect_measure: Optional[str] = None
     proportional_hazards_diagnostic: Optional[str] = None
     proportional_hazards_alpha: Optional[float] = Field(default=None, gt=0, lt=1)
+    #: What the plan asks the host to do when the PH assumption is rejected.
+    #:
+    #: ``human_review`` was removed from this vocabulary on 2026-08-07. It named
+    #: a workflow that did not exist: a PH violation under that policy produced
+    #: ``violation_human_review`` and ``paper_authorization_allowed=False``, and
+    #: nothing anywhere converted that into a review request, bound a reviewer
+    #: decision to the PH/result digests, or resumed the publication gate. Its
+    #: observable behaviour was identical to ``block_paper_authorization``, so
+    #: the contract advertised a review capability the system did not have.
+    #: A plan that wants human adjudication declares
+    #: ``block_paper_authorization``, which is what actually happens.
+    #:
+    #: Neither remaining value lets the plan authorize its own paper: see
+    #: ``SurvivalAnalysisReceipt`` for why ``report_only`` is a disclosure
+    #: setting rather than an authorization.
     proportional_hazards_policy: Optional[
-        Literal["report_only", "block_paper_authorization", "human_review"]
+        Literal["report_only", "block_paper_authorization"]
     ] = None
     covariates: Optional[List[str]] = None
     model_terms: Optional[List[ModelTermSpec]] = None

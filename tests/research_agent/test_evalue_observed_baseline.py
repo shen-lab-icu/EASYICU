@@ -174,3 +174,43 @@ def test_every_unresolved_cause_is_distinct(tmp_path):
         ).cause,
     }
     assert len(causes) == 4, causes
+
+
+# ---------------------------------------------------------------------------
+# Properties carried over from the deleted second implementation
+#
+# ``methods/evalue.py`` was a parallel E-value kernel, declared unreachable
+# because it disagreed with this one on OR -> RR. It was deleted on 2026-08-07
+# in favour of the observed-prevalence (Zhang-Yu) conversion here, which uses
+# the cohort's own event rate instead of asking the caller to assert a rare- or
+# common-outcome regime. These four properties were only covered by its tests,
+# so they move here rather than disappearing with it.
+# ---------------------------------------------------------------------------
+
+
+def test_the_canonical_published_example_reproduces():
+    """VanderWeele & Ding 2017's smoking/lung-cancer RR = 3.9 -> E = 7.26."""
+
+    assert compute_e_value(estimate=3.9, estimate_type="rr").e_value == pytest.approx(
+        7.26, abs=1e-2
+    )
+
+
+def test_the_evalue_is_symmetric_about_the_null():
+    """An RR of r and its inverse carry the same confounding burden."""
+
+    above = compute_e_value(estimate=2.0, estimate_type="rr").e_value
+    below = compute_e_value(estimate=0.5, estimate_type="rr").e_value
+    assert above == pytest.approx(below, abs=1e-9)
+    assert above == pytest.approx(3.4142, abs=1e-3)
+
+
+def test_an_estimate_at_the_null_needs_no_confounder():
+    assert compute_e_value(estimate=1.0, estimate_type="rr").e_value == pytest.approx(
+        1.0, abs=1e-9
+    )
+
+
+def test_an_interval_crossing_the_null_has_a_bound_evalue_of_one():
+    crossing = compute_e_value(estimate=1.4, estimate_type="rr", ci=(0.9, 1.8))
+    assert crossing.e_value_lower_bound == pytest.approx(1.0, abs=1e-9)

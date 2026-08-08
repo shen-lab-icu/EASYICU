@@ -41,6 +41,8 @@ from .contracts.model_tokens import (
     ASSOCIATION_GLM_BINOMIAL_ESTIMATOR,
     ASSOCIATION_LOGIT_ESTIMATOR,
     ASSOCIATION_OLS_ESTIMATOR,
+    PLANNED_MODEL_REQUIREMENTS_OUTPUT_KIND,
+    PLANNED_MODEL_REQUIREMENTS_STEP_METHOD,
     canonical_association_method as _canonical_association_method,
     normalise_model_contract_token as _normalise_model_contract_token,
 )
@@ -987,8 +989,10 @@ ADJUSTED_ASSOCIATION_CONTINUOUS_METHOD_FAMILIES = frozenset(
         "statsmodels_quantreg_median_vcov_robust",
     }
 )
-PLANNED_MODEL_REQUIREMENTS_STEP_METHOD = "adjusted_association_models"
-PLANNED_MODEL_REQUIREMENTS_OUTPUT_KIND = "table"
+# PLANNED_MODEL_REQUIREMENTS_STEP_METHOD / _OUTPUT_KIND are imported from
+# contracts.model_tokens above and re-exported here unchanged, so the ownership
+# predicate in contracts.association_execution reads the same two strings this
+# schema validates against.
 
 
 class PlannedModelRequirement(BaseModel):
@@ -2156,6 +2160,21 @@ class AnalysisStep(BaseModel):
         description="Logical outputs — table_name, figure_name, statistic_name.",
     )
     method: Optional[str] = None
+    scientific_capability: Optional[str] = Field(
+        default=None,
+        description=(
+            "Which registered scientific capability this primary step executes, "
+            "when its family has more than one. Only ``association`` does: the "
+            "host-owned exact single-model contract and the agent-coded "
+            "free-form kernel (interactions, splines, multiple models). "
+            "Null selects the family default, which for association is the "
+            "deterministic contract -- so an under-declared plan cannot obtain "
+            "the looser agent-coded obligations by simply not declaring the "
+            "typed one. Nothing infers this from the method string: routing a "
+            "capability by keyword is how a feasibility audit and an "
+            "interaction model become indistinguishable to a validator."
+        ),
+    )
     icu_rule_refs: List[str] = Field(default_factory=list)
     model_requirements: List[PlannedModelRequirement] = Field(
         default_factory=list,

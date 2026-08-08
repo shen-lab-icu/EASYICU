@@ -223,17 +223,20 @@ def test_primary_survival_execution_binds_all_evidence_digests(
             p_value=0.03,
         ),
     )
-    monkeypatch.setattr(
-        owner,
-        "ph_test",
-        lambda *_args, **_kwargs: pd.DataFrame(
+    def _ph_all_clear(*_args, covariates, **_kwargs):
+        # Rows are built from the design columns the executor actually passes.
+        # The previous literal said ``treatment`` while the compiled design
+        # column for a treatment-contrast binary exposure is ``treatment__is_1``,
+        # so the stub answered about a covariate the run does not have.
+        return pd.DataFrame(
             [
-                {"covariate": "treatment", "test_statistic": 0.3, "p_value": 0.58},
-                {"covariate": "age", "test_statistic": 0.2, "p_value": 0.65},
-                {"covariate": "global", "test_statistic": 0.3, "p_value": 1.0},
+                {"covariate": item, "test_statistic": 0.3, "p_value": 0.58}
+                for item in covariates
             ]
-        ),
-    )
+            + [{"covariate": "global", "test_statistic": 0.3, "p_value": 1.0}]
+        )
+
+    monkeypatch.setattr(owner, "ph_test", _ph_all_clear)
     monkeypatch.setattr(
         owner,
         "_package_versions",

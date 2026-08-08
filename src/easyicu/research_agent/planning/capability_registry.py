@@ -32,6 +32,11 @@ from dataclasses import dataclass, field
 import re
 from typing import TYPE_CHECKING, Literal, Optional, Tuple
 
+from ..contracts.association_execution import association_execution_verdict
+from ..contracts.model_tokens import (
+    ADJUSTED_ASSOCIATION_OUTPUT,
+    PLANNED_MODEL_REQUIREMENTS_STEP_METHOD,
+)
 from .study_design_playbook import StudyDesignFamily
 
 if TYPE_CHECKING:
@@ -40,7 +45,9 @@ if TYPE_CHECKING:
 __all__ = [
     "ScientificCapability",
     "FamilyCapability",
+    "PrimaryCapabilityVerdict",
     "ScientificCapabilityAssessment",
+    "resolve_primary_capability",
     "AuxiliaryRunner",
     "CAPABILITY_REGISTRY",
     "AUXILIARY_DETERMINISTIC_RUNNERS",
@@ -560,33 +567,269 @@ def get_capability_by_id(
     return matches[0]
 
 
-def _plan_declares_exact_adjusted_association(plan: object) -> bool:
-    """Whether the Planner selected the deterministic association contract.
+def _declares_host_association_product_key(step: object) -> bool:
+    """Whether a step names the sealed executor's product key at all.
 
-    Method and output shape choose the capability. Missing model terms or an
-    unsupported exact estimator do not downgrade the step to free-form: those
-    are declaration/ownership failures that must remain visible to the exact
-    owner's fail-closed gates.
+    Asked independently of the method, because the product key -- not the
+    method string -- is what ``bind_primary_output`` and the deterministic
+    figure lineage read to decide what a table is.
     """
 
-    for step in tuple(getattr(plan, "steps", ()) or ()):
-        if getattr(step, "planned_analysis_role", None) != "primary":
-            continue
-        method = re.sub(
-            r"[^a-z0-9]+",
-            "_",
-            str(getattr(step, "method", "") or "").lower().split(" with ", 1)[0],
-        ).strip("_")
-        outputs = {
-            str(value or "").strip().lower()
-            for value in tuple(getattr(step, "expected_outputs", ()) or ())
-        }
-        if (
-            method == "adjusted_association_models"
-            and "table:adjusted_association_estimates" in outputs
-        ):
-            return True
-    return False
+    return ADJUSTED_ASSOCIATION_OUTPUT in {
+        str(value or "").strip().lower()
+        for value in tuple(getattr(step, "expected_outputs", ()) or ())
+    }
+
+
+def _claims_host_association_product(step: object) -> bool:
+    """Whether one step claims the host's exact adjusted-association product.
+
+    This is a *claim*, not an ownership decision: the step names the method and
+    the product key that belong to the sealed executor. Whether that executor
+    can actually run it is :func:`association_execution_verdict`'s answer, and
+    keeping the two apart is the whole point -- a step that claims the host
+    product and declares an estimator the host does not implement is a
+    contradiction to report, not a step to quietly re-route.
+    """
+
+    method = re.sub(
+        r"[^a-z0-9]+",
+        "_",
+        str(getattr(step, "method", "") or "").lower().split(" with ", 1)[0],
+    ).strip("_")
+    return method == PLANNED_MODEL_REQUIREMENTS_STEP_METHOD and (
+        _declares_host_association_product_key(step)
+    )
+
+
+def _plan_declares_exact_adjusted_association(plan: object) -> bool:
+    """Whether any primary step claims the deterministic association contract."""
+
+    return any(
+        _claims_host_association_product(step)
+        for step in tuple(getattr(plan, "steps", ()) or ())
+        if getattr(step, "planned_analysis_role", None) == "primary"
+    )
+
+
+@dataclass(frozen=True)
+class PrimaryCapabilityVerdict:
+    """One answer to "who computes the primary result, and may it be reported?"
+
+    Four layers used to answer this separately -- the capability registry, the
+    Planner's primary-result validator, runtime executor selection and
+    readiness -- and on ``ba11f52`` they disagreed on a plan that is entirely
+    legal to write.  A plan declaring ``adjusted_association_models``,
+    ``table:adjusted_association_estimates`` and
+    ``method_family='statsmodels_glm_binomial'`` (a canonical token) was
+    labelled ``association_adjusted_v1`` / ``deterministic`` by the registry,
+    accepted by plan validation, declined ``wrong_shape`` by the owner, passed
+    over in silence by the owner-declaration gate -- and executed by the LLM
+    coder.  The label reached ``run_status.json`` and readiness; the execution
+    did not match it.
+
+    ``failure_reason`` is the field that makes this type worth having: a
+    verdict may be *incoherent*, and saying so is different from choosing one
+    of the two coherent answers on the plan's behalf.  Re-routing a
+    GLM-binomial contract to the free-form capability would let any plan escape
+    the deterministic owner by naming an estimator it does not implement;
+    coercing it to Logit would answer a different scientific question under the
+    declared method's name.  So the resolver reports the contradiction and the
+    Planner picks.
+    """
+
+    capability_id: Optional[str]
+    analysis_family: Optional[str]
+    execution_owner: Literal["host_deterministic", "agent_coded", "unresolved"]
+    #: ``None`` when the family has no host owner to ask.
+    owner_claimed: Optional[bool]
+    owner_reason: str
+    scientific_validation: Literal["reportable", "analysis_only", "unsupported"]
+    #: A stable code, or ``None`` when the four layers agree.  Callers branch
+    #: on this; the ``detail`` wording may change.
+    failure_reason: Optional[str]
+    detail: str
+    capability: Optional[ScientificCapability] = None
+
+    @property
+    def coherent(self) -> bool:
+        """Whether the declared capability and the real execution owner agree."""
+
+        return self.failure_reason is None
+
+
+def _verdict_for(
+    capability: Optional[ScientificCapability],
+    *,
+    analysis_family: Optional[str],
+    owner_claimed: Optional[bool] = None,
+    owner_reason: str = "",
+    failure_reason: Optional[str] = None,
+    detail: str = "",
+) -> PrimaryCapabilityVerdict:
+    if capability is None:
+        return PrimaryCapabilityVerdict(
+            capability_id=None,
+            analysis_family=analysis_family,
+            execution_owner="unresolved",
+            owner_claimed=None,
+            owner_reason=owner_reason,
+            scientific_validation="unsupported",
+            failure_reason=failure_reason or "scientific_capability_unregistered",
+            detail=detail or "No scientific capability is registered for this family.",
+        )
+    if failure_reason is not None:
+        owner = "unresolved"
+    elif capability.primary_analysis == "deterministic":
+        owner = "host_deterministic"
+    else:
+        owner = "agent_coded"
+    return PrimaryCapabilityVerdict(
+        capability_id=capability.capability_id,
+        analysis_family=analysis_family,
+        execution_owner=owner,
+        owner_claimed=owner_claimed,
+        owner_reason=owner_reason,
+        scientific_validation=(
+            "unsupported"
+            if failure_reason is not None
+            else capability.scientific_validation
+        ),
+        failure_reason=failure_reason,
+        detail=detail,
+        capability=capability,
+    )
+
+
+def resolve_primary_capability(
+    *,
+    analysis_type: Optional[str],
+    plan: object = None,
+) -> PrimaryCapabilityVerdict:
+    """Resolve capability, execution owner and reportability in one place.
+
+    Read by plan validation, the capability assessment written into
+    ``run_status.json`` and readiness.  Runtime executor selection agrees by
+    construction rather than by convention: this function and the owner call
+    the same :func:`association_execution_verdict`.
+    """
+
+    raw_type = str(analysis_type or "").strip()
+    if not raw_type:
+        return _verdict_for(
+            None,
+            analysis_family=None,
+            failure_reason="analysis_family_unresolved",
+            detail="No canonical analysis family was declared for this run.",
+        )
+    try:
+        from .analysis_types import canonical_analysis_family, get_analysis_type
+
+        canonical = canonical_analysis_family(raw_type)
+        if canonical is None:
+            raise ValueError("unknown analysis type")
+        capability = get_capability_by_id(get_analysis_type(canonical).capability_id)
+    except (TypeError, ValueError):
+        return _verdict_for(
+            None,
+            analysis_family=raw_type,
+            failure_reason="scientific_capability_unregistered",
+            detail=f"No scientific capability is registered for {raw_type!r}.",
+        )
+
+    if (
+        capability is None
+        or capability.capability_id != "association_adjusted_v1"
+        or plan is None
+    ):
+        return _verdict_for(capability, analysis_family=canonical)
+
+    primary_steps = [
+        step
+        for step in tuple(getattr(plan, "steps", ()) or ())
+        if getattr(step, "planned_analysis_role", None) == "primary"
+    ]
+    # No primary step: keep the conservative deterministic default so an
+    # under-declared plan cannot obtain a looser publication contract.
+    if not primary_steps:
+        return _verdict_for(capability, analysis_family=canonical)
+
+    primary = primary_steps[0]
+    declared = str(getattr(primary, "scientific_capability", "") or "").strip()
+    if declared == "association_freeform_v1":
+        # Free-form is *declared*, never inferred. Inferring it from "this step
+        # does not match the exact contract" would make a feasibility audit and
+        # an interaction model indistinguishable, and would hand every
+        # under-declared plan the looser agent-coded obligations for free.
+        if _declares_host_association_product_key(primary):
+            return _verdict_for(
+                capability,
+                analysis_family=canonical,
+                owner_claimed=None,
+                owner_reason="the step declares free-form and the host product",
+                failure_reason="freeform_step_claims_host_product",
+                detail=(
+                    "A step declaring scientific_capability="
+                    "'association_freeform_v1' may not declare the sealed "
+                    f"executor's product {ADJUSTED_ASSOCIATION_OUTPUT!r}. That "
+                    "product key is the sealed executor's identity, read by "
+                    "bind_primary_output and by the deterministic figure "
+                    "lineage; a coder-written table under that name would "
+                    "inherit the deterministic owner's contract without its "
+                    "guarantees. Declare a result product of its own."
+                ),
+            )
+        return _verdict_for(
+            get_capability_by_id("association_freeform_v1"),
+            analysis_family=canonical,
+            owner_claimed=None,
+            owner_reason="the primary step declares the agent-coded association kernel",
+        )
+
+    if not _claims_host_association_product(primary):
+        # Not the host contract and not a declared free-form kernel: the exact
+        # single-model validator owns this and produces its own precise error.
+        return _verdict_for(capability, analysis_family=canonical)
+
+    verdict = association_execution_verdict(primary)
+    if verdict.claimed:
+        return _verdict_for(
+            capability,
+            analysis_family=canonical,
+            owner_claimed=True,
+            owner_reason=verdict.reason,
+        )
+    if verdict.missing_declarations:
+        # Repairable: the plan-time owner-declaration gate already turns this
+        # into one focused replan directive. The capability is still the
+        # deterministic one, so nothing false is asserted by keeping the label.
+        return _verdict_for(
+            capability,
+            analysis_family=canonical,
+            owner_claimed=False,
+            owner_reason=verdict.reason,
+            failure_reason="primary_owner_declaration_incomplete",
+            detail=(
+                "The primary step claims the host adjusted-association product "
+                "but has not declared: " + ", ".join(verdict.missing_declarations)
+            ),
+        )
+    return _verdict_for(
+        capability,
+        analysis_family=canonical,
+        owner_claimed=False,
+        owner_reason=verdict.reason,
+        failure_reason="primary_capability_owner_mismatch",
+        detail=(
+            "The primary step claims the host-owned deterministic product "
+            f"{ADJUSTED_ASSOCIATION_OUTPUT!r}, but the sealed executor cannot "
+            f"run it: {verdict.reason}. Either declare a contract this owner "
+            "implements, or declare a free-form association primary step under "
+            "a different result product -- the host will not substitute an "
+            "estimator, and a coder-executed step may not carry a deterministic "
+            "capability label."
+        ),
+    )
 
 
 def get_capability_for_plan(
@@ -594,42 +837,14 @@ def get_capability_for_plan(
     analysis_type: Optional[str],
     plan: object = None,
 ) -> Optional[ScientificCapability]:
-    """Resolve one capability from the declared analysis and primary step.
+    """The capability record from :func:`resolve_primary_capability`.
 
-    Association is the only family with two non-ordinal primary execution
-    routes. A primary step that explicitly selects the exact adjusted-model
-    method/output contract stays on the deterministic route; another explicit
-    association primary step selects the free-form agent route. With no primary
-    step the conservative analysis-type default remains deterministic so an
-    under-declared plan cannot obtain a looser publication contract.
+    Kept as the compatibility surface for callers that only need the record.
+    Callers that act on the answer should read the verdict instead: this
+    function cannot express "the label and the execution owner disagree".
     """
 
-    raw_type = str(analysis_type or "").strip()
-    if not raw_type:
-        return None
-    try:
-        from .analysis_types import canonical_analysis_family, get_analysis_type
-
-        canonical = canonical_analysis_family(raw_type)
-        if canonical is None:
-            return None
-        capability = get_capability_by_id(get_analysis_type(canonical).capability_id)
-    except (TypeError, ValueError):
-        return None
-    if (
-        capability is None
-        or capability.capability_id != "association_adjusted_v1"
-        or plan is None
-    ):
-        return capability
-    primary_steps = [
-        step
-        for step in tuple(getattr(plan, "steps", ()) or ())
-        if getattr(step, "planned_analysis_role", None) == "primary"
-    ]
-    if not primary_steps or _plan_declares_exact_adjusted_association(plan):
-        return capability
-    return get_capability_by_id("association_freeform_v1")
+    return resolve_primary_capability(analysis_type=analysis_type, plan=plan).capability
 
 
 def assess_scientific_capability(
@@ -693,10 +908,27 @@ def assess_scientific_capability(
                     "the descriptive display fallback is not a result validator."
                 ),
             )
-        capability = get_capability_for_plan(
-            analysis_type=canonical,
-            plan=plan,
-        )
+        verdict = resolve_primary_capability(analysis_type=canonical, plan=plan)
+        capability = verdict.capability
+        # A capability label whose execution owner is not the one it names must
+        # never reach ``run_status.json`` as an executable ceiling. Plan
+        # validation refuses this plan outright; if a caller assesses one
+        # anyway (a stale plan, a replay), the assessment says so rather than
+        # reporting the deterministic label the runtime will not honour.
+        if verdict.failure_reason == "primary_capability_owner_mismatch":
+            return ScientificCapabilityAssessment(
+                capability_id=verdict.capability_id,
+                analysis_type=canonical,
+                question_present=question_present,
+                question_coordinates_resolved=False,
+                input_contract_resolved=False,
+                runtime_data_available=None,
+                execution_backend_available=None,
+                scientific_validator_available=False,
+                claim_ceiling="unsupported",
+                issue_code="primary_capability_owner_mismatch",
+                reason=verdict.detail,
+            )
     except (TypeError, ValueError):
         capability = None
         canonical = raw_type

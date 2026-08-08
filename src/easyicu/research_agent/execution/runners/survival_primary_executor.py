@@ -363,7 +363,6 @@ def run_survival_primary(
     if ph_policy not in {
         "report_only",
         "block_paper_authorization",
-        "human_review",
     }:
         raise SurvivalPrimaryExecutionError(
             "survival_ph_policy_unsupported",
@@ -529,22 +528,45 @@ def run_survival_primary(
             "survival_ph_global_p_invalid",
             "The PH diagnostic returned an invalid global p value",
         )
-    ph_violation = global_p < float(ph_alpha)
+    # The exposure's own PH row. The global row is Bonferroni -- min(1, k *
+    # min_j p_j) -- so it cannot see a time-varying exposure effect once the
+    # model carries a handful of covariates: an exposure at p=0.01 leaves the
+    # global at 0.05 with 5 covariates and 0.08 with 8, both "not rejected" at
+    # alpha=0.05 while the single coefficient the manuscript reports is the one
+    # violating the assumption the estimate depends on.
+    #
+    # The contract already refuses a categorical exposure, so the exposure
+    # generates exactly one design column and this lookup is exact rather than
+    # a choice among contrasts.
+    exposure_rows = ph_table.loc[
+        ph_table["covariate"].astype(str) == str(exposure_design_column)
+    ]
+    if len(exposure_rows) != 1:
+        raise SurvivalPrimaryExecutionError(
+            "survival_ph_exposure_result_missing",
+            "The PH diagnostic did not return exactly one row for the primary "
+            "exposure design column",
+        )
+    exposure_p = float(exposure_rows["p_value"].iloc[0])
+    if not math.isfinite(exposure_p) or not 0 <= exposure_p <= 1:
+        raise SurvivalPrimaryExecutionError(
+            "survival_ph_exposure_p_invalid",
+            "The PH diagnostic returned an invalid exposure p value",
+        )
+    ph_violation = global_p < float(ph_alpha) or exposure_p < float(ph_alpha)
     if not ph_violation:
         ph_status = "not_rejected"
     elif ph_policy == "report_only":
         ph_status = "violation_report_only"
-    elif ph_policy == "block_paper_authorization":
-        ph_status = "violation_block_paper_authorization"
     else:
-        ph_status = "violation_human_review"
-    paper_authorization_allowed = ph_status in {
-        "not_rejected",
-        "violation_report_only",
-    }
+        ph_status = "violation_block_paper_authorization"
+    # A rejected assumption is never self-authorizing, whatever the plan asked
+    # for: the policy was chosen before the diagnostic ran.
+    paper_authorization_allowed = not ph_violation
     ph_table = ph_table.copy()
     ph_table["declared_alpha"] = float(ph_alpha)
     ph_table["handling_policy"] = ph_policy
+    ph_table["ph_decision_rule"] = "exposure_or_global"
     ph_table["ph_status"] = ph_status
     ph_table["paper_authorization_allowed"] = paper_authorization_allowed
 
@@ -626,6 +648,8 @@ def run_survival_primary(
         proportional_hazards_diagnostic=ph_diagnostic,
         proportional_hazards_tested=True,
         proportional_hazards_p_value=global_p,
+        proportional_hazards_exposure_p_value=exposure_p,
+        proportional_hazards_decision_rule="exposure_or_global",
         proportional_hazards_alpha=float(ph_alpha),
         proportional_hazards_policy=ph_policy,
         proportional_hazards_status=ph_status,
@@ -671,6 +695,8 @@ def run_survival_primary(
         "design_columns": list(compiled.design.columns),
         "exposure_design_column": exposure_design_column,
         "proportional_hazards_p_value": global_p,
+        "proportional_hazards_exposure_p_value": exposure_p,
+        "proportional_hazards_decision_rule": "exposure_or_global",
         "proportional_hazards_alpha": float(ph_alpha),
         "proportional_hazards_policy": ph_policy,
         "proportional_hazards_status": ph_status,

@@ -13,7 +13,11 @@ from dataclasses import dataclass
 import math
 from typing import Any, Dict, Mapping, Sequence, Tuple
 
-from ..contracts.model_terms import ModelTermSpec, level_spelling
+from ..contracts.model_terms import (
+    ModelTermSpec,
+    level_identity_class,
+    level_spelling,
+)
 
 
 class ModelTermCompilationError(ValueError):
@@ -43,7 +47,36 @@ def _contrast_column(name: str, level: str) -> str:
 def _validate_observed_levels(series: Any, term: ModelTermSpec) -> Any:
     # Normalize pandas nullable scalars before using the dependency-neutral
     # spelling contract; missing values must never become an observed level.
-    keys = series.astype("object").where(series.notna(), None).map(level_spelling)
+    values = series.astype("object").where(series.notna(), None)
+    keys = values.map(level_spelling)
+
+    # A spelling reached by more than one type class is two source categories
+    # wearing one name. Treatment coding would merge them into a single
+    # contrast and the closed-domain check above would see nothing wrong,
+    # because it compares spellings to spellings.
+    classes_by_spelling: Dict[str, set] = {}
+    for raw in values.unique().tolist():
+        spelling = level_spelling(raw)
+        if not spelling:
+            continue
+        classes_by_spelling.setdefault(spelling, set()).add(level_identity_class(raw))
+    ambiguous = sorted(
+        spelling
+        for spelling, classes in classes_by_spelling.items()
+        if len(classes) > 1
+    )
+    if ambiguous:
+        raise ModelTermCompilationError(
+            "model_term_level_identity_ambiguous",
+            f"{term.name!r} holds values of more than one type that share a "
+            "declared level spelling, so distinct categories would be coded as "
+            "one: "
+            + ", ".join(
+                f"{spelling!r} ({'/'.join(sorted(classes_by_spelling[spelling]))})"
+                for spelling in ambiguous
+            ),
+        )
+
     observed = {value for value in keys.unique().tolist() if value}
     declared = set(term.levels or ())
     unexpected = sorted(observed - declared)

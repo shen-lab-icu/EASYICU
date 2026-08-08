@@ -1,0 +1,31 @@
+{
+  "_provenance": {
+    "generator": "tools/generate_method_kernel_oracles.py",
+    "not_covered": [
+      "methods.rmst",
+      "methods.decision_curve"
+    ],
+    "ph_global_excluded_because": "ours is Bonferroni min(1, k*min_p); cox.zph's is the joint Grambsch-Therneau chi-square on k df -- different statistics",
+    "r_packages": [
+      "survival",
+      "pROC",
+      "EValue"
+    ]
+  },
+  "auc_a": 0.7847535636087,
+  "auc_b": 0.6483757093704,
+  "delong_p": 0.001486361183374,
+  "delong_z": 3.177333284631,
+  "evalue_lower": 5.044994432064,
+  "evalue_point": 7.26303434416,
+  "ph_per_covariate": {
+    "age": {
+      "chisq": 0.001563940679054,
+      "p": 0.9684545294831
+    },
+    "treatment": {
+      "chisq": 0.8474991524178,
+      "p": 0.3572607794215
+    }
+  }
+}

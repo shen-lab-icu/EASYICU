@@ -12,7 +12,6 @@ METHOD_MODULES = (
     "conformal",
     "decision_curve",
     "delong_auc",
-    "evalue",
     "fairness",
     "missing",
     "missing_data",

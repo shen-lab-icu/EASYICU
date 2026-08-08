@@ -231,26 +231,21 @@ class UnreachableKernel:
     pending_decision: str  # what must be decided; asserted non-empty
 
 
-DECLARED_UNREACHABLE_KERNELS: Tuple[UnreachableKernel, ...] = (
-    UnreachableKernel(
-        module="evalue",
-        reason=(
-            "Second E-value implementation. It agrees with the wired "
-            "sensitivity.compute_e_value exactly on RR and HR, but the two use "
-            "DIFFERENT odds-ratio conversions: this module takes an explicit "
-            "'or_rare' / 'or_common' declaration (OR=2.0 -> 3.414 / 2.180), "
-            "while compute_e_value converts through a baseline prevalence and "
-            "defaults to 0.1 when none is supplied (OR=2.0 -> 3.038). Deleting "
-            "either one silently picks a convention, and the numbers differ."
-        ),
-        pending_decision=(
-            "Which OR->RR convention the reported E-value uses. That is a "
-            "scientific choice, not a refactor: the wired default of a 10% "
-            "baseline prevalence is a guessed parameter that moves a reported "
-            "number. Resolve the convention first, then delete the loser."
-        ),
-    ),
-)
+# Empty, and that is the intended steady state rather than a gap.
+#
+# Its only entry was ``evalue``: a second E-value kernel that agreed with the
+# wired ``sensitivity.compute_e_value`` on RR and HR but disagreed on OR -> RR,
+# so the same odds ratio produced two different E-values depending on which
+# module a caller reached. Its ``pending_decision`` was "which OR -> RR
+# convention the reported E-value uses".
+#
+# Decided 2026-08-07: the observed-prevalence (Zhang-Yu) conversion in
+# ``sensitivity.compute_e_value``, because it reads the cohort's own event rate
+# instead of asking the caller to assert a rare- or common-outcome regime, and
+# refuses rather than guessing when that rate is unavailable. ``evalue.py`` was
+# deleted; the four properties only its tests covered moved to
+# ``test_evalue_observed_baseline.py``.
+DECLARED_UNREACHABLE_KERNELS: Tuple[UnreachableKernel, ...] = ()
 
 
 UNREACHABLE_MODULE_NAMES: frozenset = frozenset(

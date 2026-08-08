@@ -42,6 +42,39 @@ def level_spelling(value: object) -> str:
     return str(value).strip()
 
 
+def level_identity_class(value: object) -> str:
+    """The type class a level spelling stands for.
+
+    ``level_spelling`` is deliberately lossy -- it is the *wire* identity, and
+    collapsing ``1`` and ``1.0`` is correct because they are the same value.
+    Collapsing ``1`` and ``"1"``, or ``True`` and ``"true"``, is not: those are
+    two source categories, and treatment coding them as one merges two groups
+    into a single contrast with nothing recorded.
+
+    That is not hypothetical for this codebase. ``io.data_converter`` pins
+    ``MIXED_TYPE_COLUMNS`` to string precisely because real EHR exports carry
+    columns whose object dtype holds both, and a cohort assembled from more
+    than one source can reach an executor with the mixture intact.
+
+    Returning a class rather than a richer typed level keeps the declared
+    contract, every receipt and every digest byte-identical: the ambiguity is
+    detected where declaration meets data, instead of by rewriting the wire
+    format of every model term.
+    """
+
+    if value is None:
+        return "missing"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, float) and value != value:  # NaN
+        return "missing"
+    if isinstance(value, (int, float)):
+        return "numeric"
+    if isinstance(value, str):
+        return "text"
+    return type(value).__name__
+
+
 class ModelTermSpec(BaseModel):
     """Exactly how one source variable enters a statistical model.
 
@@ -189,6 +222,7 @@ __all__ = [
     "ModelTermRole",
     "ModelTermSpec",
     "ModelTermTransform",
+    "level_identity_class",
     "level_spelling",
     "serialise_model_terms",
     "validate_model_term_roster",
