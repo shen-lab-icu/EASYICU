@@ -17,7 +17,9 @@ import threading
 import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
+
+from pydantic import BaseModel, ConfigDict, Field
 
 _CONFIG_DIR = Path.home() / ".easyicu"
 _CONFIG_PATH = _CONFIG_DIR / "webserver_guided_drafts.json"
@@ -80,6 +82,56 @@ _GOAL_META = {
         "summary_zh": "计划确认后创建或打开 Agent 项目。",
     },
 }
+
+
+class GuidedProjectStudySetup(BaseModel):
+    """Typed, PHI-safe project setup exported to the StudyContext owner."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: str = "easyicu.guided-project-study-setup/1"
+    project_id: str = Field(min_length=1, max_length=160)
+    project_title: str = Field(min_length=1, max_length=160)
+    question: str = Field(default="", max_length=1200)
+    purpose: str = Field(default="", max_length=800)
+    data_source: Optional[Dict[str, str]] = None
+    cohort: Dict[str, Any] = Field(default_factory=dict)
+    modules: List[str] = Field(default_factory=list, max_length=64)
+    outcome: str = Field(default="", max_length=500)
+    time_window: Dict[str, Any] = Field(default_factory=dict)
+    comparator: str = Field(default="", max_length=500)
+    export_format: str = Field(default="", max_length=40)
+    analysis_goal: str = Field(default="", max_length=1200)
+    confirmations: Dict[str, bool] = Field(default_factory=dict)
+    source_digest: str = Field(min_length=64, max_length=64)
+    migrated_fields: List[str] = Field(default_factory=list, max_length=16)
+    missing_required: List[str] = Field(default_factory=list, max_length=8)
+
+    def study_context_patch(self) -> Dict[str, Any]:
+        """Return only exact, non-empty values accepted by StudyContext."""
+
+        payload: Dict[str, Any] = {
+            "title": self.project_title,
+            "current_stage": "study_setup",
+            "last_route": "guided",
+        }
+        for field in (
+            "question",
+            "purpose",
+            "data_source",
+            "cohort",
+            "modules",
+            "outcome",
+            "time_window",
+            "comparator",
+            "export_format",
+            "analysis_goal",
+            "confirmations",
+        ):
+            value = getattr(self, field)
+            if value not in (None, "", [], {}):
+                payload[field] = value
+        return payload
 
 
 def _now() -> str:
@@ -232,6 +284,225 @@ def _find_session(session_id: str) -> Dict[str, Any] | None:
         if row.get("id") == session_id:
             return row
     return None
+
+
+def _first_text(*values: Any, max_len: int = 500) -> str:
+    for value in values:
+        clean = _clean_text(value, max_len=max_len)
+        if clean:
+            return clean
+    return ""
+
+
+def read_project_study_setup(project_id: str) -> GuidedProjectStudySetup | None:
+    """Compile one existing Guided project's exact saved study coordinates.
+
+    This is the public, dependency-neutral migration contract. It reads local
+    project metadata without mutating either Guided memory or StudyContext.
+    """
+
+    clean_project = _clean_text(project_id, max_len=160)
+    if not clean_project:
+        return None
+    with _LOCK:
+        sessions = _load_sessions()
+        raw = _read_raw()
+    session = next(
+        (
+            row
+            for row in sessions
+            if str(row.get("draft_id") or "") == clean_project
+            or str(row.get("id") or "") == clean_project
+        ),
+        None,
+    )
+    drafts = raw.get("drafts") if isinstance(raw.get("drafts"), list) else []
+    draft = next(
+        (
+            row
+            for row in drafts
+            if isinstance(row, dict) and str(row.get("id") or "") == clean_project
+        ),
+        None,
+    )
+    if session is None and draft is None:
+        return None
+
+    slots = (
+        session.get("slots")
+        if isinstance(session, dict) and isinstance(session.get("slots"), dict)
+        else {}
+    )
+    design = (
+        slots.get("study_design") if isinstance(slots.get("study_design"), dict) else {}
+    )
+    params = (
+        slots.get("study_params") if isinstance(slots.get("study_params"), dict) else {}
+    )
+    extraction = (
+        slots.get("extraction") if isinstance(slots.get("extraction"), dict) else {}
+    )
+    export = (
+        slots.get("active_export")
+        if isinstance(slots.get("active_export"), dict)
+        else {}
+    )
+    agent = slots.get("agent") if isinstance(slots.get("agent"), dict) else {}
+    context = (
+        session.get("context")
+        if isinstance(session, dict) and isinstance(session.get("context"), dict)
+        else {}
+    )
+    selected_source = (
+        context.get("selected_source")
+        if isinstance(context.get("selected_source"), dict)
+        else {}
+    )
+    draft_row = draft if isinstance(draft, dict) else {}
+    draft_source = (
+        draft_row.get("source") if isinstance(draft_row.get("source"), dict) else {}
+    )
+
+    title = _first_text(
+        session.get("project_title") if isinstance(session, dict) else "",
+        draft_row.get("title"),
+        clean_project,
+        max_len=160,
+    )
+    question = _first_text(
+        agent.get("question"),
+        slots.get("question_hint"),
+        draft_row.get("question"),
+        max_len=1200,
+    )
+    outcome = _first_text(
+        design.get("outcome_label"),
+        design.get("outcome_custom"),
+        design.get("outcome"),
+        params.get("outcome"),
+        slots.get("outcome_hint"),
+    )
+    window_text = _first_text(
+        params.get("window"),
+        design.get("window"),
+        slots.get("time_window_hint"),
+    )
+    time_window = {"preset": window_text, "label": window_text} if window_text else {}
+    comparator = _first_text(
+        design.get("comparator_label"),
+        design.get("comparator_custom"),
+        design.get("comparator"),
+        params.get("exposure"),
+        slots.get("comparator_hint"),
+    )
+    cohort_raw = extraction.get("cohort")
+    if isinstance(cohort_raw, dict):
+        cohort = dict(cohort_raw)
+    else:
+        cohort_text = _first_text(
+            cohort_raw, slots.get("cohort_hint"), draft_row.get("cohort_hint")
+        )
+        cohort = {"preset": cohort_text, "label": cohort_text} if cohort_text else {}
+    modules_raw = extraction.get("modules")
+    if not isinstance(modules_raw, list):
+        modules_raw = (
+            export.get("modules") if isinstance(export.get("modules"), list) else []
+        )
+    modules = []
+    for value in modules_raw[:64]:
+        module = _clean_text(value, max_len=80)
+        if module and module not in modules:
+            modules.append(module)
+    source_path = _first_text(
+        export.get("path"), extraction.get("export_dir"), max_len=4096
+    )
+    source_label = _first_text(
+        export.get("label"),
+        selected_source.get("label"),
+        draft_source.get("label"),
+        max_len=160,
+    )
+    source_database = _first_text(
+        export.get("database"),
+        selected_source.get("database"),
+        draft_source.get("database"),
+        max_len=64,
+    )
+    data_source = {
+        key: value
+        for key, value in {
+            "path": source_path,
+            "label": source_label,
+            "database": source_database,
+        }.items()
+        if value
+    } or None
+    export_format = _first_text(extraction.get("format"), max_len=40)
+    purpose = _first_text(
+        session.get("goal") if isinstance(session, dict) else "", max_len=800
+    )
+    analysis_goal = _first_text(
+        agent.get("analysis_goal"), agent.get("question"), max_len=1200
+    )
+    confirmations = {}
+    if design.get("collected") is True:
+        confirmations["study_design_collected"] = True
+    if extraction.get("registered") is True:
+        confirmations["data_source_registered"] = True
+
+    coordinates = {
+        "question": question,
+        "data_source": data_source,
+        "cohort": cohort,
+        "modules": modules,
+        "outcome": outcome,
+        "time_window": time_window,
+        "comparator": comparator,
+        "export_format": export_format,
+        "analysis_goal": analysis_goal,
+        "confirmations": confirmations,
+    }
+    migrated_fields = [
+        key for key, value in coordinates.items() if value not in (None, "", [], {})
+    ]
+    required = {
+        "question": question,
+        "cohort": cohort,
+        "modules": modules,
+        "outcome": outcome,
+        "time_window": time_window,
+    }
+    missing = [key for key, value in required.items() if value in (None, "", [], {})]
+    digest_payload = {
+        "schema_version": "easyicu.guided-project-study-setup/1",
+        "project_id": clean_project,
+        "project_title": title,
+        "purpose": purpose,
+        **coordinates,
+    }
+    source_digest = hashlib.sha256(
+        json.dumps(
+            digest_payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        ).encode("utf-8")
+    ).hexdigest()
+    return GuidedProjectStudySetup(
+        project_id=clean_project,
+        project_title=title,
+        question=question,
+        purpose=purpose,
+        data_source=data_source,
+        cohort=cohort,
+        modules=modules,
+        outcome=outcome,
+        time_window=time_window,
+        comparator=comparator,
+        export_format=export_format,
+        analysis_goal=analysis_goal,
+        confirmations=confirmations,
+        source_digest=source_digest,
+        migrated_fields=migrated_fields,
+        missing_required=missing,
+    )
 
 
 def _upsert_session(session: Dict[str, Any]) -> None:

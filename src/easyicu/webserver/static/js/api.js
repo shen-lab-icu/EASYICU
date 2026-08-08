@@ -385,6 +385,9 @@
   function createPiCopilotSession(body) {
     return postJSON('/api/copilot/pi/sessions', body || {});
   }
+  function initializePiCopilotProject(body) {
+    return postJSON('/api/copilot/pi/projects/initialize', body || {});
+  }
   function loadPiCopilotSessions(limit, projectId) {
     const n = Math.max(1, Math.min(100, Number(limit) || 30));
     return getJSON('/api/copilot/pi/sessions?project_id=' + encodeURIComponent(projectId || '') + '&limit=' + encodeURIComponent(n));
@@ -556,6 +559,7 @@
   window.EU_API.loadPiCopilotStatus = loadPiCopilotStatus;
   window.EU_API.savePiCopilotProviderConfig = savePiCopilotProviderConfig;
   window.EU_API.createPiCopilotSession = createPiCopilotSession;
+  window.EU_API.initializePiCopilotProject = initializePiCopilotProject;
   window.EU_API.loadPiCopilotSessions = loadPiCopilotSessions;
   window.EU_API.loadPiCopilotSession = loadPiCopilotSession;
   window.EU_API.sendPiCopilotMessage = sendPiCopilotMessage;

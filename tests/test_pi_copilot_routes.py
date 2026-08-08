@@ -16,6 +16,9 @@ class FakeService:
     def create_session(self, **kwargs) -> dict:
         return {"ok": True, "received": kwargs}
 
+    def initialize_project(self, **kwargs) -> dict:
+        return {"ok": True, "status": "ready", "received": kwargs}
+
     def configure_provider(self, **kwargs) -> dict:
         assert kwargs["api_key"] == "route-private-key"
         return {
@@ -105,6 +108,40 @@ def test_session_queries_are_scoped_to_one_research_project(monkeypatch) -> None
     assert opened.json()["received"]["project_id"] == "guided-project-2"
 
 
+def test_project_initialization_is_an_explicit_typed_mutation(monkeypatch) -> None:
+    fake = FakeService()
+    monkeypatch.setattr(route_module, "get_pi_copilot_service", lambda: fake)
+    client = TestClient(app)
+
+    assert (
+        client.post("/api/copilot/pi/projects/initialize", json={}).status_code == 422
+    )
+    initialized = client.post(
+        "/api/copilot/pi/projects/initialize",
+        json={
+            "project_id": "guided-project-2",
+            "title": "Existing study",
+            "confirm_initialization": False,
+        },
+    )
+    assert initialized.status_code == 200
+    assert initialized.json()["received"] == {
+        "project_id": "guided-project-2",
+        "title": "Existing study",
+        "confirm_initialization": False,
+    }
+    assert (
+        client.post(
+            "/api/copilot/pi/projects/initialize",
+            json={
+                "project_id": "guided-project-2",
+                "confirm_initialization": "false",
+            },
+        ).status_code
+        == 422
+    )
+
+
 def test_provider_setup_route_is_typed_and_never_returns_secret(monkeypatch) -> None:
     fake = FakeService()
     monkeypatch.setattr(route_module, "get_pi_copilot_service", lambda: fake)
@@ -125,17 +162,20 @@ def test_provider_setup_route_is_typed_and_never_returns_secret(monkeypatch) -> 
     assert response.status_code == 200
     assert response.json()["runtime"]["status"] == "ready"
     assert "route-private-key" not in response.text
-    assert client.post(
-        "/api/copilot/pi/provider-config",
-        json={
-            "provider": "easyicu-local",
-            "api_key": "route-private-key",
-            "base_url": "http://127.0.0.1:8317/v1",
-            "model": "gpt5.6 luna",
-            "api_transport": "openai-completions",
-            "enable_ai": "true",
-        },
-    ).status_code == 422
+    assert (
+        client.post(
+            "/api/copilot/pi/provider-config",
+            json={
+                "provider": "easyicu-local",
+                "api_key": "route-private-key",
+                "base_url": "http://127.0.0.1:8317/v1",
+                "model": "gpt5.6 luna",
+                "api_transport": "openai-completions",
+                "enable_ai": "true",
+            },
+        ).status_code
+        == 422
+    )
     anthropic = client.post(
         "/api/copilot/pi/provider-config",
         json={
@@ -148,17 +188,20 @@ def test_provider_setup_route_is_typed_and_never_returns_secret(monkeypatch) -> 
         },
     )
     assert anthropic.status_code == 200
-    assert client.post(
-        "/api/copilot/pi/provider-config",
-        json={
-            "provider": "easyicu-local",
-            "api_key": "route-private-key",
-            "base_url": "http://127.0.0.1:8317/v1",
-            "model": "gpt5.6 luna",
-            "api_transport": "unknown",
-            "enable_ai": True,
-        },
-    ).status_code == 422
+    assert (
+        client.post(
+            "/api/copilot/pi/provider-config",
+            json={
+                "provider": "easyicu-local",
+                "api_key": "route-private-key",
+                "base_url": "http://127.0.0.1:8317/v1",
+                "model": "gpt5.6 luna",
+                "api_transport": "unknown",
+                "enable_ai": True,
+            },
+        ).status_code
+        == 422
+    )
 
 
 def test_message_route_rejects_unknown_actions_and_fields(monkeypatch) -> None:
@@ -177,22 +220,28 @@ def test_message_route_rejects_unknown_actions_and_fields(monkeypatch) -> None:
     assert accepted.status_code == 200
     assert accepted.json()["received"]["allowed_actions"] == ["configure", "run"]
 
-    assert client.post(
-        "/api/copilot/pi/sessions/pi-test/message",
-        json={
-            "project_id": "guided-project-1",
-            "message": "Inspect",
-            "allowed_actions": ["bash"],
-        },
-    ).status_code == 422
-    assert client.post(
-        "/api/copilot/pi/sessions/pi-test/message",
-        json={
-            "project_id": "guided-project-1",
-            "message": "Inspect",
-            "raw_rows": True,
-        },
-    ).status_code == 422
+    assert (
+        client.post(
+            "/api/copilot/pi/sessions/pi-test/message",
+            json={
+                "project_id": "guided-project-1",
+                "message": "Inspect",
+                "allowed_actions": ["bash"],
+            },
+        ).status_code
+        == 422
+    )
+    assert (
+        client.post(
+            "/api/copilot/pi/sessions/pi-test/message",
+            json={
+                "project_id": "guided-project-1",
+                "message": "Inspect",
+                "raw_rows": True,
+            },
+        ).status_code
+        == 422
+    )
 
 
 def test_all_session_mutations_require_project_scope(monkeypatch) -> None:
@@ -201,10 +250,13 @@ def test_all_session_mutations_require_project_scope(monkeypatch) -> None:
     client = TestClient(app)
 
     for suffix in ("rebind", "abort"):
-        assert client.post(
-            f"/api/copilot/pi/sessions/pi-test/{suffix}",
-            json={},
-        ).status_code == 422
+        assert (
+            client.post(
+                f"/api/copilot/pi/sessions/pi-test/{suffix}",
+                json={},
+            ).status_code
+            == 422
+        )
 
     rebound = client.post(
         "/api/copilot/pi/sessions/pi-test/rebind",

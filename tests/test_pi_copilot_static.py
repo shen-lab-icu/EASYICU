@@ -9,7 +9,9 @@ from pathlib import Path
 
 import pytest
 
-STATIC = Path(__file__).resolve().parents[1] / "src" / "easyicu" / "webserver" / "static"
+STATIC = (
+    Path(__file__).resolve().parents[1] / "src" / "easyicu" / "webserver" / "static"
+)
 
 
 def _read(relative: str) -> str:
@@ -18,8 +20,9 @@ def _read(relative: str) -> str:
 
 def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     index = _read("index.html")
-    assert "css/guided-pi.css?v=20260808-pi-timeline3" in index
-    assert "js/screens-guided-pi.js?v=20260808-pi-timeline3" in index
+    assert "css/guided-pi.css?v=20260808-pi-timeline5" in index
+    assert "js/screens-guided-pi.js?v=20260808-pi-timeline5" in index
+    assert "js/api.js?v=20260808-pi-authority2" in index
     assert index.index("css/guided.css") < index.index("css/guided-pi.css")
     assert index.index("js/screens-guided-pi.js") < index.index("js/screens-guided.js")
 
@@ -32,7 +35,10 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert 'id="gdPiShell"' in guided
     assert 'id="gdLegacyShell"' in guided
     assert "window.EU_GUIDED_PI.mount" in guided
-    assert "window.EU_GUIDED_PI = { mount, unmount, setShell, bindProject, isActive }" in pi_owner
+    assert (
+        "window.EU_GUIDED_PI = { mount, unmount, setShell, bindProject, isActive }"
+        in pi_owner
+    )
     assert "new EventSource('/api/jobs/'" in pi_owner
     assert "external_llm_opt_in: true" in pi_owner
     assert pi_owner.count("project_id: projectId()") >= 4
@@ -42,7 +48,10 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "window.EU_GUIDED_PI.bindProject" in guided
     assert "if (usePiSession) bindProjectToPi(result, row);" in guided
     assert "else restoreGuidedProjectThread(result, row, kind);" in guided
-    assert "if (piProjectShellActive()) bindProjectToPi(result, selectedGuidedDraft);" in guided
+    assert (
+        "if (piProjectShellActive()) bindProjectToPi(result, selectedGuidedDraft);"
+        in guided
+    )
     assert "Conversation memory" not in guided
     assert "对话记忆" not in guided
     assert "Pi keeps the conversation" in projects_owner
@@ -60,17 +69,20 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "provider_connection_unverified" in pi_owner
     assert "localStorage.setItem('easyicu_pi_api" not in pi_owner
     assert "keyInput.value = ''" in pi_owner
-    assert "data-gpi-grant=\"configure\"" in pi_owner
-    assert "data-gpi-grant=\"run\"" in pi_owner
-    assert "data-gpi-grant=\"cancel\"" in pi_owner
-    assert "Worked for" in pi_owner
-    assert "gpi-tool-receipt" in pi_owner
-    assert "iconHtml(toolIcon(row.toolName), 15)" in pi_owner
+    assert 'data-gpi-grant="configure"' in pi_owner
+    assert 'data-gpi-grant="run"' in pi_owner
+    assert 'data-gpi-grant="cancel"' in pi_owner
+    assert "Used ${toolSteps.length} EasyICU tools" in pi_owner
+    assert "gpi-activity-live" in pi_owner
+    assert "completedToolLabel" in pi_owner
+    assert "initializePiCopilotProject" in pi_owner
     assert "history-activity-" in pi_owner
     assert "closeHistoryActivity" in pi_owner
     assert "row.role === 'activity'" in pi_owner
     assert "gpi-avatar" not in pi_owner
     assert "private chain-of-thought" in pi_owner
+    assert "assistantTextHtml" in pi_owner
+    assert "row.role === 'assistant' ? assistantTextHtml(row.text) : esc(row.text)" in pi_owner
     assert "event.type === 'run_start'" in pi_owner
     assert "event.type === 'tool_progress'" in pi_owner
     assert "event.type === 'run_end'" in pi_owner
@@ -78,6 +90,7 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
         "loadPiCopilotStatus",
         "savePiCopilotProviderConfig",
         "createPiCopilotSession",
+        "initializePiCopilotProject",
         "loadPiCopilotSessions",
         "loadPiCopilotSession",
         "sendPiCopilotMessage",
@@ -92,18 +105,24 @@ def test_pi_css_is_route_owned_and_does_not_pollute_catch_all_files() -> None:
     owner = _read("css/guided-pi.css")
     assert ".gpi-panel" in owner
     assert ".gpi-activity" in owner
-    assert ".gpi-tool-body" in owner
-    assert ".gpi-tool-receipt" in owner
+    assert ".gpi-activity-live" in owner
+    assert ".gpi-activity-step-copy>span" in owner
     assert "pi-gui's MIT-licensed timeline-item/timeline.css" in owner
     assert ".gpi-message{max-width:768px" in owner
-    assert ".gpi-activity,.gpi-tool{max-width:768px" in owner
+    assert ".gpi-activity,.gpi-activity-live{max-width:768px" in owner
+    assert ".gpi-tool" not in owner
     assert "gpi-avatar" not in owner
     assert ".gd-conv.pi-active" in owner
     assert "!important" not in owner
     assert ":has(" not in owner
     for foreign in (".patient-", ".cohort-", ".crossdb-", ".settings-", ".idea-"):
         assert foreign not in owner
-    for relative in ("css/app.css", "css/redesign.css", "css/guided.css", "css/tweaks.css"):
+    for relative in (
+        "css/app.css",
+        "css/redesign.css",
+        "css/guided.css",
+        "css/tweaks.css",
+    ):
         assert ".gpi-" not in _read(relative)
 
 
@@ -114,7 +133,9 @@ def test_pi_chat_uses_a_scrolling_transcript_and_bottom_composer() -> None:
     assert ".gpi-log{flex:1 1 auto;min-height:0;overflow:auto" in owner
     assert ".gpi-compose{flex:0 0 auto" in owner
     assert "grid-template-rows:auto auto minmax(0,1fr) auto auto" not in owner
-    assert ".gpi-text{white-space:pre-wrap;overflow-wrap:anywhere;font-size:15px" in owner
+    assert (
+        ".gpi-text{white-space:pre-wrap;overflow-wrap:anywhere;font-size:15px" in owner
+    )
     assert "font-size:15px;line-height:1.5" in owner
 
 

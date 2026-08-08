@@ -16,7 +16,12 @@ import {
 import { Type } from "typebox";
 
 import { normalizePiEvent, projectTranscriptMessage } from "./event-projection.mjs";
-import { ShellBudgetGuard } from "./shell-budget.mjs";
+import {
+  providerCallReceipt,
+  restoredProviderCallCount,
+  SHELL_BUDGET_RECEIPT,
+  ShellBudgetGuard,
+} from "./shell-budget.mjs";
 
 const PROTOCOL_VERSION = "easyicu.pi-copilot/1";
 const MAX_LINE_BYTES = 1024 * 1024;
@@ -285,7 +290,7 @@ function customTools(sessionId) {
     hostTool(sessionId, { name: "easyicu_list_artifacts", label: "List run artefacts", description: "List whitelisted EasyICU artefact names and digests; never return file contents or paths.", parameters: Type.Object({ run_id: optionalRunId }, { additionalProperties: false }) }),
     hostTool(sessionId, { name: "easyicu_inspect_evidence", label: "Inspect evidence", description: "Inspect bounded evidence-ledger and audit status for an EasyICU run.", parameters: Type.Object({ run_id: optionalRunId }, { additionalProperties: false }) }),
     hostTool(sessionId, { name: "easyicu_explain_blocker", label: "Explain blocker", description: "Explain the current stable EasyICU blocker code and its owning boundary.", parameters: Type.Object({ run_id: optionalRunId, job_id: Type.Optional(Type.String({ maxLength: 160 })) }, { additionalProperties: false }) }),
-    hostTool(sessionId, { name: "easyicu_update_study_context", label: "Save study setup", description: "Persist typed conversational study slots through the existing StudyContext owner. Requires a host-held one-turn Configure authorization and makes the session stale until explicit rebind.", parameters: Type.Object({
+    hostTool(sessionId, { name: "easyicu_update_study_context", executionMode: "sequential", label: "Save study setup", description: "Persist typed conversational study slots through the existing StudyContext owner. Requires a host-held one-turn Configure authorization and makes the session stale until explicit rebind.", parameters: Type.Object({
       title: optionalText(160), question: optionalText(1200), purpose: optionalText(800),
       cohort: Type.Optional(studyCohort), modules: Type.Optional(Type.Array(Type.String({ maxLength: 80 }), { maxItems: 64 })),
       outcome: optionalText(500), time_window: Type.Optional(studyWindow), comparator: optionalText(500),
@@ -293,10 +298,10 @@ function customTools(sessionId) {
       confirmations: Type.Optional(Type.Record(Type.String({ maxLength: 80 }), Type.Boolean())),
       bind_active_export: Type.Optional(Type.Boolean()),
     }, { additionalProperties: false }) }),
-    hostTool(sessionId, { name: "easyicu_run", label: "Start EasyICU run", description: "Submit an existing EasyICU Research Agent run. Requires a host-held one-turn user authorization.", parameters: Type.Object({ run_type: Type.Optional(Type.Union([Type.Literal("preflight"), Type.Literal("full")])), llm_provider: Type.Optional(Type.String({ maxLength: 80 })) }, { additionalProperties: false }) }),
+    hostTool(sessionId, { name: "easyicu_run", executionMode: "sequential", label: "Start EasyICU run", description: "Submit an existing EasyICU Research Agent run. Requires a host-held one-turn user authorization.", parameters: Type.Object({ run_type: Type.Optional(Type.Union([Type.Literal("preflight"), Type.Literal("full")])), llm_provider: Type.Optional(Type.String({ maxLength: 80 })) }, { additionalProperties: false }) }),
     hostTool(sessionId, { name: "easyicu_resume", label: "Resume EasyICU work", description: "Reattach to an existing active EasyICU job. Scientific crash-resume fails closed until an owner contract exists.", parameters: Type.Object({ job_id: Type.Optional(Type.String({ maxLength: 160 })), run_id: optionalRunId }, { additionalProperties: false }) }),
-    hostTool(sessionId, { name: "easyicu_cancel", label: "Cancel EasyICU job", description: "Request cooperative cancellation of the specifically bound EasyICU job. Requires a host-held one-turn user authorization.", parameters: Type.Object({ job_id: Type.Optional(Type.String({ maxLength: 160 })) }, { additionalProperties: false }) }),
-    hostTool(sessionId, { name: "easyicu_request_replan", label: "Request replan", description: "Request re-planning through EasyICU authority. Version 1 returns a typed blocked result until a public replan owner exists.", parameters: Type.Object({ reason: Type.String({ minLength: 1, maxLength: 1200 }) }, { additionalProperties: false }) }),
+    hostTool(sessionId, { name: "easyicu_cancel", executionMode: "sequential", label: "Cancel EasyICU job", description: "Request cooperative cancellation of the specifically bound EasyICU job. Requires a host-held one-turn user authorization.", parameters: Type.Object({ job_id: Type.Optional(Type.String({ maxLength: 160 })) }, { additionalProperties: false }) }),
+    hostTool(sessionId, { name: "easyicu_request_replan", executionMode: "sequential", label: "Request replan", description: "Request re-planning through EasyICU authority. Version 1 returns a typed blocked result until a public replan owner exists.", parameters: Type.Object({ reason: Type.String({ minLength: 1, maxLength: 1200 }) }, { additionalProperties: false }) }),
   ];
 }
 
@@ -401,12 +406,19 @@ async function createSession(params) {
     maxProviderCallsPerMessage: config.maxProviderCallsPerMessage,
     maxProviderCallsPerSession: config.maxProviderCallsPerSession,
     consumedTokens: () => session.getSessionStats().tokens.total,
-    initialProviderCalls: session.getSessionStats().assistantMessages,
+    initialProviderCalls: restoredProviderCallCount(
+      typeof manager?.getEntries === "function" ? manager.getEntries() : [],
+      session.getSessionStats().assistantMessages,
+    ),
   });
   session.agent.streamFunction = (model, context, options = {}) => lazyStream(
     model,
     async () => {
-      record.budgetGuard.authorize(context, options);
+      const authorization = record.budgetGuard.authorize(context, options);
+      manager.appendCustomEntry(
+        SHELL_BUDGET_RECEIPT,
+        providerCallReceipt(authorization.session_provider_call),
+      );
       return await originalStreamFunction(model, context, {
         ...options,
         maxRetries: 0,
