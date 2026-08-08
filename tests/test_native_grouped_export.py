@@ -462,6 +462,19 @@ def test_native_schema_preserves_numeric_logical_and_categorical_families() -> N
     assert str(canonical["ecmo_indication"].dtype) == "string"
 
 
+def test_native_arrow_schema_normalises_backend_large_strings() -> None:
+    import pyarrow as pa
+
+    inferred = pa.schema(
+        [pa.field("stay_id", pa.int64()), pa.field("category", pa.large_string())],
+        metadata={b"owner": b"native-v2"},
+    )
+    normalized = api._normalise_native_export_arrow_schema(inferred)
+
+    assert str(normalized.field("category").type) == "string"
+    assert normalized.metadata == {b"owner": b"native-v2"}
+
+
 def test_native_schema_preserves_kdigo_ascertainment_receipt_families() -> None:
     dictionary = api.load_dictionary(include_sofa2=True)
     receipt_columns = [

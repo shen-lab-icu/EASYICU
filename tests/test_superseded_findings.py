@@ -56,6 +56,7 @@ def _plan_with_steps(step_ids: List[str]) -> AnalysisPlan:
     """Construct a minimal AnalysisPlan with the named steps."""
     return AnalysisPlan(
         research_question="dummy",
+        analysis_type="descriptive_epidemiology",
         steps=[
             AnalysisStep(
                 step_id=sid, intent="dummy intent", inputs=[], expected_outputs=[]

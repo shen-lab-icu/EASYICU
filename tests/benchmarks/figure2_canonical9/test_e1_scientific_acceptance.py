@@ -298,6 +298,32 @@ def test_e1_scientific_acceptance_accepts_complete_structured_closure(
     assert receipt["issues"] == []
 
 
+def test_e1_scientific_acceptance_rejects_obsolete_table_one_schema(
+    tmp_path: Path,
+) -> None:
+    run_dir = _accepted_run(tmp_path)
+    path = (
+        run_dir
+        / "steps"
+        / "02_table_one"
+        / "outputs"
+        / "table_one.csv"
+    )
+    table = pd.read_csv(path)
+    table["schema_version"] = "easyicu.table_one_result/2"
+    table.to_csv(path, index=False)
+
+    receipt = evaluate_e1_scientific_acceptance(
+        run_dir=run_dir,
+        contract=e1_scientific_acceptance_contract(),
+    )
+
+    codes = _reason_codes(receipt)
+    assert receipt["status"] == "rejected"
+    assert "e1_artifact_not_registered" in codes
+    assert "e1_table_one_schema_invalid" in codes
+
+
 def test_e1_scientific_acceptance_rejects_missing_typed_consumption(
     tmp_path: Path,
 ) -> None:

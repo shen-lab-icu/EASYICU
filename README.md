@@ -40,6 +40,7 @@ EasyICU has two layers that answer the two halves of one question — *how trust
 | Run the research-agent on a question + cohort | `easyicu-research-agent` |
 | Reproduce an external paper through the agent | `easyicu-research-replication` |
 | Host the LLM proxy used by the research-agent | `easyicu-llm-server` |
+| Install or refresh the optional Pi Copilot runtime bundled with the Web app | `easyicu-copilot-install` |
 | Copy-paste runnable scripts | [`examples/`](examples/) — start with [`quickstart_convert_and_load.py`](examples/quickstart_convert_and_load.py) |
 
 All console scripts are declared in `pyproject.toml` under `[project.scripts]` and become available once you install the package — see **[Path B](#path-b-python-api)** for the user vs. developer install options.

@@ -1591,7 +1591,7 @@ def _load_raw_feature_data(
 def _materialize_raw_output_columns(frame: Any, plan: ConceptLoadPlan) -> Any:
     """Project executable loader sources back to public catalog outputs.
 
-    Raw Cross-DB requests use the public 281-feature catalog, while a small
+    Raw Cross-DB requests use the public 288-feature catalog, while a small
     number of composite outputs intentionally load through a different
     executable source (for example ``sep3_sofa1`` through ``sep3``).  The
     dependency-neutral concept-output authority compiles that mapping once;

@@ -398,7 +398,7 @@ def _validate_table_one(
         )
         return
     if set(table["schema_version"].dropna().astype(str)) != {
-        "easyicu.table_one_result/2"
+        "easyicu.table_one_result/3"
     }:
         issues.append(
             _issue(

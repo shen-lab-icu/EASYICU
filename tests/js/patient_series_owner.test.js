@@ -101,7 +101,7 @@ assert.match(coveredHtml, /data-patient-module-load="vitals"/);
 assert.match(coveredHtml, /data-patient-inventory-toggle="open"/);
 assert.match(coveredHtml, /observed · load chart/);
 assert.match(coveredHtml, /materialized · verify on load/);
-assert.match(coveredHtml, /281 features across 19 modules/);
+assert.match(coveredHtml, /288 features across 19 modules/);
 const workspaceHtml = series.renderTimeSeriesWorkspace(
   { lanes: coveredLanes, mode: 'lanes' },
   { esc: value => String(value), fmtInt: value => String(value), t: en => en },

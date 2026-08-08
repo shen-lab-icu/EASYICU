@@ -19,7 +19,7 @@ import textwrap
 import time
 from collections import Counter
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -1263,7 +1263,7 @@ def render_from_source(
         else {}
     )
     manifest.update(lineage)
-    manifest["last_rendered_at_utc"] = datetime.now(UTC).isoformat()
+    manifest["last_rendered_at_utc"] = datetime.now(timezone.utc).isoformat()
     manifest["render_layout"] = "adaptive_module_atlas"
     rendered_modules = set(manifest.get("modules") or [])
     rendered_modules.update(manifest.get("rendered_modules") or [])
@@ -1482,7 +1482,7 @@ def run() -> int:
     elapsed = time.perf_counter() - started
     manifest = {
         "status": "passed" if not failures else "partial",
-        "created_at_utc": datetime.now(UTC).isoformat(),
+        "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "backend": "python",
         "databases": list(DATABASES),
         "modules": list(modules),

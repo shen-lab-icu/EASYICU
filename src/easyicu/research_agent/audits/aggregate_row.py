@@ -87,8 +87,8 @@ MIN_AGREEING_COUNT_COLUMNS = 2
 #: table whose other four read ``[52707, 0, 0, 0]`` says exactly ``A == B``
 #: again, and the row floor does not see it.
 #:
-#: MEASURED on m1_hepatobiliary_missingness, 2026-08-03 (``..._7e98a59_verify05``).
-#: Step 03 emitted five audit tables over the concepts bili, sofa2_liver, death,
+#: MEASURED on a hepatobiliary missingness fixture, 2026-08-03.
+#: Its audit step emitted five tables over the concepts bili, sofa2_liver, death,
 #: age and sex.  SOFA-2 liver stage is COMPUTED FROM bilirubin, so the two share
 #: a missingness count to the row (52,707 of 94,458); death, age and sex are
 #: never missing, so they contribute 0.  Row 0 therefore "equalled the sum of the
@@ -96,7 +96,7 @@ MIN_AGREEING_COUNT_COLUMNS = 2
 #: refused as unlabelled totals.  None of them has a total row.  The step's own
 #: correct output went to the Coder for repair, the repair mutated it, the
 #: concept audit then blocked the mutated code, and 08_missingness_audit_panel
-#: died as collateral -- three of the task's failures from one arithmetic
+#: died as collateral -- three failures from one arithmetic
 #: coincidence with a clinical cause.
 #:
 #: MEASURED over the recorded corpus: 1,374 emitted tables of 3-60 rows, 143

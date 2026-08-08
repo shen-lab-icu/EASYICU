@@ -96,4 +96,4 @@ def test_release_pack_sanitizes_paths_and_preserves_license(
         packed_manifest = archive.read(manifest_name).decode()
         assert "/Users/" not in packed_manifest
         assert "<official-demo-cache>/raw" in packed_manifest
-    assert receipt.feature_summary["definitions"] == 281
+    assert receipt.feature_summary["definitions"] == 288
