@@ -156,6 +156,18 @@ def test_the_tomli_fallback_is_actually_installed_on_310() -> None:
     )
 
 
+def test_agent_ci_installs_the_mcp_transport_test_runtime() -> None:
+    """The agent suite imports the optional official MCP SDK at collection."""
+
+    declared = _declared_floors()
+    workflow = _workflow_floors()
+
+    assert workflow.get("mcp") == declared["mcp"], (
+        "research_agent CI runs test_mcp_transport.py under --no-deps, so its "
+        "explicit dependency list must install the declared MCP SDK floor"
+    )
+
+
 def test_optional_sksurv_adapter_does_not_break_python_310_resolution() -> None:
     """scikit-survival 0.28 requires Python 3.11, while core supports 3.10."""
 
