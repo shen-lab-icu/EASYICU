@@ -23,8 +23,13 @@ The installer copies only packaged runtime files and runs
 
 ## Runtime configuration
 
-The sidecar is launched by EasyICU, not by the browser. Configuration is read
-from the WebApp process environment:
+The sidecar is launched by EasyICU, not by the browser. The normal product path
+is Guided Copilot's first-use setup: EasyICU verifies `/models`, stores the
+credential in `~/.easyicu/pi-provider.env` with mode `0600`, and opens chat only
+while the matching verification receipt remains valid. The key is submitted
+once and is never returned to the page or browser storage.
+
+Operators can alternatively provide process-environment overrides:
 
 ```sh
 export EASYICU_PI_API_KEY='...'
@@ -45,7 +50,9 @@ Optional variables:
 The shell provider is independent of any provider selected for an EasyICU
 scientific run. The child receives only a strict runtime/`EASYICU_PI_*`
 environment allowlist; credentials are never stored in this package or
-returned over the gateway protocol. Node `>=22.19.0` is required.
+returned over the gateway protocol. Environment overrides must still match a
+local verification receipt before the chat gate opens. Node `>=22.19.0` is
+required.
 
 The shell registers fifteen EasyICU-only tools. Study setup can be collected
 and saved inside the conversation with a one-message Configure grant; the

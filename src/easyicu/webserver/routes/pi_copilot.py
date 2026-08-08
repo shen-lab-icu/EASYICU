@@ -20,6 +20,22 @@ MessageText = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1, max_length=12_000),
 ]
+ProviderText = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=80),
+]
+CredentialText = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=8192),
+]
+EndpointText = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=2048),
+]
+ModelText = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=256),
+]
 
 
 class PiSessionCreateRequest(BaseModel):
@@ -48,6 +64,20 @@ class PiAbortRequest(BaseModel):
     message_job_id: ShortText | None = None
 
 
+class PiProviderConfigRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    provider: ProviderText = "easyicu-local"
+    api_key: CredentialText
+    base_url: EndpointText = "http://127.0.0.1:8317/v1"
+    model: ModelText = "gpt5.6 luna"
+    api_transport: Literal[
+        "openai-completions",
+        "openai-responses",
+    ] = "openai-completions"
+    enable_ai: StrictBool = False
+
+
 def _raise_http(error: PiCopilotError) -> None:
     raise HTTPException(status_code=error.status_code, detail=error.detail) from error
 
@@ -55,6 +85,21 @@ def _raise_http(error: PiCopilotError) -> None:
 @router.get("/api/copilot/pi/status")
 def get_pi_copilot_status() -> dict:
     return get_pi_copilot_service().runtime_status()
+
+
+@router.post("/api/copilot/pi/provider-config")
+def post_pi_copilot_provider_config(body: PiProviderConfigRequest) -> dict:
+    try:
+        return get_pi_copilot_service().configure_provider(
+            provider=body.provider,
+            api_key=body.api_key,
+            base_url=body.base_url,
+            model=body.model,
+            api_transport=body.api_transport,
+            enable_ai=body.enable_ai,
+        )
+    except PiCopilotError as exc:
+        _raise_http(exc)
 
 
 @router.post("/api/copilot/pi/sessions")

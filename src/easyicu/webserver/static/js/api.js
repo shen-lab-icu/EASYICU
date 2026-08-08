@@ -378,6 +378,9 @@
   function loadPiCopilotStatus() {
     return getJSON('/api/copilot/pi/status');
   }
+  function savePiCopilotProviderConfig(body) {
+    return postJSON('/api/copilot/pi/provider-config', body || {});
+  }
   function createPiCopilotSession(body) {
     return postJSON('/api/copilot/pi/sessions', body || {});
   }
@@ -550,6 +553,7 @@
   window.EU_API.saveGuidedSlots = saveGuidedSlots;
   window.EU_API.loadGuidedSessions = loadGuidedSessions;
   window.EU_API.loadPiCopilotStatus = loadPiCopilotStatus;
+  window.EU_API.savePiCopilotProviderConfig = savePiCopilotProviderConfig;
   window.EU_API.createPiCopilotSession = createPiCopilotSession;
   window.EU_API.loadPiCopilotSessions = loadPiCopilotSessions;
   window.EU_API.loadPiCopilotSession = loadPiCopilotSession;

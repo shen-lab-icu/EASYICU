@@ -21,6 +21,7 @@ from .contracts import (
     utc_now,
 )
 from .gateway import PiGatewayClient
+from .provider_config import PiProviderConfigStore
 from .projections import reject_sensitive_message
 
 MAX_SESSIONS = 100
@@ -35,6 +36,7 @@ class PiCopilotService:
         *,
         store_path: Optional[Path] = None,
         gateway: Optional[PiGatewayClient] = None,
+        provider_store: Optional[PiProviderConfigStore] = None,
     ) -> None:
         self.store_path = (
             Path(store_path)
@@ -42,6 +44,11 @@ class PiCopilotService:
             else Path.home() / ".easyicu" / "pi_copilot_sessions.json"
         )
         self.gateway = gateway or PiGatewayClient()
+        self.provider_store = (
+            provider_store
+            or getattr(self.gateway, "provider_store", None)
+            or PiProviderConfigStore()
+        )
         self._lock = threading.RLock()
         self._active_message_jobs: Dict[str, str] = {}
         self._busy_sessions: set[str] = set()
@@ -226,12 +233,30 @@ class PiCopilotService:
         ):
             if not install.get(key):
                 blockers.append(key)
+        if install.get("api_key_configured") and not install.get(
+            "provider_connection_verified"
+        ):
+            blockers.append("provider_connection_unverified")
         if not current_settings.get("ai_enabled"):
             blockers.append("easyicu_ai_opt_in_disabled")
+        runtime_blockers = {
+            "node_available",
+            "node_version_supported",
+            "entrypoint_available",
+            "dependency_installed",
+            "lockfile_present",
+            "base_url_configured",
+        }
+        if not blockers:
+            runtime_state = "ready"
+        elif runtime_blockers.intersection(blockers):
+            runtime_state = "unavailable"
+        else:
+            runtime_state = "setup_required"
         return {
             "ok": True,
             "runtime": {
-                "status": "ready" if not blockers else "unavailable",
+                "status": runtime_state,
                 "blockers": blockers,
                 "pi_package_version": "0.84.1",
                 "pi_source_commit": "9dd90a49711d088b86fdd9b4aea575913a8328a8",
@@ -243,7 +268,61 @@ class PiCopilotService:
                 ),
                 "built_in_tools_enabled": [],
                 "credential_values_exposed": False,
+                "configuration": dict(
+                    install.get("provider_configuration") or {}
+                ),
             },
+        }
+
+    def configure_provider(
+        self,
+        *,
+        provider: str,
+        api_key: str,
+        base_url: str,
+        model: str,
+        api_transport: str,
+        enable_ai: bool,
+    ) -> Dict[str, Any]:
+        """Verify and persist first-use Pi credentials before chat unlocks."""
+
+        if not enable_ai:
+            raise PiCopilotError(
+                "external_llm_opt_in_required",
+                "Confirm external AI use before verifying the model service.",
+                status_code=403,
+            )
+        with self._lock:
+            if self._busy_sessions:
+                raise PiCopilotError(
+                    "pi_provider_config_busy",
+                    "Stop the active Pi response before changing model service settings.",
+                    status_code=409,
+                )
+        apply_config = getattr(self.gateway, "apply_provider_config", None)
+        if not callable(apply_config):
+            raise PiCopilotError(
+                "pi_provider_gateway_reconfigure_unsupported",
+                "The Pi gateway cannot apply the verified configuration.",
+                status_code=500,
+            )
+        # The explicit request is the canonical opt-in for this verification
+        # call. Persist that choice before any network access.
+        settings.update_settings({"ai_enabled": True})
+        config, configuration = self.provider_store.verify_and_save(
+            provider=provider,
+            api_key=api_key,
+            base_url=base_url,
+            model=model,
+            api_transport=api_transport,
+        )
+        apply_config(config)
+        payload = self.runtime_status()
+        return {
+            "ok": True,
+            "runtime": payload["runtime"],
+            "configuration": configuration,
+            "secrets_returned": False,
         }
 
     @staticmethod
@@ -286,6 +365,12 @@ class PiCopilotService:
             raise PiCopilotError(
                 "pi_api_key_missing",
                 "Set EASYICU_PI_API_KEY in the WebApp process environment.",
+                status_code=503,
+            )
+        if not install.get("provider_connection_verified"):
+            raise PiCopilotError(
+                "pi_provider_setup_required",
+                "Verify the Pi model service before starting a conversation.",
                 status_code=503,
             )
         context = None

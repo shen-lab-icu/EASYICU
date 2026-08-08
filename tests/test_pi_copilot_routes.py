@@ -16,6 +16,18 @@ class FakeService:
     def create_session(self, **kwargs) -> dict:
         return {"ok": True, "received": kwargs}
 
+    def configure_provider(self, **kwargs) -> dict:
+        assert kwargs["api_key"] == "route-private-key"
+        return {
+            "ok": True,
+            "runtime": {"status": "ready"},
+            "configuration": {
+                "credential_present": True,
+                "connection_verified": True,
+                "secrets_returned": False,
+            },
+        }
+
     def send_message(self, session_id: str, **kwargs) -> dict:
         return {"ok": True, "session_id": session_id, "received": kwargs}
 
@@ -48,6 +60,50 @@ def test_status_and_create_routes_preserve_strict_boolean_opt_in(monkeypatch) ->
         json={"external_llm_opt_in": True, "api_key": "must-not-be-accepted"},
     )
     assert unknown.status_code == 422
+
+
+def test_provider_setup_route_is_typed_and_never_returns_secret(monkeypatch) -> None:
+    fake = FakeService()
+    monkeypatch.setattr(route_module, "get_pi_copilot_service", lambda: fake)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/copilot/pi/provider-config",
+        json={
+            "provider": "easyicu-local",
+            "api_key": "route-private-key",
+            "base_url": "http://127.0.0.1:8317/v1",
+            "model": "gpt5.6 luna",
+            "api_transport": "openai-completions",
+            "enable_ai": True,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["runtime"]["status"] == "ready"
+    assert "route-private-key" not in response.text
+    assert client.post(
+        "/api/copilot/pi/provider-config",
+        json={
+            "provider": "easyicu-local",
+            "api_key": "route-private-key",
+            "base_url": "http://127.0.0.1:8317/v1",
+            "model": "gpt5.6 luna",
+            "api_transport": "openai-completions",
+            "enable_ai": "true",
+        },
+    ).status_code == 422
+    assert client.post(
+        "/api/copilot/pi/provider-config",
+        json={
+            "provider": "easyicu-local",
+            "api_key": "route-private-key",
+            "base_url": "http://127.0.0.1:8317/v1",
+            "model": "gpt5.6 luna",
+            "api_transport": "unknown",
+            "enable_ai": True,
+        },
+    ).status_code == 422
 
 
 def test_message_route_rejects_unknown_actions_and_fields(monkeypatch) -> None:
