@@ -15,6 +15,7 @@ from easyicu.webserver.pi_copilot.contracts import (
     ToolExecutionContext,
 )
 from easyicu.webserver.pi_copilot.gateway import PiGatewayClient, _PendingRequest
+from easyicu.webserver.pi_copilot.provider_config import PiProviderConfig
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 APP_DIR = (
@@ -183,6 +184,34 @@ def test_sidecar_environment_is_allowlisted_and_workspace_is_private(
         "EASYICU_PI_SESSION_DIR": str((tmp_path / "sessions").resolve()),
         "EASYICU_PI_CWD": str((tmp_path / "workspace").resolve()),
     }
+
+
+def test_reconfigure_preserves_independent_shell_budget_settings(
+    tmp_path: Path,
+) -> None:
+    gateway = PiGatewayClient(
+        app_dir=APP_DIR,
+        session_dir=tmp_path / "sessions",
+        environ={
+            "PATH": "/usr/bin:/bin",
+            "EASYICU_PI_SESSION_TOKEN_BUDGET": "42000",
+            "EASYICU_PI_MAX_TOKENS": "2048",
+        },
+    )
+
+    gateway.apply_provider_config(
+        PiProviderConfig(
+            provider="easyicu-local",
+            api_key="new-private-key",
+            base_url="http://127.0.0.1:8317/v1",
+            model="gpt5.6 luna",
+            api_transport="openai-completions",
+        )
+    )
+
+    assert gateway.environ["EASYICU_PI_SESSION_TOKEN_BUDGET"] == "42000"
+    assert gateway.environ["EASYICU_PI_MAX_TOKENS"] == "2048"
+    assert gateway.environ["EASYICU_PI_API_KEY"] == "new-private-key"
 
 
 def test_prompt_timeout_aborts_and_refreshes_session(

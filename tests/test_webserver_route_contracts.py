@@ -87,6 +87,11 @@ EXPECTED_COPILOT_ROUTES = [
 
 EXPECTED_PI_COPILOT_ROUTES = [
     ("GET", "/api/copilot/pi/status", "get_pi_copilot_status"),
+    (
+        "POST",
+        "/api/copilot/pi/provider-config",
+        "post_pi_copilot_provider_config",
+    ),
     ("POST", "/api/copilot/pi/sessions", "post_pi_copilot_session"),
     ("GET", "/api/copilot/pi/sessions", "get_pi_copilot_sessions"),
     ("GET", "/api/copilot/pi/sessions/{session_id}", "get_pi_copilot_session"),

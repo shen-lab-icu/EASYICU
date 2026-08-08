@@ -24,6 +24,7 @@ from easyicu.webserver.pi_copilot.projections import (
     project_study_context,
     reject_sensitive_message,
 )
+from easyicu.webserver.pi_copilot.provider_config import PiProviderConfig
 from easyicu.webserver.pi_copilot.service import PiCopilotService
 from easyicu.webserver.pi_copilot import service as service_module
 from easyicu.webserver.pi_copilot import tools as tool_module
@@ -38,6 +39,7 @@ class FakeGateway:
         self.calls: list[tuple[str, dict[str, Any], Any]] = []
         self.tool_contexts: list[ToolExecutionContext] = []
         self.session_dir = session_dir
+        self.applied_config: PiProviderConfig | None = None
 
     def installation_status(self) -> dict[str, Any]:
         return {
@@ -48,6 +50,7 @@ class FakeGateway:
             "dependency_installed": True,
             "lockfile_present": True,
             "api_key_configured": True,
+            "provider_connection_verified": True,
             "base_url_configured": True,
             "provider": "easyicu-local",
             "model": "gpt5.6 luna",
@@ -79,6 +82,10 @@ class FakeGateway:
 
     def close(self) -> None:
         return None
+
+    def apply_provider_config(self, config: PiProviderConfig) -> None:
+        self.applied_config = config
+        self.environ.update(config.as_environment())
 
 
 @pytest.fixture
@@ -155,8 +162,86 @@ def test_runtime_status_fails_closed_when_credential_is_missing(
         store_path=tmp_path / "sessions.json",
         gateway=gateway,
     ).runtime_status()
-    assert payload["runtime"]["status"] == "unavailable"
+    assert payload["runtime"]["status"] == "setup_required"
     assert payload["runtime"]["blockers"] == ["api_key_configured"]
+
+
+def test_runtime_status_fails_closed_until_provider_is_verified(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "load_settings", lambda: {"ai_enabled": True})
+    gateway = FakeGateway()
+    original = gateway.installation_status
+    gateway.installation_status = lambda: {
+        **original(),
+        "provider_connection_verified": False,
+    }
+
+    payload = PiCopilotService(
+        store_path=tmp_path / "sessions.json",
+        gateway=gateway,
+    ).runtime_status()
+
+    assert payload["runtime"]["status"] == "setup_required"
+    assert payload["runtime"]["blockers"] == ["provider_connection_unverified"]
+
+
+def test_verified_first_use_config_is_applied_before_chat_unlocks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current_settings = {"ai_enabled": False, "language": "en"}
+    monkeypatch.setattr(settings, "load_settings", lambda: dict(current_settings))
+
+    def update_settings(patch: dict[str, Any]) -> dict[str, Any]:
+        current_settings.update(patch)
+        return dict(current_settings)
+
+    monkeypatch.setattr(settings, "update_settings", update_settings)
+
+    class RecordingStore:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, Any]] = []
+
+        def verify_and_save(self, **kwargs: Any):
+            self.calls.append(dict(kwargs))
+            config = PiProviderConfig(
+                provider=kwargs["provider"],
+                api_key=kwargs["api_key"],
+                base_url=kwargs["base_url"],
+                model=kwargs["model"],
+                api_transport=kwargs["api_transport"],
+            )
+            return config, {
+                "credential_present": True,
+                "connection_verified": True,
+                "secrets_returned": False,
+            }
+
+    gateway = FakeGateway()
+    store = RecordingStore()
+    service = PiCopilotService(
+        store_path=tmp_path / "sessions.json",
+        gateway=gateway,
+        provider_store=store,  # type: ignore[arg-type]
+    )
+
+    payload = service.configure_provider(
+        provider="easyicu-local",
+        api_key="private-setup-key",
+        base_url="http://127.0.0.1:8317/v1",
+        model="gpt5.6 luna",
+        api_transport="openai-completions",
+        enable_ai=True,
+    )
+
+    assert current_settings["ai_enabled"] is True
+    assert gateway.applied_config is not None
+    assert gateway.applied_config.api_key == "private-setup-key"
+    assert payload["runtime"]["status"] == "ready"
+    assert payload["secrets_returned"] is False
+    assert "private-setup-key" not in json.dumps(payload)
 
 
 def test_session_requires_both_global_and_per_session_opt_in(

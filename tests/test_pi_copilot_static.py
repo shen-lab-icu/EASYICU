@@ -18,8 +18,8 @@ def _read(relative: str) -> str:
 
 def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     index = _read("index.html")
-    assert "css/guided-pi.css?v=20260808-pi-review2" in index
-    assert "js/screens-guided-pi.js?v=20260808-pi-review2" in index
+    assert "css/guided-pi.css?v=20260808-pi-setup1" in index
+    assert "js/screens-guided-pi.js?v=20260808-pi-setup1" in index
     assert index.index("css/guided.css") < index.index("css/guided-pi.css")
     assert index.index("js/screens-guided-pi.js") < index.index("js/screens-guided.js")
 
@@ -34,11 +34,18 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "window.EU_GUIDED_PI = { mount, unmount, setShell }" in pi_owner
     assert "new EventSource('/api/jobs/'" in pi_owner
     assert "external_llm_opt_in: true" in pi_owner
+    assert "data-gpi-provider-form" in pi_owner
+    assert 'type="password"' in pi_owner
+    assert "savePiCopilotProviderConfig" in pi_owner
+    assert "provider_connection_unverified" in pi_owner
+    assert "localStorage.setItem('easyicu_pi_api" not in pi_owner
+    assert "keyInput.value = ''" in pi_owner
     assert "data-gpi-grant=\"configure\"" in pi_owner
     assert "data-gpi-grant=\"run\"" in pi_owner
     assert "data-gpi-grant=\"cancel\"" in pi_owner
     for method in (
         "loadPiCopilotStatus",
+        "savePiCopilotProviderConfig",
         "createPiCopilotSession",
         "loadPiCopilotSessions",
         "loadPiCopilotSession",

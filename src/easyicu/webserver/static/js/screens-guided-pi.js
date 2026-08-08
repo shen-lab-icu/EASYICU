@@ -7,7 +7,8 @@
   const state = {
     host: null, conv: null, runtime: null, sessions: [], session: null,
     messages: [], loading: true, creating: false, busy: false, jobId: '',
-    source: null, error: '', shell: 'legacy', draft: '',
+    source: null, error: '', shell: 'pi', draft: '', setupSaving: false,
+    showSetup: false,
   };
 
   function tr(en, zh) { return window.EU_LANG === 'zh' ? zh : en; }
@@ -37,6 +38,15 @@
     if (error.code === 'pi_session_authority_stale') {
       return tr('The study binding changed after this conversation was saved. Rebind it before continuing.', '这段对话保存后研究绑定发生了变化，请先重新绑定再继续。');
     }
+    if (error.code === 'pi_provider_auth_failed') {
+      return tr('The model service rejected this API credential.', '模型服务拒绝了这个 API 凭据，请检查后重试。');
+    }
+    if (error.code === 'pi_provider_model_unavailable') {
+      return tr('The selected model was not reported by this service.', '该服务没有返回所选模型，请检查模型名称。');
+    }
+    if (error.code === 'pi_provider_connection_failed') {
+      return tr('EasyICU could not reach the model service.', 'EasyICU 无法连接到模型服务，请检查地址和服务状态。');
+    }
     return String(error.message || error.code || error);
   }
   function sessionIsStale() {
@@ -61,16 +71,54 @@
     if (!runtimeReady()) {
       const blockers = (state.runtime && state.runtime.blockers) || [];
       const reason = blockers.includes('api_key_configured')
-        ? tr('Pi is installed; set EASYICU_PI_API_KEY in the WebApp environment to activate it.', 'Pi 已安装；请在 WebApp 环境中设置 EASYICU_PI_API_KEY 后启用。')
+        ? tr('Connect and verify your model service before entering Pi Copilot.', '请先连接并验证模型服务，再进入 Pi Copilot。')
+        : blockers.includes('provider_connection_unverified')
+          ? tr('Verify the saved model service before entering Pi Copilot.', '请先验证已保存的模型服务，再进入 Pi Copilot。')
         : blockers.includes('easyicu_ai_opt_in_disabled')
-          ? tr('Enable external AI in Settings before activating the Pi shell.', '请先在设置中启用外部 AI，再启用 Pi 交互壳。')
+          ? tr('Confirm external AI use before entering Pi Copilot.', '请先确认允许使用外部 AI，再进入 Pi Copilot。')
           : tr('Pi is not ready on this machine. The local Guided workflow remains available.', '这台电脑上的 Pi 尚未就绪，仍可使用本地研究引导流程。');
-      return `<div class="gpi-inline unavailable"><span class="gpi-dot"></span><span>${esc(reason)}</span><button class="gpi-link" type="button" data-gpi-retry>${tr('Retry', '重试')}</button></div>`;
+      return `<div class="gpi-inline unavailable"><span class="gpi-dot"></span><span>${esc(reason)}</span><button class="gpi-link" type="button" data-gpi-setup>${tr('Set up', '开始配置')}</button></div>`;
     }
     if (state.shell === 'legacy') {
       return `<div class="gpi-inline ready"><span class="gpi-dot"></span><span>${tr('Pi AgentSession is ready with EasyICU-only tools.', 'Pi AgentSession 已就绪，仅开放 EasyICU 工具。')}</span><button class="gpi-link" type="button" data-gpi-open>${tr('Open Pi shell', '打开 Pi 交互壳')}</button></div>`;
     }
     return '';
+  }
+
+  function setupPanel() {
+    const runtime = state.runtime || {};
+    const config = runtime.configuration || {};
+    const blockers = runtime.blockers || [];
+    const runtimeMissing = blockers.filter(code => [
+      'node_available', 'node_version_supported', 'entrypoint_available',
+      'dependency_installed', 'lockfile_present', 'base_url_configured',
+    ].includes(code));
+    const savedCredential = !!config.credential_present;
+    const canCancel = runtimeReady();
+    return `
+      <div class="gpi-setup-wrap">
+        <form class="gpi-setup" data-gpi-provider-form autocomplete="off">
+          <div class="gpi-kicker">PI COPILOT · FIRST-USE SETUP</div>
+          <h2>${tr('Connect your model service', '连接你的模型服务')}</h2>
+          <p>${tr('Like signing in to Codex or Claude Code, this one-time check must succeed before the conversation opens. The API credential is saved only in EasyICU’s private local credential file and is never returned to this page.', '就像登录 Codex 或 Claude Code 一样，只有这次连接验证成功后才会开放对话。API 凭据只保存在 EasyICU 本机私有凭据文件中，不会回传到页面。')}</p>
+          <div class="gpi-setup-grid">
+            <label><span>${tr('Service name', '服务名称')}</span><input name="provider" maxlength="80" value="${esc(config.provider || runtime.provider || 'easyicu-local')}" required></label>
+            <label><span>${tr('API transport', 'API 协议')}</span><select name="api_transport"><option value="openai-completions" ${(config.api_transport || runtime.api_transport) === 'openai-responses' ? '' : 'selected'}>OpenAI Chat Completions</option><option value="openai-responses" ${(config.api_transport || runtime.api_transport) === 'openai-responses' ? 'selected' : ''}>OpenAI Responses</option></select></label>
+            <label class="wide"><span>${tr('Service address', '服务地址')}</span><input name="base_url" maxlength="2048" value="${esc(config.base_url || 'http://127.0.0.1:8317/v1')}" inputmode="url" spellcheck="false" required></label>
+            <label><span>${tr('Model', '模型')}</span><input name="model" maxlength="256" value="${esc(config.model || runtime.model || 'gpt5.6 luna')}" spellcheck="false" required></label>
+            <label><span>${tr('API credential', 'API 凭据')}</span><input name="api_key" type="password" maxlength="8192" autocomplete="new-password" placeholder="${savedCredential ? tr('Re-enter to verify or replace', '重新输入以验证或更换') : tr('Paste once; it will not be shown again', '仅粘贴一次，之后不再显示')}" required></label>
+          </div>
+          ${savedCredential ? `<div class="gpi-config-note ok"><span class="gpi-dot"></span>${tr('A private credential is saved, but a newly entered credential is still required to verify or change this connection.', '本机已有私有凭据；为验证或更换连接，仍需重新输入一次凭据。')}</div>` : ''}
+          ${runtimeMissing.length ? `<div class="gpi-config-note warn">${tr('The Pi runtime also needs attention before chat can open:', '聊天开放前还需要处理 Pi 运行环境：')} ${esc(runtimeMissing.join(', '))}</div>` : ''}
+          <label class="gpi-optin"><input name="enable_ai" type="checkbox" required> <span>${tr('I authorize this verification request and external AI use for Pi Copilot. Chat text and PHI-safe summaries may be sent to this service.', '我授权本次连接验证，并允许 Pi Copilot 使用外部 AI；对话文字和经 PHI 安全投影的摘要可能发送到该服务。')}</span></label>
+          ${state.error ? `<div class="gpi-error inline">${esc(state.error)}</div>` : ''}
+          <div class="gpi-setup-actions">
+            ${canCancel ? `<button class="btn" type="button" data-gpi-cancel-setup>${tr('Back to conversation', '返回对话')}</button>` : `<button class="gpi-link" type="button" data-gpi-legacy>${tr('Use local Guided workflow', '使用本地研究引导流程')}</button>`}
+            <button class="btn primary" type="submit" ${state.setupSaving ? 'disabled' : ''}>${state.setupSaving ? tr('Verifying…', '正在验证…') : tr('Verify and enter Copilot', '验证并进入 Copilot')}</button>
+          </div>
+          <div class="gpi-consent">${tr('Verification calls only the service model-list endpoint. The credential is never written to project files, browser storage, logs, or Pi session history.', '验证仅调用服务的模型列表接口。凭据不会写入项目文件、浏览器存储、日志或 Pi 会话历史。')}</div>
+        </form>
+      </div>`;
   }
 
   function activatePanel() {
@@ -121,6 +169,7 @@
           <div><div class="gpi-kicker">PI AGENTSESSION · UX STATE ONLY</div><div class="gpi-title">${esc(session.title || 'Pi Copilot')} <span class="gpi-live">${state.busy ? tr('streaming', '生成中') : tr('ready', '就绪')}</span></div></div>
           <div class="gpi-head-meta">
             <span>${esc(model.id || (state.runtime && state.runtime.model) || 'model')}</span>
+            <button class="gpi-link" type="button" data-gpi-config>${tr('Model service', '模型服务')}</button>
             <button class="gpi-link" type="button" data-gpi-new>${tr('New', '新会话')}</button>
             <button class="gpi-link" type="button" data-gpi-legacy>${tr('Study setup', '研究配置')}</button>
           </div>
@@ -148,7 +197,9 @@
   function render() {
     if (!state.host) return;
     state.host.hidden = false;
-    state.host.innerHTML = state.shell === 'legacy' ? statusBanner() : (state.session ? sessionPanel() : activatePanel());
+    state.host.innerHTML = state.shell === 'legacy'
+      ? statusBanner()
+      : ((state.showSetup || !runtimeReady()) ? setupPanel() : (state.session ? sessionPanel() : activatePanel()));
     requestAnimationFrame(() => {
       const log = state.host && state.host.querySelector('[data-gpi-log]');
       if (log) log.scrollTop = log.scrollHeight;
@@ -167,12 +218,46 @@
         if (remembered && state.sessions.some(row => row.session_id === remembered)) {
           await openSession(remembered); return;
         }
+      } else {
+        state.showSetup = true;
       }
     } catch (error) {
       state.runtime = { status: 'unavailable', blockers: ['status_request_failed'] };
       state.error = errorText(error);
     } finally {
       state.loading = false; render();
+    }
+  }
+
+  async function configureProvider(form) {
+    if (state.setupSaving || !form) return;
+    const data = new FormData(form);
+    const apiKey = String(data.get('api_key') || '').trim();
+    const keyInput = form.querySelector('[name="api_key"]');
+    if (keyInput) keyInput.value = '';
+    state.setupSaving = true; state.error = '';
+    const submit = form.querySelector('[type="submit"]');
+    if (submit) { submit.disabled = true; submit.textContent = tr('Verifying…', '正在验证…'); }
+    try {
+      const payload = await api().savePiCopilotProviderConfig({
+        provider: String(data.get('provider') || '').trim(),
+        api_key: apiKey,
+        base_url: String(data.get('base_url') || '').trim(),
+        model: String(data.get('model') || '').trim(),
+        api_transport: String(data.get('api_transport') || 'openai-completions'),
+        enable_ai: data.get('enable_ai') === 'on',
+      });
+      state.runtime = payload && payload.runtime;
+      if (!runtimeReady()) {
+        state.error = tr('The model connection was saved, but the Pi runtime is not ready yet.', '模型连接已保存，但 Pi 运行环境尚未就绪。');
+        return;
+      }
+      state.showSetup = false;
+      await createSession();
+    } catch (error) {
+      state.error = errorText(error);
+    } finally {
+      state.setupSaving = false; render();
     }
   }
 
@@ -275,12 +360,15 @@
       const session = event.target.closest('[data-gpi-session]');
       if (session) { openSession(session.dataset.gpiSession); return; }
       if (event.target.closest('[data-gpi-retry]')) { loadStatus(); return; }
+      if (event.target.closest('[data-gpi-setup]')) { state.showSetup = true; setShell('pi'); return; }
       if (event.target.closest('[data-gpi-open]')) { setShell('pi'); return; }
       if (event.target.closest('[data-gpi-legacy]')) { setShell('legacy'); return; }
       if (event.target.closest('[data-gpi-create]')) { createSession(); return; }
       if (event.target.closest('[data-gpi-send]')) { sendMessage(); return; }
       if (event.target.closest('[data-gpi-stop]')) { stopMessage(); return; }
       if (event.target.closest('[data-gpi-rebind]')) { rebind(); return; }
+      if (event.target.closest('[data-gpi-config]')) { state.showSetup = true; state.error = ''; render(); return; }
+      if (event.target.closest('[data-gpi-cancel-setup]')) { state.showSetup = false; state.error = ''; render(); return; }
       if (event.target.closest('[data-gpi-new]')) { state.session = null; state.messages = []; rememberSession(''); render(); }
     });
     state.host.addEventListener('input', event => {
@@ -291,10 +379,16 @@
         event.preventDefault(); sendMessage();
       }
     });
+    state.host.addEventListener('submit', event => {
+      const form = event.target.closest('[data-gpi-provider-form]');
+      if (!form) return;
+      event.preventDefault(); configureProvider(form);
+    });
   }
   function mount(host) {
     if (!host || state.host === host) return;
-    closeSource(); state.host = host; state.conv = host.closest('.gd-conv'); state.shell = 'legacy';
+    closeSource(); state.host = host; state.conv = host.closest('.gd-conv'); state.shell = 'pi';
+    if (state.conv) state.conv.classList.add('pi-active');
     wire(); loadStatus();
   }
   function unmount() {

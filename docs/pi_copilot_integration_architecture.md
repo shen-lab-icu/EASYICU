@@ -214,15 +214,27 @@ be inside the private Pi session root.
 ## Provider and cost implications
 
 The Pi shell model and the EasyICU scientific-run provider are separate
-authorities. Pi configuration uses `EASYICU_PI_*` environment variables and is
-never copied into a scientific run. Starting a Pi session requires both the
-server-wide EasyICU AI opt-in and a per-session external-LLM opt-in before any
-credential lookup or subprocess startup.
+authorities. Pi configuration is owned by the Pi boundary and is never copied
+into a scientific run. On first use, the Guided route shows a model-service
+setup gate instead of a chat composer. The browser submits the credential once
+to local FastAPI; FastAPI validates the destination, calls the bounded
+OpenAI-compatible `/models` endpoint without redirects, requires the selected
+model to be present, and only then writes the configuration plus a matching
+verification receipt under `~/.easyicu/` with mode `0600`. A failed
+verification writes neither file. Changing any credential or endpoint field
+invalidates the receipt and closes the chat gate again.
+
+`EASYICU_PI_*` process variables remain an operator override and take
+precedence over the private file. They do not bypass verification: their
+fingerprint must match the local verification receipt before chat can open.
+Starting a Pi session still requires both the server-wide EasyICU AI opt-in
+and a per-session external-LLM opt-in before subprocess startup.
 
 The local OpenAI-compatible defaults are `http://127.0.0.1:8317/v1` and model
-`gpt5.6 luna`, but the API key is environment-only and is never written to the
-repository, browser, session JSONL metadata, logs, or tool results. No paid
-provider call is part of automated tests.
+`gpt5.6 luna`. The API key is never written to the repository, browser storage,
+session JSONL metadata, logs, verification receipt, responses, or tool results;
+only the dedicated private local credential file contains it. Automated tests
+use injected transports and never make a paid provider call.
 
 The Node child receives a strict environment allowlist containing only basic
 process locale/runtime variables and `EASYICU_PI_*` shell configuration. It
@@ -247,8 +259,10 @@ This creates a private versioned runtime and executes only
 
 ## Failure behavior
 
-- Missing Node, dependencies, opt-in, model, or credential: report unavailable;
-  keep the legacy local shell clearly labelled.
+- Missing opt-in, verified model, or credential: report `setup_required` and
+  show the first-use connection gate instead of a chat composer.
+- Missing Node or pinned dependencies: report unavailable and keep the legacy
+  local shell clearly labelled.
 - Sidecar exit/protocol violation: fail the Pi message job with a stable gateway
   code; do not mark or mutate a scientific run.
 - Prompt timeout: best-effort abort the Pi turn, refresh session state, then

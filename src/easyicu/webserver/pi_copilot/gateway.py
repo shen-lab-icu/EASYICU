@@ -19,6 +19,7 @@ from .contracts import (
     ToolExecutionContext,
 )
 from .install import preferred_app_dir
+from .provider_config import PiProviderConfig, PiProviderConfigStore
 from .tools import execute_tool
 
 MAX_PROTOCOL_LINE_BYTES = 1024 * 1024
@@ -67,6 +68,7 @@ class PiGatewayClient:
         session_dir: Optional[Path] = None,
         cwd: Optional[Path] = None,
         environ: Optional[Mapping[str, str]] = None,
+        provider_store: Optional[PiProviderConfigStore] = None,
         tool_executor: Callable[
             [str, Mapping[str, Any], ToolExecutionContext], Dict[str, Any]
         ] = execute_tool,
@@ -87,7 +89,17 @@ class PiGatewayClient:
             if cwd is not None
             else self.session_dir.parent / "workspace"
         ).resolve()
+        self.provider_store = provider_store or PiProviderConfigStore()
+        self._provider_file_enabled = environ is None
         source_environment = os.environ if environ is None else environ
+        provider_environment = self.provider_store.environment(
+            environ=source_environment,
+            include_file=self._provider_file_enabled,
+        )
+        source_environment = {
+            **source_environment,
+            **provider_environment,
+        }
         self.environ = {
             key: str(value)
             for key, value in source_environment.items()
@@ -142,6 +154,10 @@ class PiGatewayClient:
     def installation_status(self) -> Dict[str, Any]:
         node = self._node_binary()
         node_version = self._node_version(node)
+        provider_status = self.provider_store.public_status(
+            environ=self.environ,
+            include_file=self._provider_file_enabled,
+        )
         dependency = (
             self.app_dir
             / "node_modules"
@@ -165,6 +181,9 @@ class PiGatewayClient:
             "api_key_configured": bool(
                 str(self.environ.get("EASYICU_PI_API_KEY") or "").strip()
             ),
+            "provider_connection_verified": bool(
+                provider_status.get("connection_verified")
+            ),
             "provider": str(
                 self.environ.get("EASYICU_PI_PROVIDER") or "easyicu-local"
             ),
@@ -178,7 +197,19 @@ class PiGatewayClient:
             "api_transport": str(
                 self.environ.get("EASYICU_PI_API") or "openai-completions"
             ),
+            "provider_configuration": provider_status,
         }
+
+    def apply_provider_config(self, config: PiProviderConfig) -> None:
+        """Restart the sidecar boundary with a newly verified configuration."""
+
+        self.close()
+        with self._state_lock:
+            provider_environment = config.as_environment()
+            for key in provider_environment:
+                self.environ.pop(key, None)
+            self.environ.update(provider_environment)
+            self._provider_file_enabled = True
 
     def _start(self) -> None:
         with self._state_lock:
