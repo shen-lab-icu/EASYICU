@@ -118,6 +118,7 @@ function modelConfig() {
   if (!new Set(["openai-completions", "openai-responses"]).has(api)) {
     throw Object.assign(new Error(`unsupported Pi API transport: ${api}`), { code: "pi_api_transport_unsupported" });
   }
+  const maxTokens = integerEnv("EASYICU_PI_MAX_TOKENS", 16384, 256, 131072);
   return {
     apiKey,
     baseUrl,
@@ -125,7 +126,11 @@ function modelConfig() {
     provider,
     api,
     contextWindow: integerEnv("EASYICU_PI_CONTEXT_WINDOW", 200000, 8192, 2000000),
-    maxTokens: integerEnv("EASYICU_PI_MAX_TOKENS", 16384, 256, 131072),
+    maxTokens,
+    sessionTokenBudget: Math.max(
+      maxTokens,
+      integerEnv("EASYICU_PI_SESSION_TOKEN_BUDGET", 1000000, 16384, 100000000),
+    ),
   };
 }
 
@@ -294,7 +299,6 @@ function normalizeEvent(event) {
   if (event.type === "message_update") {
     const update = event.assistantMessageEvent || {};
     if (update.type === "text_delta") return { type: "text_delta", delta: boundedText(update.delta, 8000) };
-    if (update.type === "thinking_delta") return { type: "thinking_delta", delta: boundedText(update.delta, 8000) };
     return undefined;
   }
   if (event.type === "tool_execution_start") {
@@ -325,8 +329,8 @@ function transcriptMessage(message) {
   const parts = [];
   for (const item of content.slice(0, 80)) {
     if (!item || typeof item !== "object") continue;
-    if (item.type === "text" || item.type === "thinking") {
-      parts.push({ type: item.type, text: boundedText(item.text || item.thinking, 12000) });
+    if (item.type === "text") {
+      parts.push({ type: "text", text: boundedText(item.text, 12000) });
     } else if (item.type === "toolCall") {
       parts.push({ type: "tool_call", tool_call_id: boundedText(item.id, 160), tool_name: boundedText(item.name, 160) });
     }
@@ -340,6 +344,7 @@ function transcriptMessage(message) {
 
 function sessionState(record) {
   const { session } = record;
+  const stats = session.getSessionStats();
   return {
     session_id: record.externalId,
     pi_session_id: session.sessionId,
@@ -350,6 +355,12 @@ function sessionState(record) {
     streaming: session.isStreaming,
     enabled_tools: session.getActiveToolNames().filter((name) => TOOL_NAMES.includes(name)),
     transcript: session.messages.slice(-100).map(transcriptMessage).filter(Boolean),
+    shell_usage: {
+      tokens: stats.tokens,
+      cost: stats.cost,
+      token_budget: record.sessionTokenBudget,
+      tokens_remaining: Math.max(0, record.sessionTokenBudget - stats.tokens.total),
+    },
   };
 }
 
@@ -360,13 +371,11 @@ async function createSession(params) {
     throw Object.assign(new Error("invalid external session id"), { code: "pi_session_id_invalid" });
   }
   if (sessions.has(externalId)) return sessionState(sessions.get(externalId));
-  const { runtime, selected } = await getModelRuntime();
+  const { runtime, selected, config } = await getModelRuntime();
   const manager = params.session_file
     ? SessionManager.open(safeSessionFile(params.session_file), SESSION_DIR, CWD)
     : SessionManager.create(CWD, SESSION_DIR);
-  const thinkingLevel = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]).has(params.thinking_level)
-    ? params.thinking_level
-    : "medium";
+  const thinkingLevel = "off";
   const settingsManager = SettingsManager.inMemory({
     compaction: { enabled: true },
     retry: { enabled: true, maxRetries: 2 },
@@ -390,7 +399,13 @@ async function createSession(params) {
     const normalized = normalizeEvent(event);
     if (normalized) emit({ kind: "event", request_id: requestId, session_id: externalId, event: normalized });
   });
-  const record = { externalId, session, unsubscribe };
+  const record = {
+    externalId,
+    session,
+    unsubscribe,
+    sessionTokenBudget: config.sessionTokenBudget,
+    maxTokens: config.maxTokens,
+  };
   sessions.set(externalId, record);
   return sessionState(record);
 }
@@ -404,6 +419,20 @@ async function promptSession(requestId, params) {
   if (!message) throw Object.assign(new Error("message is required"), { code: "pi_message_required" });
   if (activeRequestBySession.has(sessionId)) {
     throw Object.assign(new Error("Pi session already has an active prompt"), { code: "pi_session_busy" });
+  }
+  const stats = record.session.getSessionStats();
+  if (stats.tokens.total + record.maxTokens > record.sessionTokenBudget) {
+    throw Object.assign(
+      new Error("Pi shell session token budget is exhausted"),
+      {
+        code: "pi_shell_token_budget_exhausted",
+        details: {
+          consumed_tokens: stats.tokens.total,
+          reserved_output_tokens: record.maxTokens,
+          token_budget: record.sessionTokenBudget,
+        },
+      },
+    );
   }
   activeRequestBySession.set(sessionId, requestId);
   try {

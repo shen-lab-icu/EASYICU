@@ -10,6 +10,7 @@ import pytest
 
 from easyicu.webserver.pi_copilot.contracts import (
     PROTOCOL_VERSION,
+    PiCopilotError,
     PiSessionRecord,
     ToolExecutionContext,
 )
@@ -142,6 +143,84 @@ def test_host_rejects_cross_session_stream_event(tmp_path: Path) -> None:
     assert pending.done.is_set()
     assert pending.error is not None
     assert pending.error.code == "pi_protocol_session_mismatch"
+
+
+def test_sidecar_environment_is_allowlisted_and_workspace_is_private(
+    tmp_path: Path,
+) -> None:
+    gateway = PiGatewayClient(
+        app_dir=APP_DIR,
+        session_dir=tmp_path / "sessions",
+        environ={
+            "PATH": "/usr/bin:/bin",
+            "HOME": str(tmp_path / "home"),
+            "LANG": "en_US.UTF-8",
+            "EASYICU_PI_API_KEY": "pi-only-secret",
+            "EASYICU_PI_MODEL": "gpt5.6 luna",
+            "OPENAI_API_KEY": "scientific-secret",
+            "ANTHROPIC_API_KEY": "scientific-secret",
+            "TAVILY_API_KEY": "search-secret",
+            "AWS_SECRET_ACCESS_KEY": "cloud-secret",
+            "DATABASE_PASSWORD": "database-secret",
+        },
+    )
+
+    assert gateway.environ["EASYICU_PI_API_KEY"] == "pi-only-secret"
+    assert gateway.environ["PATH"] == "/usr/bin:/bin"
+    assert gateway.environ["HOME"] == str(tmp_path / "home")
+    assert "OPENAI_API_KEY" not in gateway.environ
+    assert "ANTHROPIC_API_KEY" not in gateway.environ
+    assert "TAVILY_API_KEY" not in gateway.environ
+    assert "AWS_SECRET_ACCESS_KEY" not in gateway.environ
+    assert "DATABASE_PASSWORD" not in gateway.environ
+    assert gateway.cwd == (tmp_path / "workspace").resolve()
+    assert gateway._child_environment() == {
+        "PATH": "/usr/bin:/bin",
+        "HOME": str(tmp_path / "home"),
+        "LANG": "en_US.UTF-8",
+        "EASYICU_PI_API_KEY": "pi-only-secret",
+        "EASYICU_PI_MODEL": "gpt5.6 luna",
+        "EASYICU_PI_SESSION_DIR": str((tmp_path / "sessions").resolve()),
+        "EASYICU_PI_CWD": str((tmp_path / "workspace").resolve()),
+    }
+
+
+def test_prompt_timeout_aborts_and_refreshes_session(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = PiGatewayClient(app_dir=APP_DIR, session_dir=tmp_path)
+    recovered: list[str] = []
+    monkeypatch.setattr(gateway, "_start", lambda: None)
+    monkeypatch.setattr(gateway, "_write", lambda payload: None)
+    monkeypatch.setattr(
+        gateway,
+        "_recover_timed_out_prompt",
+        lambda session_id: recovered.append(session_id),
+    )
+    monkeypatch.setattr(
+        "easyicu.webserver.pi_copilot.gateway.threading.Event.wait",
+        lambda self, timeout: False,
+    )
+
+    with pytest.raises(PiCopilotError) as caught:
+        gateway.request(
+            "session.prompt",
+            {"session_id": "pi-timeout", "message": "inspect"},
+            timeout=0.1,
+        )
+
+    assert caught.value.code == "pi_gateway_timeout"
+    assert recovered == ["pi-timeout"]
+
+
+def test_sidecar_contract_hides_reasoning_and_enforces_token_budget() -> None:
+    source = (APP_DIR / "src" / "main.mjs").read_text(encoding="utf-8")
+
+    assert "EASYICU_PI_SESSION_TOKEN_BUDGET" in source
+    assert "pi_shell_token_budget_exhausted" in source
+    assert 'update.type === "thinking_delta"' not in source
+    assert 'item.type === "thinking"' not in source
 
 
 def test_pinned_sidecar_starts_with_only_easyicu_tools(tmp_path: Path) -> None:

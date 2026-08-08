@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import threading
 from datetime import datetime, timezone
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Callable, Dict, Iterable, Literal, Optional
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
@@ -71,7 +72,7 @@ class PiSessionRecord(BaseModel):
     pi_session_file: Optional[str] = None
     title: str = "Pi Copilot"
     language: Literal["en", "zh"] = "en"
-    thinking_level: Literal["off", "minimal", "low", "medium", "high"] = "medium"
+    thinking_level: Literal["off", "minimal", "low", "medium", "high"] = "off"
     external_llm_opt_in: bool = False
     binding: AuthorityBinding = Field(default_factory=AuthorityBinding)
     created_at: str = Field(default_factory=utc_now)
@@ -95,17 +96,92 @@ class PiToolResult(BaseModel):
     authority: Dict[str, Any] = Field(default_factory=dict)
 
 
-class ToolExecutionContext(BaseModel):
-    """Host-held turn capability; it is never supplied by the model."""
+class HostTurnGrant:
+    """Atomically consumable one-use action grants held only by the host."""
 
-    model_config = ConfigDict(extra="forbid")
+    def __init__(self, remaining: Optional[Dict[str, int]] = None) -> None:
+        self._remaining = {
+            str(action): max(0, int(count))
+            for action, count in dict(remaining or {}).items()
+        }
+        self._provided = frozenset(self._remaining)
+        self._lock = threading.Lock()
 
-    session: PiSessionRecord
-    allowed_actions: frozenset[str] = frozenset()
+    @classmethod
+    def from_actions(cls, actions: Iterable[str]) -> "HostTurnGrant":
+        return cls({str(action): 1 for action in actions})
+
+    def consume(self, action: str) -> Literal["granted", "consumed", "missing"]:
+        name = str(action)
+        with self._lock:
+            if name not in self._provided:
+                return "missing"
+            if self._remaining.get(name, 0) <= 0:
+                return "consumed"
+            self._remaining[name] -= 1
+            return "granted"
+
+    @property
+    def available_actions(self) -> frozenset[str]:
+        with self._lock:
+            return frozenset(
+                action for action, count in self._remaining.items() if count > 0
+            )
+
+
+AuthorityValidator = Callable[[AuthorityBinding], Dict[str, Any]]
+
+
+class ToolExecutionContext:
+    """Host-held turn grants and authority freshness; never model supplied."""
+
+    def __init__(
+        self,
+        *,
+        session: PiSessionRecord,
+        allowed_actions: Iterable[str] = (),
+        grant: Optional[HostTurnGrant] = None,
+        authority_validator: Optional[AuthorityValidator] = None,
+    ) -> None:
+        self.session = session
+        self.grant = grant or HostTurnGrant.from_actions(allowed_actions)
+        self.authority_validator = authority_validator
+        self._authority_invalidated_reason: Optional[str] = None
+        self._lock = threading.Lock()
+
+    @property
+    def allowed_actions(self) -> frozenset[str]:
+        return self.grant.available_actions
+
+    def invalidate_authority(self, reason: str) -> None:
+        with self._lock:
+            self._authority_invalidated_reason = str(reason or "authority_mutated")
+
+    def assert_authority_fresh(self) -> None:
+        with self._lock:
+            invalidated_reason = self._authority_invalidated_reason
+        if invalidated_reason:
+            raise PiCopilotError(
+                "pi_session_authority_stale",
+                "This Pi turn changed EasyICU authority and must stop until rebind.",
+                status_code=409,
+                details={"stale": True, "reason": invalidated_reason},
+            )
+        if self.authority_validator is None:
+            return
+        details = self.authority_validator(self.session.binding)
+        if details.get("stale"):
+            raise PiCopilotError(
+                "pi_session_authority_stale",
+                "EasyICU authority changed during this Pi turn; rebind before continuing.",
+                status_code=409,
+                details=details,
+            )
 
 
 __all__ = [
     "AuthorityBinding",
+    "HostTurnGrant",
     "MAX_MESSAGE_CHARS",
     "PROTOCOL_VERSION",
     "PiCopilotError",

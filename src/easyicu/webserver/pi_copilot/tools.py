@@ -16,6 +16,7 @@ from .contracts import (
 )
 from .projections import (
     bounded_json_projection,
+    ensure_safe_projection,
     path_digest,
     project_artifacts,
     project_capabilities,
@@ -23,6 +24,7 @@ from .projections import (
     project_run_row,
     project_study_context,
     reject_sensitive_message,
+    stable_code,
 )
 
 READ_TOOLS = frozenset(
@@ -60,7 +62,7 @@ def _result(
     owner: str,
     details: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    return PiToolResult(
+    payload = PiToolResult(
         status=status,
         code=code,
         summary=summary[:2000],
@@ -68,6 +70,30 @@ def _result(
         details=bounded_json_projection(details or {}),
         authority=context.session.binding.model_dump(mode="json"),
     ).model_dump(mode="json")
+    return ensure_safe_projection(payload)
+
+
+def _consume_action(
+    context: ToolExecutionContext, action: str
+) -> Optional[Dict[str, Any]]:
+    outcome = context.grant.consume(action)
+    if outcome == "granted":
+        return None
+    if outcome == "consumed":
+        return _result(
+            context,
+            status="blocked",
+            code="pi_action_grant_consumed",
+            summary=f"The one-use {action} grant for this message was already consumed.",
+            owner="easyicu.webserver.pi_copilot",
+        )
+    return _result(
+        context,
+        status="blocked",
+        code="pi_action_authorization_required",
+        summary=f"This action requires a one-use {action} grant for the current message.",
+        owner="easyicu.webserver.pi_copilot",
+    )
 
 
 def _require_args(
@@ -386,11 +412,63 @@ def _inspect_validation(
             owner="easyicu.webserver.agent_runs",
         )
     review = _run_review(row)
+    gate = review.get("gate")
+    gate = gate if isinstance(gate, Mapping) else {}
+    readiness = review.get("readiness")
+    readiness = readiness if isinstance(readiness, Mapping) else {}
+    checks = gate.get("checks")
+    checks = checks if isinstance(checks, list) else []
+    failed_requirement_codes = [
+        stable_code(check.get("id"))
+        for check in checks
+        if isinstance(check, Mapping)
+        and isinstance(check.get("id"), str)
+        and not check.get("passed")
+    ][:50]
+    failed_requirement_codes = [
+        code for code in failed_requirement_codes if code is not None
+    ]
+    missing_requirement_codes = [
+        stable_code(item)
+        for item in (readiness.get("non_human_failures") or [])
+        if isinstance(item, str)
+    ][:50]
+    missing_requirement_codes = [
+        code for code in missing_requirement_codes if code is not None
+    ]
     details = bounded_json_projection(
         {
             "run_id": row.get("run_id"),
-            "gate": review.get("gate") or {},
-            "readiness": review.get("readiness") or {},
+            "gate": {
+                "status": gate.get("status"),
+                "gate_code": stable_code(gate.get("reason")),
+                "reportable": bool(gate.get("reportable")),
+                "draft_unlocked": bool(gate.get("draft_unlocked")),
+                "checks_total": len(checks),
+                "checks_passed": sum(
+                    1
+                    for check in checks
+                    if isinstance(check, Mapping) and check.get("passed")
+                ),
+                "failed_requirement_codes": failed_requirement_codes,
+            },
+            "readiness": {
+                key: readiness.get(key)
+                for key in (
+                    "status",
+                    "signable",
+                    "signed",
+                    "signoff_stale",
+                    "reportable",
+                    "draft_unlocked",
+                    "gate_status",
+                    "checks_total",
+                    "checks_passed",
+                    "human_signoff_passed_in_gate",
+                )
+                if readiness.get(key) is not None
+            }
+            | {"missing_requirement_codes": missing_requirement_codes},
             "signed": bool(review.get("signed")),
             "signoff_stale": bool(review.get("signoff_stale")),
         }
@@ -523,7 +601,11 @@ def _explain_blocker(
     details = run_or_job.get("details") or {}
     job = details.get("job") if isinstance(details.get("job"), Mapping) else {}
     if job and job.get("status") in {"failed", "cancelled"}:
-        code = str(job.get("error_code") or job.get("cancel_reason") or job["status"])
+        code = str(
+            job.get("error_code")
+            or job.get("cancel_reason_code")
+            or job["status"]
+        )
         return _result(
             context,
             status="blocked",
@@ -541,9 +623,9 @@ def _explain_blocker(
             "ready",
             "signed",
         }:
-            code = str(
-                gate.get("reason")
-                or readiness.get("reason")
+            code = (
+                stable_code(gate.get("reason"))
+                or stable_code(readiness.get("reason"))
                 or "easyicu_readiness_blocked"
             )
             return _result(
@@ -555,7 +637,7 @@ def _explain_blocker(
                 details={
                     "run_id": row.get("run_id"),
                     "gate_status": gate.get("status"),
-                    "gate_reason": gate.get("reason"),
+                    "gate_code": stable_code(gate.get("reason")),
                     "readiness_status": readiness.get("status"),
                 },
             )
@@ -592,17 +674,6 @@ def _update_study_context(
     """Persist conversational setup through the existing typed owner."""
 
     _require_args(params, allowed=_STUDY_SETUP_FIELDS)
-    if "configure" not in context.allowed_actions:
-        return _result(
-            context,
-            status="blocked",
-            code="pi_action_authorization_required",
-            summary=(
-                "Saving study setup requires the user to grant Configure for "
-                "this message. The proposed values were not persisted."
-            ),
-            owner="easyicu.webserver.pi_copilot",
-        )
     binding = context.session.binding
     current = _bound_context(binding)
     if binding.study_context_id and current is None:
@@ -669,6 +740,9 @@ def _update_study_context(
             "pi_tool_arguments_required",
             "At least one typed study-setup field is required.",
         )
+    grant_block = _consume_action(context, "configure")
+    if grant_block is not None:
+        return grant_block
 
     try:
         updated = study_contexts.upsert_context(
@@ -699,7 +773,7 @@ def _update_study_context(
                 if exc.detail.get(key) is not None
             },
         )
-    return _result(
+    result = _result(
         context,
         status="ok",
         code="study_context_updated",
@@ -713,20 +787,14 @@ def _update_study_context(
             "rebind_required": True,
         },
     )
+    context.invalidate_authority("study_context_updated")
+    return result
 
 
 def _run(
     context: ToolExecutionContext, params: Mapping[str, Any]
 ) -> Dict[str, Any]:
     _require_args(params, allowed=("run_type", "llm_provider"))
-    if "run" not in context.allowed_actions:
-        return _result(
-            context,
-            status="blocked",
-            code="pi_action_authorization_required",
-            summary="Starting an EasyICU run requires the user to grant Run for this message.",
-            owner="easyicu.webserver.pi_copilot",
-        )
     run_type = str(params.get("run_type") or "preflight").strip().lower()
     if run_type != "preflight":
         return _result(
@@ -749,6 +817,9 @@ def _run(
             summary="Create and bind a typed StudyContext before starting an EasyICU run.",
             owner="easyicu.webserver.study_contexts",
         )
+    grant_block = _consume_action(context, "run")
+    if grant_block is not None:
+        return grant_block
     # Import lazily to keep the route-composition module out of this package's
     # import graph. The function remains the one existing run submission path;
     # this adapter does not reconstruct its validation or JobManager behavior.
@@ -778,7 +849,7 @@ def _run(
                 if detail.get(key) is not None
             },
         )
-    return _result(
+    result = _result(
         context,
         status="ok",
         code="easyicu_run_submitted",
@@ -796,6 +867,8 @@ def _run(
             if submitted.get(key) is not None
         },
     )
+    context.invalidate_authority("easyicu_run_submitted")
+    return result
 
 
 def _resume(
@@ -843,14 +916,6 @@ def _cancel(
     context: ToolExecutionContext, params: Mapping[str, Any]
 ) -> Dict[str, Any]:
     _require_args(params, allowed=("job_id",))
-    if "cancel" not in context.allowed_actions:
-        return _result(
-            context,
-            status="blocked",
-            code="pi_action_authorization_required",
-            summary="Cancelling an EasyICU job requires the user to grant Cancel for this message.",
-            owner="easyicu.webserver.pi_copilot",
-        )
     job_id = str(
         params.get("job_id")
         or context.session.binding.active_job_id
@@ -865,8 +930,11 @@ def _cancel(
             summary="The specifically bound EasyICU job no longer exists in JobManager.",
             owner="easyicu.webserver.jobs",
         )
+    grant_block = _consume_action(context, "cancel")
+    if grant_block is not None:
+        return grant_block
     accepted = job.request_cancel("pi_copilot_user_authorized")
-    return _result(
+    result = _result(
         context,
         status="ok" if accepted else "blocked",
         code=(
@@ -882,6 +950,9 @@ def _cancel(
         owner="easyicu.webserver.jobs",
         details={"job": project_job(job.snapshot())},
     )
+    if accepted:
+        context.invalidate_authority("easyicu_job_cancel_requested")
+    return result
 
 
 def _request_replan(
@@ -927,6 +998,7 @@ def execute_tool(
 ) -> Dict[str, Any]:
     """Execute exactly one registered tool through its existing EasyICU owner."""
 
+    context.assert_authority_fresh()
     tool_name = str(name or "").strip()
     handler = _DISPATCH.get(tool_name)
     if handler is None:

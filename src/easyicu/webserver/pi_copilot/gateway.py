@@ -18,10 +18,32 @@ from .contracts import (
     PiCopilotError,
     ToolExecutionContext,
 )
+from .install import preferred_app_dir
 from .tools import execute_tool
 
 MAX_PROTOCOL_LINE_BYTES = 1024 * 1024
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 15 * 60
+MIN_NODE_VERSION = (22, 19, 0)
+_CHILD_ENV_KEYS = frozenset(
+    {
+        "PATH",
+        "HOME",
+        "TMPDIR",
+        "TEMP",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "TZ",
+        "EASYICU_PI_API_KEY",
+        "EASYICU_PI_PROVIDER",
+        "EASYICU_PI_MODEL",
+        "EASYICU_PI_BASE_URL",
+        "EASYICU_PI_API",
+        "EASYICU_PI_CONTEXT_WINDOW",
+        "EASYICU_PI_MAX_TOKENS",
+        "EASYICU_PI_SESSION_TOKEN_BUDGET",
+    }
+)
 
 EventSink = Callable[[Dict[str, Any]], None]
 
@@ -49,11 +71,10 @@ class PiGatewayClient:
             [str, Mapping[str, Any], ToolExecutionContext], Dict[str, Any]
         ] = execute_tool,
     ) -> None:
-        repo_root = Path(__file__).resolve().parents[4]
         self.app_dir = (
             Path(app_dir)
             if app_dir is not None
-            else Path(__file__).resolve().with_name("node_app")
+            else preferred_app_dir()
         ).resolve()
         self.entrypoint = self.app_dir / "src" / "main.mjs"
         self.session_dir = (
@@ -61,8 +82,17 @@ class PiGatewayClient:
             if session_dir is not None
             else Path.home() / ".easyicu" / "pi-agent" / "sessions"
         ).resolve()
-        self.cwd = (Path(cwd) if cwd is not None else repo_root).resolve()
-        self.environ = dict(environ or os.environ)
+        self.cwd = (
+            Path(cwd)
+            if cwd is not None
+            else self.session_dir.parent / "workspace"
+        ).resolve()
+        source_environment = os.environ if environ is None else environ
+        self.environ = {
+            key: str(value)
+            for key, value in source_environment.items()
+            if key in _CHILD_ENV_KEYS or key.startswith("LC_")
+        }
         self._tool_executor = tool_executor
         self._process: Optional[subprocess.Popen[str]] = None
         self._write_lock = threading.Lock()
@@ -72,18 +102,46 @@ class PiGatewayClient:
         self._reader_thread: Optional[threading.Thread] = None
         self._stderr_thread: Optional[threading.Thread] = None
 
-    @staticmethod
-    def _node_binary() -> Optional[str]:
-        direct = shutil.which("node")
+    def _node_binary(self) -> Optional[str]:
+        direct = shutil.which("node", path=self.environ.get("PATH"))
         if direct:
             return direct
+        home = Path(self.environ.get("HOME") or Path.home())
         candidates = sorted(
-            (Path.home() / ".nvm" / "versions" / "node").glob("*/bin/node")
+            (home / ".nvm" / "versions" / "node").glob("*/bin/node")
         )
         return str(candidates[-1]) if candidates else None
 
+    def _node_version(self, node: Optional[str]) -> Optional[tuple[int, int, int]]:
+        if not node:
+            return None
+        try:
+            completed = subprocess.run(
+                [node, "--version"],
+                env=self.environ,
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=True,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        raw = completed.stdout.strip().removeprefix("v")
+        parts = raw.split(".")
+        if len(parts) < 3 or not all(part.isdigit() for part in parts[:3]):
+            return None
+        return tuple(int(part) for part in parts[:3])
+
+    def _child_environment(self) -> Dict[str, str]:
+        return {
+            **self.environ,
+            "EASYICU_PI_SESSION_DIR": str(self.session_dir),
+            "EASYICU_PI_CWD": str(self.cwd),
+        }
+
     def installation_status(self) -> Dict[str, Any]:
         node = self._node_binary()
+        node_version = self._node_version(node)
         dependency = (
             self.app_dir
             / "node_modules"
@@ -93,6 +151,14 @@ class PiGatewayClient:
         )
         return {
             "node_available": bool(node),
+            "node_version": (
+                ".".join(str(part) for part in node_version)
+                if node_version is not None
+                else None
+            ),
+            "node_version_supported": bool(
+                node_version is not None and node_version >= MIN_NODE_VERSION
+            ),
             "entrypoint_available": self.entrypoint.is_file(),
             "dependency_installed": dependency.is_file(),
             "lockfile_present": (self.app_dir / "package-lock.json").is_file(),
@@ -123,6 +189,7 @@ class PiGatewayClient:
                 key
                 for key in (
                     "node_available",
+                    "node_version_supported",
                     "entrypoint_available",
                     "dependency_installed",
                     "lockfile_present",
@@ -139,9 +206,8 @@ class PiGatewayClient:
             node = self._node_binary()
             assert node is not None
             self.session_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-            env = dict(self.environ)
-            env["EASYICU_PI_SESSION_DIR"] = str(self.session_dir)
-            env["EASYICU_PI_CWD"] = str(self.cwd)
+            self.cwd.mkdir(parents=True, exist_ok=True, mode=0o700)
+            env = self._child_environment()
             self._process = subprocess.Popen(
                 [node, str(self.entrypoint)],
                 cwd=str(self.app_dir),
@@ -225,6 +291,10 @@ class PiGatewayClient:
                 }
             )
             if not pending.done.wait(timeout=max(0.1, float(timeout))):
+                if method == "session.prompt":
+                    session_id = str((params or {}).get("session_id") or "")
+                    if session_id:
+                        self._recover_timed_out_prompt(session_id)
                 raise PiCopilotError(
                     "pi_gateway_timeout",
                     f"The Pi gateway did not finish {method!r} before the host deadline.",
@@ -237,6 +307,26 @@ class PiGatewayClient:
         finally:
             with self._state_lock:
                 self._pending.pop(request_id, None)
+
+    def _recover_timed_out_prompt(self, session_id: str) -> None:
+        """Best-effort stop and state refresh after the host prompt deadline."""
+
+        try:
+            self.request(
+                "session.abort",
+                {"session_id": session_id},
+                timeout=5,
+            )
+        except PiCopilotError:
+            pass
+        try:
+            self.request(
+                "session.state",
+                {"session_id": session_id},
+                timeout=5,
+            )
+        except PiCopilotError:
+            pass
 
     def _read_stdout(self) -> None:
         process = self._process

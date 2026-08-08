@@ -142,8 +142,41 @@ class PiCopilotService:
                 if row.session_id != record.session_id
             ]
             rows.insert(0, record)
-            self._write_records(rows)
+            evicted = rows[MAX_SESSIONS:]
+            self._write_records(rows[:MAX_SESSIONS])
+        for retired in evicted:
+            self._retire_record(retired)
         return record
+
+    def _retire_record(self, record: PiSessionRecord) -> None:
+        """Dispose an evicted Pi session and remove only its private JSONL."""
+
+        with self._lock:
+            if record.session_id in self._busy_sessions:
+                return
+        try:
+            self.gateway.request(
+                "session.dispose",
+                {"session_id": record.session_id},
+                timeout=5,
+            )
+        except (OSError, PiCopilotError):
+            pass
+        session_root = getattr(self.gateway, "session_dir", None)
+        if session_root is None or not record.pi_session_file:
+            return
+        candidate = Path(record.pi_session_file).resolve()
+        root = Path(session_root).resolve()
+        try:
+            candidate.relative_to(root)
+        except ValueError:
+            return
+        if candidate.suffix != ".jsonl" or not candidate.is_file():
+            return
+        try:
+            candidate.unlink()
+        except OSError:
+            pass
 
     def _provider_gate(self, *, external_llm_opt_in: bool) -> Dict[str, Any]:
         current_settings = settings.load_settings()
@@ -184,6 +217,7 @@ class PiCopilotService:
         blockers = []
         for key in (
             "node_available",
+            "node_version_supported",
             "entrypoint_available",
             "dependency_installed",
             "lockfile_present",
@@ -242,7 +276,7 @@ class PiCopilotService:
         *,
         title: str = "Pi Copilot",
         language: str = "en",
-        thinking_level: str = "medium",
+        thinking_level: str = "off",
         study_context_id: Optional[str] = None,
         external_llm_opt_in: bool = False,
     ) -> Dict[str, Any]:
@@ -273,11 +307,10 @@ class PiCopilotService:
         else:
             context = study_contexts.get_active_context()
         resolved_language = "zh" if language == "zh" else "en"
-        resolved_thinking = (
-            thinking_level
-            if thinking_level in {"off", "minimal", "low", "medium", "high"}
-            else "medium"
-        )
+        # Raw provider reasoning is neither streamed nor persisted by the
+        # governed product shell. Historical values remain readable only for
+        # metadata compatibility; all newly opened sessions run with it off.
+        resolved_thinking = "off"
         session_id = f"pi_{secrets.token_hex(10)}"
         binding = self._binding_for_context(
             context,
@@ -324,13 +357,12 @@ class PiCopilotService:
             {
                 "session_id": record.session_id,
                 "session_file": record.pi_session_file,
-                "thinking_level": record.thinking_level,
+                "thinking_level": "off",
             },
             timeout=30,
         )
 
-    def _stale_details(self, record: PiSessionRecord) -> Dict[str, Any]:
-        binding = record.binding
+    def _binding_stale_details(self, binding: AuthorityBinding) -> Dict[str, Any]:
         if not binding.study_context_id:
             try:
                 active = study_contexts.get_active_context()
@@ -366,6 +398,7 @@ class PiCopilotService:
         current_job = (
             str(current.get("active_job_id")) if current.get("active_job_id") else None
         )
+        current_run = self._latest_run_id(binding.study_context_id)
         mismatches = {}
         if current_revision != binding.study_revision:
             mismatches["study_revision"] = {
@@ -377,11 +410,19 @@ class PiCopilotService:
                 "session": binding.active_job_id,
                 "current": current_job,
             }
+        if current_run != binding.run_id:
+            mismatches["run_id"] = {
+                "session": binding.run_id,
+                "current": current_run,
+            }
         return {
             "stale": bool(mismatches),
             "reason": "authority_binding_changed" if mismatches else None,
             "mismatches": mismatches,
         }
+
+    def _stale_details(self, record: PiSessionRecord) -> Dict[str, Any]:
+        return self._binding_stale_details(record.binding)
 
     def rebind_session(self, session_id: str) -> Dict[str, Any]:
         record = self._get_record(session_id)
@@ -467,6 +508,7 @@ class PiCopilotService:
         tool_context = ToolExecutionContext(
             session=record.model_copy(deep=True),
             allowed_actions=requested_actions,
+            authority_validator=self._binding_stale_details,
         )
         with self._lock:
             if record.session_id in self._busy_sessions:
@@ -618,6 +660,11 @@ class PiCopilotService:
                 list(state.get("transcript") or [])[:100]
                 if isinstance(state.get("transcript"), list)
                 else []
+            ),
+            "shell_usage": (
+                dict(state.get("shell_usage") or {})
+                if isinstance(state.get("shell_usage"), Mapping)
+                else {}
             ),
             "binding": record.binding.model_dump(mode="json"),
             "stale": self._stale_details(record),
