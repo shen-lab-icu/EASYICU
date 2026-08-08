@@ -460,7 +460,17 @@ def test_sidecar_projects_safe_agent_activity_and_tool_receipts() -> None:
         type: 'tool_execution_start', toolCallId: 'call-4',
         toolName: 'easyicu_read_project_file', args: {{ file: '../secret.txt' }},
       }});
-      console.log(JSON.stringify({{ events, transcript, blockedEvent, blockedTranscript, workspaceStart, workspaceEnd, unsafeWorkspace }}));
+      const researchArtifacts = normalizePiEvent({{
+        type: 'tool_execution_end', toolCallId: 'call-5', toolName: 'easyicu_list_artifacts',
+        result: {{ details: {{ status: 'ok', code: 'easyicu_artifacts_projected',
+          summary: 'Listed artifacts', owner: 'easyicu.agent_runs', details: {{
+            project_dir: 'must-not-leak', resources: [
+              {{ kind: 'research_artifact', run_id: 'run_20260808', artifact: 'table1_summary.json', label: 'Table 1', media_type: 'application/json' }},
+              {{ kind: 'research_artifact', run_id: '../unsafe', artifact: '../secret.json' }},
+            ]
+          }} }} }},
+      }});
+      console.log(JSON.stringify({{ events, transcript, blockedEvent, blockedTranscript, workspaceStart, workspaceEnd, unsafeWorkspace, researchArtifacts }}));
     """
     completed = subprocess.run(
         [node, "--input-type=module", "--eval", script],
@@ -497,7 +507,15 @@ def test_sidecar_projects_safe_agent_activity_and_tool_receipts() -> None:
     }
     assert payload["workspaceEnd"]["resource"]["media_type"] == "text/html"
     assert "resource" not in payload["unsafeWorkspace"]
+    assert payload["researchArtifacts"]["resources"] == [{
+        "kind": "research_artifact",
+        "run_id": "run_20260808",
+        "artifact": "table1_summary.json",
+        "label": "Table 1",
+        "media_type": "application/json",
+    }]
     assert "raw result must not leak" not in completed.stdout
+    assert "project_dir" not in completed.stdout
     assert "must-not-leak" not in completed.stdout
 
 

@@ -41,6 +41,24 @@ WorkspaceFileText = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1, max_length=240),
 ]
+RunIdText = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=1,
+        max_length=160,
+        pattern=r"^[A-Za-z][A-Za-z0-9_.-]{0,159}$",
+    ),
+]
+ArtifactNameText = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=6,
+        max_length=160,
+        pattern=r"^[A-Za-z0-9_.-]+\.json$",
+    ),
+]
 
 
 class PiSessionCreateRequest(BaseModel):
@@ -199,6 +217,24 @@ def get_pi_copilot_workspace_preview(
             "X-Content-Type-Options": "nosniff",
         },
     )
+
+
+@router.get(
+    "/api/copilot/pi/projects/{project_id}/runs/{run_id}/artifacts/{artifact_name}"
+)
+def get_pi_copilot_research_artifact(
+    project_id: ShortText,
+    run_id: RunIdText,
+    artifact_name: ArtifactNameText,
+) -> dict:
+    try:
+        return get_pi_copilot_service().get_research_artifact(
+            project_id=project_id,
+            run_id=run_id,
+            artifact_name=artifact_name,
+        )
+    except PiCopilotError as exc:
+        _raise_http(exc)
 
 
 @router.get("/api/copilot/pi/sessions")

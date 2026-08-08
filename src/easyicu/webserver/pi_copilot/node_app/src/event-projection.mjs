@@ -30,8 +30,31 @@ function safeRelativeFile(value) {
   return file;
 }
 
+function safeStableId(value, limit = 160) {
+  const text = boundedText(value, limit).trim();
+  return /^[A-Za-z][A-Za-z0-9_.-]{0,159}$/.test(text) ? text : "";
+}
+
+function safeArtifactName(value) {
+  const name = boundedText(value, 160).trim();
+  if (!name || name.includes("/") || name.includes("\\") || !name.endsWith(".json")) return "";
+  return /^[A-Za-z0-9_.-]+$/.test(name) ? name : "";
+}
+
 function projectedResource(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  if (value.kind === "research_artifact") {
+    const runId = safeStableId(value.run_id);
+    const artifact = safeArtifactName(value.artifact);
+    if (!runId || !artifact) return undefined;
+    return {
+      kind: "research_artifact",
+      run_id: runId,
+      artifact,
+      label: boundedText(value.label || artifact, 160),
+      media_type: "application/json",
+    };
+  }
   const file = safeRelativeFile(value.file);
   if (!file) return undefined;
   const kind = value.kind === "webpage" ? "webpage" : "file";
@@ -42,6 +65,11 @@ function projectedResource(value) {
     label: boundedText(value.label || fallbackLabel, 160),
     media_type: boundedText(value.media_type || "text/plain", 120),
   };
+}
+
+function projectedResources(value) {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 80).map(projectedResource).filter(Boolean);
 }
 
 function toolResource(toolName, args) {
@@ -68,12 +96,14 @@ function toolReceipt(result) {
   const content = Array.isArray(result?.content) ? result.content : [];
   const fallback = content.find((item) => item && item.type === "text")?.text || "";
   const resource = projectedResource(details.resource || ownerDetails.resource);
+  const resources = projectedResources(details.resources || ownerDetails.resources);
   return {
     status: boundedText(details.status || "", 40),
     code: boundedText(details.code || "", 160),
     summary: boundedText(details.summary || fallback, 2000),
     owner: boundedText(details.owner || "", 240),
     ...(resource ? { resource } : {}),
+    ...(resources.length ? { resources } : {}),
   };
 }
 

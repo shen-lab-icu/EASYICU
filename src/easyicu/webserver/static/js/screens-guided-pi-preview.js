@@ -1,6 +1,6 @@
-/* Guided Pi project-artifact preview owner.
-   It swaps the study-progress aside for one clicked file or webpage and never
-   interprets paths outside the project-isolated Pi workspace. */
+/* Guided Pi governed-resource preview owner.
+   It swaps the study-progress aside for one clicked project file, webpage, or
+   path-free Research Agent artifact reference. */
 (function () {
   'use strict';
 
@@ -9,6 +9,7 @@
     projectId: '',
     resource: null,
     artifact: null,
+    payload: null,
     mode: 'code',
     loading: false,
     error: '',
@@ -26,6 +27,17 @@
   }
   function safeResource(value) {
     if (!value || typeof value !== 'object') return null;
+    if (value.kind === 'research_artifact') {
+      const runId = String(value.run_id || '').trim();
+      const artifact = String(value.artifact || '').trim();
+      if (!/^[A-Za-z][A-Za-z0-9_.-]{0,159}$/.test(runId)) return null;
+      if (!/^[A-Za-z0-9_.-]+\.json$/.test(artifact) || artifact.length > 160) return null;
+      return {
+        kind: 'research_artifact', run_id: runId, artifact,
+        label: String(value.label || artifact).slice(0, 160),
+        media_type: 'application/json',
+      };
+    }
     const file = String(value.file || '').trim().replace(/\\/g, '/');
     if (!file || file.startsWith('/') || file.includes('\0')) return null;
     if (file.split('/').some(part => !part || part === '.' || part === '..')) return null;
@@ -36,6 +48,7 @@
       media_type: String(value.media_type || 'text/plain').slice(0, 120),
     };
   }
+  function isResearchArtifact() { return !!state.resource && state.resource.kind === 'research_artifact'; }
   function isHtml() {
     return !!state.resource && (
       state.resource.kind === 'webpage'
@@ -61,41 +74,64 @@
   function render() {
     if (!state.host || !state.resource) return;
     setAsideOpen(true);
-    const tabs = isHtml() ? `
+    const tabs = isResearchArtifact() ? `
+      <div class="gpi-preview-tabs" role="tablist" aria-label="${tr('Artifact views', '产物视图')}">
+        <button type="button" role="tab" data-gpi-preview-mode="structured" aria-selected="${state.mode === 'structured'}">${icon('list', 14)} ${tr('Readable', '可读视图')}</button>
+        <button type="button" role="tab" data-gpi-preview-mode="code" aria-selected="${state.mode === 'code'}">${icon('file', 14)} JSON</button>
+      </div>` : isHtml() ? `
       <div class="gpi-preview-tabs" role="tablist" aria-label="${tr('Artifact views', '产物视图')}">
         <button type="button" role="tab" data-gpi-preview-mode="code" aria-selected="${state.mode === 'code'}">${icon('file', 14)} ${tr('Code', '代码')}</button>
         <button type="button" role="tab" data-gpi-preview-mode="web" aria-selected="${state.mode === 'web'}">${icon('globe', 14)} ${tr('Web preview', '网页预览')}</button>
       </div>` : '';
     let body = '';
     if (state.loading) {
-      body = `<div class="gpi-preview-state"><span class="gpi-preview-spinner"></span>${tr('Loading project artifact…', '正在加载项目产物…')}</div>`;
+      body = `<div class="gpi-preview-state"><span class="gpi-preview-spinner"></span>${tr('Loading governed artifact…', '正在加载受治理产物…')}</div>`;
     } else if (state.error) {
       body = `<div class="gpi-preview-state error">${icon('alert', 16)}<strong>${tr('Preview unavailable', '无法预览')}</strong><span>${esc(state.error)}</span></div>`;
     } else if (state.mode === 'web' && isHtml()) {
       body = `<iframe class="gpi-preview-frame" src="${esc(previewUrl())}" sandbox="allow-scripts" referrerpolicy="no-referrer" title="${esc(tr('Preview of ', '预览：') + state.resource.label)}"></iframe>`;
+    } else if (state.mode === 'structured' && isResearchArtifact()) {
+      const renderer = window.AGENT_RENDER;
+      body = renderer && typeof renderer.artifactStructuredView === 'function'
+        ? renderer.artifactStructuredView(state.resource.artifact, state.payload || {})
+        : `<pre class="gpi-preview-code" tabindex="0"><code>${esc(JSON.stringify(state.payload || {}, null, 2))}</code></pre>`;
     } else {
-      const text = state.artifact && state.artifact.text != null ? state.artifact.text : '';
+      const text = isResearchArtifact()
+        ? JSON.stringify(state.payload || {}, null, 2)
+        : (state.artifact && state.artifact.text != null ? state.artifact.text : '');
       body = `<pre class="gpi-preview-code" tabindex="0"><code>${esc(text)}</code></pre>`;
     }
+    const reference = isResearchArtifact()
+      ? `${state.resource.run_id} · ${state.resource.artifact}`
+      : state.resource.file;
     state.host.innerHTML = `
       <header class="gpi-preview-head">
         <div class="gpi-preview-file-icon" aria-hidden="true">${icon(state.mode === 'web' ? 'globe' : 'file', 16)}</div>
-        <div class="gpi-preview-ident"><strong>${esc(state.resource.label)}</strong><span>${esc(state.resource.file)}</span></div>
+        <div class="gpi-preview-ident"><strong>${esc(state.resource.label)}</strong><span>${esc(reference)}</span></div>
         <button class="gpi-preview-close" type="button" data-gpi-preview-close aria-label="${tr('Close preview', '关闭预览')}" title="${tr('Close preview', '关闭预览')}">${icon('close', 15)}</button>
       </header>
       ${tabs}
       <div class="gpi-preview-body">${body}</div>`;
   }
-  async function loadCode() {
+  async function loadResource() {
     if (!state.resource || !state.projectId) return;
     const ticket = ++state.request;
     state.loading = true; state.error = ''; render();
     try {
       const api = window.EU_API || {};
-      if (!api.loadPiCopilotWorkspaceFile) throw new Error(tr('The workspace file API is unavailable.', '工作区文件接口不可用。'));
-      const payload = await api.loadPiCopilotWorkspaceFile(state.projectId, state.resource.file);
+      let payload;
+      if (isResearchArtifact()) {
+        if (!api.loadPiCopilotResearchArtifact) throw new Error(tr('The research artifact API is unavailable.', '研究产物接口不可用。'));
+        payload = await api.loadPiCopilotResearchArtifact(
+          state.projectId, state.resource.run_id, state.resource.artifact,
+        );
+      } else {
+        if (!api.loadPiCopilotWorkspaceFile) throw new Error(tr('The workspace file API is unavailable.', '工作区文件接口不可用。'));
+        payload = await api.loadPiCopilotWorkspaceFile(state.projectId, state.resource.file);
+      }
       if (ticket !== state.request) return;
       state.artifact = payload && payload.artifact ? payload.artifact : null;
+      state.payload = isResearchArtifact() && payload ? (payload.payload || {}) : null;
     } catch (error) {
       if (ticket !== state.request) return;
       state.error = String(error && (error.message || error.code) || error);
@@ -110,14 +146,15 @@
     state.resource = safe;
     state.projectId = project;
     state.artifact = null;
+    state.payload = null;
     state.error = '';
-    state.mode = safe.kind === 'webpage' ? 'web' : 'code';
+    state.mode = safe.kind === 'research_artifact' ? 'structured' : (safe.kind === 'webpage' ? 'web' : 'code');
     render();
-    if (state.mode === 'code') loadCode();
+    if (state.mode !== 'web') loadResource();
   }
   function close() {
     state.request += 1;
-    state.resource = null; state.artifact = null; state.error = ''; state.loading = false;
+    state.resource = null; state.artifact = null; state.payload = null; state.error = ''; state.loading = false;
     setAsideOpen(false);
     if (state.host) state.host.replaceChildren();
   }
@@ -129,11 +166,12 @@
       if (event.target.closest('[data-gpi-preview-close]')) { close(); return; }
       const tab = event.target.closest('[data-gpi-preview-mode]');
       if (!tab || !state.resource) return;
-      const mode = tab.dataset.gpiPreviewMode === 'web' ? 'web' : 'code';
+      const requested = tab.dataset.gpiPreviewMode;
+      const mode = requested === 'web' ? 'web' : (requested === 'structured' ? 'structured' : 'code');
       if (mode === state.mode) return;
       state.mode = mode;
       render();
-      if (mode === 'code' && !state.artifact && !state.loading) loadCode();
+      if (mode !== 'web' && !state.artifact && !state.loading) loadResource();
     });
     if (!state.resource) setAsideOpen(false);
     else render();
