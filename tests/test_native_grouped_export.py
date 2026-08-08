@@ -462,6 +462,42 @@ def test_native_schema_preserves_numeric_logical_and_categorical_families() -> N
     assert str(canonical["ecmo_indication"].dtype) == "string"
 
 
+def test_native_schema_preserves_kdigo_ascertainment_receipt_families() -> None:
+    dictionary = api.load_dictionary(include_sofa2=True)
+    receipt_columns = [
+        "aki_assessable",
+        "aki_ascertainment",
+        "aki_assessment_reason",
+        "observation_window_coverage",
+        "creatinine_ascertainment",
+        "urine_ascertainment",
+        "rrt_ascertainment",
+    ]
+    frame = pd.DataFrame(
+        {
+            "stay_id": [101, 102],
+            "charttime": [0.0, 1.0],
+            "aki_assessable": [1, 0],
+            "aki_ascertainment": ["positive", "indeterminate"],
+            "aki_assessment_reason": ["positive", "indeterminate"],
+            "observation_window_coverage": ["complete", "partial"],
+            "creatinine_ascertainment": ["positive", "negative"],
+            "urine_ascertainment": ["negative", "indeterminate"],
+            "rrt_ascertainment": ["negative", "indeterminate"],
+        }
+    )
+
+    canonical = api._canonicalise_native_export_frame(
+        frame,
+        module="renal",
+        requested_concepts=receipt_columns,
+        dictionary=dictionary,
+    )
+
+    assert str(canonical["aki_assessable"].dtype) == "boolean"
+    assert all(str(canonical[column].dtype) == "string" for column in receipt_columns[1:])
+
+
 def test_native_schema_accepts_multi_class_numeric_concept() -> None:
     dictionary = api.load_dictionary(include_sofa2=True)
     assert isinstance(dictionary["dex"].class_name, list)

@@ -256,6 +256,16 @@ CONCEPT_DICTIONARY = {
     'aki_stage_creat': ('AKI Stage (Creatinine)', 'AKI分期（肌酐）', '0-3'),
     'aki_stage_uo': ('AKI Stage (Urine Output)', 'AKI分期（尿量）', '0-3'),
     'aki_stage_rrt': ('AKI Stage (RRT)', 'AKI分期（RRT）', '0-3'),
+    # These are receipts rather than measurements.  Their explicit storage
+    # kinds keep native-v2 exports portable and prevent categorical
+    # ascertainment states from being coerced to floating point.
+    'aki_assessable': ('KDIGO AKI Assessable', 'KDIGO AKI 可判定性', 'boolean'),
+    'aki_ascertainment': ('KDIGO AKI Ascertainment', 'KDIGO AKI 判定状态', 'category'),
+    'aki_assessment_reason': ('KDIGO AKI Assessment Reason', 'KDIGO AKI 判定原因', 'category'),
+    'observation_window_coverage': ('KDIGO Observation-window Coverage', 'KDIGO 观察窗覆盖度', 'category'),
+    'creatinine_ascertainment': ('KDIGO Creatinine-component Ascertainment', 'KDIGO 肌酐组件判定状态', 'category'),
+    'urine_ascertainment': ('KDIGO Urine-output-component Ascertainment', 'KDIGO 尿量组件判定状态', 'category'),
+    'rrt_ascertainment': ('KDIGO RRT-component Ascertainment', 'KDIGO RRT 组件判定状态', 'category'),
     # 🔧 2026-02-12: 添加规范化后的 KDIGO 扩展列
     'creat_low_past_48hr': ('Lowest Creatinine in Past 48h', '过去48小时内最低肌酐', 'mg/dL'),
     'creat_low_past_7day': ('Baseline Creatinine (7-day lowest)', '基线肌酐（7天内最低值）', 'mg/dL'),

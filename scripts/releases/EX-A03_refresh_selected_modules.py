@@ -32,6 +32,7 @@ if str(SOURCE_ROOT) not in sys.path:
     sys.path.insert(0, str(SOURCE_ROOT))
 
 from easyicu.api import extract_database  # noqa: E402
+from easyicu.api.extraction import EXTRACT_MODULES  # noqa: E402
 
 
 def _load_republisher():
@@ -141,6 +142,53 @@ def _replace_selected_module_files(
         os.replace(source_manifest, destination_database_root / source_manifest.name)
 
 
+def _module_is_canonical_refresh(
+    database_root: Path, modules: Sequence[str]
+) -> bool:
+    """Check whether a candidate already contains the selected new columns."""
+
+    try:
+        import pyarrow.parquet as pq
+    except ImportError as exc:  # pragma: no cover - package is release-required
+        raise ModuleRefreshError("pyarrow is required to resume a module refresh") from exc
+    for module in modules:
+        parquet = database_root / f"{module}.parquet"
+        manifest = database_root / f"{module}.manifest.json"
+        if parquet.is_symlink() or manifest.is_symlink() or not parquet.is_file() or not manifest.is_file():
+            return False
+        try:
+            columns = set(pq.read_schema(parquet).names)
+        except Exception:
+            return False
+        if "stay_id" not in columns or not set(EXTRACT_MODULES[module]).issubset(columns):
+            return False
+    return True
+
+
+def _metrics_from_module_manifests(
+    database_root: Path, modules: Sequence[str]
+) -> dict[str, dict[str, float]]:
+    metrics: dict[str, dict[str, float]] = {}
+    for module in modules:
+        manifest = _read_json(
+            database_root / f"{module}.manifest.json",
+            label=f"{module} refresh manifest",
+        )
+        try:
+            metrics[module] = {
+                "elapsed_seconds": float(manifest.get("elapsed_sec") or 0.0),
+                "peak_rss_mb": float(manifest.get("peak_rss_mb") or 0.0),
+                "peak_working_set_mb": float(
+                    manifest.get("peak_working_set_mb") or 0.0
+                ),
+            }
+        except (TypeError, ValueError) as exc:
+            raise ModuleRefreshError(
+                f"{module} refresh manifest has invalid runtime metrics"
+            ) from exc
+    return metrics
+
+
 def _module_runtime_metrics(
     extraction: Mapping[str, Any], modules: Sequence[str]
 ) -> dict[str, dict[str, float]]:
@@ -179,8 +227,42 @@ def _refresh_one_database(
     batch_size: int | None,
 ) -> dict[str, Any]:
     staging_root = candidate_root / ".module_refresh_staging" / database
+    destination_database_root = candidate_root / "exports" / database
+    if _module_is_canonical_refresh(destination_database_root, modules):
+        return {
+            "database": database,
+            "data_path": data_path,
+            "num_patients": None,
+            "batch_size": None,
+            "total_elapsed_seconds": None,
+            "modules": _metrics_from_module_manifests(
+                destination_database_root, modules
+            ),
+            "recovery_mode": "candidate_export_already_refreshed",
+        }
     if staging_root.exists() or staging_root.is_symlink():
-        raise ModuleRefreshError(f"Refusing existing refresh staging root: {staging_root}")
+        if _module_is_canonical_refresh(staging_root, modules):
+            _replace_selected_module_files(
+                staging_root=staging_root,
+                destination_database_root=destination_database_root,
+                modules=modules,
+            )
+            metrics = _metrics_from_module_manifests(
+                destination_database_root, modules
+            )
+            shutil.rmtree(staging_root)
+            return {
+                "database": database,
+                "data_path": data_path,
+                "num_patients": None,
+                "batch_size": None,
+                "total_elapsed_seconds": None,
+                "modules": metrics,
+                "recovery_mode": "completed_staging_promoted",
+            }
+        raise ModuleRefreshError(
+            f"Existing refresh staging is incomplete or not canonical: {staging_root}"
+        )
     staging_root.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     extraction = extract_database(
         database,
@@ -196,7 +278,7 @@ def _refresh_one_database(
     metrics = _module_runtime_metrics(extraction, modules)
     _replace_selected_module_files(
         staging_root=staging_root,
-        destination_database_root=candidate_root / "exports" / database,
+        destination_database_root=destination_database_root,
         modules=modules,
     )
     # Successful files have been atomically moved into ``exports``.  Remove
@@ -234,6 +316,7 @@ def refresh_candidate(
     modules: Sequence[str],
     data_path_overrides: Mapping[str, str],
     batch_size: int | None,
+    resume: bool = False,
 ) -> Path:
     source = source_run_root.resolve()
     destination = output_root.expanduser().absolute()
@@ -251,11 +334,23 @@ def refresh_candidate(
         for database in DATABASES
     }
 
-    REPUBLICATION._clone_source(source, destination)
-    (destination / "run_metadata.json").unlink(missing_ok=True)
-    (destination / "module_extraction_timing.csv").unlink(missing_ok=True)
-    (destination / "republication_provenance.json").unlink(missing_ok=True)
-    shutil.rmtree(destination / "publication_qc", ignore_errors=True)
+    if resume:
+        if destination.is_symlink() or not destination.is_dir():
+            raise ModuleRefreshError(
+                f"--resume requires an existing regular candidate directory: {destination}"
+            )
+        if (destination / "module_refresh_provenance.json").exists() or (
+            destination / "run_metadata.json"
+        ).exists():
+            raise ModuleRefreshError(
+                "--resume refuses a sealed or already-finalized refresh candidate"
+            )
+    else:
+        REPUBLICATION._clone_source(source, destination)
+        (destination / "run_metadata.json").unlink(missing_ok=True)
+        (destination / "module_extraction_timing.csv").unlink(missing_ok=True)
+        (destination / "republication_provenance.json").unlink(missing_ok=True)
+        shutil.rmtree(destination / "publication_qc", ignore_errors=True)
 
     refreshed: dict[str, dict[str, Any]] = {}
     try:
@@ -337,6 +432,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--source-run-root", required=True, type=Path)
     parser.add_argument("--output-root", required=True, type=Path)
     parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume an unsealed candidate after recovering canonical staged modules.",
+    )
+    parser.add_argument(
         "--module",
         action="append",
         default=[],
@@ -369,6 +469,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             modules=args.module,
             data_path_overrides=_parse_data_path_overrides(args.data_path),
             batch_size=args.batch_size,
+            resume=args.resume,
         )
     except (ModuleRefreshError, OSError, ValueError) as exc:
         print(f"selected-module refresh failed: {exc}", file=sys.stderr)
