@@ -19,10 +19,37 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import socket
 from types import SimpleNamespace
 
 import pandas as pd
 import pytest
+
+
+def _pin_provider_test_dns(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make URL-policy tests independent of VPN/proxy DNS rewriting."""
+
+    addresses = {
+        "169.254.169.254": "169.254.169.254",
+        "10.0.0.5": "10.0.0.5",
+        "example.com": "93.184.216.34",
+        "api.openai.com": "104.18.33.45",
+        "127.0.0.1": "127.0.0.1",
+    }
+
+    def getaddrinfo(host, port, *args, **kwargs):
+        address = addresses[str(host)]
+        return [
+            (
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+                socket.IPPROTO_TCP,
+                "",
+                (address, int(port or 0)),
+            )
+        ]
+
+    monkeypatch.setattr(socket, "getaddrinfo", getaddrinfo)
 
 
 def _store(tmp_path):
@@ -359,13 +386,16 @@ def test_bounds_cannot_be_assembled_from_two_different_steps():
         ("https://metadata.google.internal/v1", "metadata_host"),
     ],
 )
-def test_a_provider_url_that_should_not_receive_a_key_is_refused(url, reason):
+def test_a_provider_url_that_should_not_receive_a_key_is_refused(
+    url, reason, monkeypatch
+):
     """The server sends ``Authorization: Bearer <key>`` to this address.
 
     An unchecked value is both an SSRF probe from inside the host's network
     and a delivery mechanism for the operator's key.
     """
 
+    _pin_provider_test_dns(monkeypatch)
     from easyicu.webserver.provider_adapter import (
         ProviderAdapterError,
         validate_provider_base_url,
@@ -381,9 +411,10 @@ def test_a_provider_url_that_should_not_receive_a_key_is_refused(url, reason):
     "url",
     ["https://api.openai.com/v1", "http://127.0.0.1:8787/v1"],
 )
-def test_the_real_provider_and_the_local_proxy_still_work(url):
+def test_the_real_provider_and_the_local_proxy_still_work(url, monkeypatch):
     """Plaintext to loopback stays allowed: that is the local model proxy."""
 
+    _pin_provider_test_dns(monkeypatch)
     from easyicu.webserver.provider_adapter import validate_provider_base_url
 
     assert validate_provider_base_url(url) == url

@@ -133,7 +133,6 @@ def test_the_guard_actually_sees_the_dead_modules_it_was_written_for():
         "decision_curve",
         "rmst",
         "conformal",
-        "evalue",
         # Found by this guard, not by the hand survey that preceded it: a
         # loose grep reported it as live. It is the most consequential of the
         # set -- it exists because generated code kept misreading a

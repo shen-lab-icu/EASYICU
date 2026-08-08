@@ -35,6 +35,10 @@ from pydantic import (
     model_validator,
 )
 
+from .contracts.capability_ids import capability_family
+from .contracts.closed_levels import validate_closed_scalar_levels
+from .contracts.endpoint import EndpointAbsenceSemantics, EndpointKind, EndpointSpec
+from .contracts.family_primary import FamilyPrimaryResultRequirement
 from .contracts.model_terms import ModelTermSpec, validate_model_term_roster
 from .contracts.model_tokens import (
     ADJUSTED_ASSOCIATION_ANALYSIS_KIND as PLANNED_MODEL_REQUIREMENTS_OUTPUT,
@@ -46,7 +50,7 @@ from .contracts.model_tokens import (
     canonical_association_method as _canonical_association_method,
     normalise_model_contract_token as _normalise_model_contract_token,
 )
-from .contracts.family_primary import FamilyPrimaryResultRequirement
+from .contracts.post_analysis import EValueConversionSpec, SubgroupAnalysisSpec
 from .contracts.survival import (
     SURVIVAL_ANALYSIS_RECEIPT_PRODUCT,
     SurvivalAnalysisReceipt,
@@ -171,16 +175,7 @@ ROBUSTNESS_REPLAY_OUTPUTS = frozenset(
 
 
 def _closed_table_one_levels(values: List[Any], *, label: str) -> List[Any]:
-    tokens: list[tuple[str, str]] = []
-    for value in values:
-        if not isinstance(value, (str, bool, int, float)):
-            raise ValueError(f"{label} must contain only JSON scalar values")
-        if isinstance(value, float) and not math.isfinite(value):
-            raise ValueError(f"{label} must contain only finite values")
-        tokens.append((type(value).__name__, repr(value)))
-    if len(tokens) != len(set(tokens)):
-        raise ValueError(f"{label} must contain unique typed values")
-    return list(values)
+    return validate_closed_scalar_levels(values, label=label)
 
 
 _PRIMARY_RESULT_KIND_ALIASES = {
@@ -622,219 +617,6 @@ class UserPreferences(BaseModel):
     # constant baked into the skill.
     landmark_hours: Optional[float] = None
     extra_notes: Optional[str] = None
-
-
-EndpointKind = Literal[
-    "binary",
-    "continuous",
-    "count",
-    "ordinal",
-    "time_to_event",
-    "repeated_measures",
-]
-
-EndpointAbsenceSemantics = Literal[
-    # A positive-only source: an analysis unit with no row did not have the
-    # event.  Declaring this is what makes a zero count legible as a real zero.
-    "absent_row_is_no_event",
-    # An analysis unit with no row was never assessed.  A denominator built
-    # from these rows measures ascertainment, not incidence.
-    "absent_row_is_unmeasured",
-    # Every analysis unit carries an explicit value; absence cannot occur.
-    "no_absent_rows",
-]
-
-
-class EndpointSpec(BaseModel):
-    """What the study's endpoint *is*, declared once instead of inferred.
-
-    The typed context has always been able to say that ``death`` is an
-    ``OUTCOME`` of dtype ``int64`` and that ``death_time`` is a ``TIME`` of
-    dtype ``float64``.  It has never been able to say whether the endpoint of
-    *this study* is the binary flag or the time-to-event pair those two columns
-    would form together -- that pairing simply did not exist in the type system,
-    so it could only be guessed from a ``_time`` suffix.
-
-    Four separately-patched defects were the same missing type:
-
-    * a landmark phrase ("must survive to 24 hours") re-typed a binary mortality
-      study as a survival study, because nothing could contradict the words;
-    * an outcome value outside the declared set was silently counted as
-      "did not happen", because the level set was not closed;
-    * a positive-only event's absent rows were read as real negatives, because
-      absence had no declared meaning;
-    * a time column was used with no declared origin, so negative event times
-      and events before time zero passed through.
-
-    Declaring the endpoint removes the guess.  Nothing here may be
-    reverse-inferred from a column-name suffix, a pandas dtype, or the order the
-    columns arrived in -- those are exactly the signals that produced the four
-    defects, and a validator here that consulted them would reintroduce them.
-
-    ``absence_semantics`` has no default on purpose.  A default would answer,
-    on the declarer's behalf, the one question that distinguishes "the event did
-    not occur" from "nobody looked" -- and the wrong answer there changes an
-    incidence into an ascertainment rate without changing a single number's
-    appearance.
-    """
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    name: str
-    kind: EndpointKind
-    absence_semantics: EndpointAbsenceSemantics
-    levels: Optional[List[Any]] = Field(
-        default=None,
-        description=(
-            "Closed level set. Required for binary (exactly two) and ordinal "
-            "(two or more, in order). Forbidden for every other kind."
-        ),
-    )
-    event_column: Optional[str] = None
-    time_column: Optional[str] = None
-    time_origin: Optional[str] = Field(
-        default=None,
-        description=(
-            "What t=0 means for time_column, stated explicitly (e.g. "
-            "'icu_admission'). Never inferred."
-        ),
-    )
-    censoring_rule: Optional[str] = None
-
-    @model_validator(mode="after")
-    def _validate_kind_closure(self) -> "EndpointSpec":
-        if not self.name.strip():
-            raise ValueError("EndpointSpec.name must be a non-empty column name")
-
-        # The fields split along two independent axes rather than one
-        # "time_to_event or not" switch. Collapsing them was an over-restriction
-        # that only a mortality-association study would never notice: a
-        # repeated-measures endpoint genuinely has a time axis, and refusing to
-        # let it declare one puts the time column straight back into the
-        # guessing that this type exists to end.
-        TIME_AXIS_KINDS = {"time_to_event", "repeated_measures"}
-        EVENT_KINDS = {"time_to_event"}
-        # Kinds whose values form a closed set. ``time_to_event`` belongs here:
-        # its event column carries the event *type*, and a competing-risks
-        # design (extubation vs. death vs. tracheostomy) is exactly a closed set
-        # of codes. Leaving it out meant a competing-risks endpoint could not be
-        # declared at all, and an unlisted event code would land in the same
-        # silent non-event hole M1 closed for binary outcomes.
-        CLOSED_LEVEL_KINDS = {"binary", "ordinal", "time_to_event"}
-
-        axis_fields = {"time_column": self.time_column, "time_origin": self.time_origin}
-        event_fields = {
-            "event_column": self.event_column,
-            "censoring_rule": self.censoring_rule,
-        }
-
-        def _blank(value: Optional[str]) -> bool:
-            return value is None or not str(value).strip()
-
-        if self.kind in TIME_AXIS_KINDS:
-            missing = sorted(field for field, v in axis_fields.items() if _blank(v))
-            if missing:
-                raise ValueError(
-                    f"a {self.kind} endpoint must declare "
-                    + ", ".join(missing)
-                    + "; these are never inferred from column names or dtypes"
-                )
-        else:
-            present = sorted(field for field, v in axis_fields.items() if v is not None)
-            if present:
-                raise ValueError(
-                    f"a {self.kind} endpoint has no time axis, so it must not "
-                    "declare " + ", ".join(present)
-                )
-
-        if self.kind in EVENT_KINDS:
-            missing = sorted(field for field, v in event_fields.items() if _blank(v))
-            if missing:
-                raise ValueError(
-                    f"a {self.kind} endpoint must declare "
-                    + ", ".join(missing)
-                    + "; these are never inferred from column names or dtypes"
-                )
-        else:
-            present = sorted(
-                field for field, v in event_fields.items() if v is not None
-            )
-            if present:
-                raise ValueError(
-                    f"a {self.kind} endpoint has no event/censoring structure, so "
-                    "it must not declare " + ", ".join(present)
-                )
-
-        if self.kind in CLOSED_LEVEL_KINDS:
-            if self.levels is None:
-                raise ValueError(
-                    f"a {self.kind} endpoint must declare its closed level set; "
-                    "an undeclared value must stop the step, not be counted as "
-                    "a non-event"
-                )
-            levels = _closed_table_one_levels(
-                self.levels, label=f"EndpointSpec({self.name}) levels"
-            )
-            if self.kind == "binary" and len(levels) != 2:
-                raise ValueError(
-                    "a binary endpoint must declare exactly two levels, got "
-                    f"{len(levels)}"
-                )
-            if self.kind == "ordinal" and len(levels) < 2:
-                raise ValueError(
-                    "an ordinal endpoint must declare at least two ordered levels"
-                )
-            if self.kind == "time_to_event" and len(levels) < 2:
-                # One censored code plus at least one event type. A
-                # competing-risks design declares one code per competing event,
-                # so the closed set is what distinguishes it from a single-event
-                # design -- declared, not counted from the data.
-                raise ValueError(
-                    "a time_to_event endpoint must declare the closed set of "
-                    "event_column codes: the censored code plus one code per "
-                    "event type (a competing-risks design declares one each)"
-                )
-            # ``_closed_table_one_levels`` separates levels by type as well as
-            # by value, which is what M1 needs so an unexpected value cannot
-            # impersonate a declared one. An endpoint needs the stronger
-            # property: the levels must also be distinguishable *in the data*.
-            # ``[0, False]`` passes the typed check and is still unusable --
-            # a column compared against 0 matches both -- so an endpoint whose
-            # levels collide by value is rejected here rather than silently
-            # collapsing one arm of the contrast.
-            for index, level in enumerate(levels):
-                for other in levels[index + 1 :]:
-                    try:
-                        collides = bool(level == other)
-                    except Exception:  # pragma: no cover - exotic __eq__
-                        collides = False
-                    if collides:
-                        raise ValueError(
-                            f"EndpointSpec({self.name}) declares levels {level!r} "
-                            f"and {other!r} that compare equal; the data cannot "
-                            "tell them apart"
-                        )
-        elif self.levels is not None:
-            raise ValueError(
-                f"a {self.kind} endpoint has no closed level set; remove levels"
-            )
-        return self
-
-    def declared_columns(self) -> tuple[str, ...]:
-        """Every cohort column this declaration binds, in declaration order.
-
-        The caller checks these against the verified materialized cohort. That
-        check is the receipt: a declaration naming a column the cohort does not
-        have is a fail-closed error, not a warning.
-        """
-        names = [self.name]
-        for column in (self.event_column, self.time_column):
-            if column is not None:
-                names.append(column)
-        seen: dict[str, None] = {}
-        for name in names:
-            seen.setdefault(name, None)
-        return tuple(seen)
 
 
 RESEARCH_CONTEXT_SCHEMA_VERSION = "easyicu.research_context/1"
@@ -2261,6 +2043,21 @@ class AnalysisStep(BaseModel):
         ),
     )
 
+    @field_validator("scientific_capability")
+    @classmethod
+    def _validate_stable_capability_id(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        cleaned = str(value).strip()
+        if not cleaned:
+            return None
+        if capability_family(cleaned) is None:
+            raise ValueError(
+                "scientific_capability_unknown: "
+                f"{cleaned!r} is not in the stable capability vocabulary"
+            )
+        return cleaned
+
     def required_primary_exposure_sources(self) -> tuple[str, ...]:
         """Return required PRIMARY sources from the Planner-owned model roster."""
 
@@ -2531,11 +2328,23 @@ class AnalysisPlan(BaseModel):
     endpoint: Optional[EndpointSpec] = Field(
         default=None,
         description=(
-            "Typed endpoint declaration for this study: what the endpoint IS, "
-            "and for a time axis, which column carries follow-up time, what "
-            "t=0 means, and what censors it. Required for families whose "
-            "registry entry declares a required_endpoint_kind. Never inferred "
-            "from a column-name suffix or dtype."
+            "Backward-compatible projection of ResearchContext.endpoint. It is "
+            "not independent authority: when present it must equal the sealed "
+            "context declaration exactly."
+        ),
+    )
+    evalue_conversion_spec: Optional[EValueConversionSpec] = Field(
+        default=None,
+        description=(
+            "Planner-owned evidence and population binding for optional odds-"
+            "ratio E-value conversion. No declaration means no OR conversion."
+        ),
+    )
+    subgroup_analysis_spec: Optional[SubgroupAnalysisSpec] = Field(
+        default=None,
+        description=(
+            "Planner-owned predictor, outcome, subgroup axes, binning, sample-"
+            "size thresholds, and multiplicity family for optional O24 work."
         ),
     )
     robustness_specs: List[RobustnessSpec] = Field(
@@ -2639,40 +2448,12 @@ class AnalysisPlan(BaseModel):
                 "analysis plan may declare at most one step with "
                 "planned_analysis_role='primary'; found " + ", ".join(primary_step_ids)
             )
-        # ``scientific_capability`` is execution authority, not an open-ended
-        # label. Validate ids and family compatibility against the owner
-        # registry while keeping the field itself extensible (rather than a
-        # schema Literal that must be edited for every new registered owner).
-        from .planning.analysis_types import (
-            canonical_analysis_family,
-            get_analysis_type,
-        )
-        from .planning.capability_registry import get_capability_by_id
-
-        default_capability = None
-        canonical_family = canonical_analysis_family(self.analysis_type)
-        if canonical_family is not None:
-            default_capability = get_capability_by_id(
-                get_analysis_type(canonical_family).capability_id
-            )
         for step in self.steps:
             declared_id = str(step.scientific_capability or "").strip()
-            if not declared_id:
-                continue
-            declared = get_capability_by_id(declared_id)
-            if declared is None:
+            if declared_id and capability_family(declared_id) is None:
                 raise ValueError(
                     "scientific_capability_unknown: "
-                    f"{declared_id!r} is not registered"
-                )
-            if (
-                default_capability is not None
-                and declared.family != default_capability.family
-            ):
-                raise ValueError(
-                    "scientific_capability_family_mismatch: "
-                    f"{declared_id!r} belongs to {declared.family!r}, not "
-                    f"{default_capability.family!r}"
+                    f"{declared_id!r} is not in the stable capability vocabulary"
                 )
         for step in self.steps:
             if step.planned_analysis_role != "primary":
@@ -3369,6 +3150,11 @@ class StepRecord(BaseModel):
 
 __all__ = [
     "PlannedAnalysisRole",
+    "EndpointAbsenceSemantics",
+    "EndpointKind",
+    "EndpointSpec",
+    "EValueConversionSpec",
+    "SubgroupAnalysisSpec",
     "VariableRole",
     "AggregationRule",
     "TimeWindow",

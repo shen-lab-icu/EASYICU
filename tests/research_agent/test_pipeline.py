@@ -72,6 +72,41 @@ def _disable_article_contract(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
+def _allow_reportable_capability_for_readiness_unit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Isolate readiness mechanics from capability-resolution fixtures.
+
+    These focused tests predate the scientific-capability gate and intentionally
+    use tiny display/manuscript plans rather than executable estimator plans.
+    Supply an already-valid owner receipt here; capability resolution and its
+    fail-closed integration are covered in their dedicated suites.
+    """
+
+    import easyicu.research_agent.reporting.readiness as readiness_module
+    from easyicu.research_agent.planning.capability_registry import (
+        ScientificCapabilityAssessment,
+    )
+
+    assessment = ScientificCapabilityAssessment(
+        capability_id="descriptive_measurement_v1",
+        analysis_type="descriptive_epidemiology",
+        question_present=True,
+        question_coordinates_resolved=True,
+        input_contract_resolved=True,
+        runtime_data_available=None,
+        execution_backend_available=None,
+        scientific_validator_available=True,
+        claim_ceiling="reportable",
+        reason="Focused readiness fixture supplies a valid capability receipt.",
+    )
+    monkeypatch.setattr(
+        readiness_module,
+        "assess_scientific_capability",
+        lambda **_kwargs: assessment,
+    )
+
+
 def _stable_plan_rules(plan: str):
     """Return initial and probe-replan routes for a fixed focused test plan."""
 
@@ -6502,8 +6537,9 @@ def test_readiness_artifacts_reject_unresolved_manifest_comments(
 
 
 def test_readiness_artifacts_emit_manuscript_ready_only_after_gates_pass(
-    ra, tmp_path: Path
+    ra, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
+    _allow_reportable_capability_for_readiness_unit(monkeypatch)
     from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _write_readiness_artifacts
 
@@ -6843,7 +6879,9 @@ def _authoritative_readiness_records(
 def test_readiness_publication_ready_requires_article_display_suite(
     ra,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
+    _allow_reportable_capability_for_readiness_unit(monkeypatch)
     from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _write_readiness_artifacts
 
@@ -6928,7 +6966,9 @@ def test_readiness_publication_ready_requires_article_display_suite(
 def test_readiness_publication_ready_accepts_complete_display_suite(
     ra,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
+    _allow_reportable_capability_for_readiness_unit(monkeypatch)
     from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _write_readiness_artifacts
 
@@ -7732,7 +7772,9 @@ def test_association_display_suite_rejects_risk_difference_without_absolute_risk
 def test_readiness_supersedes_stale_publication_figure_contract_quality_error(
     ra,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
+    _allow_reportable_capability_for_readiness_unit(monkeypatch)
     from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _write_readiness_artifacts
     from easyicu.research_agent.schema import ValidationFinding
@@ -7819,7 +7861,9 @@ def test_readiness_supersedes_stale_publication_figure_contract_quality_error(
 def test_author_review_note_marks_superseded_publication_export_error_nonblocking(
     ra,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
+    _allow_reportable_capability_for_readiness_unit(monkeypatch)
     from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _write_readiness_artifacts
     from easyicu.research_agent.schema import ValidationFinding
@@ -7899,7 +7943,9 @@ def test_author_review_note_marks_superseded_publication_export_error_nonblockin
 def test_readiness_keeps_current_publication_figure_export_error_active(
     ra,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
+    _allow_reportable_capability_for_readiness_unit(monkeypatch)
     from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _write_readiness_artifacts
     from easyicu.research_agent.schema import ValidationFinding
@@ -7980,7 +8026,9 @@ def test_readiness_keeps_current_publication_figure_export_error_active(
 def test_readiness_supersedes_stale_strict_writer_error_after_clean_bound_manuscript(
     ra,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
+    _allow_reportable_capability_for_readiness_unit(monkeypatch)
     from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _write_readiness_artifacts
     from easyicu.research_agent.schema import ValidationFinding
@@ -8057,7 +8105,9 @@ def test_readiness_supersedes_stale_strict_writer_error_after_clean_bound_manusc
 def test_readiness_supersedes_stale_numeric_error_after_clean_bound_manuscript(
     ra,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
+    _allow_reportable_capability_for_readiness_unit(monkeypatch)
     from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _write_readiness_artifacts
     from easyicu.research_agent.schema import ValidationFinding
@@ -8138,7 +8188,9 @@ def test_readiness_supersedes_stale_numeric_error_after_clean_bound_manuscript(
 def test_readiness_supersedes_stale_critic_error_after_passed_current_critique(
     ra,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
+    _allow_reportable_capability_for_readiness_unit(monkeypatch)
     from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _write_readiness_artifacts
     from easyicu.research_agent.schema import ValidationFinding
@@ -8273,10 +8325,12 @@ def _readiness_fixture_for_manifest_caveats(ra, tmp_path: Path):
 def test_readiness_supersedes_stale_manifest_caveat_error_when_current_bound_is_clean(
     ra,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     """A caveat-count error from an earlier writer pass must retire when the
     latest bound manuscript carries no manifest-caveat comments (e.g. a
     resume whose rewrite cites only caveat-free records)."""
+    _allow_reportable_capability_for_readiness_unit(monkeypatch)
     from easyicu.research_agent.pipeline import _write_readiness_artifacts
 
     context, plan, evidence, caveat_finding, per_step_records = (

@@ -37,6 +37,7 @@ from ..contracts.runtime import (
     _PlanPhaseResult,
     _WritePhaseResult,
 )
+from ..contracts.post_analysis import EValueConversionSpec, SubgroupAnalysisSpec
 from ..providers.cost import CostMeter
 from ..providers.factory import provider_authorization_manifest
 from ..authority.evidence_store import EvidenceStore
@@ -62,7 +63,7 @@ from ..authority.runtime_artifacts import (
     write_run_checkpoint,
 )
 from ..robustness.panel import PANEL_FILENAME, load_robustness_panel
-from ..schema import AnalysisManifest, PipelineResult, ResearchContext
+from ..schema import AnalysisManifest, AnalysisPlan, PipelineResult, ResearchContext
 from ..learning.store import quarantine_run_lesson
 from ..reporting.side_findings import collect_side_findings, write_side_findings
 
@@ -126,6 +127,8 @@ class ObservedEventRate:
     reason: str  # one sentence for the finding message
     candidates: Tuple[float, ...] = ()
     source_column: str = ""
+    population_column: str = ""
+    baseline_population: str = ""
 
 
 @dataclass(frozen=True)
@@ -138,22 +141,32 @@ class EValueArtifacts:
     row_count: int
     baseline_prevalence: float
     baseline_source_column: str
+    baseline_population: str
+    conversion_spec_sha256: str
 
 
-# Columns an outcome-rate product may use for its rate. This is a reading
-# convention for an untyped product, not a gate: every name here means the same
-# quantity, and a value under a name NOT listed is treated as absent rather
-# than guessed at.
-_EVENT_RATE_COLUMNS: Tuple[str, ...] = (
-    "outcome_rate",
-    "rate",
-    "mortality_rate",
-    "event_rate",
-)
+def _subgroup_spec_matches_primary_requirement(
+    plan: AnalysisPlan,
+    spec: SubgroupAnalysisSpec,
+) -> bool:
+    """Bind optional subgroup work to one exact Planner-owned primary model."""
+
+    return any(
+        requirement.requirement_id == spec.primary_model_requirement_id
+        and requirement.exposure_source == spec.predictor
+        and requirement.outcome == spec.outcome
+        and requirement.outcome_type == "binary"
+        for step in plan.steps
+        if step.planned_analysis_role == "primary"
+        for requirement in step.model_requirements
+    )
 
 
-def resolve_observed_event_rate(path: Optional[Path]) -> ObservedEventRate:
-    """Read one unambiguous observed event rate from an outcome-rate product.
+def resolve_observed_event_rate(
+    path: Optional[Path],
+    spec: Optional[EValueConversionSpec],
+) -> ObservedEventRate:
+    """Read the one rate bound to the declared population and evidence schema.
 
     Every failure mode returns ``value=None`` with a cause. The previous
     version instead seeded ``baseline_prev = 0.1`` and let each failure fall
@@ -169,6 +182,15 @@ def resolve_observed_event_rate(path: Optional[Path]) -> ObservedEventRate:
     anywhere the reader can see.
     """
 
+    if spec is None:
+        return ObservedEventRate(
+            value=None,
+            cause="evalue_conversion_spec_required",
+            reason=(
+                "the plan declares no E-value conversion evidence/population "
+                "contract."
+            ),
+        )
     if path is None:
         return ObservedEventRate(
             value=None,
@@ -188,46 +210,54 @@ def resolve_observed_event_rate(path: Optional[Path]) -> ObservedEventRate:
     import io
 
     candidates: list[float] = []
-    columns: list[str] = []
+    matching_rows = 0
     for row in _csv.DictReader(io.StringIO(text)):
-        for key in _EVENT_RATE_COLUMNS:
-            if key not in row:
-                continue
-            try:
-                value = float(row[key])
-            except (TypeError, ValueError):
-                continue
-            if 0.0 < value < 1.0:
-                candidates.append(value)
-                columns.append(key)
+        if str(row.get(spec.population_column) or "").strip() != spec.baseline_population:
+            continue
+        matching_rows += 1
+        try:
+            value = float(row[spec.baseline_risk_column])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if 0.0 < value < 1.0:
+            candidates.append(value)
 
-    if not candidates:
+    if matching_rows == 0:
         return ObservedEventRate(
             value=None,
-            cause="outcome_rate_has_no_usable_rate",
+            cause="baseline_population_not_found",
             reason=(
-                "its outcome-rate product carries no value in (0, 1) under any "
-                f"of {list(_EVENT_RATE_COLUMNS)}."
+                f"its declared population {spec.baseline_population!r} was not "
+                f"found in column {spec.population_column!r}."
             ),
         )
-    distinct = sorted(set(candidates))
-    if len(distinct) > 1:
+    if matching_rows == 1 and not candidates:
         return ObservedEventRate(
             value=None,
-            cause="outcome_rate_ambiguous",
+            cause="baseline_population_rate_invalid",
             reason=(
-                f"its outcome-rate product reports {len(distinct)} different "
-                f"rates ({', '.join(f'{v:.4f}' for v in distinct)}) and none is "
-                "declared as the cohort baseline."
+                f"the declared baseline-risk cell {spec.baseline_risk_column!r} "
+                "is absent, non-numeric, or outside (0, 1)."
             ),
-            candidates=tuple(distinct),
+        )
+    if matching_rows != 1 or len(candidates) != 1:
+        return ObservedEventRate(
+            value=None,
+            cause="baseline_population_rate_ambiguous",
+            reason=(
+                f"its declared population matched {matching_rows} row(s) and "
+                f"yielded {len(candidates)} usable rate(s); exactly one is required."
+            ),
+            candidates=tuple(sorted(set(candidates))),
         )
     return ObservedEventRate(
-        value=distinct[0],
+        value=candidates[0],
         cause="",
         reason="",
-        candidates=tuple(distinct),
-        source_column=columns[0],
+        candidates=tuple(candidates),
+        source_column=spec.baseline_risk_column,
+        population_column=spec.population_column,
+        baseline_population=spec.baseline_population,
     )
 
 
@@ -375,6 +405,7 @@ def _write_primary_association_evalue_artifacts(
     evidence: EvidenceStore,
     per_step_records: List[Dict[str, Any]],
     run_dir: Path,
+    spec: Optional[EValueConversionSpec],
 ) -> Optional[EValueArtifacts]:
     """Write O23 from the current primary and outcome-rate authorities.
 
@@ -397,10 +428,13 @@ def _write_primary_association_evalue_artifacts(
         evidence=evidence,
         per_step_records=per_step_records,
         run_dir=run_dir,
-        semantic_id="outcome_rate",
+        semantic_id=(
+            spec.baseline_risk_evidence_id if spec is not None else "outcome_rate"
+        ),
     )
     resolved = resolve_observed_event_rate(
-        None if outcome_rate_source is None else outcome_rate_source[1]
+        None if outcome_rate_source is None else outcome_rate_source[1],
+        spec,
     )
     baseline_prevalence = resolved.value
     if baseline_prevalence is None:
@@ -427,8 +461,9 @@ def _write_primary_association_evalue_artifacts(
         "# E-values for primary effects (O23)",
         "",
         f"Baseline event prevalence used: **{baseline_prevalence:.4f}** "
-        f"— this run's observed event rate, read from column "
-        f"`{resolved.source_column}` of its outcome-rate product.",
+        f"— read from `{resolved.source_column}` for "
+        f"`{resolved.population_column}={resolved.baseline_population}` in the "
+        "Planner-bound baseline-risk evidence.",
         "",
         "| Term | OR | 95% CI | E-value | E-value (CI bound) |",
         "|---|---|---|---|---|",
@@ -460,6 +495,17 @@ def _write_primary_association_evalue_artifacts(
     source_ids = [str(primary_record.evidence_id)]
     if outcome_rate_source is not None:
         source_ids.append(str(outcome_rate_source[0].evidence_id))
+    assert spec is not None
+    spec_payload = spec.model_dump(mode="json")
+    spec_sha256 = hashlib.sha256(
+        json.dumps(spec_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    metadata = {
+        "schema_version": "easyicu.evalue_conversion_receipt/1",
+        "conversion_spec": spec_payload,
+        "conversion_spec_sha256": spec_sha256,
+        "oracle_scope": "RR formula only; OR conversion requires this receipt",
+    }
     csv_record = evidence.register_file(
         kind="statistic",
         description="VanderWeele–Ding E-values for every primary effect row (O23).",
@@ -468,6 +514,7 @@ def _write_primary_association_evalue_artifacts(
         inputs=source_ids,
         producer="pipeline",
         generation_mode="system",
+        metadata=metadata,
         on_sha_change="new_id",
     )
     evidence.register_file(
@@ -478,6 +525,7 @@ def _write_primary_association_evalue_artifacts(
         inputs=source_ids,
         producer="pipeline",
         generation_mode="system",
+        metadata=metadata,
         on_sha_change="new_id",
     )
     return EValueArtifacts(
@@ -487,7 +535,115 @@ def _write_primary_association_evalue_artifacts(
         row_count=len(rows),
         baseline_prevalence=baseline_prevalence,
         baseline_source_column=resolved.source_column,
+        baseline_population=resolved.baseline_population,
+        conversion_spec_sha256=spec_sha256,
     )
+
+
+def _write_subgroup_analysis_artifacts(
+    *,
+    evidence: EvidenceStore,
+    per_step_records: List[Dict[str, Any]],
+    run_dir: Path,
+    cohort_path: Path,
+    plan: AnalysisPlan,
+    spec: SubgroupAnalysisSpec,
+) -> tuple[str, Dict[str, float]]:
+    """Run exactly the declared unadjusted subgroup contract and register it."""
+
+    import csv as _csv
+
+    primary_source = _current_verified_semantic_csv(
+        evidence=evidence,
+        per_step_records=per_step_records,
+        run_dir=run_dir,
+        semantic_id="primary_association",
+    )
+    if primary_source is None:
+        raise ValueError("subgroup_primary_association_unresolved")
+    primary_record, primary_path = primary_source
+    if not _subgroup_spec_matches_primary_requirement(plan, spec):
+        raise ValueError("subgroup_spec_not_bound_to_primary_model_requirement")
+    with primary_path.open("r", encoding="utf-8") as handle:
+        primary_rows = list(_csv.DictReader(handle))
+    matching_primary = any(
+        spec.predictor
+        in {
+            str(row.get(field) or "").strip()
+            for field in ("exposure", "source_variable", "term", "variable", "predictor")
+        }
+        and str(row.get("term_role") or "exposure").strip().casefold()
+        in {"", "exposure", "primary"}
+        and str(row.get("effect_scale") or "").strip().casefold() == spec.effect_scale
+        for row in primary_rows
+    )
+    if not matching_primary:
+        raise ValueError("subgroup_predictor_not_bound_to_primary_association")
+
+    cohort_df = pd.read_parquet(cohort_path)
+    required_columns = {
+        spec.predictor,
+        spec.outcome,
+        *spec.subgroup_columns,
+    }
+    missing = sorted(required_columns - set(cohort_df.columns))
+    if missing:
+        raise ValueError(f"subgroup_declared_columns_missing:{','.join(missing)}")
+
+    from ..methods.fairness import run_subgroup_analysis
+
+    result = run_subgroup_analysis(
+        cohort_df=cohort_df,
+        predictor=spec.predictor,
+        outcome=spec.outcome,
+        subgroup_columns=spec.subgroup_columns,
+        continuous_buckets=spec.continuous_buckets,
+        minimum_axis_n=spec.minimum_axis_n,
+        minimum_stratum_n=spec.minimum_stratum_n,
+        multiplicity_family_id=spec.multiplicity_family_id,
+    )
+    csv_path = run_dir / "fairness_subgroups.csv"
+    markdown_path = run_dir / "fairness_subgroups.md"
+    result.write_csv(csv_path)
+    result.write_markdown(markdown_path)
+    metadata = {
+        "schema_version": "easyicu.subgroup_analysis_receipt/1",
+        "spec": spec.model_dump(mode="json"),
+        "spec_sha256": hashlib.sha256(
+            json.dumps(
+                spec.model_dump(mode="json"),
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest(),
+        "claim_ceiling": "analysis_only",
+    }
+    input_ids = [str(primary_record.evidence_id)]
+    if evidence.get("run_input_capsule") is not None:
+        input_ids.append("run_input_capsule")
+    record = evidence.register_file(
+        kind="statistic",
+        description="Pre-specified unadjusted subgroup analysis (O24).",
+        source_path=csv_path,
+        evidence_id="fairness_subgroups",
+        inputs=input_ids,
+        producer="pipeline",
+        generation_mode="system",
+        metadata=metadata,
+        on_sha_change="new_id",
+    )
+    evidence.register_file(
+        kind="log",
+        description="Human-readable pre-specified subgroup summary (O24).",
+        source_path=markdown_path,
+        evidence_id="fairness_subgroups_summary",
+        inputs=input_ids,
+        producer="pipeline",
+        generation_mode="system",
+        metadata=metadata,
+        on_sha_change="new_id",
+    )
+    return str(record.evidence_id), dict(result.interaction_pvalues)
 
 
 def _register_multiple_testing_outputs(
@@ -731,6 +887,70 @@ def finalise_success(
         )
         reproducibility_summary = plan_result.repro_envelope.to_manifest_summary()
 
+    # O24 must run before O22 so every declared stratum/interaction p-value is
+    # part of the family-scoped multiplicity denominator. It is opt-in twice:
+    # the operator enables the feature and the Planner declares exact science.
+    if pipeline._enable_fairness_subgroups:
+        subgroup_spec = plan.subgroup_analysis_spec
+        if subgroup_spec is None:
+            findings.append(
+                ValidationFinding(
+                    validator="fairness_subgroups",
+                    severity="warning",
+                    message=(
+                        "Subgroup analysis was enabled but not computed because "
+                        "AnalysisPlan.subgroup_analysis_spec is absent; the host "
+                        "will not choose a predictor, subgroup axes, binning, or "
+                        "multiplicity family."
+                    ),
+                    detail={"reason": "subgroup_analysis_spec_required"},
+                )
+            )
+        else:
+            try:
+                subgroup_evidence_id, interaction_pvalues = (
+                    _write_subgroup_analysis_artifacts(
+                        evidence=evidence,
+                        per_step_records=per_step_records,
+                        run_dir=run_dir,
+                        cohort_path=cohort_path,
+                        plan=plan,
+                        spec=subgroup_spec,
+                    )
+                )
+                findings.append(
+                    ValidationFinding(
+                        validator="fairness_subgroups",
+                        severity="info",
+                        message=(
+                            "Computed the pre-specified, analysis-only subgroup "
+                            f"contract across {len(subgroup_spec.subgroup_columns)} "
+                            "axis/axes; raw p-values are delegated to O22."
+                        ),
+                        evidence_ids=[subgroup_evidence_id],
+                        detail={
+                            "spec": subgroup_spec.model_dump(mode="json"),
+                            "interaction_pvalues": interaction_pvalues,
+                            "claim_ceiling": "analysis_only",
+                        },
+                    )
+                )
+            except Exception as exc:
+                findings.append(
+                    ValidationFinding(
+                        validator="fairness_subgroups",
+                        severity="warning",
+                        message=(
+                            "Declared subgroup analysis was not computed: "
+                            f"{type(exc).__name__}: {exc}"
+                        ),
+                        detail={
+                            "reason": "subgroup_analysis_contract_failed",
+                            "cause": str(exc),
+                        },
+                    )
+                )
+
     # O22 — Multiple-testing correction. Scan registered table /
     # statistic artefacts for auditable raw p-values and adjust them
     # within their declared (or defensible source-local) hypothesis
@@ -821,13 +1041,14 @@ def finalise_success(
     # O23 — E-values. For every primary-association row, compute
     # VanderWeele–Ding E-value + lower-CI E-value. Writes
     # ``e_values.csv`` + ``e_values.md`` and registers both.
-    # Baseline prevalence defaults to observed outcome rate when
-    # an ``outcome_rate.csv`` was registered.
+    # For odds ratios, baseline risk is read only from the exact evidence,
+    # column and population declared by EValueConversionSpec.
     try:
         evalue_artifacts = _write_primary_association_evalue_artifacts(
             evidence=evidence,
             per_step_records=per_step_records,
             run_dir=run_dir,
+            spec=plan.evalue_conversion_spec,
         )
         if evalue_artifacts is not None:
             findings.append(
@@ -837,8 +1058,8 @@ def finalise_success(
                     message=(
                         f"Computed E-values for {evalue_artifacts.row_count} primary "
                         "effect row(s) at this run's observed event rate "
-                        f"{evalue_artifacts.baseline_prevalence:.4f} (column "
-                        f"'{evalue_artifacts.baseline_source_column}')."
+                        f"{evalue_artifacts.baseline_prevalence:.4f} for declared "
+                        f"population {evalue_artifacts.baseline_population!r}."
                     ),
                     evidence_ids=[evalue_artifacts.evidence_id],
                     detail={
@@ -848,6 +1069,10 @@ def finalise_success(
                         "baseline_prevalence_source": "observed_outcome_rate",
                         "baseline_prevalence_column": (
                             evalue_artifacts.baseline_source_column
+                        ),
+                        "baseline_population": evalue_artifacts.baseline_population,
+                        "conversion_spec_sha256": (
+                            evalue_artifacts.conversion_spec_sha256
                         ),
                     },
                 )
@@ -881,138 +1106,6 @@ def finalise_success(
                 message=f"E-value computation failed: {type(exc).__name__}: {exc}",
             )
         )
-
-    # O24 — Fairness / subgroup analysis. Runs when a
-    # ``primary_association`` artefact exists and the cohort has
-    # at least one of (``age``, ``sex``, ``sex_M``, ``race``,
-    # ``insurance``). Pure numpy; no pandas-only helpers so we
-    # stay consistent with the rest of the deterministic layer.
-    if pipeline._enable_fairness_subgroups:
-        try:
-            primary_source = _current_verified_semantic_csv(
-                evidence=evidence,
-                per_step_records=per_step_records,
-                run_dir=run_dir,
-                semantic_id="primary_association",
-            )
-            if primary_source is not None:
-                import csv as _csv
-
-                primary_record, primary_path = primary_source
-                predictor_name: Optional[str] = None
-                outcome_name = context.target_outcome
-                with primary_path.open("r", encoding="utf-8") as fh:
-                    for row in _csv.DictReader(fh):
-                        term = (
-                            row.get("term")
-                            or row.get("variable")
-                            or row.get("predictor")
-                            or ""
-                        )
-                        if term and term.lower() not in {
-                            "intercept",
-                            "const",
-                            "age",
-                            "sex_m",
-                        }:
-                            predictor_name = term
-                            break
-                cohort_df = pd.read_parquet(cohort_path)
-                candidate_subgroups = [
-                    col
-                    for col in ("age", "sex", "sex_M", "race", "insurance")
-                    if col in cohort_df.columns
-                ]
-                if (
-                    predictor_name is not None
-                    and outcome_name
-                    and outcome_name in cohort_df.columns
-                    and candidate_subgroups
-                ):
-                    from ..methods.fairness import run_subgroup_analysis
-
-                    result = run_subgroup_analysis(
-                        cohort_df=cohort_df,
-                        predictor=predictor_name,
-                        outcome=outcome_name,
-                        subgroup_columns=candidate_subgroups,
-                    )
-                    fair_csv = run_dir / "fairness_subgroups.csv"
-                    fair_md = run_dir / "fairness_subgroups.md"
-                    result.write_csv(fair_csv)
-                    result.write_markdown(fair_md)
-                    fair_record = evidence.register_file(
-                        kind="statistic",
-                        description=(
-                            "Subgroup / fairness analysis for the "
-                            "primary effect (O24)."
-                        ),
-                        source_path=fair_csv,
-                        evidence_id="fairness_subgroups",
-                        inputs=[str(primary_record.evidence_id)],
-                        producer="pipeline",
-                        generation_mode="system",
-                        on_sha_change="new_id",
-                    )
-                    evidence.register_file(
-                        kind="log",
-                        description=(
-                            "Human-readable fairness / subgroup summary (O24)."
-                        ),
-                        source_path=fair_md,
-                        evidence_id="fairness_subgroups_summary",
-                        inputs=[str(primary_record.evidence_id)],
-                        producer="pipeline",
-                        generation_mode="system",
-                        on_sha_change="new_id",
-                    )
-                    findings.append(
-                        ValidationFinding(
-                            validator="fairness_subgroups",
-                            severity="info",
-                            message=(
-                                f"Subgroup analysis for {predictor_name} ~ "
-                                f"{outcome_name} across "
-                                f"{len(candidate_subgroups)} axis/axes."
-                            ),
-                            evidence_ids=[fair_record.evidence_id],
-                            detail={
-                                "predictor": predictor_name,
-                                "outcome": outcome_name,
-                                "subgroup_columns": candidate_subgroups,
-                                "interaction_pvalues": result.interaction_pvalues,
-                            },
-                        )
-                    )
-                    # Escalate to warning if any interaction p < 0.05.
-                    sig_cols = [
-                        col for col, p in result.interaction_pvalues.items() if p < 0.05
-                    ]
-                    if sig_cols:
-                        findings.append(
-                            ValidationFinding(
-                                validator="fairness_subgroups",
-                                severity="warning",
-                                message=(
-                                    f"Interaction p < 0.05 on "
-                                    f"{sig_cols}; subgroup heterogeneity "
-                                    "must be discussed."
-                                ),
-                                evidence_ids=[fair_record.evidence_id],
-                                detail={"significant_subgroups": sig_cols},
-                            )
-                        )
-        except Exception as exc:
-            findings.append(
-                ValidationFinding(
-                    validator="fairness_subgroups",
-                    severity="warning",
-                    message=(
-                        f"Subgroup analysis failed: " f"{type(exc).__name__}: {exc}"
-                    ),
-                )
-            )
-
     manifest_notes = notes
     if stop_after_analysis:
         suffix = "paused_after_analysis: manuscript generation skipped by user option."

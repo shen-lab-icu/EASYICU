@@ -17,10 +17,11 @@ finding-detail field and is never read back out of the code, so a draft that
 kept the scope tuple and dropped the pin would have executed with the authority
 binding silently gone.
 
-``test_the_real_executed_script_is_reproduced_byte_for_byte`` is the
-load-bearing one for the refactor: drawing the boundary must not change a
-single byte of what runs. ``test_the_real_coder_draft_is_detected_as_rewritten``
-is the load-bearing one for the defect.
+The original fresh17 digest remains historical evidence.  The receipt fragment
+later became intentionally self-contained in ``04b19fa`` (it now carries its
+own imports), so the live generator must not pretend to reproduce those older
+bytes.  The golden below instead pins the current host scaffold, while the
+region tests remain load-bearing for the authority boundary.
 """
 
 from __future__ import annotations
@@ -38,7 +39,9 @@ from easyicu.research_agent.schema import AnalysisStep
 # The exact coordinates the fresh17 manifest recorded for that step.
 _STEP_ID = "07_standard_robustness_sensitivity"
 _CONTRACTS_SHA = "4d8bd1f3b81c0ad100bfc5b6f04f94acac7f74ba54ebf8f52d230fbae794c708"
-_EXECUTED_SHA = "42878da0199b0cccec2181257bd9c6591406b371fb81c22172d7a4eaf61c1ef5"
+_CURRENT_SCAFFOLD_SHA = (
+    "8b6071825faebdb597fdaf4816f84280b2b5a1f942e372382fea8a92a4e498ae"
+)
 
 
 def _scope() -> FlagOnlyPlausibilityScope:
@@ -54,16 +57,12 @@ def _step() -> AnalysisStep:
     return AnalysisStep(step_id=_STEP_ID, intent="robustness", method="robustness")
 
 
-def test_the_real_executed_script_is_reproduced_byte_for_byte() -> None:
-    """Drawing the boundary must not change what runs.
-
-    ``42878da…`` is the sha256 the fresh17 manifest recorded as both
-    ``concept_approved_code_sha256`` and ``executed_code_sha256``.
-    """
+def test_the_current_host_scaffold_has_an_explicit_byte_golden() -> None:
+    """Intentional generator changes must update one reviewed byte golden."""
 
     code = robustness_sensitivity_preflight_code(_step(), plausibility_scope=_scope())
 
-    assert hashlib.sha256(code.encode("utf-8")).hexdigest() == _EXECUTED_SHA
+    assert hashlib.sha256(code.encode("utf-8")).hexdigest() == _CURRENT_SCAFFOLD_SHA
 
 
 def test_the_assembled_scaffold_is_the_script() -> None:

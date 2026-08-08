@@ -60,6 +60,7 @@ class SubgroupEstimate:
 class SubgroupAnalysisResult:
     predictor: str
     outcome: str
+    multiplicity_family_id: str
     estimates: List[SubgroupEstimate] = field(default_factory=list)
     interaction_pvalues: Dict[str, float] = field(default_factory=dict)
     notes: List[str] = field(default_factory=list)
@@ -68,6 +69,7 @@ class SubgroupAnalysisResult:
         return {
             "predictor": self.predictor,
             "outcome": self.outcome,
+            "multiplicity_family_id": self.multiplicity_family_id,
             "estimates": [e.to_json() for e in self.estimates],
             "interaction_pvalues": dict(self.interaction_pvalues),
             "notes": list(self.notes),
@@ -82,6 +84,10 @@ class SubgroupAnalysisResult:
             writer = csv.writer(fh)
             writer.writerow(
                 [
+                    "hypothesis_id",
+                    "multiplicity_family_id",
+                    "analysis_role",
+                    "row_type",
                     "subgroup_column",
                     "subgroup_value",
                     "n",
@@ -89,12 +95,15 @@ class SubgroupAnalysisResult:
                     "ci_lower",
                     "ci_upper",
                     "p_value",
-                    "interaction_p",
                 ]
             )
             for e in self.estimates:
                 writer.writerow(
                     [
+                        f"subgroup_effect:{e.subgroup_column}:{e.subgroup_value}",
+                        self.multiplicity_family_id,
+                        "secondary",
+                        "stratum_effect",
                         e.subgroup_column,
                         e.subgroup_value,
                         e.n,
@@ -102,7 +111,22 @@ class SubgroupAnalysisResult:
                         e.ci_lower if e.ci_lower is not None else "",
                         e.ci_upper if e.ci_upper is not None else "",
                         e.p_value if e.p_value is not None else "",
-                        self.interaction_pvalues.get(e.subgroup_column, ""),
+                    ]
+                )
+            for column, p_value in sorted(self.interaction_pvalues.items()):
+                writer.writerow(
+                    [
+                        f"subgroup_interaction:{column}",
+                        self.multiplicity_family_id,
+                        "secondary",
+                        "interaction",
+                        column,
+                        "__interaction__",
+                        "",
+                        "",
+                        "",
+                        "",
+                        p_value,
                     ]
                 )
         return path
@@ -154,7 +178,7 @@ class SubgroupAnalysisResult:
 
 
 def _fit_logistic_or(
-    x: Any, y: Any
+    x: Any, y: Any, *, minimum_n: int
 ) -> Optional[Tuple[float, float, float, float]]:
     """Return (OR, ci_lo, ci_hi, p_value) for logistic(y ~ x)."""
     if np is None:
@@ -162,7 +186,7 @@ def _fit_logistic_or(
     x = np.asarray(x, dtype=float)
     y = np.asarray(y, dtype=int)
     n = len(x)
-    if n < 30 or len(np.unique(y)) < 2:
+    if n < minimum_n or len(np.unique(y)) < 2:
         return None
     X = np.column_stack([np.ones(n), x])
     beta = np.zeros(2)
@@ -305,27 +329,39 @@ def run_subgroup_analysis(
     outcome: str,
     subgroup_columns: Sequence[str],
     continuous_buckets: int = 4,
+    minimum_axis_n: int = 50,
+    minimum_stratum_n: int = 30,
+    multiplicity_family_id: str,
 ) -> SubgroupAnalysisResult:
     """Fit the primary OR per subgroup + interaction p-values."""
     if np is None:
         return SubgroupAnalysisResult(
-            predictor=predictor, outcome=outcome,
+            predictor=predictor,
+            outcome=outcome,
+            multiplicity_family_id=multiplicity_family_id,
             notes=["numpy unavailable"],
         )
     if predictor not in cohort_df.columns or outcome not in cohort_df.columns:
         return SubgroupAnalysisResult(
             predictor=predictor,
             outcome=outcome,
+            multiplicity_family_id=multiplicity_family_id,
             notes=[f"predictor/outcome not in cohort: {predictor}, {outcome}"],
         )
-    result = SubgroupAnalysisResult(predictor=predictor, outcome=outcome)
+    result = SubgroupAnalysisResult(
+        predictor=predictor,
+        outcome=outcome,
+        multiplicity_family_id=multiplicity_family_id,
+    )
     for col in subgroup_columns:
         if col not in cohort_df.columns:
             result.notes.append(f"{col}: not in cohort; skipped")
             continue
         sub = cohort_df.dropna(subset=[predictor, outcome, col])
-        if len(sub) < 50:
-            result.notes.append(f"{col}: fewer than 50 rows after dropna; skipped")
+        if len(sub) < minimum_axis_n:
+            result.notes.append(
+                f"{col}: fewer than {minimum_axis_n} rows after dropna; skipped"
+            )
             continue
         raw_values = sub[col].to_list()
         if sub[col].dtype.kind in {"i", "u", "f"} and len(set(raw_values)) > 6:
@@ -338,7 +374,7 @@ def run_subgroup_analysis(
         s_arr = np.asarray(levels)
         for level in unique_levels:
             mask = s_arr == level
-            if mask.sum() < 30:
+            if mask.sum() < minimum_stratum_n:
                 result.estimates.append(
                     SubgroupEstimate(
                         subgroup_column=col,
@@ -351,7 +387,9 @@ def run_subgroup_analysis(
                     )
                 )
                 continue
-            fit = _fit_logistic_or(x[mask], y[mask])
+            fit = _fit_logistic_or(
+                x[mask], y[mask], minimum_n=minimum_stratum_n
+            )
             if fit is None:
                 result.estimates.append(
                     SubgroupEstimate(

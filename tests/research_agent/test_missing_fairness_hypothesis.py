@@ -88,6 +88,7 @@ def test_subgroup_analysis_runs_over_age_and_sex(ra, synthetic_cohort):
         predictor="sofa2",
         outcome="death",
         subgroup_columns=["age", "sex"],
+        multiplicity_family_id="secondary:subgroups",
     )
     assert result.predictor == "sofa2"
     assert result.outcome == "death"
@@ -95,6 +96,99 @@ def test_subgroup_analysis_runs_over_age_and_sex(ra, synthetic_cohort):
     assert len(result.estimates) >= 2
     # Interaction p-values present for both (may be None if single-level).
     assert "age" in result.interaction_pvalues or "sex" in result.interaction_pvalues
+
+
+def test_subgroup_pvalues_enter_the_declared_multiplicity_family(
+    ra, synthetic_cohort, tmp_path
+) -> None:
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
+    from easyicu.research_agent.methods.multiple_testing import (
+        build_multiple_testing_report,
+    )
+
+    result = ra.run_subgroup_analysis(
+        cohort_df=synthetic_cohort,
+        predictor="sofa2",
+        outcome="death",
+        subgroup_columns=["age", "sex"],
+        multiplicity_family_id="secondary:subgroups",
+    )
+    source = result.write_csv(tmp_path / "fairness_subgroups.csv")
+    evidence = EvidenceStore(tmp_path)
+    evidence.register_file(
+        kind="statistic",
+        description="subgroup contract",
+        source_path=source,
+        evidence_id="fairness_subgroups",
+        producer="pipeline",
+        generation_mode="system",
+    )
+
+    report = build_multiple_testing_report(
+        evidence_records=evidence.records(),
+        run_dir=tmp_path,
+    )
+
+    assert report.n_tests > 0
+    assert {record.family_id for record in report.records} == {
+        "declared:secondary_subgroups"
+    }
+    assert len({record.hypothesis_key for record in report.records}) == report.n_tests
+
+
+def test_subgroup_analysis_is_default_off_and_refuses_silent_adjustment(
+    tmp_path,
+) -> None:
+    from pydantic import ValidationError
+
+    from easyicu.research_agent.contracts.post_analysis import SubgroupAnalysisSpec
+    from easyicu.research_agent.orchestration.config import PipelineConfig
+
+    assert PipelineConfig(workdir=tmp_path).enable_fairness_subgroups is False
+    with pytest.raises(ValidationError, match="subgroup_adjustment_unsupported"):
+        SubgroupAnalysisSpec(
+            primary_model_requirement_id="primary",
+            predictor="exposure",
+            outcome="outcome",
+            subgroup_columns=["sex"],
+            adjustment_covariates=["age"],
+            multiplicity_family_id="secondary:subgroups",
+        )
+
+
+def test_subgroup_spec_binds_one_exact_primary_model_requirement() -> None:
+    from easyicu.research_agent.contracts.post_analysis import SubgroupAnalysisSpec
+    from easyicu.research_agent.orchestration.finalize import (
+        _subgroup_spec_matches_primary_requirement,
+    )
+
+    requirement = SimpleNamespace(
+        requirement_id="primary_model",
+        exposure_source="exposure",
+        outcome="outcome",
+        outcome_type="binary",
+    )
+    plan = SimpleNamespace(
+        steps=[
+            SimpleNamespace(
+                planned_analysis_role="primary",
+                model_requirements=[requirement],
+            )
+        ]
+    )
+    spec = SubgroupAnalysisSpec(
+        primary_model_requirement_id="primary_model",
+        predictor="exposure",
+        outcome="outcome",
+        subgroup_columns=["sex"],
+        multiplicity_family_id="secondary:subgroups",
+    )
+
+    assert _subgroup_spec_matches_primary_requirement(plan, spec)
+    assert not _subgroup_spec_matches_primary_requirement(
+        plan,
+        spec.model_copy(update={"primary_model_requirement_id": "other_model"}),
+    )
 
 
 # ---------------------------------------------------------------------------

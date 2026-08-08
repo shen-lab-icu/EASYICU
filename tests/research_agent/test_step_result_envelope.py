@@ -720,7 +720,7 @@ def test_archived_replay_uses_current_ledger_and_verified_input_authority(
     assert "absolute_unbound_path" in _issue_codes(rejected_envelope)
 
 
-def test_sealed_envelope_wires_only_the_final_fraction_consumer() -> None:
+def test_sealed_envelope_wires_only_the_final_validation_consumer() -> None:
     repo_root = Path(__file__).resolve().parents[2]
     pipeline_source = (repo_root / "src/easyicu/research_agent/pipeline.py").read_text(
         encoding="utf-8"
@@ -733,13 +733,18 @@ def test_sealed_envelope_wires_only_the_final_fraction_consumer() -> None:
     phase_source = (
         repo_root / "src/easyicu/research_agent/execution/phase.py"
     ).read_text(encoding="utf-8")
-    assert phase_source.count("compile_sealed_step_result_shadow(") == 1
-    assert phase_source.count("StepSummaryFractionEnvelopeDualReader()") == 1
-    assert phase_source.count("final_fraction_envelope_validator=") == 1
+    final_validation_source = (
+        repo_root / "src/easyicu/research_agent/execution/final_validation.py"
+    ).read_text(encoding="utf-8")
+    assert "compile_sealed_step_result_shadow(" not in phase_source
+    assert final_validation_source.count("compile_sealed_step_result_shadow(") == 1
+    assert final_validation_source.count("StepSummaryFractionEnvelopeDualReader()") == 1
+    assert final_validation_source.count("final_fraction_envelope_validator=") == 1
     # M8-B1 lands the envelope-authoritative RegisteredOutputEnvelopeConsumer as
     # a pure, fully-tested unit; the live final-gate wiring is the separate B2
     # slice.  Until B2, the consumer must NOT appear in the phase orchestration.
     assert "RegisteredOutputEnvelopeConsumer" not in phase_source
+    assert "RegisteredOutputEnvelopeConsumer" not in final_validation_source
 
 
 def test_registered_tables_compile_typed_population_missingness_and_estimate(

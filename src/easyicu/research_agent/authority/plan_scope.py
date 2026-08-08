@@ -273,44 +273,68 @@ def _normalise_scientific_text(value: Any) -> Optional[str]:
     return " ".join(str(value).split()).casefold()
 
 
+_ANALYSIS_PLAN_CORE_SCIENTIFIC_AUTHORITY_FIELDS = frozenset(
+    {"research_question", "analysis_type", "rationale"}
+)
+_ANALYSIS_PLAN_STRUCTURED_SCIENTIFIC_AUTHORITY_FIELDS = frozenset(
+    {
+        "cohort",
+        "endpoint",
+        "robustness_specs",
+        "know_how_decisions",
+        "evalue_conversion_spec",
+        "subgroup_analysis_spec",
+    }
+)
+_ANALYSIS_PLAN_STEP_AUTHORITY_FIELDS = frozenset({"steps"})
+_ANALYSIS_PLAN_PRESENTATION_ONLY_FIELDS = frozenset({"display_labels"})
+_ANALYSIS_PLAN_RUNTIME_ONLY_FIELDS = frozenset({"revision"})
+
+
+def _classified_plan_scientific_payload(plan: AnalysisPlan) -> dict[str, Any]:
+    """Return structured plan science and fail when schema fields drift."""
+
+    classes = (
+        _ANALYSIS_PLAN_CORE_SCIENTIFIC_AUTHORITY_FIELDS,
+        _ANALYSIS_PLAN_STRUCTURED_SCIENTIFIC_AUTHORITY_FIELDS,
+        _ANALYSIS_PLAN_STEP_AUTHORITY_FIELDS,
+        _ANALYSIS_PLAN_PRESENTATION_ONLY_FIELDS,
+        _ANALYSIS_PLAN_RUNTIME_ONLY_FIELDS,
+    )
+    classified: set[str] = set()
+    overlaps: set[str] = set()
+    for fields in classes:
+        overlaps.update(classified.intersection(fields))
+        classified.update(fields)
+    public_fields = set(AnalysisPlan.model_fields)
+    if overlaps or classified != public_fields:
+        raise RuntimeError(
+            "AnalysisPlan authority classification drift: "
+            f"missing={sorted(public_fields - classified)!r}, "
+            f"unknown={sorted(classified - public_fields)!r}, "
+            f"overlaps={sorted(overlaps)!r}"
+        )
+    return plan.model_dump(
+        mode="json",
+        include=_ANALYSIS_PLAN_STRUCTURED_SCIENTIFIC_AUTHORITY_FIELDS,
+    )
+
+
 def _plan_scientific_scope_signature(plan: AnalysisPlan) -> Tuple[Optional[str], ...]:
     """Fingerprint Planner-owned science that applies to every plan step.
 
-    ``revision`` is deliberately absent: it records plan history, not a change
-    in the research question, analysis family, cohort, robustness contract, or
-    rationale. Structured values use canonical JSON so the signature remains
-    stable when it is serialized into a step record and loaded on resume.
+    ``display_labels`` and ``revision`` are deliberately absent: presentation
+    and plan history cannot change execution. ``steps`` have their own exact
+    per-step authority signature. Every remaining public field is classified
+    above so a schema addition cannot silently disappear from resume identity.
     """
 
-    plan_payload = plan.model_dump(
-        mode="json",
-        include={
-            "cohort",
-            "robustness_specs",
-            "display_labels",
-            "know_how_decisions",
-        },
-    )
+    plan_payload = _classified_plan_scientific_payload(plan)
     return (
         _normalise_scientific_text(plan.research_question),
         _normalise_scientific_text(plan.analysis_type),
         json.dumps(
-            plan_payload.get("cohort"),
-            sort_keys=True,
-            separators=(",", ":"),
-        ),
-        json.dumps(
-            plan_payload.get("robustness_specs", []),
-            sort_keys=True,
-            separators=(",", ":"),
-        ),
-        json.dumps(
-            plan_payload.get("display_labels", {}),
-            sort_keys=True,
-            separators=(",", ":"),
-        ),
-        json.dumps(
-            plan_payload.get("know_how_decisions", []),
+            plan_payload,
             sort_keys=True,
             separators=(",", ":"),
         ),
