@@ -160,10 +160,32 @@ def run_completion_axes(
     }
 
 
+def paper_authority_gates(
+    publication_artifacts_ready: bool,
+    execution_paper_eligible: bool,
+    plan_authority_verified: bool,
+    plan_authority_sha256: str | None,
+) -> dict[str, object]:
+    """Bind paper authorization to one verified immutable plan digest."""
+
+    digest = str(plan_authority_sha256 or "").strip().lower()
+    plan_bound = bool(
+        plan_authority_verified and re.fullmatch(r"[0-9a-f]{64}", digest)
+    )
+    return {
+        "plan_authority_verified": plan_bound,
+        "plan_authority_sha256": digest if plan_bound else None,
+        "paper_authorized": bool(
+            publication_artifacts_ready and execution_paper_eligible and plan_bound
+        ),
+    }
+
+
 __all__ = [
     "count_missing_evidence_markers",
     "count_writer_attempts",
     "has_figure_only_output_contract",
+    "paper_authority_gates",
     "publication_authorized",
     "run_completion_axes",
     "step_completion_projection",

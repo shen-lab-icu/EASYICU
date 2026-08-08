@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 import re
 from typing import TYPE_CHECKING, Literal, Optional, Tuple
 
+from ..contracts.capability_ids import CAPABILITY_FAMILIES
 from ..contracts.association_execution import association_execution_verdict
 from ..contracts.model_tokens import (
     ADJUSTED_ASSOCIATION_OUTPUT,
@@ -395,6 +396,27 @@ CAPABILITY_REGISTRY: Tuple[ScientificCapability, ...] = (
         required_diagnostics=("denominators", "measurement availability"),
     ),
 )
+
+
+def _assert_capability_vocabulary_matches_registry() -> None:
+    """Keep stable persisted ids synchronized with executable registrations."""
+
+    registered = {
+        capability.capability_id: capability.family
+        for capability in CAPABILITY_REGISTRY
+        if capability.capability_id
+    }
+    if registered != CAPABILITY_FAMILIES:
+        raise RuntimeError(
+            "scientific capability vocabulary drift: "
+            f"missing={sorted(set(CAPABILITY_FAMILIES) - set(registered))!r}, "
+            f"unregistered={sorted(set(registered) - set(CAPABILITY_FAMILIES))!r}, "
+            "family_mismatches="
+            f"{sorted(key for key in registered.keys() & CAPABILITY_FAMILIES.keys() if registered[key] != CAPABILITY_FAMILIES[key])!r}"
+        )
+
+
+_assert_capability_vocabulary_matches_registry()
 
 
 AUXILIARY_DETERMINISTIC_RUNNERS: Tuple[AuxiliaryRunner, ...] = (

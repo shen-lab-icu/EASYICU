@@ -3710,7 +3710,12 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       if (!result || result.ok === false) {
         throw new Error((result && (result.reason || result.error)) || 'remove_failed');
       }
-      if (selectedGuidedDraft && selectedGuidedDraft.id === row.id) selectedGuidedDraft = null;
+      if (selectedGuidedDraft && selectedGuidedDraft.id === row.id) {
+        selectedGuidedDraft = null;
+        if (window.EU_GUIDED_PI && window.EU_GUIDED_PI.bindProject) {
+          window.EU_GUIDED_PI.bindProject(null);
+        }
+      }
       guidedDrafts = { loading: false, error: null, data: result.drafts ? { drafts: result.drafts } : null };
       loadGuidedDrafts(true);
       pushBot(
@@ -4032,6 +4037,29 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       return result;
     });
   }
+  function piProjectShellActive() {
+    return !!(
+      window.EU_GUIDED_PI &&
+      window.EU_GUIDED_PI.isActive &&
+      window.EU_GUIDED_PI.isActive()
+    );
+  }
+  function bindProjectToPi(result, row) {
+    const session = result && result.session ? result.session : null;
+    guidedCopilot = { loading: false, error: null, session, last: result || guidedCopilot.last };
+    restoreGuidedSlotsFromSession(session);
+    const projectId = String((session && session.draft_id) || (row && row.id) || '').trim();
+    const projectTitle = String(
+      (session && session.project_title) ||
+      (row && (row.title || row.study_id || row.run_label)) ||
+      projectId
+    ).trim();
+    if (projectId && window.EU_GUIDED_PI && window.EU_GUIDED_PI.bindProject) {
+      window.EU_GUIDED_PI.bindProject({ id: projectId, title: projectTitle });
+    }
+    renderAside();
+    renderSessions();
+  }
   function continuePendingGuidedGoal() {
     if (!pendingGuidedGoal) return false;
     const pending = pendingGuidedGoal;
@@ -4178,10 +4206,13 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       return;
     }
     document.querySelectorAll('.gd-sess').forEach(s => s.classList.toggle('active', s === el));
+    const usePiSession = piProjectShellActive();
     guidedCopilot = { loading: true, error: null, session: null, last: guidedCopilot.last };
-    thread = [{ typing: true }];
-    chips = [];
-    renderThread(); renderChips();
+    if (!usePiSession) {
+      thread = [{ typing: true }];
+      chips = [];
+      renderThread(); renderChips();
+    }
     window.EU_API.openGuidedProject({
       project_dir: row.project_dir,
       draft_id: row.id || null,
@@ -4189,16 +4220,17 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       mode: 'local',
       context: guidedBackendContext(),
     }).then(result => {
-      thread = thread.filter(item => !item.typing);
+      if (!usePiSession) thread = thread.filter(item => !item.typing);
       if (!result || !result.ok) {
         const reason = result && (result.reason || result.error) ? (result.reason || result.error) : 'unknown error';
         pushBot(`Could not open project memory: <span class="mono">${esc(reason)}</span>`, `无法打开项目记忆：<span class="mono">${esc(reason)}</span>`);
         renderThread();
         return;
       }
-      restoreGuidedProjectThread(result, row, kind);
+      if (usePiSession) bindProjectToPi(result, row);
+      else restoreGuidedProjectThread(result, row, kind);
     }).catch(err => {
-      thread = thread.filter(item => !item.typing);
+      if (!usePiSession) thread = thread.filter(item => !item.typing);
       pushBot(`Could not open project memory: <span class="mono">${esc(err.message || String(err))}</span>`, `无法打开项目记忆：<span class="mono">${esc(err.message || String(err))}</span>`);
       renderThread();
     });
@@ -4411,6 +4443,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       guidedDraftParentDir,
       guidedFolderBrowser,
       guidedKnownProjectsOpen,
+      selectedGuidedDraft,
       pendingGuidedGoal,
       localDraftRows,
       guidedKnownProjectRows,
@@ -4658,7 +4691,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       setGuidedProjectOpenStatus(
         setupBox,
         'ok',
-        `${icon('check', 12)} <span>${t('Project memory opened. Restoring the conversation...', '项目记忆已打开，正在恢复对话...')}</span>`,
+        `${icon('check', 12)} <span>${t('Research project opened.', '研究项目已打开。')}</span>`,
       );
       selectedGuidedDraft = {
         id: result.session && result.session.draft_id,
@@ -4667,7 +4700,8 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       };
       selectedGuidedRun = null;
       closeGuidedFolderDialog();
-      restoreGuidedProjectThread(result, selectedGuidedDraft, 'draft');
+      if (piProjectShellActive()) bindProjectToPi(result, selectedGuidedDraft);
+      else restoreGuidedProjectThread(result, selectedGuidedDraft, 'draft');
       continuePendingGuidedGoal();
       loadGuidedDrafts(true);
     }).catch(err => {
@@ -4716,6 +4750,10 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       const title = selectedGuidedDraft && selectedGuidedDraft.title ? selectedGuidedDraft.title : text;
       const path = selectedGuidedDraft && selectedGuidedDraft.project_dir ? compactPath(selectedGuidedDraft.project_dir) : '~/easyicu/projects';
       closeGuidedFolderDialog();
+      if (piProjectShellActive() && opened && opened.ok) {
+        bindProjectToPi(opened, selectedGuidedDraft);
+        return;
+      }
       // One-click starter path: keep the goal the user already picked and resume
       // it in the fresh folder, instead of resetting them back to goal cards.
       if (options.continueGoal && pendingGuidedGoal) {
@@ -5015,35 +5053,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
   };
 
   function renderSessions() {
-    const host = document.getElementById('gdSessions');
-    if (!host) return;
-    const drafts = localDraftRows();
-    const draftHtml = guidedDrafts.loading
-      ? `<div class="gd-empty-local"><div class="ss-t">${t('Loading study folders', '正在加载研究文件夹')}</div><div class="ss-m">${t('Reading metadata-only Guided folder registry.', '正在读取仅元数据的 Guided 文件夹 registry。')}</div></div>`
-      : guidedDrafts.error
-        ? `<div class="gd-empty-local warn"><div class="ss-t">${t('Study folders unavailable', '研究文件夹不可用')}</div><div class="ss-m">${esc(guidedDrafts.error)}</div></div>`
-        : drafts.length
-          ? drafts.slice(0, 8).map((row, i) => `
-            <div class="gd-sessline">
-              <button class="gd-sess draft ${selectedGuidedDraft && selectedGuidedDraft.id === row.id ? 'active' : ''}" data-localdraft="${i}" title="${t('Open this folder conversation memory', '打开这个文件夹的对话记忆')}">
-                <span class="ss-fold">${icon('file', 15)}</span>
-                <span>
-                  <span class="ss-t">${esc(row.title || 'Guided draft')}</span>
-                  <span class="ss-m">${esc(row.status || 'metadata_only')} · ${esc(row.depth || 'full')} · ${esc(row.data_mode || 'demo')}</span>
-                  <span class="ss-m mono">${row.project_dir ? esc(compactPath(row.project_dir)) : 'legacy registry-only draft'}</span>
-                  <span class="ss-m mono">${esc(fmtRunTime(row.updated_at || row.created_at))}</span>
-                </span>
-              </button>
-              <button class="gd-sess-action danger" type="button" data-remove-localdraft="${i}" title="${t('Remove from Guided draft list', '从草稿列表移除')}" aria-label="${t('Remove from Guided draft list', '从草稿列表移除')}">${icon('close', 12)}</button>
-            </div>`).join('')
-          : `<div class="gd-empty-local">
-              <div class="ss-t">${t('No study folders yet', '还没有研究文件夹')}</div>
-              <div class="ss-m">${t('Use New / open study folder to bind this conversation to a local project folder first.', '先使用“新建/打开研究文件夹”把这条对话绑定到本地项目文件夹。')}</div>
-            </div>`;
-    host.innerHTML = `
-      <div class="gd-rail-sec in-list">${t('Study folders', '研究文件夹')} <button class="gd-refresh-mini" data-refreshdrafts title="${t('Refresh study folders', '刷新研究文件夹')}">${icon('refresh', 10)}</button></div>
-      <div class="gd-rail-note"><strong>${t('Conversation memory', '对话记忆')}</strong><span>${t('Open these to continue setup inside Guided Copilot.', '打开这里可继续研究引导内的配置。')}</span></div>
-      ${draftHtml}`;
+    guidedProjectRenderer('renderProjectRail');
   }
 
   /* ============== screen ============== */
@@ -5076,7 +5086,6 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         <div class="gd-main threecol">
           <aside class="gd-rail">
             <div class="gd-rail-top" id="gdFolderControls"></div>
-            <div class="gd-rail-sec">Workspace</div>
             <div class="gd-rail-list" id="gdSessions"></div>
             <div class="gd-rail-foot">
               <div class="gd-rail-utils" aria-label="${t('Guided Copilot utilities', '研究引导工具')}">
@@ -5090,20 +5099,26 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
             </div>
           </aside>
           <div class="gd-conv">
-            <div class="gd-scroll" id="gdScroll"><div class="gd-thread" id="gdThread" role="log" aria-live="polite" aria-label="Copilot conversation"></div></div>
-            <div class="gd-suggest" id="gdSuggest"></div>
-            <div class="gd-composer-wrap">
-              <div class="gd-composer">
-                <input class="gd-input" id="gdInput" value="${attr(guidedComposerDraft)}" placeholder="${t('Reply, or tap an option above to continue…', '回复，或点击上方选项继续…')}" autocomplete="off" aria-label="${t('Message Guided Copilot', '给研究引导发送消息')}" />
-                <button type="button" class="gd-send" id="gdSend" aria-label="${t('Send message', '发送消息')}">${icon('arrow', 16)}</button>
+            <div class="gd-pi-shell" id="gdPiShell" aria-label="${t('Pi Copilot conversation', 'Pi Copilot 对话')}"></div>
+            <div class="gd-legacy-shell" id="gdLegacyShell">
+              <div class="gd-scroll" id="gdScroll"><div class="gd-thread" id="gdThread" role="log" aria-live="polite" aria-label="Copilot conversation"></div></div>
+              <div class="gd-suggest" id="gdSuggest"></div>
+              <div class="gd-composer-wrap">
+                <div class="gd-composer">
+                  <input class="gd-input" id="gdInput" value="${attr(guidedComposerDraft)}" placeholder="${t('Reply, or tap an option above to continue…', '回复，或点击上方选项继续…')}" autocomplete="off" aria-label="${t('Message Guided Copilot', '给研究引导发送消息')}" />
+                  <button type="button" class="gd-send" id="gdSend" aria-label="${t('Send message', '发送消息')}">${icon('arrow', 16)}</button>
+                </div>
+                <div class="gd-foot-note">${t('Guided Copilot · local first · nothing leaves your machine', '研究引导 · 本地优先 · 数据不离开你的电脑')}</div>
               </div>
-              <div class="gd-foot-note">${t('Guided Copilot · local first · nothing leaves your machine', '研究引导 · 本地优先 · 数据不离开你的电脑')}</div>
             </div>
           </div>
-          <aside class="gd-aside">
-            <div class="gd-aside-head"><div class="eyebrow">${t('Building your study', '正在搭建你的研究')}</div><div class="at">${t('Study workspace', '研究工作区')}</div><div class="asub">${t('Assembles as we talk · edit any step', '随对话逐步组装 · 任意步骤可编辑')}</div></div>
-            <div class="gd-aside-body" id="gdAsideBody"></div>
-            <div class="gd-aside-foot"><div class="note ok" style="padding:9px 11px;"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="t" style="font-size:11.5px;">${t('Evidence-bound', '证据绑定')}</div><div class="d" style="font-size:10.5px;">${t('Draft stays gated until checks pass.', '草稿在检查通过前保持受限。')}</div></div></div></div>
+          <aside class="gd-aside" id="gdContextAside">
+            <div class="gd-study-aside" id="gdStudyAside">
+              <div class="gd-aside-head"><div class="eyebrow">${t('Building your study', '正在搭建你的研究')}</div><div class="at">${t('Study workspace', '研究工作区')}</div><div class="asub">${t('Assembles as we talk · edit any step', '随对话逐步组装 · 任意步骤可编辑')}</div></div>
+              <div class="gd-aside-body" id="gdAsideBody"></div>
+              <div class="gd-aside-foot"><div class="note ok" style="padding:9px 11px;"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="t" style="font-size:11.5px;">${t('Evidence-bound', '证据绑定')}</div><div class="d" style="font-size:10.5px;">${t('Draft stays gated until checks pass.', '草稿在检查通过前保持受限。')}</div></div></div></div>
+            </div>
+            <div class="gpi-preview-aside" id="gdPreviewAside" hidden></div>
           </aside>
         </div>
         <div id="gdFolderDialogHost"></div>
@@ -5115,8 +5130,20 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       renderGuidedFolderControls();
       renderGuidedFolderDialog();
       renderAside();
+      if (window.EU_GUIDED_PI_PREVIEW && window.EU_GUIDED_PI_PREVIEW.mount) {
+        window.EU_GUIDED_PI_PREVIEW.mount(root.querySelector('#gdPreviewAside'));
+      }
       renderSessions();
       loadGuidedDrafts();
+      if (window.EU_GUIDED_PI && window.EU_GUIDED_PI.mount) {
+        window.EU_GUIDED_PI.mount(root.querySelector('#gdPiShell'));
+        if (selectedGuidedDraft && window.EU_GUIDED_PI.bindProject) {
+          window.EU_GUIDED_PI.bindProject({
+            id: selectedGuidedDraft.id,
+            title: selectedGuidedDraft.title || selectedGuidedDraft.id,
+          });
+        }
+      }
       // The global topbar Demo/Real toggle is the source of truth on entry:
       // sync UP only (demo → real), so a Real-mode user never sees the aside
       // claim "Demo · local". The conversation may still opt into demo

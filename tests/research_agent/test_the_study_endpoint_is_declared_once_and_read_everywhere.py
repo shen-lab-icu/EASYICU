@@ -51,7 +51,12 @@ from easyicu.research_agent.planning.analysis_types import (
     list_analysis_types,
     required_endpoint_kind_for_family,
 )
-from easyicu.research_agent.schema import AnalysisPlan, EndpointSpec
+from easyicu.research_agent.schema import (
+    AnalysisPlan,
+    CohortDescriptor,
+    EndpointSpec,
+    ResearchContext,
+)
 
 
 def _endpoint(**overrides: object) -> EndpointSpec:
@@ -79,6 +84,21 @@ def _plan(**overrides: object) -> AnalysisPlan:
     }
     payload.update(overrides)
     return AnalysisPlan(**payload)  # type: ignore[arg-type]
+
+
+def _context(endpoint: EndpointSpec | None = None) -> ResearchContext:
+    return ResearchContext(
+        research_question="Estimate time to death.",
+        cohort=CohortDescriptor(
+            cohort_name="c",
+            database="synthetic",
+            n_patients=10,
+            n_stays=10,
+        ),
+        variables=[],
+        target_outcome="death",
+        endpoint=endpoint,
+    )
 
 
 # --------------------------------------------------------------------------
@@ -131,7 +151,7 @@ def test_every_declared_requirement_names_a_real_endpoint_kind() -> None:
 
 
 def test_a_survival_plan_without_an_endpoint_is_reported() -> None:
-    findings = endpoint_contract_findings(_plan())
+    findings = endpoint_contract_findings(_plan(), context=_context())
     assert [(f.validator, f.severity) for f in findings] == [
         ("endpoint_contract", "warning")
     ]
@@ -152,13 +172,18 @@ def test_the_missing_declaration_does_not_abort_the_run() -> None:
     advisory finding must not pre-empt that repair opportunity.
     """
 
-    assert all(f.severity != "error" for f in endpoint_contract_findings(_plan()))
+    assert all(
+        f.severity != "error"
+        for f in endpoint_contract_findings(_plan(), context=_context())
+    )
 
 
 def test_the_same_contract_can_be_enforced_after_retries_are_exhausted() -> None:
     """One rule, two lifecycle severities; no duplicated endpoint policy."""
 
-    findings = endpoint_contract_findings(_plan(), severity="error")
+    findings = endpoint_contract_findings(
+        _plan(), context=_context(), severity="error"
+    )
 
     assert [(finding.validator, finding.severity) for finding in findings] == [
         ("endpoint_contract", "error")
@@ -171,7 +196,7 @@ def test_the_refusal_names_the_fields_that_would_satisfy_it() -> None:
     Every field the planner must send has to appear in the message it receives.
     """
 
-    message = endpoint_contract_findings(_plan())[0].message
+    message = endpoint_contract_findings(_plan(), context=_context())[0].message
     for field in (
         "kind",
         "levels",
@@ -186,7 +211,10 @@ def test_the_refusal_names_the_fields_that_would_satisfy_it() -> None:
 def test_a_declared_endpoint_of_the_required_kind_is_accepted() -> None:
     """Satisfiability, stated as a test: the gate has to have an exit."""
 
-    assert endpoint_contract_findings(_plan(endpoint=_endpoint())) == []
+    endpoint = _endpoint()
+    assert endpoint_contract_findings(
+        _plan(endpoint=endpoint), context=_context(endpoint)
+    ) == []
 
 
 def test_a_declared_endpoint_of_the_wrong_kind_is_refused_and_says_which() -> None:
@@ -198,7 +226,9 @@ def test_a_declared_endpoint_of_the_wrong_kind_is_refused_and_says_which() -> No
             levels=[0, 1],
         )
     )
-    findings = endpoint_contract_findings(plan)
+    findings = endpoint_contract_findings(
+        plan, context=_context(plan.endpoint)
+    )
     assert len(findings) == 1
     assert (findings[0].detail or {})["declared_endpoint_kind"] == "binary"
     assert "'binary'" in findings[0].message
@@ -464,7 +494,7 @@ def _phase_endpoint_call_arguments() -> list[str]:
     return found
 
 
-def test_both_consumers_are_wired_to_the_plans_own_endpoint() -> None:
+def test_both_consumers_are_wired_to_the_sealed_context_endpoint() -> None:
     """The step record and the concept auditor, from one source.
 
     Two consumers rather than one is the point: the record tells the Coder what
@@ -476,10 +506,21 @@ def test_both_consumers_are_wired_to_the_plans_own_endpoint() -> None:
     arguments = _phase_endpoint_call_arguments()
     assert len(arguments) == 2, arguments
     for argument in arguments:
-        # The locked plan -- not the context (built before the plan exists and
-        # sealed as evidence, so it can never carry this), and not the step.
-        assert "plan_result.plan" in argument, argument
-        assert "'endpoint'" in argument or '"endpoint"' in argument, argument
+        assert argument == "context.endpoint", argument
+
+
+def test_a_stale_plan_projection_is_rejected_against_context_authority() -> None:
+    authoritative = _endpoint()
+    stale = _endpoint(time_origin="hospital_admission")
+
+    findings = endpoint_contract_findings(
+        _plan(endpoint=stale),
+        context=_context(authoritative),
+        severity="error",
+    )
+
+    assert len(findings) == 1
+    assert (findings[0].detail or {})["reason"] == "endpoint_projection_mismatch"
 
 
 def test_the_authorization_prose_is_not_repeated_to_the_auditor() -> None:
@@ -584,10 +625,7 @@ def test_missing_endpoint_is_blocked_after_planner_and_replanner_miss(
         for messages, _kwargs in llm.calls
     ]
 
-    assert any(
-        "PROBE SUMMARY:" in prompt and "Repair the plan's typed study endpoint" in prompt
-        for prompt in prompts
-    )
+    assert not any("Repair the plan's typed study endpoint" in prompt for prompt in prompts)
     assert any(
         finding.get("validator") == "endpoint_contract"
         and finding.get("severity") == "error"

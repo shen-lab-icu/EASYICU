@@ -305,7 +305,7 @@ class PipelineConfig:
     # the generic typed mode; the caller decides which mode a task requires.
     required_primary_cohort_selection_mode: Optional[CohortSelectionMode] = None
     enable_reviewer_round: bool = True
-    enable_fairness_subgroups: bool = True
+    enable_fairness_subgroups: bool = False
     enable_hypothesis_generator: bool = False
     hypothesis_generator_top_k: int = 5
     enable_pdf_render: bool = False

@@ -23,10 +23,23 @@ from pathlib import Path
 import pytest
 
 from easyicu.research_agent.authority.evidence_store import EvidenceStore
+from easyicu.research_agent.contracts.post_analysis import EValueConversionSpec
 from easyicu.research_agent.methods.sensitivity import (
     BaselinePrevalenceRequiredError,
     compute_e_value,
 )
+
+
+def _spec(**overrides: str) -> EValueConversionSpec:
+    payload = {
+        "baseline_risk_column": "outcome_rate",
+        "population_column": "population",
+        "baseline_population": "analysis_cohort",
+    }
+    payload.update(overrides)
+    return EValueConversionSpec(**payload)
+
+
 from easyicu.research_agent.orchestration.finalize import (
     _primary_association_evalue_rows,
     _write_primary_association_evalue_artifacts,
@@ -65,7 +78,11 @@ def test_typed_deterministic_association_output_reaches_evalue_finalization(
     """Typed owner -> semantic evidence authority -> O23 registered artefact."""
 
     primary_path = (
-        tmp_path / "steps" / "primary" / "outputs" / "adjusted_association_estimates.csv"
+        tmp_path
+        / "steps"
+        / "primary"
+        / "outputs"
+        / "adjusted_association_estimates.csv"
     )
     primary_path.parent.mkdir(parents=True)
     primary_path.write_text(
@@ -75,7 +92,9 @@ def test_typed_deterministic_association_output_reaches_evalue_finalization(
     )
     outcome_path = tmp_path / "steps" / "outcome" / "outputs" / "outcome_rate.csv"
     outcome_path.parent.mkdir(parents=True)
-    outcome_path.write_text("outcome_rate\n0.2\n", encoding="utf-8")
+    outcome_path.write_text(
+        "population,outcome_rate\nanalysis_cohort,0.2\n", encoding="utf-8"
+    )
     evidence = EvidenceStore(tmp_path)
     primary = evidence.register_file(
         kind="table",
@@ -99,10 +118,19 @@ def test_typed_deterministic_association_output_reaches_evalue_finalization(
     artifacts = _write_primary_association_evalue_artifacts(
         evidence=evidence,
         per_step_records=[
-            {"step_id": "primary", "status": "ok", "evidence_ids": [primary.evidence_id]},
-            {"step_id": "outcome", "status": "ok", "evidence_ids": [outcome.evidence_id]},
+            {
+                "step_id": "primary",
+                "status": "ok",
+                "evidence_ids": [primary.evidence_id],
+            },
+            {
+                "step_id": "outcome",
+                "status": "ok",
+                "evidence_ids": [outcome.evidence_id],
+            },
         ],
         run_dir=tmp_path,
+        spec=_spec(),
     )
 
     assert artifacts is not None
@@ -110,10 +138,34 @@ def test_typed_deterministic_association_output_reaches_evalue_finalization(
     assert artifacts.csv_path.is_file()
     assert artifacts.markdown_path.is_file()
     assert artifacts.row_count == 1
+    assert artifacts.baseline_population == "analysis_cohort"
+    assert len(artifacts.conversion_spec_sha256) == 64
     assert evidence.get("e_values") is not None
     text = artifacts.csv_path.read_text(encoding="utf-8")
     assert "sep3" in text
     assert "1.8" in text
+
+
+def test_evalue_population_binding_changes_plan_scientific_identity() -> None:
+    from easyicu.research_agent.authority.plan_scope import (
+        _plan_scientific_scope_signature,
+    )
+    from easyicu.research_agent.schema import AnalysisPlan
+
+    base = AnalysisPlan(
+        research_question="q",
+        steps=[],
+        evalue_conversion_spec=_spec(),
+    )
+    changed = base.model_copy(
+        update={
+            "evalue_conversion_spec": _spec(baseline_population="unexposed_reference")
+        }
+    )
+
+    assert _plan_scientific_scope_signature(base) != (
+        _plan_scientific_scope_signature(changed)
+    )
 
 
 def test_typed_non_odds_ratio_is_not_reinterpreted_as_an_or(tmp_path: Path) -> None:
@@ -168,8 +220,12 @@ def _write(tmp_path, name: str, text: str):
 
 
 def test_a_single_declared_rate_resolves(tmp_path):
-    path = _write(tmp_path, "outcome_rate.csv", "outcome_rate\n0.214\n")
-    resolved = resolve_observed_event_rate(path)
+    path = _write(
+        tmp_path,
+        "outcome_rate.csv",
+        "population,outcome_rate\nanalysis_cohort,0.214\n",
+    )
+    resolved = resolve_observed_event_rate(path, _spec())
 
     assert resolved.value == pytest.approx(0.214)
     assert resolved.cause == ""
@@ -177,24 +233,28 @@ def test_a_single_declared_rate_resolves(tmp_path):
 
 
 def test_a_missing_product_resolves_to_nothing_not_to_a_default(tmp_path):
-    resolved = resolve_observed_event_rate(None)
+    resolved = resolve_observed_event_rate(None, _spec())
     assert resolved.value is None
     assert resolved.cause == "no_outcome_rate_product"
 
 
 def test_an_unreadable_product_resolves_to_nothing(tmp_path):
-    resolved = resolve_observed_event_rate(tmp_path / "does_not_exist.csv")
+    resolved = resolve_observed_event_rate(tmp_path / "does_not_exist.csv", _spec())
     assert resolved.value is None
     assert resolved.cause == "outcome_rate_unreadable"
 
 
 def test_a_product_with_no_usable_rate_resolves_to_nothing(tmp_path):
     # Present, parseable, and carries nothing that is a rate in (0, 1).
-    path = _write(tmp_path, "outcome_rate.csv", "n_events,n_total\n2021,9445\n")
-    resolved = resolve_observed_event_rate(path)
+    path = _write(
+        tmp_path,
+        "outcome_rate.csv",
+        "population,n_events,n_total\nanalysis_cohort,2021,9445\n",
+    )
+    resolved = resolve_observed_event_rate(path, _spec())
 
     assert resolved.value is None
-    assert resolved.cause == "outcome_rate_has_no_usable_rate"
+    assert resolved.cause == "baseline_population_rate_invalid"
 
 
 def test_disagreeing_rates_are_refused_not_reduced(tmp_path):
@@ -208,28 +268,49 @@ def test_disagreeing_rates_are_refused_not_reduced(tmp_path):
     path = _write(
         tmp_path,
         "outcome_rate.csv",
-        "group,outcome_rate\nexposed,0.31\nunexposed,0.18\n",
+        "population,outcome_rate\nanalysis_cohort,0.31\nanalysis_cohort,0.18\n",
     )
-    resolved = resolve_observed_event_rate(path)
+    resolved = resolve_observed_event_rate(path, _spec())
 
     assert resolved.value is None
-    assert resolved.cause == "outcome_rate_ambiguous"
+    assert resolved.cause == "baseline_population_rate_ambiguous"
     assert resolved.candidates == (0.18, 0.31)
-    assert "0.1800" in resolved.reason and "0.3100" in resolved.reason
+    assert "2 row(s)" in resolved.reason
 
 
-def test_the_same_rate_repeated_across_rows_is_not_ambiguous(tmp_path):
-    """Refusing agreement would be a false block, not a safe one."""
+def test_duplicate_population_rows_are_ambiguous_even_when_rates_agree(tmp_path):
 
     path = _write(
         tmp_path,
         "outcome_rate.csv",
-        "stratum,outcome_rate\na,0.214\nb,0.214\n",
+        "population,outcome_rate\nanalysis_cohort,0.214\nanalysis_cohort,0.214\n",
     )
-    resolved = resolve_observed_event_rate(path)
+    resolved = resolve_observed_event_rate(path, _spec())
 
-    assert resolved.value == pytest.approx(0.214)
-    assert resolved.cause == ""
+    assert resolved.value is None
+    assert resolved.cause == "baseline_population_rate_ambiguous"
+
+
+def test_a_different_population_is_not_used_as_the_baseline(tmp_path):
+    path = _write(
+        tmp_path,
+        "outcome_rate.csv",
+        "population,outcome_rate\nexposed,0.214\n",
+    )
+    resolved = resolve_observed_event_rate(path, _spec())
+    assert resolved.value is None
+    assert resolved.cause == "baseline_population_not_found"
+
+
+def test_an_or_conversion_without_a_typed_population_contract_is_omitted(tmp_path):
+    path = _write(
+        tmp_path,
+        "outcome_rate.csv",
+        "population,outcome_rate\nanalysis_cohort,0.214\n",
+    )
+    resolved = resolve_observed_event_rate(path, None)
+    assert resolved.value is None
+    assert resolved.cause == "evalue_conversion_spec_required"
 
 
 def test_every_unresolved_cause_is_distinct(tmp_path):
@@ -241,11 +322,23 @@ def test_every_unresolved_cause_is_distinct(tmp_path):
     """
 
     causes = {
-        resolve_observed_event_rate(None).cause,
-        resolve_observed_event_rate(tmp_path / "nope.csv").cause,
-        resolve_observed_event_rate(_write(tmp_path, "a.csv", "n\n5\n")).cause,
+        resolve_observed_event_rate(None, _spec()).cause,
+        resolve_observed_event_rate(tmp_path / "nope.csv", _spec()).cause,
         resolve_observed_event_rate(
-            _write(tmp_path, "b.csv", "outcome_rate\n0.1\n0.9\n")
+            _write(
+                tmp_path,
+                "a.csv",
+                "population,n\nanalysis_cohort,5\n",
+            ),
+            _spec(),
+        ).cause,
+        resolve_observed_event_rate(
+            _write(
+                tmp_path,
+                "b.csv",
+                "population,outcome_rate\nanalysis_cohort,0.1\nanalysis_cohort,0.9\n",
+            ),
+            _spec(),
         ).cause,
     }
     assert len(causes) == 4, causes

@@ -33,6 +33,7 @@ from ..schema import (
     ResearchContext,
     VariableRole,
 )
+from ..contracts.post_analysis import EValueConversionSpec
 from ..planning.robustness_contract import RobustnessSpec
 
 # ---------------------------------------------------------------------------
@@ -449,8 +450,14 @@ def _mock_plan_json(ctx: ResearchContext) -> str:
     # instead of the old ambiguous ``logistic_or_KM`` placeholder.
     steps = [
         (
-            step.model_copy(update={"method": "logistic_regression"})
+            step.model_copy(
+                update={
+                    "method": "logistic_regression",
+                    "scientific_capability": "association_freeform_v1",
+                }
+            )
             if step.step_id == "04_primary_association"
+            and analysis_type.key == "association_study"
             else (
                 step.model_copy(
                     update={
@@ -533,6 +540,15 @@ def _mock_plan_json(ctx: ResearchContext) -> str:
         research_question=ctx.research_question,
         analysis_type=analysis_type.key,
         steps=steps,
+        evalue_conversion_spec=(
+            EValueConversionSpec(
+                baseline_risk_column="outcome_rate",
+                population_column="population",
+                baseline_population="analysis_cohort",
+            )
+            if analysis_type.key == "association_study"
+            else None
+        ),
         rationale=(
             f"Mock plan generated from ResearchContext for analysis type "
             f"'{analysis_type.key}'. The outer loop stays stable, while inner "
@@ -1010,6 +1026,7 @@ def _mock_code_for_step(ctx: ResearchContext, prompt: str) -> str:
             summary["outcome_col"] = outcome_col
             summary["outcome_rate"] = inc
             pd.DataFrame([{{
+                "population": "analysis_cohort",
                 "outcome": outcome_col,
                 "n_total": int(df[outcome_col].notna().sum()),
                 "n_events": int(df[outcome_col].dropna().astype(int).sum()),

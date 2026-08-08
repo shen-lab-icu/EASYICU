@@ -17,7 +17,7 @@ def replan_candidate_contract_findings(
     """Return execution-blocking graph defects in one proposed revision."""
 
     return [
-        *endpoint_contract_findings(plan, severity="error"),
+        *endpoint_contract_findings(plan, context=context, severity="error"),
         *_typed_plan_dag_findings(plan),
         *primary_analysis_cohort_plan_findings(plan=plan),
         *trajectory_plan_dag_findings(plan=plan, context=context),

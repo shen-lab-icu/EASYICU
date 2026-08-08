@@ -10,7 +10,51 @@
       attr: ctx.attr,
       compactPath: ctx.compactPath,
       slugifyDraftFolder: ctx.slugifyDraftFolder,
+      fmtRunTime: ctx.fmtRunTime,
     };
+  }
+
+  function projectMeta(row, t) {
+    const status = row.status === 'metadata_only'
+      ? t('Setup only', '仅配置')
+      : (row.status === 'ready' ? t('Ready', '已就绪') : (row.status || t('Study', '研究')));
+    const mode = row.data_mode === 'demo'
+      ? t('Demo data', '演示数据')
+      : (row.data_mode === 'real' ? t('Local data', '本地数据') : (row.data_mode || ''));
+    return [status, mode].filter(Boolean).join(' · ');
+  }
+
+  function renderProjectRail(ctx) {
+    const { t, icon, esc, fmtRunTime } = helpers(ctx);
+    const host = document.getElementById('gdSessions');
+    if (!host) return;
+    const rows = ctx.localDraftRows();
+    const activeId = ctx.selectedGuidedDraft && ctx.selectedGuidedDraft.id;
+    const draftHtml = ctx.guidedDrafts.loading
+      ? `<div class="gd-empty-local"><div class="ss-t">${t('Loading study folders', '正在加载研究文件夹')}</div><div class="ss-m">${t('Reading the local project registry.', '正在读取本地项目列表。')}</div></div>`
+      : ctx.guidedDrafts.error
+        ? `<div class="gd-empty-local warn"><div class="ss-t">${t('Study folders unavailable', '研究文件夹不可用')}</div><div class="ss-m">${esc(ctx.guidedDrafts.error)}</div></div>`
+        : rows.length
+          ? rows.slice(0, 8).map((row, i) => {
+            const active = activeId === row.id;
+            const title = row.title || t('Guided study', '研究项目');
+            const meta = projectMeta(row, t);
+            const time = fmtRunTime(row.updated_at || row.created_at);
+            return `
+            <div class="gd-sessline">
+              <button class="gd-sess draft ${active ? 'active' : ''}" data-localdraft="${i}" title="${t('Open research project', '打开研究项目')}: ${esc(title)}" ${active ? 'aria-current="true"' : ''}>
+                <span class="gd-sess-status" aria-hidden="true"></span>
+                <span class="gd-sess-body"><span class="ss-t">${esc(title)}</span><span class="ss-m">${esc(meta)}</span></span>
+                <span class="ss-time">${esc(time)}</span>
+              </button>
+              <button class="gd-sess-action danger" type="button" data-remove-localdraft="${i}" title="${t('Remove from project list', '从项目列表移除')}" aria-label="${t('Remove from project list', '从项目列表移除')}: ${esc(title)}">${icon('close', 12)}</button>
+            </div>`;
+          }).join('')
+          : `<div class="gd-empty-local"><div class="ss-t">${t('No study folders yet', '还没有研究文件夹')}</div><div class="ss-m">${t('Create or open a project before starting a Pi conversation.', '开始 Pi 对话前，请先创建或打开一个项目。')}</div></div>`;
+    host.innerHTML = `
+      <div class="gd-project-heading"><span>${t('Research projects', '研究项目')}</span><button class="gd-refresh-mini" type="button" data-refreshdrafts title="${t('Refresh research projects', '刷新研究项目')}" aria-label="${t('Refresh research projects', '刷新研究项目')}">${icon('refresh', 12)}</button></div>
+      <div class="gd-project-summary">${icon('folder', 14)}<div><strong>${t('Local research workspace', '本地研究工作区')}</strong><span>${t('Study setup, runs, and evidence stay here. Pi keeps the conversation.', '研究配置、运行和证据保存在这里；对话由 Pi 管理。')}</span></div></div>
+      ${draftHtml}`;
   }
 
   function renderFolderControls(ctx) {
@@ -20,7 +64,7 @@
     host.innerHTML = `
       <div class="gd-folder-picker ${ctx.guidedFolderMenuOpen ? 'open' : ''}">
         <button class="gd-newbtn" type="button" data-newstudy data-folder-menu-toggle aria-haspopup="menu" aria-expanded="${ctx.guidedFolderMenuOpen ? 'true' : 'false'}" title="${t('Choose or create a local study folder', '选择或创建本地研究文件夹')}">
-          ${icon('plus', 14)} ${t('New / open study folder', '新建/打开研究文件夹')}
+          ${icon('plus', 14)} ${t('New / open research project', '新建/打开研究项目')}
         </button>
         ${ctx.guidedFolderMenuOpen ? `
           <div class="gd-folder-menu" role="menu" aria-label="${t('Study folder actions', '研究文件夹操作')}">
@@ -30,7 +74,7 @@
             </button>
             <button class="gd-folder-menu-item" type="button" role="menuitem" data-folder-choice="open">
               <span class="gds-ico">${icon('folder', 14)}</span>
-              <span><strong>${t('Use existing folder', '使用现有文件夹')}</strong><small>${t('Open a Guided, Idea Mining, or Agent project folder as this conversation context.', '把已有 Guided、Idea Mining 或 Agent 项目文件夹作为当前对话上下文打开。')}</small></span>
+              <span><strong>${t('Use existing folder', '使用现有文件夹')}</strong><small>${t('Open a Guided, Idea Mining, or Agent project folder as the current research project.', '把已有 Guided、Idea Mining 或 Agent 项目文件夹作为当前研究项目打开。')}</small></span>
             </button>
           </div>` : ''}
       </div>`;
@@ -127,8 +171,8 @@
     const openForReview = ctx.pendingGuidedGoal && ctx.pendingGuidedGoal.goal === 'review_data';
     const openActions = openForReview ? `
       <button class="btn primary sm" data-reviewexportfolder>${icon('eye', 13)} ${t('Review extracted data', '审阅已提取数据')}</button>
-      <button class="btn sm" data-openprojectfolder>${icon('folder', 13)} ${t('Open project memory', '打开项目记忆')}</button>` : `
-      <button class="btn primary sm" data-openprojectfolder>${icon('folder', 13)} ${t('Open project memory', '打开项目记忆')}</button>
+      <button class="btn sm" data-openprojectfolder>${icon('folder', 13)} ${t('Open research project', '打开研究项目')}</button>` : `
+      <button class="btn primary sm" data-openprojectfolder>${icon('folder', 13)} ${t('Open research project', '打开研究项目')}</button>
       <button class="btn sm" data-reviewexportfolder>${icon('eye', 13)} ${t('Review extracted data', '审阅已提取数据')}</button>`;
     host.innerHTML = `
       <div class="gd-folder-backdrop" data-folder-dialog-close></div>
@@ -137,7 +181,7 @@
           <span class="gds-ico">${icon('folder', 15)}</span>
           <div>
             <strong>${t('Choose a local folder', '选择本地文件夹')}</strong>
-            <span>${t('Open a project folder for Guided memory, or choose an EasyICU export folder when you want to review extracted data.', '打开项目文件夹用于 Guided 记忆；如果要审阅已提取数据，请选择 EasyICU export 文件夹。')}</span>
+            <span>${t('Open a project folder for study setup, runs, and evidence, or choose an EasyICU export folder to review extracted data. Pi manages conversation history separately.', '项目文件夹用于保存研究配置、运行和证据；如果要审阅已提取数据，请选择 EasyICU export 文件夹。对话历史由 Pi 单独管理。')}</span>
           </div>
           <button class="gd-folder-close" type="button" data-folder-dialog-close aria-label="${t('Close', '关闭')}">×</button>
         </div>
@@ -147,7 +191,7 @@
         </div>
         ${mode === 'open' ? `
           <div class="gds-choice">
-            <div class="gds-choice-head"><strong>${t('Open project or extracted data folder', '打开项目或已提取数据文件夹')}</strong><span>${t('Required setup stays here instead of jumping to Classic Workspace. Use a project folder for conversation memory, or an EasyICU export folder to review previously extracted data.', '必需配置都留在这里完成，不强制跳到其他页面。项目文件夹用于对话记忆；EasyICU export 文件夹用于审阅之前提取的数据。')}</span></div>
+            <div class="gds-choice-head"><strong>${t('Open project or extracted data folder', '打开项目或已提取数据文件夹')}</strong><span>${t('Required setup stays here instead of jumping to Classic Workspace. Use a project folder for study state and evidence; Pi keeps its own conversations. Use an EasyICU export folder to review previously extracted data.', '必需配置都留在这里完成，不强制跳到其他页面。项目文件夹保存研究状态和证据，Pi 单独保存对话；EasyICU export 文件夹用于审阅之前提取的数据。')}</span></div>
             <div class="gds-path-row">
               <label class="gds-field"><span>${t('Local folder path', '本地文件夹路径')}</span><input data-existing-project-dir placeholder="${t('Paste a local project or EasyICU export folder path', '粘贴本地项目或 EasyICU 导出文件夹路径')}" autocomplete="off" /></label>
               <button class="btn sm" type="button" data-browseprojectfolder>${icon('folder', 13)} ${t('Browse...', '浏览...')}</button>
@@ -174,6 +218,7 @@
   }
 
   window.EU_GUIDED_PROJECTS = {
+    renderProjectRail,
     renderFolderControls,
     renderKnownProjectPicker,
     renderFolderBrowser,
