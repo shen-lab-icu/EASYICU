@@ -5090,14 +5090,17 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
             </div>
           </aside>
           <div class="gd-conv">
-            <div class="gd-scroll" id="gdScroll"><div class="gd-thread" id="gdThread" role="log" aria-live="polite" aria-label="Copilot conversation"></div></div>
-            <div class="gd-suggest" id="gdSuggest"></div>
-            <div class="gd-composer-wrap">
-              <div class="gd-composer">
-                <input class="gd-input" id="gdInput" value="${attr(guidedComposerDraft)}" placeholder="${t('Reply, or tap an option above to continue…', '回复，或点击上方选项继续…')}" autocomplete="off" aria-label="${t('Message Guided Copilot', '给研究引导发送消息')}" />
-                <button type="button" class="gd-send" id="gdSend" aria-label="${t('Send message', '发送消息')}">${icon('arrow', 16)}</button>
+            <div class="gd-pi-shell" id="gdPiShell" aria-label="${t('Pi Copilot conversation', 'Pi Copilot 对话')}"></div>
+            <div class="gd-legacy-shell" id="gdLegacyShell">
+              <div class="gd-scroll" id="gdScroll"><div class="gd-thread" id="gdThread" role="log" aria-live="polite" aria-label="Copilot conversation"></div></div>
+              <div class="gd-suggest" id="gdSuggest"></div>
+              <div class="gd-composer-wrap">
+                <div class="gd-composer">
+                  <input class="gd-input" id="gdInput" value="${attr(guidedComposerDraft)}" placeholder="${t('Reply, or tap an option above to continue…', '回复，或点击上方选项继续…')}" autocomplete="off" aria-label="${t('Message Guided Copilot', '给研究引导发送消息')}" />
+                  <button type="button" class="gd-send" id="gdSend" aria-label="${t('Send message', '发送消息')}">${icon('arrow', 16)}</button>
+                </div>
+                <div class="gd-foot-note">${t('Guided Copilot · local first · nothing leaves your machine', '研究引导 · 本地优先 · 数据不离开你的电脑')}</div>
               </div>
-              <div class="gd-foot-note">${t('Guided Copilot · local first · nothing leaves your machine', '研究引导 · 本地优先 · 数据不离开你的电脑')}</div>
             </div>
           </div>
           <aside class="gd-aside">
@@ -5117,6 +5120,9 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       renderAside();
       renderSessions();
       loadGuidedDrafts();
+      if (window.EU_GUIDED_PI && window.EU_GUIDED_PI.mount) {
+        window.EU_GUIDED_PI.mount(root.querySelector('#gdPiShell'));
+      }
       // The global topbar Demo/Real toggle is the source of truth on entry:
       // sync UP only (demo → real), so a Real-mode user never sees the aside
       // claim "Demo · local". The conversation may still opt into demo

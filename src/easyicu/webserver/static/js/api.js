@@ -375,6 +375,28 @@
   function loadGuidedSessions(body) {
     return postJSON('/api/guided/sessions/list', body || {});
   }
+  function loadPiCopilotStatus() {
+    return getJSON('/api/copilot/pi/status');
+  }
+  function createPiCopilotSession(body) {
+    return postJSON('/api/copilot/pi/sessions', body || {});
+  }
+  function loadPiCopilotSessions(limit) {
+    const n = Math.max(1, Math.min(100, Number(limit) || 30));
+    return getJSON('/api/copilot/pi/sessions?limit=' + encodeURIComponent(n));
+  }
+  function loadPiCopilotSession(sessionId) {
+    return getJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId));
+  }
+  function sendPiCopilotMessage(sessionId, body) {
+    return postJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/message', body || {});
+  }
+  function rebindPiCopilotSession(sessionId) {
+    return postJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/rebind', {});
+  }
+  function abortPiCopilotSession(sessionId, body) {
+    return postJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/abort', body || {});
+  }
   function createPageGuideSession(body) {
     return postJSON('/api/page-guide/sessions', body || {});
   }
@@ -527,6 +549,13 @@
   window.EU_API.runGuidedAction = runGuidedAction;
   window.EU_API.saveGuidedSlots = saveGuidedSlots;
   window.EU_API.loadGuidedSessions = loadGuidedSessions;
+  window.EU_API.loadPiCopilotStatus = loadPiCopilotStatus;
+  window.EU_API.createPiCopilotSession = createPiCopilotSession;
+  window.EU_API.loadPiCopilotSessions = loadPiCopilotSessions;
+  window.EU_API.loadPiCopilotSession = loadPiCopilotSession;
+  window.EU_API.sendPiCopilotMessage = sendPiCopilotMessage;
+  window.EU_API.rebindPiCopilotSession = rebindPiCopilotSession;
+  window.EU_API.abortPiCopilotSession = abortPiCopilotSession;
   window.EU_API.createPageGuideSession = createPageGuideSession;
   window.EU_API.sendPageGuideMessage = sendPageGuideMessage;
   window.EU_API.runPageGuideAction = runPageGuideAction;

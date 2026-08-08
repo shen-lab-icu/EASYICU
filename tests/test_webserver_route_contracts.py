@@ -26,6 +26,7 @@ from easyicu.webserver.routes.jobs import lifecycle_router as job_lifecycle_rout
 from easyicu.webserver.routes.jobs import submission_router as job_submission_router
 from easyicu.webserver.routes.local_data import router as local_data_router
 from easyicu.webserver.routes.page_guide import router as page_guide_router
+from easyicu.webserver.routes.pi_copilot import router as pi_copilot_router
 from easyicu.webserver.routes.reviews import router as reviews_router
 from easyicu.webserver.routes.study_contexts import router as study_contexts_router
 from easyicu.webserver.routes.system import router as system_router
@@ -82,6 +83,28 @@ EXPECTED_COPILOT_ROUTES = [
     ("POST", "/api/copilot/message", "post_copilot_message"),
     ("POST", "/api/copilot/action", "post_copilot_action"),
     ("POST", "/api/copilot/sessions/list", "post_copilot_sessions_list"),
+]
+
+EXPECTED_PI_COPILOT_ROUTES = [
+    ("GET", "/api/copilot/pi/status", "get_pi_copilot_status"),
+    ("POST", "/api/copilot/pi/sessions", "post_pi_copilot_session"),
+    ("GET", "/api/copilot/pi/sessions", "get_pi_copilot_sessions"),
+    ("GET", "/api/copilot/pi/sessions/{session_id}", "get_pi_copilot_session"),
+    (
+        "POST",
+        "/api/copilot/pi/sessions/{session_id}/message",
+        "post_pi_copilot_message",
+    ),
+    (
+        "POST",
+        "/api/copilot/pi/sessions/{session_id}/rebind",
+        "post_pi_copilot_rebind",
+    ),
+    (
+        "POST",
+        "/api/copilot/pi/sessions/{session_id}/abort",
+        "post_pi_copilot_abort",
+    ),
 ]
 
 EXPECTED_PAGE_GUIDE_ROUTES = [
@@ -341,6 +364,10 @@ def test_copilot_route_method_path_and_operation_name_snapshot() -> None:
     _assert_router_contract(copilot_router, EXPECTED_COPILOT_ROUTES)
 
 
+def test_pi_copilot_route_method_path_and_operation_name_snapshot() -> None:
+    _assert_router_contract(pi_copilot_router, EXPECTED_PI_COPILOT_ROUTES)
+
+
 def test_page_guide_route_method_path_and_operation_name_snapshot() -> None:
     _assert_router_contract(
         page_guide_router,
@@ -561,6 +588,7 @@ def test_root_static_mount_stays_last() -> None:
         < _router_registration_index(agent_control_router)
         < _router_registration_index(guided_router)
         < _router_registration_index(copilot_router)
+        < _router_registration_index(pi_copilot_router)
         < _router_registration_index(page_guide_router)
         < _router_registration_index(ideas_router)
         < _router_registration_index(agent_artifact_router)
