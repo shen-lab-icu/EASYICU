@@ -112,11 +112,79 @@ def test_model_must_be_reported_by_verified_endpoint(tmp_path: Path) -> None:
             base_url="http://127.0.0.1:8317/v1",
             model="missing-model",
             api_transport="openai-completions",
-            verifier=lambda *_: (200, {"data": [{"id": "served-model"}]}),
+            verifier=lambda *_: (
+                200,
+                {
+                    "data": [
+                        {"id": "served-model"},
+                        {"id": "reflected-must-not-be-written"},
+                    ]
+                },
+            ),
         )
 
     assert caught.value.code == "pi_provider_model_unavailable"
+    assert caught.value.details == {
+        "available_models": ["served-model"],
+        "models_reported": 1,
+    }
     assert not store.config_path.exists()
+
+
+@pytest.mark.parametrize(
+    ("transport", "base_url", "payload", "model", "expected_headers"),
+    [
+        (
+            "anthropic-messages",
+            "https://api.anthropic.com/v1",
+            {"data": [{"id": "claude-sonnet-4-6"}]},
+            "claude-sonnet-4-6",
+            {"x-api-key": "test-private-key", "anthropic-version": "2023-06-01"},
+        ),
+        (
+            "google-generative-ai",
+            "https://generativelanguage.googleapis.com/v1beta",
+            {"models": [{"name": "models/gemini-3.5-flash"}]},
+            "gemini-3.5-flash",
+            {"x-goog-api-key": "test-private-key"},
+        ),
+    ],
+)
+def test_native_provider_protocols_use_their_own_auth_and_catalog_shape(
+    tmp_path: Path,
+    transport: str,
+    base_url: str,
+    payload: dict[str, Any],
+    model: str,
+    expected_headers: dict[str, str],
+) -> None:
+    store = PiProviderConfigStore(
+        config_path=tmp_path / "pi-provider.env",
+        receipt_path=tmp_path / "receipt.json",
+    )
+
+    def verify(
+        url: str,
+        headers: Mapping[str, str],
+        timeout: float,
+    ) -> tuple[int, Any]:
+        assert url.endswith("/models")
+        assert timeout > 0
+        assert "Authorization" not in headers
+        for key, value in expected_headers.items():
+            assert headers[key] == value
+        return 200, payload
+
+    _config, public = store.verify_and_save(
+        provider="native-provider",
+        api_key="test-private-key",
+        base_url=base_url,
+        model=model,
+        api_transport=transport,
+        verifier=verify,
+    )
+
+    assert public["connection_verified"] is True
 
 
 def test_insecure_config_file_is_not_loaded(tmp_path: Path) -> None:

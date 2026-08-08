@@ -72,6 +72,8 @@ class PiProviderConfigRequest(BaseModel):
     base_url: EndpointText = "http://127.0.0.1:8317/v1"
     model: ModelText = "gpt5.6 luna"
     api_transport: Literal[
+        "anthropic-messages",
+        "google-generative-ai",
         "openai-completions",
         "openai-responses",
     ] = "openai-completions"

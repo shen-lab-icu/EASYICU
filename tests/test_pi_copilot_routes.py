@@ -93,6 +93,18 @@ def test_provider_setup_route_is_typed_and_never_returns_secret(monkeypatch) -> 
             "enable_ai": "true",
         },
     ).status_code == 422
+    anthropic = client.post(
+        "/api/copilot/pi/provider-config",
+        json={
+            "provider": "anthropic",
+            "api_key": "route-private-key",
+            "base_url": "https://api.anthropic.com/v1",
+            "model": "claude-sonnet-4-6",
+            "api_transport": "anthropic-messages",
+            "enable_ai": True,
+        },
+    )
+    assert anthropic.status_code == 200
     assert client.post(
         "/api/copilot/pi/provider-config",
         json={
