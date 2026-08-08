@@ -18,8 +18,8 @@ def _read(relative: str) -> str:
 
 def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     index = _read("index.html")
-    assert "css/guided-pi.css?v=20260808-pi-layout1" in index
-    assert "js/screens-guided-pi.js?v=20260808-pi-authority1" in index
+    assert "css/guided-pi.css?v=20260808-pi-timeline3" in index
+    assert "js/screens-guided-pi.js?v=20260808-pi-timeline3" in index
     assert index.index("css/guided.css") < index.index("css/guided-pi.css")
     assert index.index("js/screens-guided-pi.js") < index.index("js/screens-guided.js")
 
@@ -63,7 +63,13 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "data-gpi-grant=\"configure\"" in pi_owner
     assert "data-gpi-grant=\"run\"" in pi_owner
     assert "data-gpi-grant=\"cancel\"" in pi_owner
-    assert "Agent activity" in pi_owner
+    assert "Worked for" in pi_owner
+    assert "gpi-tool-receipt" in pi_owner
+    assert "iconHtml(toolIcon(row.toolName), 15)" in pi_owner
+    assert "history-activity-" in pi_owner
+    assert "closeHistoryActivity" in pi_owner
+    assert "row.role === 'activity'" in pi_owner
+    assert "gpi-avatar" not in pi_owner
     assert "private chain-of-thought" in pi_owner
     assert "event.type === 'run_start'" in pi_owner
     assert "event.type === 'tool_progress'" in pi_owner
@@ -86,6 +92,12 @@ def test_pi_css_is_route_owned_and_does_not_pollute_catch_all_files() -> None:
     owner = _read("css/guided-pi.css")
     assert ".gpi-panel" in owner
     assert ".gpi-activity" in owner
+    assert ".gpi-tool-body" in owner
+    assert ".gpi-tool-receipt" in owner
+    assert "pi-gui's MIT-licensed timeline-item/timeline.css" in owner
+    assert ".gpi-message{max-width:768px" in owner
+    assert ".gpi-activity,.gpi-tool{max-width:768px" in owner
+    assert "gpi-avatar" not in owner
     assert ".gd-conv.pi-active" in owner
     assert "!important" not in owner
     assert ":has(" not in owner
@@ -104,6 +116,15 @@ def test_pi_chat_uses_a_scrolling_transcript_and_bottom_composer() -> None:
     assert "grid-template-rows:auto auto minmax(0,1fr) auto auto" not in owner
     assert ".gpi-text{white-space:pre-wrap;overflow-wrap:anywhere;font-size:15px" in owner
     assert "font-size:15px;line-height:1.5" in owner
+
+
+def test_pi_gui_adaptation_is_attributed_and_packaged() -> None:
+    notice = _read("THIRD_PARTY_NOTICES.md")
+    pyproject = (STATIC.parents[3] / "pyproject.toml").read_text(encoding="utf-8")
+    assert "pi-gui" in notice
+    assert "Copyright (c) 2026 Matthew Lam" in notice
+    assert "eb9a7380705dffad36db3efa771ee825aafbef6f" in notice
+    assert '"static/THIRD_PARTY_NOTICES.md"' in pyproject
 
 
 def test_pi_css_has_balanced_comments_and_braces() -> None:

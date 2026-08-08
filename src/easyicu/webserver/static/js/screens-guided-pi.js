@@ -86,8 +86,44 @@
   function durationText(startedAt, endedAt) {
     const elapsed = Math.max(0, Number(endedAt || Date.now()) - Number(startedAt || Date.now()));
     if (elapsed < 1000) return `${elapsed} ms`;
-    if (elapsed < 10000) return `${(elapsed / 1000).toFixed(1)} s`;
-    return `${Math.round(elapsed / 1000)} s`;
+    const seconds = elapsed / 1000;
+    if (seconds < 60) {
+      const value = seconds < 10 ? seconds.toFixed(1) : Math.round(seconds);
+      return tr(`${value}s`, `${value} 秒`);
+    }
+    const minutes = Math.floor(seconds / 60);
+    const remainder = Math.round(seconds % 60);
+    return tr(
+      remainder ? `${minutes}m ${remainder}s` : `${minutes}m`,
+      remainder ? `${minutes} 分 ${remainder} 秒` : `${minutes} 分`,
+    );
+  }
+  function iconHtml(name, size) {
+    return typeof window.icon === 'function' ? window.icon(name, size || 16, 1.55) : '';
+  }
+  function toolIcon(name) {
+    const tool = String(name || '');
+    if (/update|replan/.test(tool)) return 'edit';
+    if (/run$/.test(tool)) return 'play';
+    if (/resume/.test(tool)) return 'refresh';
+    if (/cancel/.test(tool)) return 'stop';
+    if (/evidence|validation|blocker/.test(tool)) return 'shield';
+    if (/artifact|plan|step/.test(tool)) return 'list';
+    if (/workspace|capability/.test(tool)) return 'db';
+    if (/context/.test(tool)) return 'file';
+    return 'spark';
+  }
+  function activityIcon(step) {
+    if (!step) return 'spark';
+    if (step.kind === 'submitted') return 'arrow';
+    if (step.kind === 'turn' || step.kind === 'retry') return 'refresh';
+    if (step.kind === 'assistant') return 'wand';
+    if (step.kind === 'tool') return toolIcon(step.toolName);
+    if (step.kind === 'compaction') return 'layers';
+    if (step.kind === 'failed') return 'alert';
+    if (step.kind === 'cancelled') return 'stop';
+    if (step.kind === 'settled') return 'check';
+    return 'spark';
   }
   function toolLabel(name) {
     const labels = {
@@ -173,33 +209,66 @@
     const rows = Array.isArray(session && session.transcript) ? session.transcript : [];
     const messages = [];
     const tools = new Map();
+    let activity = null;
+    let lastTimestamp = Date.now();
+    function closeHistoryActivity(at) {
+      if (!activity || activity.status !== 'running') return;
+      const endedAt = Number(at || lastTimestamp || activity.startedAt);
+      upsertActivityStep(activity, { id: 'terminal', kind: 'settled', status: 'complete', at: endedAt });
+      activity.status = 'complete'; activity.endedAt = endedAt;
+    }
     rows.forEach((row, index) => {
+      const rowAt = timeMs(row.timestamp);
+      lastTimestamp = rowAt;
       const parts = Array.isArray(row.content) ? row.content : [];
       const text = parts.filter(p => p && p.type === 'text').map(p => p.text || '').join('');
-      if (text) messages.push({ id: 'history-' + index, role: row.role || 'assistant', text, complete: true });
+      if (text && row.role === 'user') {
+        closeHistoryActivity(rowAt);
+        messages.push({ id: 'history-' + index, role: 'user', text, complete: true });
+        activity = {
+          id: 'history-activity-' + index, role: 'activity', status: 'running',
+          startedAt: rowAt, steps: [],
+        };
+        upsertActivityStep(activity, { id: 'submitted', kind: 'submitted', status: 'complete', at: rowAt });
+        messages.push(activity);
+      } else if (text) {
+        messages.push({ id: 'history-' + index, role: row.role || 'assistant', text, complete: true });
+        if (row.role === 'assistant' && activity) {
+          upsertActivityStep(activity, { id: 'assistant', kind: 'assistant', phase: 1, status: 'complete', at: rowAt });
+          closeHistoryActivity(rowAt);
+        }
+      }
       parts.filter(p => p && p.type === 'tool_call').forEach((tool, partIndex) => {
         const toolRow = {
           id: tool.tool_call_id || `history-tool-${index}-${partIndex}`,
           role: 'tool', toolName: tool.tool_name, status: 'running', text: '',
-          startedAt: timeMs(row.timestamp),
+          startedAt: rowAt,
         };
         messages.push(toolRow); tools.set(toolRow.id, toolRow);
+        if (activity) upsertActivityStep(activity, {
+          id: 'tool-' + toolRow.id, kind: 'tool', toolName: tool.tool_name, status: 'running', at: rowAt,
+        });
       });
       parts.filter(p => p && p.type === 'tool_result').forEach((receipt, partIndex) => {
         const id = receipt.tool_call_id || `history-result-${index}-${partIndex}`;
         let toolRow = tools.get(id);
         if (!toolRow) {
-          toolRow = { id, role: 'tool', toolName: receipt.tool_name, startedAt: timeMs(row.timestamp) };
+          toolRow = { id, role: 'tool', toolName: receipt.tool_name, startedAt: rowAt };
           messages.push(toolRow); tools.set(id, toolRow);
         }
         Object.assign(toolRow, {
           status: receipt.is_error ? 'error' : 'success', text: receipt.summary || '',
           code: receipt.code || '', owner: receipt.owner || '', receiptStatus: receipt.status || '',
-          endedAt: timeMs(row.timestamp),
+          endedAt: rowAt,
+        });
+        if (activity) upsertActivityStep(activity, {
+          id: 'tool-' + id, kind: 'tool', toolName: receipt.tool_name,
+          status: receipt.is_error ? 'error' : 'complete', code: receipt.code || '', at: rowAt,
         });
       });
     });
-    return messages.filter(row => row.text || row.toolName);
+    closeHistoryActivity(lastTimestamp);
+    return messages.filter(row => row.text || row.toolName || row.role === 'activity');
   }
 
   function statusBanner() {
@@ -303,42 +372,58 @@
       const latest = row.steps[row.steps.length - 1];
       const running = row.status === 'running';
       const failed = row.status === 'error' || row.status === 'cancelled';
-      const status = running ? tr('running', '运行中') : failed ? tr('attention', '需关注') : tr('complete', '已完成');
+      const status = running ? tr('working', '工作中') : failed ? tr('needs attention', '需关注') : tr('complete', '已完成');
+      const title = running
+        ? (latest ? activityStepLabel(latest) : tr('Pi is preparing', 'Pi 正在准备'))
+        : failed
+          ? tr('This turn needs attention', '本轮需要处理')
+          : tr(`Worked for ${durationText(row.startedAt, row.endedAt)}`, `耗时 ${durationText(row.startedAt, row.endedAt)}`);
       const steps = row.steps.map(step => `
         <li class="${esc(step.status || 'complete')}">
-          <span class="gpi-activity-rail" aria-hidden="true"></span>
-          <span><strong>${esc(activityStepLabel(step))}</strong>${step.code ? `<small>${esc(step.code)}</small>` : ''}</span>
+          <span class="gpi-activity-step-icon" aria-hidden="true">${iconHtml(activityIcon(step), 15)}</span>
+          <span class="gpi-activity-step-copy"><strong>${esc(activityStepLabel(step))}</strong>${step.code ? `<small>${esc(step.code)}</small>` : ''}</span>
+          <span class="gpi-status-pip" aria-hidden="true"></span>
         </li>`).join('');
-      return `<details class="gpi-activity ${failed ? 'error' : ''}" ${running ? 'open' : ''}>
+      return `<details class="gpi-activity ${running ? 'running' : failed ? 'error' : 'complete'}" ${running ? 'open' : ''}>
         <summary>
-          <span class="gpi-activity-state" aria-hidden="true"></span>
-          <span><strong>${tr('Agent activity', 'Agent 运行轨迹')}</strong><small>${esc(latest ? activityStepLabel(latest) : tr('Preparing', '正在准备'))}</small></span>
-          <span>${esc(durationText(row.startedAt, row.endedAt))} · ${status}</span>
+          <span class="gpi-activity-glyph" aria-hidden="true">${iconHtml(running ? activityIcon(latest) : failed ? 'alert' : 'clock', 15)}</span>
+          <span class="gpi-disclosure" aria-hidden="true">${iconHtml('chevron', 14)}</span>
+          <span class="gpi-activity-title">${esc(title)}</span>
+          ${running ? `<span class="gpi-activity-meta"><span class="gpi-status-pip" aria-hidden="true"></span>${esc(status)}</span>` : ''}
         </summary>
-        <ol>${steps}</ol>
-        <p>${tr('This trace shows Pi lifecycle events and EasyICU tool receipts, not private chain-of-thought.', '这里显示的是 Pi 生命周期事件和 EasyICU 工具回执，不是模型的私有思维链。')}</p>
+        <div class="gpi-activity-body">
+          <ol>${steps}</ol>
+          <p>${tr('Lifecycle facts and EasyICU receipts only — private chain-of-thought is never displayed.', '这里只显示生命周期事实和 EasyICU 回执，不展示模型的私有思维链。')}</p>
+        </div>
       </details>`;
     }
     if (row.role === 'tool') {
       const status = row.status || 'running';
       const statusText = status === 'running' ? tr('running', '运行中') : status === 'error' ? tr('error', '错误') : tr('complete', '已完成');
       const meta = [row.code, row.startedAt ? durationText(row.startedAt, row.endedAt) : ''].filter(Boolean).join(' · ');
-      return `<details class="gpi-tool ${status}" ${status === 'running' || status === 'error' ? 'open' : ''}>
-        <summary><span class="gpi-tool-mark" aria-hidden="true"></span><span><strong>${esc(toolLabel(row.toolName))}</strong><small>${esc(row.toolName || 'easyicu_tool')}</small></span><span>${esc(statusText)}</span></summary>
+      return `<details class="gpi-tool ${status}" ${status === 'error' ? 'open' : ''}>
+        <summary>
+          <span class="gpi-tool-glyph" aria-hidden="true">${iconHtml(toolIcon(row.toolName), 15)}</span>
+          <span class="gpi-disclosure" aria-hidden="true">${iconHtml('chevron', 14)}</span>
+          <span class="gpi-tool-label">${esc(toolLabel(row.toolName))}</span>
+          <span class="gpi-tool-inline-meta"><span class="gpi-status-pip" aria-hidden="true"></span>${esc(statusText)}</span>
+        </summary>
         <div class="gpi-tool-body">
-          ${row.text ? `<p>${esc(row.text)}</p>` : `<p>${tr('Waiting for a bounded EasyICU receipt…', '正在等待受限的 EasyICU 回执…')}</p>`}
-          ${meta ? `<div class="gpi-tool-meta">${esc(meta)}</div>` : ''}
-          ${row.owner ? `<div class="gpi-tool-owner">${tr('Owner', '责任边界')} · ${esc(row.owner)}</div>` : ''}
+          <p>${row.text ? esc(row.text) : tr('Waiting for a bounded EasyICU receipt…', '正在等待受限的 EasyICU 回执…')}</p>
+          <dl class="gpi-tool-receipt">
+            <div><dt>${tr('Tool', '工具')}</dt><dd>${esc(row.toolName || 'easyicu_tool')}</dd></div>
+            ${meta ? `<div><dt>${tr('Receipt', '回执')}</dt><dd>${esc(meta)}</dd></div>` : ''}
+            ${row.owner ? `<div><dt>${tr('Owner', '责任边界')}</dt><dd>${esc(row.owner)}</dd></div>` : ''}
+          </dl>
         </div>
       </details>`;
     }
     const cls = row.role === 'user' ? 'user' : 'assistant';
-    return `<div class="gpi-message ${cls}">
-      <div class="gpi-avatar">${cls === 'user' ? tr('You', '你') : 'Pi'}</div>
+    return `<article class="gpi-message ${cls}">
       <div class="gpi-message-body">
         ${row.text ? `<div class="gpi-text">${esc(row.text)}</div>` : `<div class="gpi-streaming"><i></i><i></i><i></i></div>`}
       </div>
-    </div>`;
+    </article>`;
   }
 
   function sessionPanel() {
