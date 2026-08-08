@@ -18,8 +18,8 @@ def _read(relative: str) -> str:
 
 def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     index = _read("index.html")
-    assert "css/guided-pi.css?v=20260808-pi-shell1" in index
-    assert "js/screens-guided-pi.js?v=20260808-pi-shell1" in index
+    assert "css/guided-pi.css?v=20260808-pi-review2" in index
+    assert "js/screens-guided-pi.js?v=20260808-pi-review2" in index
     assert index.index("css/guided.css") < index.index("css/guided-pi.css")
     assert index.index("js/screens-guided-pi.js") < index.index("js/screens-guided.js")
 

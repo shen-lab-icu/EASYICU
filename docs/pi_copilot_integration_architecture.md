@@ -28,8 +28,8 @@ Guided Copilot Web client
           | typed local HTTP + existing job SSE
           v
 FastAPI Pi Copilot gateway owner
-  - opt-in and one-turn action grants
-  - authority binding and stale-session check
+  - opt-in and atomically consumed one-use action grants
+  - authority binding and per-tool stale-session check
   - PHI-safe projections
           |
           | strict JSON-lines, local stdio
@@ -49,7 +49,7 @@ Existing EasyICU owners
 
 The Pi surface replaces the free-form conversational shell inside the Guided
 Copilot route: assistant turn streaming, tool-call presentation, session
-history, cancellation, thinking-level selection, and eventual compaction or
+history, cancellation, hidden-reasoning model turns, and eventual compaction or
 fork controls. Conversational setup is persisted by
 `easyicu_update_study_context`, which delegates to the existing typed
 StudyContext owner and requires a host-held one-turn Configure grant. The
@@ -124,7 +124,11 @@ Python functions, or EvidenceStore mutation.
 Read tools receive a session authority binding and return only host-produced
 projections. Mutating tools require a one-turn capability supplied by the Web
 request. The capability is held by FastAPI and is not a tool argument, so the
-model cannot grant it to itself. The first slice permits only the existing
+model cannot grant it to itself. Each named grant has exactly one atomic
+consumption; a second same-action call returns `pi_action_grant_consumed`.
+Every tool call revalidates the bound study revision, active job, and current
+run. A successful authority mutation invalidates the rest of that turn until
+the user explicitly rebinds. The first slice permits only the existing
 deterministic local preflight submission and cooperative cancellation through
 their current owners. Full provider runs, scientific crash-resume, and replan
 requests return stable blocked codes instead of inventing a second
@@ -149,9 +153,16 @@ through Pi would violate the purpose of this integration.
 
 Model-visible tools never return patient rows, identifiers, timestamps, notes,
 credentials, source paths, or raw files. Study data sources are represented by
-type/database plus a one-way path digest. Run and evidence tools return bounded
+type/database plus a 32-hex one-way path correlation digest; that digest is
+never an authority or integrity receipt. Run and evidence tools return bounded
 status, gate codes, aggregate counts, artifact names/digests, and concise
 summaries from existing public artefacts.
+
+Every owner builds a semantic allowlist rather than forwarding a generic
+readiness/job object. The complete model-visible result, including summary and
+authority fields, then passes a recursive value scan for absolute paths,
+credential shapes, row identifiers, and size limits. Job labels and free-form
+reasons are replaced with stable codes.
 
 Both inbound chat text and outbound tool payloads pass a fail-closed marker
 scan. The scan is defense in depth, not de-identification. The Web UI also tells
@@ -183,8 +194,13 @@ Pi session file and one scientific authority binding.
 
 On reopen, FastAPI validates that the session file is inside the dedicated Pi
 session root, then asks Pi to open it. Before every new prompt it reloads the
-authoritative StudyContext. A revision/run mismatch returns
+authoritative StudyContext. The binding uses **current-run semantics**: creation
+or rebind records the latest run id, and a newer run makes the session stale.
+A revision/job/run mismatch before a prompt or host tool returns
 `pi_session_authority_stale`; the user must explicitly rebind before continuing.
+The metadata/JSONL retention ceiling is 100 sessions. When an older record is
+evicted, FastAPI best-effort disposes it and deletes only a `.jsonl` proven to
+be inside the private Pi session root.
 
 “Resume” has two distinct meanings:
 
@@ -208,12 +224,35 @@ The local OpenAI-compatible defaults are `http://127.0.0.1:8317/v1` and model
 repository, browser, session JSONL metadata, logs, or tool results. No paid
 provider call is part of automated tests.
 
+The Node child receives a strict environment allowlist containing only basic
+process locale/runtime variables and `EASYICU_PI_*` shell configuration. It
+does not inherit scientific-provider, search, cloud, or database credentials,
+and its agent CWD is a private empty workspace outside the repository. Runtime
+status also requires Node `>=22.19.0`.
+
+Raw reasoning is forced off and is neither streamed nor returned in session
+transcripts. Shell usage is separate from scientific ledgers and has a
+session-level hard stop (`EASYICU_PI_SESSION_TOKEN_BUDGET`, default 1,000,000
+tokens); a new prompt must fit its reserved output budget.
+
+A wheel never installs Node dependencies during server startup. Installation
+is an explicit user action using the packaged exact lockfile:
+
+```sh
+easyicu copilot install
+```
+
+This creates a private versioned runtime and executes only
+`npm ci --ignore-scripts` with an installer environment allowlist.
+
 ## Failure behavior
 
 - Missing Node, dependencies, opt-in, model, or credential: report unavailable;
   keep the legacy local shell clearly labelled.
 - Sidecar exit/protocol violation: fail the Pi message job with a stable gateway
   code; do not mark or mutate a scientific run.
+- Prompt timeout: best-effort abort the Pi turn, refresh session state, then
+  return `pi_gateway_timeout`.
 - Tool projection violation: withhold the payload and return
   `pi_projection_blocked`.
 - Cancellation: abort the Pi turn and cooperatively cancel only the specifically

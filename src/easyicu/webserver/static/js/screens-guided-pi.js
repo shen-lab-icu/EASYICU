@@ -7,7 +7,7 @@
   const state = {
     host: null, conv: null, runtime: null, sessions: [], session: null,
     messages: [], loading: true, creating: false, busy: false, jobId: '',
-    source: null, error: '', shell: 'legacy', draft: '', thinking: 'medium',
+    source: null, error: '', shell: 'legacy', draft: '',
   };
 
   function tr(en, zh) { return window.EU_LANG === 'zh' ? zh : en; }
@@ -48,11 +48,10 @@
     return rows.map((row, index) => {
       const parts = Array.isArray(row.content) ? row.content : [];
       const text = parts.filter(p => p && p.type === 'text').map(p => p.text || '').join('');
-      const thinking = parts.filter(p => p && p.type === 'thinking').map(p => p.text || '').join('');
       const tool = parts.find(p => p && p.type === 'tool_call');
       if (tool) return { id: 'history-tool-' + index, role: 'tool', toolName: tool.tool_name, status: 'complete', text: '' };
-      return { id: 'history-' + index, role: row.role || 'assistant', text, thinking };
-    }).filter(row => row.text || row.thinking || row.toolName);
+      return { id: 'history-' + index, role: row.role || 'assistant', text };
+    }).filter(row => row.text || row.toolName);
   }
 
   function statusBanner() {
@@ -85,11 +84,6 @@
         <div class="gpi-kicker">PI AGENTSESSION · EASYICU GATEWAY</div>
         <h2>${tr('Start a governed research conversation', '开始受治理的科研对话')}</h2>
         <p>${tr('Pi handles conversation and tool turns. EasyICU still owns study setup, runs, validation, and evidence. Patient rows and generic coding tools are blocked.', 'Pi 负责对话与工具循环；研究配置、运行、验证和证据仍由 EasyICU 管理。患者行级数据和通用编程工具均被阻止。')}</p>
-        <label class="gpi-select-label">${tr('Thinking level', '思考级别')}
-          <select data-gpi-thinking>
-            ${['off','minimal','low','medium','high'].map(level => `<option value="${level}" ${state.thinking === level ? 'selected' : ''}>${level}</option>`).join('')}
-          </select>
-        </label>
         <button class="btn primary" type="button" data-gpi-create ${state.creating ? 'disabled' : ''}>
           ${state.creating ? tr('Starting…', '正在启动…') : tr('I agree — activate Pi Copilot', '我同意——启用 Pi Copilot')}
         </button>
@@ -111,7 +105,6 @@
     return `<div class="gpi-message ${cls}">
       <div class="gpi-avatar">${cls === 'user' ? tr('You', '你') : 'Pi'}</div>
       <div class="gpi-message-body">
-        ${row.thinking ? `<details class="gpi-thinking"><summary>${tr('Thinking', '思考过程')}</summary><pre>${esc(row.thinking)}</pre></details>` : ''}
         ${row.text ? `<div class="gpi-text">${esc(row.text)}</div>` : `<div class="gpi-streaming"><i></i><i></i><i></i></div>`}
       </div>
     </div>`;
@@ -127,7 +120,7 @@
         <header class="gpi-head">
           <div><div class="gpi-kicker">PI AGENTSESSION · UX STATE ONLY</div><div class="gpi-title">${esc(session.title || 'Pi Copilot')} <span class="gpi-live">${state.busy ? tr('streaming', '生成中') : tr('ready', '就绪')}</span></div></div>
           <div class="gpi-head-meta">
-            <span>${esc(model.id || (state.runtime && state.runtime.model) || 'model')}</span><span>${esc(session.thinking_level || state.thinking)}</span>
+            <span>${esc(model.id || (state.runtime && state.runtime.model) || 'model')}</span>
             <button class="gpi-link" type="button" data-gpi-new>${tr('New', '新会话')}</button>
             <button class="gpi-link" type="button" data-gpi-legacy>${tr('Study setup', '研究配置')}</button>
           </div>
@@ -190,7 +183,7 @@
       const payload = await api().createPiCopilotSession({
         title: tr('EasyICU research session', 'EasyICU 科研会话'),
         language: window.EU_LANG === 'zh' ? 'zh' : 'en',
-        thinking_level: state.thinking, external_llm_opt_in: true,
+        thinking_level: 'off', external_llm_opt_in: true,
       });
       state.session = payload.session; state.messages = transcriptMessages(state.session);
       rememberSession(state.session.session_id);
@@ -211,7 +204,7 @@
   function assistantRow() {
     let row = state.messages[state.messages.length - 1];
     if (!row || row.role !== 'assistant' || row.complete) {
-      row = { id: 'live-' + Date.now(), role: 'assistant', text: '', thinking: '', complete: false };
+      row = { id: 'live-' + Date.now(), role: 'assistant', text: '', complete: false };
       state.messages.push(row);
     }
     return row;
@@ -219,7 +212,6 @@
   function handlePiEvent(event) {
     if (!event || typeof event !== 'object') return;
     if (event.type === 'text_delta') assistantRow().text += String(event.delta || '');
-    else if (event.type === 'thinking_delta') assistantRow().thinking += String(event.delta || '');
     else if (event.type === 'message_end') assistantRow().complete = true;
     else if (event.type === 'tool_start') state.messages.push({ id: event.tool_call_id, role: 'tool', toolName: event.tool_name, status: 'running', text: '' });
     else if (event.type === 'tool_end') {
@@ -257,7 +249,7 @@
     const text = String((input && input.value) || state.draft || '').trim();
     if (!text) return;
     const grants = Array.from(state.host.querySelectorAll('[data-gpi-grant]:checked')).map(node => node.dataset.gpiGrant);
-    state.messages.push({ id: 'user-' + Date.now(), role: 'user', text, thinking: '', complete: true });
+    state.messages.push({ id: 'user-' + Date.now(), role: 'user', text, complete: true });
     state.draft = ''; state.busy = true; state.error = ''; render();
     try {
       const payload = await api().sendPiCopilotMessage(state.session.session_id, { message: text, allowed_actions: grants });
@@ -290,9 +282,6 @@
       if (event.target.closest('[data-gpi-stop]')) { stopMessage(); return; }
       if (event.target.closest('[data-gpi-rebind]')) { rebind(); return; }
       if (event.target.closest('[data-gpi-new]')) { state.session = null; state.messages = []; rememberSession(''); render(); }
-    });
-    state.host.addEventListener('change', event => {
-      if (event.target.matches('[data-gpi-thinking]')) state.thinking = event.target.value;
     });
     state.host.addEventListener('input', event => {
       if (event.target.matches('[data-gpi-input]')) state.draft = event.target.value;

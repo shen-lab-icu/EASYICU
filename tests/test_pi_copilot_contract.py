@@ -13,12 +13,14 @@ import pytest
 from easyicu.webserver import settings
 from easyicu.webserver.pi_copilot.contracts import (
     AuthorityBinding,
+    HostTurnGrant,
     PiCopilotError,
     PiSessionRecord,
     ToolExecutionContext,
 )
 from easyicu.webserver.pi_copilot.projections import (
     ensure_safe_projection,
+    project_job,
     project_study_context,
     reject_sensitive_message,
 )
@@ -28,17 +30,20 @@ from easyicu.webserver.pi_copilot import tools as tool_module
 
 
 class FakeGateway:
-    def __init__(self) -> None:
+    def __init__(self, session_dir: Path | None = None) -> None:
         self.environ = {
             "EASYICU_PI_PROVIDER": "easyicu-local",
             "EASYICU_PI_API_KEY": "test-only-placeholder",
         }
         self.calls: list[tuple[str, dict[str, Any], Any]] = []
         self.tool_contexts: list[ToolExecutionContext] = []
+        self.session_dir = session_dir
 
     def installation_status(self) -> dict[str, Any]:
         return {
             "node_available": True,
+            "node_version": "24.11.0",
+            "node_version_supported": True,
             "entrypoint_available": True,
             "dependency_installed": True,
             "lockfile_present": True,
@@ -191,6 +196,64 @@ def test_session_binding_stales_then_rebinds_explicitly(
     assert rebound["session"]["stale"]["stale"] is False
 
 
+def test_session_binding_tracks_the_current_run(
+    tmp_path: Path,
+    study_state: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = PiCopilotService(
+        store_path=tmp_path / "sessions.json",
+        gateway=FakeGateway(),
+    )
+    created = service.create_session(external_llm_opt_in=True)
+    session_id = created["session"]["session_id"]
+    monkeypatch.setattr(
+        service_module.agent_runs,
+        "list_run_history",
+        lambda **kwargs: {"runs": [{"run_id": "run-new"}]},
+    )
+
+    with pytest.raises(PiCopilotError) as caught:
+        service.send_message(session_id, message="Inspect the current run")
+
+    assert caught.value.code == "pi_session_authority_stale"
+    assert caught.value.details["mismatches"]["run_id"] == {
+        "session": None,
+        "current": "run-new",
+    }
+
+
+def test_session_retention_disposes_and_unlinks_evicted_jsonl(
+    tmp_path: Path,
+) -> None:
+    session_dir = tmp_path / "pi-sessions"
+    session_dir.mkdir()
+    gateway = FakeGateway(session_dir=session_dir)
+    service = PiCopilotService(
+        store_path=tmp_path / "sessions.json",
+        gateway=gateway,
+    )
+    records = []
+    for index in range(100):
+        session_file = session_dir / f"pi-{index}.jsonl"
+        session_file.write_text("{}\n", encoding="utf-8")
+        records.append(
+            PiSessionRecord(
+                session_id=f"pi-{index}",
+                pi_session_file=str(session_file),
+            )
+        )
+    service._write_records(records)
+
+    service._save_record(PiSessionRecord(session_id="pi-new"))
+
+    assert not (session_dir / "pi-99.jsonl").exists()
+    assert any(
+        method == "session.dispose" and params["session_id"] == "pi-99"
+        for method, params, _ in gateway.calls
+    )
+
+
 def test_new_context_created_from_unbound_chat_requires_rebind(
     tmp_path: Path,
     study_state: dict[str, Any],
@@ -231,6 +294,16 @@ def test_message_grants_are_host_held_and_message_job_is_not_scientific(
         time.sleep(0.01)
     assert job is not None and job.status == "done"
     assert gateway.tool_contexts[-1].allowed_actions == frozenset({"run"})
+
+    study_state["revision"] = 4
+    with pytest.raises(PiCopilotError) as stale_tool:
+        tool_module.execute_tool(
+            "easyicu_inspect_context",
+            {},
+            gateway.tool_contexts[-1],
+        )
+    assert stale_tool.value.code == "pi_session_authority_stale"
+    study_state["revision"] = 3
 
     record = service._get_record(session_id)
     assert record.last_message_job_id == submitted["job_id"]
@@ -419,6 +492,23 @@ def test_study_setup_requires_one_turn_grant_and_uses_typed_owner(
         "lifecycle_write": False,
     }
 
+    one_grant = ToolExecutionContext(
+        session=session,
+        allowed_actions=frozenset({"configure"}),
+    )
+    first = tool_module.execute_tool(
+        "easyicu_update_study_context", proposal, one_grant
+    )
+    assert first["code"] == "study_context_updated"
+    with pytest.raises(PiCopilotError) as invalidated:
+        tool_module.execute_tool("easyicu_inspect_context", {}, one_grant)
+    assert invalidated.value.code == "pi_session_authority_stale"
+
+    grant = HostTurnGrant.from_actions(["configure"])
+    assert grant.consume("configure") == "granted"
+    assert grant.consume("configure") == "consumed"
+    assert grant.consume("run") == "missing"
+
 
 def test_preflight_delegates_to_the_existing_agent_submission_owner(
     monkeypatch: pytest.MonkeyPatch,
@@ -482,6 +572,14 @@ def test_phi_and_projection_boundaries_reject_rows_identifiers_and_paths() -> No
     with pytest.raises(PiCopilotError) as raw_path:
         ensure_safe_projection({"path": "/private/export"})
     assert raw_path.value.code == "pi_projection_blocked"
+    for unsafe_value in (
+        "failed reading /Users/researcher/patient_12345/raw.csv",
+        "Authorization: Bearer secret-token-value",
+        'row fragment: {"subject_id": 12345, "value": 7.1}',
+    ):
+        with pytest.raises(PiCopilotError) as unsafe_string:
+            ensure_safe_projection({"reason": unsafe_value})
+        assert unsafe_string.value.code == "pi_projection_blocked"
 
     projected = project_study_context(
         {
@@ -493,7 +591,97 @@ def test_phi_and_projection_boundaries_reject_rows_identifiers_and_paths() -> No
         }
     )
     assert "/private/export" not in json.dumps(projected)
-    assert len(projected["data_source"]["path_digest"]) == 16
+    assert len(projected["data_source"]["path_digest"]) == 32
+
+    projected_job = project_job(
+        {
+            "id": "job-safe",
+            "status": "failed",
+            "cancel_reason": "/Users/reviewer/private.csv",
+            "events": [
+                {
+                    "seq": 1,
+                    "type": "progress",
+                    "label": "patient_id=123",
+                    "reason": "/private/raw.csv",
+                }
+            ],
+        }
+    )
+    encoded_job = json.dumps(projected_job)
+    assert "private.csv" not in encoded_job
+    assert "patient_id" not in encoded_job
+    assert projected_job["progress"][0]["reason_code"] is None
+
+
+def test_validation_projection_is_owner_specific_and_value_safe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = ToolExecutionContext(session=PiSessionRecord(session_id="pi-safe"))
+    monkeypatch.setattr(
+        tool_module,
+        "_select_run",
+        lambda context, requested_run_id=None: {
+            "run_id": "run-safe",
+            "project_dir": "/private/not-projected",
+        },
+    )
+    monkeypatch.setattr(
+        tool_module,
+        "_run_review",
+        lambda row: {
+            "gate": {
+                "status": "blocked",
+                "reason": "/Users/reviewer/patient_123.csv",
+                "checks": [
+                    {"id": "numeric_evidence_missing", "passed": False},
+                    {"id": "unsafe /private/path", "passed": False},
+                ],
+                "nested": {"raw": "patient_id=123"},
+            },
+            "readiness": {
+                "status": "blocked",
+                "reason": "Bearer hidden-secret",
+                "non_human_failures": [
+                    "evidence_not_ready",
+                    "/private/source.csv",
+                ],
+            },
+        },
+    )
+
+    result = tool_module.execute_tool(
+        "easyicu_inspect_validation",
+        {"run_id": "run-safe"},
+        context,
+    )
+
+    encoded = json.dumps(result)
+    assert "/Users" not in encoded
+    assert "/private" not in encoded
+    assert "patient_id" not in encoded
+    assert "Bearer" not in encoded
+    assert result["details"]["gate"]["failed_requirement_codes"] == [
+        "numeric_evidence_missing"
+    ]
+
+
+def test_complete_tool_result_sanitizes_summary_and_authority_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = ToolExecutionContext(session=PiSessionRecord(session_id="pi-safe"))
+    monkeypatch.setattr(
+        tool_module,
+        "_select_run",
+        lambda context, requested_run_id=None: {
+            "run_id": "/Users/reviewer/private-run",
+        },
+    )
+
+    with pytest.raises(PiCopilotError) as caught:
+        tool_module.execute_tool("easyicu_inspect_run", {}, context)
+
+    assert caught.value.code == "pi_projection_blocked"
 
 
 def test_unknown_tool_arguments_and_missing_plan_keep_owner_codes(

@@ -106,6 +106,7 @@ easyicu-webapp = "easyicu.webserver.__main__:main"
 easyicu-llm-server = "easyicu.hosted_llm_server:main"
 easyicu-research-agent = "easyicu.research_agent.cli:main"
 easyicu-research-replication = "easyicu.research_agent.replication_cli:main"
+easyicu-copilot-install = "easyicu.webserver.pi_copilot.install:main"
 
 [project.urls]
 Homepage = "https://github.com/shen-lab-icu/easyicu"

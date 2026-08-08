@@ -27,7 +27,7 @@ class PiSessionCreateRequest(BaseModel):
 
     title: str = "Pi Copilot"
     language: Literal["en", "zh"] = "en"
-    thinking_level: Literal["off", "minimal", "low", "medium", "high"] = "medium"
+    thinking_level: Literal["off", "minimal", "low", "medium", "high"] = "off"
     study_context_id: ShortText | None = None
     external_llm_opt_in: StrictBool = False
 

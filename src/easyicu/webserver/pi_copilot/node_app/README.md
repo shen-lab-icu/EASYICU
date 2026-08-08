@@ -11,11 +11,15 @@ built-in filesystem or shell tools.
 - npm package: `@earendil-works/pi-coding-agent@0.84.1`
 - upstream license: MIT (see `THIRD_PARTY_NOTICES.md`)
 
-The lockfile is authoritative. Install with lifecycle scripts disabled:
+The lockfile is authoritative. From an installed EasyICU wheel, create the
+private versioned runtime explicitly:
 
 ```sh
-npm ci --ignore-scripts
+easyicu copilot install
 ```
+
+The installer copies only packaged runtime files and runs
+`npm ci --ignore-scripts`; Web server startup never installs dependencies.
 
 ## Runtime configuration
 
@@ -34,17 +38,21 @@ Optional variables:
 - `EASYICU_PI_API` (`openai-completions` or `openai-responses`)
 - `EASYICU_PI_CONTEXT_WINDOW` (default `200000`)
 - `EASYICU_PI_MAX_TOKENS` (default `16384`)
-- `EASYICU_PI_CWD` (session identity only; no filesystem tools are enabled)
+- `EASYICU_PI_SESSION_TOKEN_BUDGET` (default `1000000`; hard session stop)
+- `EASYICU_PI_CWD` (normally a private empty workspace supplied by the host)
 - `EASYICU_PI_SESSION_DIR` (normally supplied by the Python host)
 
 The shell provider is independent of any provider selected for an EasyICU
-scientific run. Credentials are never stored in this package or returned over
-the gateway protocol.
+scientific run. The child receives only a strict runtime/`EASYICU_PI_*`
+environment allowlist; credentials are never stored in this package or
+returned over the gateway protocol. Node `>=22.19.0` is required.
 
 The shell registers fifteen EasyICU-only tools. Study setup can be collected
 and saved inside the conversation with a one-message Configure grant; the
 existing typed StudyContext store remains authoritative. Generic Pi
 filesystem, editing, network, and shell tools stay disabled.
+Raw model reasoning is forced off and is not streamed or returned in session
+transcripts.
 
 See `docs/pi_copilot_integration_architecture.md` for authority, PHI, session,
 failure, and upgrade contracts.

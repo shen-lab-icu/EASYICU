@@ -21,6 +21,20 @@ _SENSITIVE_TEXT_PATTERNS = (
     ),
     re.compile(r"\b(?:dob|date of birth)\s*[:=]", re.I),
     re.compile(r"\b(?:note_text|free_text|clinical_note)\b", re.I),
+    re.compile(
+        r"(?:file://|(?<![A-Za-z0-9])/(?:Users|home|private|tmp|var|etc|opt|Volumes)/|\b[A-Za-z]:\\)",
+        re.I,
+    ),
+    re.compile(
+        r"(?:\bBearer\s+[A-Za-z0-9._~+/=-]{8,}|\bsk-[A-Za-z0-9_-]{8,}|"
+        r"\b(?:api[_-]?key|password|secret|token)\s*[:=]\s*\S+|"
+        r"-----BEGIN [A-Z ]*PRIVATE KEY-----)",
+        re.I,
+    ),
+    re.compile(
+        r"[\"']?(?:subject_id|stay_id|hadm_id|patient_id|mrn)[\"']?\s*[:,=]\s*[\"']?[A-Za-z0-9-]+",
+        re.I,
+    ),
 )
 _FORBIDDEN_KEYS = {
     "rows",
@@ -55,7 +69,7 @@ def path_digest(value: Any) -> Optional[str]:
     text = str(value or "").strip()
     if not text:
         return None
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:32]
 
 
 def reject_sensitive_message(text: str) -> None:
@@ -161,10 +175,11 @@ def project_job(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
                     "current",
                     "total",
                     "step",
-                    "label",
-                    "reason",
                 )
                 if event.get(key) is not None
+            }
+            | {
+                "reason_code": stable_code(event.get("reason"))
             }
         )
     return ensure_safe_projection(
@@ -174,7 +189,7 @@ def project_job(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
             "kind": snapshot.get("kind"),
             "status": snapshot.get("status"),
             "cancel_requested": bool(snapshot.get("cancel_requested")),
-            "cancel_reason": snapshot.get("cancel_reason"),
+            "cancel_reason_code": stable_code(snapshot.get("cancel_reason")),
             "error_code": _safe_error_code(snapshot.get("error")),
             "progress": progress,
         }
@@ -284,6 +299,21 @@ def ensure_safe_projection(
                 "Filesystem paths are not model-visible Pi tool results.",
                 status_code=500,
             )
+        elif isinstance(node, str):
+            if len(node) > MAX_TEXT_CHARS:
+                raise PiCopilotError(
+                    "pi_projection_too_large",
+                    "A model-visible string exceeded the projection limit.",
+                    status_code=500,
+                    details={"max_chars": MAX_TEXT_CHARS},
+                )
+            for pattern in _SENSITIVE_TEXT_PATTERNS:
+                if pattern.search(node):
+                    raise PiCopilotError(
+                        "pi_projection_blocked",
+                        "The host withheld a sensitive model-visible string value.",
+                        status_code=500,
+                    )
 
     visit(value)
     encoded = json.dumps(value, ensure_ascii=False, default=str).encode("utf-8")
@@ -298,12 +328,16 @@ def ensure_safe_projection(
 
 
 def _safe_error_code(value: Any) -> Optional[str]:
+    return stable_code(str(value or "").split(":", 1)[0])
+
+
+def stable_code(value: Any) -> Optional[str]:
     text = str(value or "").strip()
     if not text:
         return None
-    first = text.split(":", 1)[0]
-    normalized = re.sub(r"[^a-zA-Z0-9_.-]+", "_", first).strip("_")
-    return normalized[:160] or "job_failed"
+    if re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{0,159}", text):
+        return text
+    return None
 
 
 __all__ = [
@@ -316,4 +350,5 @@ __all__ = [
     "project_run_row",
     "project_study_context",
     "reject_sensitive_message",
+    "stable_code",
 ]

@@ -157,6 +157,25 @@ def build_parser() -> argparse.ArgumentParser:
     )
     
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
+
+    copilot_parser = subparsers.add_parser(
+        "copilot",
+        help="Manage the governed Pi Copilot shell runtime",
+    )
+    copilot_subparsers = copilot_parser.add_subparsers(
+        dest="copilot_command",
+        required=True,
+    )
+    copilot_install_parser = copilot_subparsers.add_parser(
+        "install",
+        help="Install the exact pinned Pi runtime from the packaged lockfile",
+    )
+    copilot_install_parser.add_argument(
+        "--runtime-dir",
+        type=Path,
+        default=None,
+        help="Override the private versioned runtime directory.",
+    )
     
     # Extract command
     extract_parser = subparsers.add_parser(
@@ -323,6 +342,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         return handle_setup(args)
     elif args.command == "extract":
         return handle_extract(args)
+    elif args.command == "copilot":
+        from easyicu.webserver.pi_copilot.install import install_runtime
+
+        installed = install_runtime(destination=args.runtime_dir)
+        LOGGER.info("Installed pinned Pi Copilot runtime at %s", installed)
+        return 0
     else:
         parser.print_help()
         return 1
