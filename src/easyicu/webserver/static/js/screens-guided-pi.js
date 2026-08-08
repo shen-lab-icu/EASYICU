@@ -79,15 +79,127 @@
     return !!(state.session && state.session.stale && state.session.stale.stale);
   }
 
+  function timeMs(value) {
+    const parsed = Date.parse(String(value || ''));
+    return Number.isFinite(parsed) ? parsed : Date.now();
+  }
+  function durationText(startedAt, endedAt) {
+    const elapsed = Math.max(0, Number(endedAt || Date.now()) - Number(startedAt || Date.now()));
+    if (elapsed < 1000) return `${elapsed} ms`;
+    if (elapsed < 10000) return `${(elapsed / 1000).toFixed(1)} s`;
+    return `${Math.round(elapsed / 1000)} s`;
+  }
+  function toolLabel(name) {
+    const labels = {
+      easyicu_workspace_status: tr('Check workspace status', '检查工作区状态'),
+      easyicu_inspect_context: tr('Inspect study context', '读取研究配置'),
+      easyicu_inspect_plan: tr('Inspect scientific plan', '读取科学计划'),
+      easyicu_inspect_capability: tr('Inspect capabilities', '检查可用能力'),
+      easyicu_inspect_run: tr('Inspect run status', '读取运行状态'),
+      easyicu_inspect_step: tr('Inspect plan step', '读取计划步骤'),
+      easyicu_inspect_validation: tr('Inspect validation', '读取验证状态'),
+      easyicu_list_artifacts: tr('List run artefacts', '列出运行产物'),
+      easyicu_inspect_evidence: tr('Inspect evidence', '读取证据状态'),
+      easyicu_explain_blocker: tr('Explain blocker', '解释阻断原因'),
+      easyicu_update_study_context: tr('Save study setup', '保存研究配置'),
+      easyicu_run: tr('Start EasyICU run', '启动 EasyICU 运行'),
+      easyicu_resume: tr('Resume EasyICU work', '恢复 EasyICU 任务'),
+      easyicu_cancel: tr('Cancel EasyICU job', '取消 EasyICU 任务'),
+      easyicu_request_replan: tr('Request replan', '请求重新规划'),
+    };
+    return labels[String(name || '')] || String(name || tr('EasyICU tool', 'EasyICU 工具'));
+  }
+
+  function activeActivity() {
+    return state.messages.slice().reverse().find(row => row.role === 'activity' && row.status === 'running');
+  }
+  function ensureActivity(at) {
+    let row = activeActivity();
+    if (!row) {
+      const startedAt = timeMs(at);
+      row = { id: 'activity-' + startedAt, role: 'activity', status: 'running', startedAt, steps: [] };
+      state.messages.push(row);
+    }
+    return row;
+  }
+  function upsertActivityStep(activity, step) {
+    if (!activity) return;
+    const found = activity.steps.find(item => item.id === step.id);
+    if (found) Object.assign(found, step);
+    else activity.steps.push(step);
+  }
+  function finishActivity(status, at, terminalKind) {
+    const activity = activeActivity();
+    if (!activity) return;
+    const endedAt = timeMs(at);
+    activity.steps.forEach(step => {
+      if (step.status === 'running') step.status = status === 'complete' ? 'complete' : 'error';
+    });
+    if (terminalKind) {
+      upsertActivityStep(activity, {
+        id: 'terminal', kind: terminalKind,
+        status: status === 'complete' ? 'complete' : 'error', at: endedAt,
+      });
+    }
+    activity.status = status;
+    activity.endedAt = endedAt;
+  }
+
+  function activityStepLabel(step) {
+    const done = step.status === 'complete';
+    const failed = step.status === 'error';
+    if (step.kind === 'submitted') return tr('Message submitted to Pi AgentSession', '消息已提交给 Pi AgentSession');
+    if (step.kind === 'agent') return tr('Pi agent loop started', 'Pi Agent 循环已启动');
+    if (step.kind === 'turn') return done
+      ? tr(`Model turn ${step.turn + 1} finished`, `模型回合 ${step.turn + 1} 已结束`)
+      : tr(`Model turn ${step.turn + 1} is running`, `模型回合 ${step.turn + 1} 进行中`);
+    if (step.kind === 'assistant') return done
+      ? tr(`Response phase ${step.phase} finished`, `回复阶段 ${step.phase} 已结束`)
+      : tr(`Generating response phase ${step.phase}`, `正在生成回复阶段 ${step.phase}`);
+    if (step.kind === 'tool') return failed
+      ? tr(`${toolLabel(step.toolName)} returned an error`, `${toolLabel(step.toolName)} 返回错误`)
+      : done
+        ? tr(`${toolLabel(step.toolName)} returned`, `${toolLabel(step.toolName)} 已返回`)
+        : tr(`Calling ${toolLabel(step.toolName)}`, `正在调用 ${toolLabel(step.toolName)}`);
+    if (step.kind === 'retry') return tr(`Retrying (${step.attempt}/${step.maxAttempts})`, `正在重试（${step.attempt}/${step.maxAttempts}）`);
+    if (step.kind === 'compaction') return done ? tr('Context compaction finished', '上下文整理已完成') : tr('Compacting context', '正在整理上下文');
+    if (step.kind === 'cancelled') return tr('This turn was stopped', '本轮已停止');
+    if (step.kind === 'failed') return tr('This turn failed', '本轮失败');
+    if (step.kind === 'settled') return tr('This turn completed', '本轮已完成');
+    return tr('Agent activity updated', 'Agent 状态已更新');
+  }
+
   function transcriptMessages(session) {
     const rows = Array.isArray(session && session.transcript) ? session.transcript : [];
-    return rows.map((row, index) => {
+    const messages = [];
+    const tools = new Map();
+    rows.forEach((row, index) => {
       const parts = Array.isArray(row.content) ? row.content : [];
       const text = parts.filter(p => p && p.type === 'text').map(p => p.text || '').join('');
-      const tool = parts.find(p => p && p.type === 'tool_call');
-      if (tool) return { id: 'history-tool-' + index, role: 'tool', toolName: tool.tool_name, status: 'complete', text: '' };
-      return { id: 'history-' + index, role: row.role || 'assistant', text };
-    }).filter(row => row.text || row.toolName);
+      if (text) messages.push({ id: 'history-' + index, role: row.role || 'assistant', text, complete: true });
+      parts.filter(p => p && p.type === 'tool_call').forEach((tool, partIndex) => {
+        const toolRow = {
+          id: tool.tool_call_id || `history-tool-${index}-${partIndex}`,
+          role: 'tool', toolName: tool.tool_name, status: 'running', text: '',
+          startedAt: timeMs(row.timestamp),
+        };
+        messages.push(toolRow); tools.set(toolRow.id, toolRow);
+      });
+      parts.filter(p => p && p.type === 'tool_result').forEach((receipt, partIndex) => {
+        const id = receipt.tool_call_id || `history-result-${index}-${partIndex}`;
+        let toolRow = tools.get(id);
+        if (!toolRow) {
+          toolRow = { id, role: 'tool', toolName: receipt.tool_name, startedAt: timeMs(row.timestamp) };
+          messages.push(toolRow); tools.set(id, toolRow);
+        }
+        Object.assign(toolRow, {
+          status: receipt.is_error ? 'error' : 'success', text: receipt.summary || '',
+          code: receipt.code || '', owner: receipt.owner || '', receiptStatus: receipt.status || '',
+          endedAt: timeMs(row.timestamp),
+        });
+      });
+    });
+    return messages.filter(row => row.text || row.toolName);
   }
 
   function statusBanner() {
@@ -187,11 +299,37 @@
   }
 
   function messageHtml(row) {
+    if (row.role === 'activity') {
+      const latest = row.steps[row.steps.length - 1];
+      const running = row.status === 'running';
+      const failed = row.status === 'error' || row.status === 'cancelled';
+      const status = running ? tr('running', '运行中') : failed ? tr('attention', '需关注') : tr('complete', '已完成');
+      const steps = row.steps.map(step => `
+        <li class="${esc(step.status || 'complete')}">
+          <span class="gpi-activity-rail" aria-hidden="true"></span>
+          <span><strong>${esc(activityStepLabel(step))}</strong>${step.code ? `<small>${esc(step.code)}</small>` : ''}</span>
+        </li>`).join('');
+      return `<details class="gpi-activity ${failed ? 'error' : ''}" ${running ? 'open' : ''}>
+        <summary>
+          <span class="gpi-activity-state" aria-hidden="true"></span>
+          <span><strong>${tr('Agent activity', 'Agent 运行轨迹')}</strong><small>${esc(latest ? activityStepLabel(latest) : tr('Preparing', '正在准备'))}</small></span>
+          <span>${esc(durationText(row.startedAt, row.endedAt))} · ${status}</span>
+        </summary>
+        <ol>${steps}</ol>
+        <p>${tr('This trace shows Pi lifecycle events and EasyICU tool receipts, not private chain-of-thought.', '这里显示的是 Pi 生命周期事件和 EasyICU 工具回执，不是模型的私有思维链。')}</p>
+      </details>`;
+    }
     if (row.role === 'tool') {
       const status = row.status || 'running';
-      return `<details class="gpi-tool ${status === 'error' ? 'error' : ''}" ${status === 'running' ? 'open' : ''}>
-        <summary><span class="gpi-tool-mark"></span><strong>${esc(row.toolName || 'EasyICU tool')}</strong><span>${status === 'running' ? tr('running', '运行中') : tr('complete', '已完成')}</span></summary>
-        ${row.text ? `<pre>${esc(row.text)}</pre>` : ''}
+      const statusText = status === 'running' ? tr('running', '运行中') : status === 'error' ? tr('error', '错误') : tr('complete', '已完成');
+      const meta = [row.code, row.startedAt ? durationText(row.startedAt, row.endedAt) : ''].filter(Boolean).join(' · ');
+      return `<details class="gpi-tool ${status}" ${status === 'running' || status === 'error' ? 'open' : ''}>
+        <summary><span class="gpi-tool-mark" aria-hidden="true"></span><span><strong>${esc(toolLabel(row.toolName))}</strong><small>${esc(row.toolName || 'easyicu_tool')}</small></span><span>${esc(statusText)}</span></summary>
+        <div class="gpi-tool-body">
+          ${row.text ? `<p>${esc(row.text)}</p>` : `<p>${tr('Waiting for a bounded EasyICU receipt…', '正在等待受限的 EasyICU 回执…')}</p>`}
+          ${meta ? `<div class="gpi-tool-meta">${esc(meta)}</div>` : ''}
+          ${row.owner ? `<div class="gpi-tool-owner">${tr('Owner', '责任边界')} · ${esc(row.owner)}</div>` : ''}
+        </div>
       </details>`;
     }
     const cls = row.role === 'user' ? 'user' : 'assistant';
@@ -211,7 +349,7 @@
     return `
       <div class="gpi-panel">
         <header class="gpi-head">
-          <div><div class="gpi-kicker">PI AGENTSESSION · ${esc((state.project && state.project.title) || projectId())}</div><div class="gpi-title">${esc(session.title || 'Pi Copilot')} <span class="gpi-live">${state.busy ? tr('streaming', '生成中') : tr('ready', '就绪')}</span></div></div>
+          <div><div class="gpi-kicker">PI AGENTSESSION · ${esc((state.project && state.project.title) || projectId())}</div><div class="gpi-title">${esc(session.title || 'Pi Copilot')} <span class="gpi-live" role="status" aria-live="polite">${state.busy ? tr('working', '工作中') : tr('ready', '就绪')}</span></div></div>
           <div class="gpi-head-meta">
             <span>${esc(model.id || (state.runtime && state.runtime.model) || 'model')}</span>
             <button class="gpi-link" type="button" data-gpi-config>${tr('Model service', '模型服务')}</button>
@@ -344,23 +482,70 @@
     }
     return row;
   }
+  function completeLatestAssistant(stopReason) {
+    const row = state.messages.slice().reverse().find(item => item.role === 'assistant' && !item.complete);
+    if (row) { row.complete = true; row.stopReason = stopReason || ''; }
+  }
   function handlePiEvent(event) {
     if (!event || typeof event !== 'object') return;
-    if (event.type === 'text_delta') assistantRow().text += String(event.delta || '');
-    else if (event.type === 'message_end') assistantRow().complete = true;
-    else if (event.type === 'tool_start') state.messages.push({ id: event.tool_call_id, role: 'tool', toolName: event.tool_name, status: 'running', text: '' });
+    const at = timeMs(event.at);
+    const activity = ensureActivity(event.at);
+    if (event.type === 'run_start') {
+      upsertActivityStep(activity, { id: 'agent', kind: 'agent', status: 'complete', at });
+    } else if (event.type === 'turn_start') {
+      upsertActivityStep(activity, { id: 'turn-' + event.turn_index, kind: 'turn', turn: Number(event.turn_index || 0), status: 'running', at });
+    } else if (event.type === 'assistant_start') {
+      const phase = activity.steps.filter(item => item.kind === 'assistant').length + 1;
+      upsertActivityStep(activity, { id: 'assistant-' + phase, kind: 'assistant', phase, status: 'running', at });
+    } else if (event.type === 'text_delta') {
+      assistantRow().text += String(event.delta || '');
+    } else if (event.type === 'message_end') {
+      completeLatestAssistant(event.stop_reason);
+      const step = activity.steps.slice().reverse().find(item => item.kind === 'assistant' && item.status === 'running');
+      if (step) step.status = 'complete';
+    } else if (event.type === 'tool_start') {
+      const assistant = activity.steps.slice().reverse().find(item => item.kind === 'assistant' && item.status === 'running');
+      if (assistant) assistant.status = 'complete';
+      upsertActivityStep(activity, { id: 'tool-' + event.tool_call_id, kind: 'tool', toolName: event.tool_name, status: 'running', at });
+      state.messages.push({ id: event.tool_call_id, role: 'tool', toolName: event.tool_name, status: 'running', text: '', startedAt: at });
+    } else if (event.type === 'tool_progress') {
+      upsertActivityStep(activity, { id: 'tool-' + event.tool_call_id, kind: 'tool', toolName: event.tool_name, status: 'running', at });
+    }
     else if (event.type === 'tool_end') {
       const row = state.messages.find(item => item.role === 'tool' && item.id === event.tool_call_id);
-      if (row) { row.status = event.is_error ? 'error' : 'complete'; row.text = event.summary || ''; }
+      if (row) {
+        row.status = event.is_error ? 'error' : 'success'; row.text = event.summary || '';
+        row.code = event.code || ''; row.owner = event.owner || ''; row.receiptStatus = event.status || '';
+        row.endedAt = at;
+      }
+      upsertActivityStep(activity, {
+        id: 'tool-' + event.tool_call_id, kind: 'tool', toolName: event.tool_name,
+        status: event.is_error ? 'error' : 'complete', code: event.code || '', at,
+      });
+    } else if (event.type === 'turn_end') {
+      const turn = activity.steps.find(item => item.id === 'turn-' + event.turn_index);
+      if (turn) turn.status = 'complete';
+    } else if (event.type === 'retry') {
+      upsertActivityStep(activity, { id: 'retry-' + event.attempt, kind: 'retry', status: 'running', attempt: event.attempt, maxAttempts: event.max_attempts, at });
+    } else if (event.type === 'compaction_start') {
+      upsertActivityStep(activity, { id: 'compaction', kind: 'compaction', status: 'running', at });
+    } else if (event.type === 'compaction_end') {
+      upsertActivityStep(activity, { id: 'compaction', kind: 'compaction', status: event.aborted ? 'error' : 'complete', at });
+    } else if (event.type === 'agent_cycle_end' && event.will_retry) {
+      const retry = activity.steps.slice().reverse().find(item => item.kind === 'retry' && item.status === 'running');
+      if (retry) retry.status = 'complete';
+    } else if (event.type === 'run_end') {
+      finishActivity('complete', event.at, 'settled');
     }
     render();
   }
   function closeSource() { if (state.source) { state.source.close(); state.source = null; } }
-  async function refreshSession() {
+  async function refreshSession(preserveTimeline) {
     if (!state.session || !projectId()) return;
     try {
       const payload = await api().loadPiCopilotSession(state.session.session_id, projectId());
-      state.session = payload.session; state.messages = transcriptMessages(state.session);
+      state.session = payload.session;
+      if (!preserveTimeline) state.messages = transcriptMessages(state.session);
     } catch (e) {}
   }
 
@@ -404,9 +589,16 @@
       if (row.type === 'pi_event') handlePiEvent(row.event);
       if (row.type === 'end') {
         closeSource(); state.busy = false;
-        if (row.status === 'failed') state.error = String(row.error || tr('Pi message failed.', 'Pi 消息失败。'));
-        else if (row.status === 'cancelled') state.error = tr('Pi message stopped.', 'Pi 消息已停止。');
-        await refreshSession(); render();
+        if (row.status === 'failed') {
+          finishActivity('error', null, 'failed');
+          state.error = String(row.error || tr('Pi message failed.', 'Pi 消息失败。'));
+        } else if (row.status === 'cancelled') {
+          finishActivity('cancelled', null, 'cancelled');
+          state.error = tr('Pi message stopped.', 'Pi 消息已停止。');
+        } else {
+          finishActivity('complete', null, 'settled');
+        }
+        await refreshSession(true); render();
       }
     };
     state.source.onerror = () => { if (!state.busy) closeSource(); };
@@ -417,12 +609,18 @@
     const text = String((input && input.value) || state.draft || '').trim();
     if (!text) return;
     const grants = Array.from(state.host.querySelectorAll('[data-gpi-grant]:checked')).map(node => node.dataset.gpiGrant);
-    state.messages.push({ id: 'user-' + Date.now(), role: 'user', text, complete: true });
+    const submittedAt = Date.now();
+    state.messages.push({ id: 'user-' + submittedAt, role: 'user', text, complete: true });
+    const activity = ensureActivity(new Date(submittedAt).toISOString());
+    upsertActivityStep(activity, { id: 'submitted', kind: 'submitted', status: 'complete', at: submittedAt });
     state.draft = ''; state.busy = true; state.error = ''; render();
     try {
       const payload = await api().sendPiCopilotMessage(state.session.session_id, { message: text, allowed_actions: grants });
       state.jobId = payload.job_id; watchJob(payload.job_id);
-    } catch (error) { state.busy = false; state.error = errorText(error); render(); }
+    } catch (error) {
+      state.busy = false; finishActivity('error', null, 'failed');
+      state.error = errorText(error); render();
+    }
   }
   async function stopMessage() {
     if (!state.session || !state.busy) return;

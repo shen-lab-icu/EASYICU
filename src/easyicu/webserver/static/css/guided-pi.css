@@ -117,18 +117,41 @@
 .gpi-message.assistant .gpi-avatar{background:#101820;color:#fff;border-color:#101820}
 .gpi-message-body{max-width:680px;padding:9px 11px;border:1px solid var(--line);border-radius:3px 12px 12px 12px;background:var(--paper)}
 .gpi-text{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12.5px;line-height:1.65}
-.gpi-tool pre{margin:7px 0 0;white-space:pre-wrap;overflow-wrap:anywhere;font:500 10px/1.55 var(--mono);color:var(--ink-3)}
-.gpi-tool{max-width:724px;margin:0 auto 14px;border:1px solid var(--line);border-radius:8px;background:color-mix(in srgb,var(--wash) 55%,var(--paper))}
-.gpi-tool.error{border-color:color-mix(in srgb,#ba463d 40%,var(--line))}
-.gpi-tool summary{display:flex;align-items:center;gap:7px;padding:8px 10px;cursor:pointer;font-size:10.5px;list-style:none}
-.gpi-tool summary::-webkit-details-marker{display:none}
-.gpi-tool summary>span:last-child{margin-left:auto;color:var(--ink-4);font:500 9px/1.3 var(--mono)}
-.gpi-tool>pre{padding:0 10px 9px}
-.gpi-tool-mark{width:7px;height:7px;border-radius:2px;background:var(--accent)}
+.gpi-activity,.gpi-tool{max-width:724px;margin:0 auto 14px;border:1px solid var(--line);border-radius:8px;background:color-mix(in srgb,var(--wash) 55%,var(--paper))}
+.gpi-activity.error,.gpi-tool.error{border-color:color-mix(in srgb,#ba463d 40%,var(--line))}
+.gpi-activity summary,.gpi-tool summary{display:flex;align-items:center;gap:9px;padding:9px 11px;cursor:pointer;font-size:10.5px;list-style:none}
+.gpi-activity summary::-webkit-details-marker,.gpi-tool summary::-webkit-details-marker{display:none}
+.gpi-activity summary>span:nth-child(2),.gpi-tool summary>span:nth-child(2){display:flex;min-width:0;flex:1;flex-direction:column;gap:2px}
+.gpi-activity summary small,.gpi-tool summary small{overflow:hidden;color:var(--ink-4);font:500 9px/1.35 var(--mono);text-overflow:ellipsis;white-space:nowrap}
+.gpi-activity summary>span:last-child,.gpi-tool summary>span:last-child{margin-left:auto;color:var(--ink-4);font:500 9px/1.3 var(--mono);white-space:nowrap}
+.gpi-activity-state{width:8px;height:8px;flex:0 0 auto;border-radius:99px;background:#2d8a62}
+.gpi-activity[open] .gpi-activity-state{animation:gpi-activity-pulse 1.5s ease-in-out infinite}
+.gpi-activity.error .gpi-activity-state{background:#ba463d;animation:none}
+.gpi-activity ol{margin:0;padding:2px 12px 8px 34px;list-style:none}
+.gpi-activity li{position:relative;display:grid;grid-template-columns:9px minmax(0,1fr);gap:8px;min-height:27px;color:var(--ink-3);font-size:10.5px}
+.gpi-activity li>span:last-child{display:flex;min-width:0;flex-direction:column;gap:2px;padding-bottom:7px}
+.gpi-activity li small{color:var(--ink-4);font:500 9px/1.35 var(--mono)}
+.gpi-activity-rail{width:7px;height:7px;margin-top:4px;border:1.5px solid var(--ink-4);border-radius:99px;background:var(--paper)}
+.gpi-activity li.complete .gpi-activity-rail{border-color:#2d8a62;background:#2d8a62}
+.gpi-activity li.error .gpi-activity-rail{border-color:#ba463d;background:#ba463d}
+.gpi-activity>p{margin:0;padding:7px 12px 9px;border-top:1px solid var(--line);color:var(--ink-4);font-size:9px;line-height:1.5}
+.gpi-tool.success{border-color:color-mix(in srgb,#2d8a62 25%,var(--line))}
+.gpi-tool-mark{width:7px;height:7px;flex:0 0 auto;border-radius:2px;background:var(--accent)}
+.gpi-tool.running .gpi-tool-mark{animation:gpi-activity-pulse 1.5s ease-in-out infinite}
+.gpi-tool.error .gpi-tool-mark{background:#ba463d}
+.gpi-tool.success .gpi-tool-mark{background:#2d8a62}
+.gpi-tool-body{padding:0 11px 10px}
+.gpi-tool-body p{margin:0;padding:8px 0;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--ink-3);font-size:10.5px;line-height:1.55}
+.gpi-tool-meta,.gpi-tool-owner{padding-top:5px;border-top:1px solid var(--line);color:var(--ink-4);font:500 9px/1.45 var(--mono);overflow-wrap:anywhere}
+@keyframes gpi-activity-pulse{50%{opacity:.35;transform:scale(.82)}}
 .gpi-streaming{display:flex;gap:4px;padding:5px}
 .gpi-streaming i{width:5px;height:5px;border-radius:99px;background:var(--ink-4);animation:gpi-dot 1s infinite}
 .gpi-streaming i:nth-child(2){animation-delay:.12s}.gpi-streaming i:nth-child(3){animation-delay:.24s}
 @keyframes gpi-dot{50%{transform:translateY(-3px);opacity:.4}}
+
+@media (prefers-reduced-motion:reduce){
+  .gpi-activity[open] .gpi-activity-state,.gpi-tool.running .gpi-tool-mark,.gpi-streaming i{animation:none}
+}
 
 .gpi-error{padding:8px 16px;border-top:1px solid color-mix(in srgb,#ba463d 30%,var(--line));background:color-mix(in srgb,#ba463d 6%,var(--paper));color:#8e312c;font-size:11px}
 .gpi-compose{padding:12px 16px;border-top:1px solid var(--line);background:var(--paper)}

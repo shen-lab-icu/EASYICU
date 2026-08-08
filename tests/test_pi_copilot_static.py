@@ -18,8 +18,8 @@ def _read(relative: str) -> str:
 
 def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     index = _read("index.html")
-    assert "css/guided-pi.css?v=20260808-pi-setup1" in index
-    assert "js/screens-guided-pi.js?v=20260808-pi-model1" in index
+    assert "css/guided-pi.css?v=20260808-pi-activity1" in index
+    assert "js/screens-guided-pi.js?v=20260808-pi-activity1" in index
     assert index.index("css/guided.css") < index.index("css/guided-pi.css")
     assert index.index("js/screens-guided-pi.js") < index.index("js/screens-guided.js")
 
@@ -62,6 +62,11 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "data-gpi-grant=\"configure\"" in pi_owner
     assert "data-gpi-grant=\"run\"" in pi_owner
     assert "data-gpi-grant=\"cancel\"" in pi_owner
+    assert "Agent activity" in pi_owner
+    assert "private chain-of-thought" in pi_owner
+    assert "event.type === 'run_start'" in pi_owner
+    assert "event.type === 'tool_progress'" in pi_owner
+    assert "event.type === 'run_end'" in pi_owner
     for method in (
         "loadPiCopilotStatus",
         "savePiCopilotProviderConfig",
@@ -79,6 +84,7 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
 def test_pi_css_is_route_owned_and_does_not_pollute_catch_all_files() -> None:
     owner = _read("css/guided-pi.css")
     assert ".gpi-panel" in owner
+    assert ".gpi-activity" in owner
     assert ".gd-conv.pi-active" in owner
     assert "!important" not in owner
     assert ":has(" not in owner

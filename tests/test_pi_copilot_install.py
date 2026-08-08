@@ -22,6 +22,16 @@ def test_easyicu_cli_exposes_explicit_copilot_install() -> None:
     assert parsed.runtime_dir == Path("/tmp/pi-test-runtime")
 
 
+def test_pi_event_projection_is_in_both_distribution_manifests() -> None:
+    root = Path(__file__).resolve().parents[1]
+    manifest = (root / "MANIFEST.in").read_text(encoding="utf-8")
+    pyproject = (root / "pyproject.toml").read_text(encoding="utf-8")
+
+    relative = "pi_copilot/node_app/src/event-projection.mjs"
+    assert f"src/easyicu/webserver/{relative}" in manifest
+    assert f'"{relative}"' in pyproject
+
+
 def test_installer_uses_lockfile_without_scripts_or_ambient_secrets(
     tmp_path: Path,
     monkeypatch,
@@ -33,6 +43,7 @@ def test_installer_uses_lockfile_without_scripts_or_ambient_secrets(
     (source / "README.md").write_text("runtime", encoding="utf-8")
     (source / "THIRD_PARTY_NOTICES.md").write_text("MIT", encoding="utf-8")
     (source / "src" / "main.mjs").write_text("", encoding="utf-8")
+    (source / "src" / "event-projection.mjs").write_text("", encoding="utf-8")
     calls = []
 
     def fake_run(command, *, cwd, env, check):
