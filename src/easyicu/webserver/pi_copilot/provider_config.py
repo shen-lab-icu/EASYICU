@@ -27,7 +27,7 @@ from .contracts import PiCopilotError, utc_now
 
 DEFAULT_PROVIDER = "easyicu-local"
 DEFAULT_BASE_URL = "http://127.0.0.1:8317/v1"
-DEFAULT_MODEL = "gpt5.6 luna"
+DEFAULT_MODEL = "gpt-5.6-luna"
 DEFAULT_API_TRANSPORT = "openai-completions"
 SUPPORTED_API_TRANSPORTS = frozenset(
     {

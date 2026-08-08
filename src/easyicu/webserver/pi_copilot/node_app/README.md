@@ -34,7 +34,7 @@ Operators can alternatively provide process-environment overrides:
 ```sh
 export EASYICU_PI_API_KEY='...'
 export EASYICU_PI_BASE_URL='http://127.0.0.1:8317/v1'
-export EASYICU_PI_MODEL='gpt5.6 luna'
+export EASYICU_PI_MODEL='gpt-5.6-luna'
 ```
 
 Optional variables:

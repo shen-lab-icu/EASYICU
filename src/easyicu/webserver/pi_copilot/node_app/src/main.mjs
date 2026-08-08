@@ -108,7 +108,7 @@ function integerEnv(name, fallback, minimum, maximum) {
 function modelConfig() {
   const apiKey = String(process.env.EASYICU_PI_API_KEY || "").trim();
   const baseUrl = String(process.env.EASYICU_PI_BASE_URL || "http://127.0.0.1:8317/v1").trim();
-  const model = String(process.env.EASYICU_PI_MODEL || "gpt5.6 luna").trim();
+  const model = String(process.env.EASYICU_PI_MODEL || "gpt-5.6-luna").trim();
   const provider = String(process.env.EASYICU_PI_PROVIDER || "easyicu-local").trim();
   const api = String(process.env.EASYICU_PI_API || "openai-completions").trim();
   if (!apiKey) throw Object.assign(new Error("EASYICU_PI_API_KEY is not configured"), { code: "pi_api_key_missing" });
@@ -464,7 +464,7 @@ async function handleRequest(request) {
         pi_package_version: "0.84.1",
         pi_source_commit: "9dd90a49711d088b86fdd9b4aea575913a8328a8",
         model_configured: Boolean(String(process.env.EASYICU_PI_API_KEY || "").trim()),
-        model: String(process.env.EASYICU_PI_MODEL || "gpt5.6 luna"),
+        model: String(process.env.EASYICU_PI_MODEL || "gpt-5.6-luna"),
         provider: String(process.env.EASYICU_PI_PROVIDER || "easyicu-local"),
         built_in_tools_enabled: [],
         custom_tools: [...TOOL_NAMES],
