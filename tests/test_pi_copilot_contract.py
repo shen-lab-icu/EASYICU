@@ -1,0 +1,513 @@
+"""Focused owner and authority tests for the Pi Copilot integration."""
+
+from __future__ import annotations
+
+import json
+import threading
+import time
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from easyicu.webserver import settings
+from easyicu.webserver.pi_copilot.contracts import (
+    AuthorityBinding,
+    PiCopilotError,
+    PiSessionRecord,
+    ToolExecutionContext,
+)
+from easyicu.webserver.pi_copilot.projections import (
+    ensure_safe_projection,
+    project_study_context,
+    reject_sensitive_message,
+)
+from easyicu.webserver.pi_copilot.service import PiCopilotService
+from easyicu.webserver.pi_copilot import service as service_module
+from easyicu.webserver.pi_copilot import tools as tool_module
+
+
+class FakeGateway:
+    def __init__(self) -> None:
+        self.environ = {
+            "EASYICU_PI_PROVIDER": "easyicu-local",
+            "EASYICU_PI_API_KEY": "test-only-placeholder",
+        }
+        self.calls: list[tuple[str, dict[str, Any], Any]] = []
+        self.tool_contexts: list[ToolExecutionContext] = []
+
+    def installation_status(self) -> dict[str, Any]:
+        return {
+            "node_available": True,
+            "entrypoint_available": True,
+            "dependency_installed": True,
+            "lockfile_present": True,
+            "api_key_configured": True,
+            "base_url_configured": True,
+            "provider": "easyicu-local",
+            "model": "gpt5.6 luna",
+            "api_transport": "openai-completions",
+        }
+
+    def request(
+        self,
+        method: str,
+        params: dict[str, Any],
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        self.calls.append((method, dict(params), kwargs.get("tool_context")))
+        if kwargs.get("tool_context") is not None:
+            self.tool_contexts.append(kwargs["tool_context"])
+        session_id = str(params.get("session_id") or "")
+        return {
+            "session_id": session_id,
+            "pi_session_id": "pi-internal-test",
+            "session_file": "/private/test-session.jsonl",
+            "model": {"provider": "easyicu-local", "id": "gpt5.6 luna"},
+            "thinking_level": params.get("thinking_level") or "medium",
+            "message_count": 1 if method == "session.prompt" else 0,
+            "streaming": False,
+            "enabled_tools": ["easyicu_inspect_context"],
+            "transcript": [],
+            "aborted": method == "session.abort",
+        }
+
+    def close(self) -> None:
+        return None
+
+
+@pytest.fixture
+def study_state(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    current = {
+        "id": "study-test",
+        "revision": 3,
+        "title": "Aggregate ICU study",
+        "question": "Is aggregate lactate associated with mortality?",
+        "data_source": {"database": "mimiciv", "path": "/private/export"},
+        "cohort": {"cohort_size": 140},
+        "modules": ["lactate"],
+        "outcome": "mortality",
+        "time_window": {"hours": 24},
+        "confirmations": {"cohort": True},
+        "active_job_id": None,
+    }
+    monkeypatch.setattr(settings, "load_settings", lambda: {"ai_enabled": True, "language": "en"})
+    monkeypatch.setattr(service_module.study_contexts, "get_active_context", lambda: dict(current))
+    monkeypatch.setattr(
+        service_module.study_contexts,
+        "get_context",
+        lambda context_id: dict(current) if context_id == current["id"] else None,
+    )
+    monkeypatch.setattr(
+        service_module.agent_runs,
+        "list_run_history",
+        lambda **kwargs: {"runs": []},
+    )
+    return current
+
+
+def test_runtime_status_has_local_defaults_without_secret_values(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "load_settings", lambda: {"ai_enabled": True})
+    gateway = FakeGateway()
+    service = PiCopilotService(store_path=tmp_path / "sessions.json", gateway=gateway)
+
+    payload = service.runtime_status()
+
+    runtime = payload["runtime"]
+    assert runtime["status"] == "ready"
+    assert runtime["provider"] == "easyicu-local"
+    assert runtime["model"] == "gpt5.6 luna"
+    assert runtime["built_in_tools_enabled"] == []
+    assert runtime["credential_values_exposed"] is False
+    assert "test-only-placeholder" not in json.dumps(payload)
+
+
+def test_development_metadata_alias_migrates_message_job_field() -> None:
+    record = PiSessionRecord.model_validate(
+        {
+            "session_id": "pi-test",
+            "last_job_id": "old-message-job",
+        }
+    )
+    assert record.last_message_job_id == "old-message-job"
+    dumped = record.model_dump(mode="json")
+    assert dumped["last_message_job_id"] == "old-message-job"
+    assert "last_job_id" not in dumped
+
+
+def test_runtime_status_fails_closed_when_credential_is_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "load_settings", lambda: {"ai_enabled": True})
+    gateway = FakeGateway()
+    original = gateway.installation_status
+    gateway.installation_status = lambda: {**original(), "api_key_configured": False}
+    payload = PiCopilotService(
+        store_path=tmp_path / "sessions.json",
+        gateway=gateway,
+    ).runtime_status()
+    assert payload["runtime"]["status"] == "unavailable"
+    assert payload["runtime"]["blockers"] == ["api_key_configured"]
+
+
+def test_session_requires_both_global_and_per_session_opt_in(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "load_settings", lambda: {"ai_enabled": False, "language": "en"})
+    service = PiCopilotService(store_path=tmp_path / "sessions.json", gateway=FakeGateway())
+    with pytest.raises(PiCopilotError) as global_block:
+        service.create_session(external_llm_opt_in=True)
+    assert global_block.value.code == "external_llm_opt_in_required"
+
+    monkeypatch.setattr(settings, "load_settings", lambda: {"ai_enabled": True, "language": "en"})
+    with pytest.raises(PiCopilotError) as turn_block:
+        service.create_session(external_llm_opt_in=False)
+    assert turn_block.value.code == "external_llm_opt_in_required"
+
+
+def test_session_binding_stales_then_rebinds_explicitly(
+    tmp_path: Path,
+    study_state: dict[str, Any],
+) -> None:
+    service = PiCopilotService(store_path=tmp_path / "sessions.json", gateway=FakeGateway())
+    created = service.create_session(external_llm_opt_in=True)
+    session_id = created["session"]["session_id"]
+    assert created["session"]["binding"]["study_revision"] == 3
+
+    study_state["revision"] = 4
+    with pytest.raises(PiCopilotError) as stale:
+        service.send_message(session_id, message="Explain the current plan.")
+    assert stale.value.code == "pi_session_authority_stale"
+    assert stale.value.status_code == 409
+
+    rebound = service.rebind_session(session_id)
+    assert rebound["rebound"] is True
+    assert rebound["session"]["binding"]["study_revision"] == 4
+    assert rebound["session"]["stale"]["stale"] is False
+
+
+def test_new_context_created_from_unbound_chat_requires_rebind(
+    tmp_path: Path,
+    study_state: dict[str, Any],
+) -> None:
+    service = PiCopilotService(store_path=tmp_path / "sessions.json", gateway=FakeGateway())
+    record = PiSessionRecord(session_id="pi-unbound", external_llm_opt_in=True)
+    service._save_record(record)
+
+    stale = service.get_session("pi-unbound")["session"]["stale"]
+    assert stale["stale"] is True
+    assert stale["reason"] == "authority_binding_available"
+    assert stale["mismatches"]["study_context_id"]["current"] == study_state["id"]
+
+    rebound = service.rebind_session("pi-unbound")
+    assert rebound["session"]["binding"]["study_context_id"] == study_state["id"]
+
+
+def test_message_grants_are_host_held_and_message_job_is_not_scientific(
+    tmp_path: Path,
+    study_state: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = FakeGateway()
+    service = PiCopilotService(store_path=tmp_path / "sessions.json", gateway=gateway)
+    session_id = service.create_session(external_llm_opt_in=True)["session"]["session_id"]
+
+    submitted = service.send_message(
+        session_id,
+        message="Inspect the study status.",
+        allowed_actions=["run"],
+    )
+    deadline = time.monotonic() + 3
+    job = None
+    while time.monotonic() < deadline:
+        job = service_module.jobs.MANAGER.get(submitted["job_id"])
+        if job and job.status != "running":
+            break
+        time.sleep(0.01)
+    assert job is not None and job.status == "done"
+    assert gateway.tool_contexts[-1].allowed_actions == frozenset({"run"})
+
+    record = service._get_record(session_id)
+    assert record.last_message_job_id == submitted["job_id"]
+    assert record.binding.active_job_id is None
+
+    class RecordingManager:
+        def __init__(self) -> None:
+            self.lookups: list[str] = []
+
+        def get(self, job_id: str) -> None:
+            self.lookups.append(job_id)
+            return None
+
+    manager = RecordingManager()
+    monkeypatch.setattr(tool_module.jobs, "MANAGER", manager)
+    monkeypatch.setattr(tool_module.agent_runs, "list_run_history", lambda **kwargs: {"runs": []})
+    result = tool_module.execute_tool(
+        "easyicu_inspect_run",
+        {},
+        ToolExecutionContext(session=record),
+    )
+    assert result["code"] == "easyicu_run_not_found"
+    assert manager.lookups == []
+
+    with pytest.raises(PiCopilotError) as unrelated_abort:
+        service.abort_session(session_id, message_job_id="some-other-job")
+    assert unrelated_abort.value.code == "pi_message_job_mismatch"
+
+
+def test_session_rejects_overlapping_prompts(
+    tmp_path: Path,
+    study_state: dict[str, Any],
+) -> None:
+    entered = threading.Event()
+    release = threading.Event()
+
+    class BlockingGateway(FakeGateway):
+        def request(self, method: str, params: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+            if method == "session.prompt":
+                entered.set()
+                assert release.wait(timeout=3)
+            return super().request(method, params, **kwargs)
+
+    service = PiCopilotService(
+        store_path=tmp_path / "sessions.json",
+        gateway=BlockingGateway(),
+    )
+    session_id = service.create_session(external_llm_opt_in=True)["session"]["session_id"]
+    first = service.send_message(session_id, message="First aggregate question")
+    assert entered.wait(timeout=3)
+    try:
+        with pytest.raises(PiCopilotError) as busy:
+            service.send_message(session_id, message="Second aggregate question")
+        assert busy.value.code == "pi_session_busy"
+        assert busy.value.status_code == 409
+    finally:
+        release.set()
+
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        job = service_module.jobs.MANAGER.get(first["job_id"])
+        if job and job.status != "running":
+            break
+        time.sleep(0.01)
+    assert job is not None and job.status == "done"
+
+
+def test_control_tools_fail_closed_without_owner_contracts() -> None:
+    session = PiSessionRecord(
+        session_id="pi-test",
+        binding=AuthorityBinding(run_id="run-1"),
+    )
+    no_grant = ToolExecutionContext(session=session)
+    run_block = tool_module.execute_tool("easyicu_run", {"run_type": "preflight"}, no_grant)
+    assert run_block["code"] == "pi_action_authorization_required"
+
+    run_grant = ToolExecutionContext(session=session, allowed_actions=frozenset({"run"}))
+    full_block = tool_module.execute_tool("easyicu_run", {"run_type": "full"}, run_grant)
+    assert full_block["code"] == "pi_full_run_requires_dedicated_confirmation"
+
+    resume_block = tool_module.execute_tool("easyicu_resume", {}, no_grant)
+    assert resume_block["code"] == "scientific_resume_not_supported"
+    replan_block = tool_module.execute_tool(
+        "easyicu_request_replan",
+        {"reason": "The aggregate outcome changed."},
+        no_grant,
+    )
+    assert replan_block["code"] == "scientific_replan_not_supported"
+
+
+def test_tool_surface_has_no_generic_or_scientific_authority_mutators() -> None:
+    assert tool_module.ALLOWED_TOOLS == {
+        "easyicu_workspace_status",
+        "easyicu_inspect_context",
+        "easyicu_inspect_plan",
+        "easyicu_inspect_capability",
+        "easyicu_inspect_run",
+        "easyicu_inspect_step",
+        "easyicu_inspect_validation",
+        "easyicu_list_artifacts",
+        "easyicu_inspect_evidence",
+        "easyicu_explain_blocker",
+        "easyicu_update_study_context",
+        "easyicu_run",
+        "easyicu_resume",
+        "easyicu_cancel",
+        "easyicu_request_replan",
+    }
+    forbidden = {
+        "read",
+        "write",
+        "edit",
+        "bash",
+        "easyicu_mutate_plan",
+        "easyicu_write_evidence",
+        "easyicu_authorize_paper",
+    }
+    assert forbidden.isdisjoint(tool_module.ALLOWED_TOOLS)
+
+
+def test_study_setup_requires_one_turn_grant_and_uses_typed_owner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current = {
+        "id": "study-1",
+        "revision": 5,
+        "question": "Old aggregate question",
+        "active_job_id": None,
+    }
+    session = PiSessionRecord(
+        session_id="pi-test",
+        binding=AuthorityBinding(study_context_id="study-1", study_revision=5),
+    )
+    monkeypatch.setattr(tool_module, "_bound_context", lambda binding: dict(current))
+    writes = []
+
+    def upsert(raw, **kwargs):
+        writes.append((dict(raw), dict(kwargs)))
+        return {
+            **current,
+            **raw,
+            "revision": 6,
+            "data_source": None,
+            "cohort": raw.get("cohort") or {},
+            "modules": raw.get("modules") or [],
+            "time_window": raw.get("time_window") or {},
+            "confirmations": raw.get("confirmations") or {},
+        }
+
+    monkeypatch.setattr(tool_module.study_contexts, "upsert_context", upsert)
+    proposal = {
+        "question": "Is aggregate lactate associated with mortality?",
+        "purpose": "Observational ICU research",
+        "cohort": {"age_min": 18, "exclude_readmissions": True},
+        "modules": ["lactate", "demographics"],
+        "outcome": "hospital mortality",
+        "time_window": {"hours": 24, "anchor": "ICU admission"},
+        "export_format": "parquet",
+        "analysis_goal": "Adjusted association",
+        "confirmations": {"guided_configuration_collected": True},
+    }
+
+    blocked = tool_module.execute_tool(
+        "easyicu_update_study_context",
+        proposal,
+        ToolExecutionContext(session=session),
+    )
+    assert blocked["code"] == "pi_action_authorization_required"
+    assert writes == []
+
+    saved = tool_module.execute_tool(
+        "easyicu_update_study_context",
+        proposal,
+        ToolExecutionContext(
+            session=session,
+            allowed_actions=frozenset({"configure"}),
+        ),
+    )
+    assert saved["code"] == "study_context_updated"
+    assert saved["details"]["rebind_required"] is True
+    assert writes[0][0]["id"] == "study-1"
+    assert writes[0][1] == {
+        "active": True,
+        "expected_revision": 5,
+        "require_revision": True,
+        "lifecycle_write": False,
+    }
+
+
+def test_preflight_delegates_to_the_existing_agent_submission_owner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    submitted_bodies = []
+
+    def submit(body):
+        submitted_bodies.append(dict(body))
+        return {
+            "job_id": "scientific-job-1",
+            "kind": "agent-run",
+            "status": "running",
+            "study_context_id": "study-1",
+            "study_context_revision": 8,
+        }
+
+    from easyicu.webserver.routes import agent as agent_route
+
+    monkeypatch.setattr(agent_route, "jobs_agent_run", submit)
+    monkeypatch.setattr(
+        tool_module,
+        "_bound_context",
+        lambda binding: {
+            "id": "study-1",
+            "revision": 7,
+            "question": "Aggregate association question",
+        },
+    )
+    context = ToolExecutionContext(
+        session=PiSessionRecord(
+            session_id="pi-test",
+            binding=AuthorityBinding(study_context_id="study-1", study_revision=7),
+        ),
+        allowed_actions=frozenset({"run"}),
+    )
+
+    result = tool_module.execute_tool(
+        "easyicu_run",
+        {"run_type": "preflight"},
+        context,
+    )
+
+    assert result["code"] == "easyicu_run_submitted"
+    assert submitted_bodies == [
+        {
+            "study_context_id": "study-1",
+            "question": "Aggregate association question",
+            "run_type": "preflight",
+            "llm_provider": "mock",
+            "external_llm_opt_in": False,
+        }
+    ]
+
+
+def test_phi_and_projection_boundaries_reject_rows_identifiers_and_paths() -> None:
+    with pytest.raises(PiCopilotError, match="row-level"):
+        reject_sensitive_message("Please inspect patient_id=12345")
+    with pytest.raises(PiCopilotError) as raw_rows:
+        ensure_safe_projection({"rows": [{"value": 1}]})
+    assert raw_rows.value.code == "pi_projection_blocked"
+    with pytest.raises(PiCopilotError) as raw_path:
+        ensure_safe_projection({"path": "/private/export"})
+    assert raw_path.value.code == "pi_projection_blocked"
+
+    projected = project_study_context(
+        {
+            "id": "study-safe",
+            "revision": 1,
+            "question": "Aggregate lactate analysis",
+            "data_source": {"database": "mimiciv", "path": "/private/export"},
+            "cohort": {"cohort_size": 140},
+        }
+    )
+    assert "/private/export" not in json.dumps(projected)
+    assert len(projected["data_source"]["path_digest"]) == 16
+
+
+def test_unknown_tool_arguments_and_missing_plan_keep_owner_codes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = ToolExecutionContext(session=PiSessionRecord(session_id="pi-test"))
+    with pytest.raises(PiCopilotError) as unknown:
+        tool_module.execute_tool("easyicu_inspect_context", {"raw": True}, context)
+    assert unknown.value.code == "pi_tool_unknown_arguments"
+
+    monkeypatch.setattr(tool_module.agent_runs, "list_run_history", lambda **kwargs: {"runs": []})
+    missing = tool_module.execute_tool(
+        "easyicu_inspect_step",
+        {"step_id": "analysis"},
+        context,
+    )
+    assert missing["code"] == "easyicu_plan_not_found"

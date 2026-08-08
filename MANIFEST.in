@@ -27,6 +27,12 @@ recursive-include src/easyicu/research_agent/runner_image *
 recursive-include src/easyicu/data *.json
 recursive-include src/easyicu/webserver/static *.html *.css *.js
 recursive-include src/easyicu/webserver/static/vendor *
+include src/easyicu/webserver/pi_copilot/node_app/package.json
+include src/easyicu/webserver/pi_copilot/node_app/package-lock.json
+include src/easyicu/webserver/pi_copilot/node_app/README.md
+include src/easyicu/webserver/pi_copilot/node_app/THIRD_PARTY_NOTICES.md
+include src/easyicu/webserver/pi_copilot/node_app/src/main.mjs
+prune src/easyicu/webserver/pi_copilot/node_app/node_modules
 
 # Exclude unwanted files
 global-exclude __pycache__

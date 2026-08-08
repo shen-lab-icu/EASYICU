@@ -36,6 +36,7 @@ from easyicu.webserver.routes.jobs import lifecycle_router as job_lifecycle_rout
 from easyicu.webserver.routes.jobs import submission_router as job_submission_router
 from easyicu.webserver.routes.local_data import router as local_data_router
 from easyicu.webserver.routes.page_guide import router as page_guide_router
+from easyicu.webserver.routes.pi_copilot import router as pi_copilot_router
 from easyicu.webserver.routes.reviews import router as reviews_router
 from easyicu.webserver.routes.study_contexts import router as study_contexts_router
 from easyicu.webserver.routes.system import router as system_router
@@ -139,6 +140,7 @@ app.include_router(demo_source_submission_router)
 app.include_router(agent_control_router)
 app.include_router(guided_router)
 app.include_router(copilot_router)
+app.include_router(pi_copilot_router)
 app.include_router(page_guide_router)
 app.include_router(ideas_router)
 app.include_router(agent_artifact_router)
