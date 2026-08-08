@@ -182,6 +182,14 @@ artefacts. A Pi session stores a binding to those values, never a replacement
 copy. Scientific actions flow through existing EasyICU entry points and retain
 their opt-in, capability, sandbox, gate, and evidence behavior.
 
+Research projects are also authoritative namespaces, not browser labels. The
+FastAPI host persists a one-to-one `project_id -> StudyContext.id` mapping. A
+new project receives its own typed StudyContext; it never inherits whichever
+context happens to be globally active. Every list/open/message/rebind/abort
+operation carries `project_id`, and the host verifies both session ownership
+and the project-to-study mapping before opening Pi or executing a tool. The
+browser and model cannot select an arbitrary StudyContext id.
+
 Tool results expose two surfaces: a concise model/user summary and bounded
 machine details with an owner and stable code. A successful chat turn never
 implies a successful scientific run.
@@ -238,14 +246,19 @@ use injected transports and never make a paid provider call.
 
 The Node child receives a strict environment allowlist containing only basic
 process locale/runtime variables and `EASYICU_PI_*` shell configuration. It
-does not inherit scientific-provider, search, cloud, or database credentials,
-and its agent CWD is a private empty workspace outside the repository. Runtime
-status also requires Node `>=22.19.0`.
+does not inherit scientific-provider, search, cloud, or database credentials.
+Its AgentSession uses a private empty logical workspace outside the repository;
+this is not an OS sandbox for the Node process. Runtime status also requires
+Node `>=22.19.0`.
 
 Raw reasoning is forced off and is neither streamed nor returned in session
-transcripts. Shell usage is separate from scientific ledgers and has a
-session-level hard stop (`EASYICU_PI_SESSION_TOKEN_BUDGET`, default 1,000,000
-tokens); a new prompt must fit its reserved output budget.
+transcripts. Shell usage is separate from scientific ledgers. Before every
+provider request, the shell checks cumulative provider-reported tokens plus a
+conservative UTF-8 input-token upper bound and reserved output against
+`EASYICU_PI_SESSION_TOKEN_BUDGET` (default 1,000,000). Hidden provider retries
+are disabled, and separate per-message/per-session provider-call ceilings
+default to 8/128. Provider prices are not inferred: `shell_usage.cost` is null
+and `pricing_available=false` until a trusted rate table exists.
 
 A wheel never installs Node dependencies during server startup. Installation
 is an explicit user action using the packaged exact lockfile:
@@ -254,8 +267,12 @@ is an explicit user action using the packaged exact lockfile:
 easyicu copilot install
 ```
 
-This creates a private versioned runtime and executes only
-`npm ci --ignore-scripts` with an installer environment allowlist.
+This creates a private content-addressed runtime and executes only
+`npm ci --ignore-scripts` with an installer environment allowlist. The runtime
+directory identity derives from a SHA-256 manifest covering the packaged
+lockfile, entrypoints, projection/budget code, notices, and exact installed Pi
+package versions. Gateway startup re-hashes those files and fails with
+`pi_runtime_integrity_mismatch` rather than running stale or modified bytes.
 
 ## Failure behavior
 

@@ -45,13 +45,13 @@ class PiSessionCreateRequest(BaseModel):
     title: str = "Pi Copilot"
     language: Literal["en", "zh"] = "en"
     thinking_level: Literal["off", "minimal", "low", "medium", "high"] = "off"
-    study_context_id: ShortText | None = None
     external_llm_opt_in: StrictBool = False
 
 
 class PiMessageRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    project_id: ShortText
     message: MessageText
     allowed_actions: list[Literal["configure", "run", "cancel"]] = Field(
         default_factory=list,
@@ -62,7 +62,14 @@ class PiMessageRequest(BaseModel):
 class PiAbortRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    project_id: ShortText
     message_job_id: ShortText | None = None
+
+
+class PiProjectRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: ShortText
 
 
 class PiProviderConfigRequest(BaseModel):
@@ -113,7 +120,6 @@ def post_pi_copilot_session(body: PiSessionCreateRequest) -> dict:
             title=body.title,
             language=body.language,
             thinking_level=body.thinking_level,
-            study_context_id=body.study_context_id,
             external_llm_opt_in=body.external_llm_opt_in,
         )
     except PiCopilotError as exc:
@@ -155,6 +161,7 @@ def post_pi_copilot_message(
     try:
         return get_pi_copilot_service().send_message(
             session_id,
+            project_id=body.project_id,
             message=body.message,
             allowed_actions=body.allowed_actions,
         )
@@ -163,9 +170,12 @@ def post_pi_copilot_message(
 
 
 @router.post("/api/copilot/pi/sessions/{session_id}/rebind")
-def post_pi_copilot_rebind(session_id: ShortText) -> dict:
+def post_pi_copilot_rebind(session_id: ShortText, body: PiProjectRequest) -> dict:
     try:
-        return get_pi_copilot_service().rebind_session(session_id)
+        return get_pi_copilot_service().rebind_session(
+            session_id,
+            project_id=body.project_id,
+        )
     except PiCopilotError as exc:
         _raise_http(exc)
 
@@ -177,6 +187,7 @@ def post_pi_copilot_abort(
     try:
         return get_pi_copilot_service().abort_session(
             session_id,
+            project_id=body.project_id,
             message_job_id=body.message_job_id,
         )
     except PiCopilotError as exc:

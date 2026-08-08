@@ -12,7 +12,7 @@ built-in filesystem or shell tools.
 - upstream license: MIT (see `THIRD_PARTY_NOTICES.md`)
 
 The lockfile is authoritative. From an installed EasyICU wheel, create the
-private versioned runtime explicitly:
+private content-addressed runtime explicitly:
 
 ```sh
 easyicu copilot install
@@ -20,6 +20,9 @@ easyicu copilot install
 
 The installer copies only packaged runtime files and runs
 `npm ci --ignore-scripts`; Web server startup never installs dependencies.
+`runtime-manifest.json` records SHA-256 digests for the packaged executable
+files and exact Pi package versions, and the host revalidates them before it
+starts Node.
 
 ## Runtime configuration
 
@@ -45,6 +48,9 @@ Optional variables:
 - `EASYICU_PI_MAX_TOKENS` (default `16384`)
 - `EASYICU_PI_SESSION_TOKEN_BUDGET` (default `1000000`; hard session stop)
 - `EASYICU_PI_CWD` (normally a private empty workspace supplied by the host)
+- `EASYICU_PI_SESSION_TOKEN_BUDGET` (provider-call checked cumulative ceiling)
+- `EASYICU_PI_MAX_PROVIDER_CALLS_PER_MESSAGE` (default `8`)
+- `EASYICU_PI_MAX_PROVIDER_CALLS_PER_SESSION` (default `128`)
 - `EASYICU_PI_SESSION_DIR` (normally supplied by the Python host)
 
 The shell provider is independent of any provider selected for an EasyICU
@@ -57,7 +63,9 @@ required.
 The shell registers fifteen EasyICU-only tools. Study setup can be collected
 and saved inside the conversation with a one-message Configure grant; the
 existing typed StudyContext store remains authoritative. Generic Pi
-filesystem, editing, network, and shell tools stay disabled.
+filesystem, editing, network, and shell tools stay disabled. The private path is
+the AgentSession's logical workspace; it is not an operating-system sandbox for
+the Node process itself.
 Raw model reasoning is forced off and is not streamed or returned in session
 transcripts.
 

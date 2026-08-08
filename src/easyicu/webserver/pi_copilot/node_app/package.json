@@ -6,7 +6,7 @@
   "description": "Pinned Pi AgentSession sidecar for the EasyICU Web Copilot",
   "license": "UNLICENSED",
   "scripts": {
-    "check": "node --check src/main.mjs",
+    "check": "node --check src/main.mjs && node --check src/shell-budget.mjs",
     "start": "node src/main.mjs"
   },
   "dependencies": {

@@ -69,7 +69,9 @@ export function normalizePiEvent(event) {
       at,
       tool_call_id: boundedText(event.toolCallId, 160),
       tool_name: boundedText(event.toolName, 160),
-      is_error: Boolean(event.isError),
+      is_error: Boolean(
+        event.isError || receipt.status === "blocked" || receipt.status === "failed",
+      ),
       ...receipt,
     };
   }
@@ -127,7 +129,9 @@ export function projectTranscriptMessage(message) {
         type: "tool_result",
         tool_call_id: boundedText(message.toolCallId, 160),
         tool_name: boundedText(message.toolName, 160),
-        is_error: Boolean(message.isError),
+        is_error: Boolean(
+          message.isError || receipt.status === "blocked" || receipt.status === "failed",
+        ),
         ...receipt,
       }],
     };

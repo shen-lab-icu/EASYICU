@@ -42,10 +42,14 @@ def test_pi_packages_and_upstream_commit_are_exactly_pinned() -> None:
     assert 'noTools: "builtin"' in entrypoint
     assert 'content: [{ type: "text", text: JSON.stringify(modelVisible) }]' in entrypoint
     assert "details: modelVisible" in entrypoint
+    assert 'isError: true' in entrypoint
+    assert 'error?.code || "pi_host_tool_rejected"' in entrypoint
     projection = (APP_DIR / "src" / "event-projection.mjs").read_text(
         encoding="utf-8"
     )
     assert "details.summary" in projection
+    assert 'receipt.status === "blocked"' in projection
+    assert 'receipt.status === "failed"' in projection
 
 
 def test_host_reauthorizes_tool_request_and_rejects_unknown_fields(
@@ -249,16 +253,61 @@ def test_prompt_timeout_aborts_and_refreshes_session(
 
 def test_sidecar_contract_hides_reasoning_and_enforces_token_budget() -> None:
     source = (APP_DIR / "src" / "main.mjs").read_text(encoding="utf-8")
+    budget = (APP_DIR / "src" / "shell-budget.mjs").read_text(encoding="utf-8")
     projection = (APP_DIR / "src" / "event-projection.mjs").read_text(
         encoding="utf-8"
     )
 
     assert "EASYICU_PI_SESSION_TOKEN_BUDGET" in source
-    assert "pi_shell_token_budget_exhausted" in source
+    assert "pi_shell_token_budget_exhausted" in budget
+    assert "record.budgetGuard.authorize(context, options)" in source
+    assert "maxRetries: 0" in source
     assert 'update.type === "thinking_delta"' not in source + projection
     assert 'item.type === "thinking"' not in source + projection
     assert "normalizePiEvent" in source
     assert "projectTranscriptMessage" in source
+
+
+def test_shell_budget_guard_blocks_each_provider_boundary() -> None:
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node is not installed")
+    module = APP_DIR / "src" / "shell-budget.mjs"
+    script = f"""
+      import {{ ShellBudgetGuard }} from {json.dumps(module.as_uri())};
+      const tokenGuard = new ShellBudgetGuard({{
+        tokenBudget: 5000,
+        maxOutputTokens: 1000,
+        maxProviderCallsPerMessage: 2,
+        maxProviderCallsPerSession: 3,
+        consumedTokens: () => 100,
+      }});
+      tokenGuard.beginMessage();
+      try {{ tokenGuard.authorize({{systemPrompt: 'x', messages: []}}, {{}}); }}
+      catch (error) {{ console.log(error.code); }}
+
+      const callGuard = new ShellBudgetGuard({{
+        tokenBudget: 50000,
+        maxOutputTokens: 1000,
+        maxProviderCallsPerMessage: 1,
+        maxProviderCallsPerSession: 3,
+        consumedTokens: () => 0,
+      }});
+      callGuard.beginMessage();
+      callGuard.authorize({{messages: []}}, {{}});
+      try {{ callGuard.authorize({{messages: []}}, {{}}); }}
+      catch (error) {{ console.log(error.code); }}
+    """
+    completed = subprocess.run(
+        [node, "--input-type=module", "-e", script],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert completed.stdout.splitlines() == [
+        "pi_shell_token_budget_exhausted",
+        "pi_shell_message_provider_call_budget_exhausted",
+    ]
 
 
 def test_sidecar_projects_safe_agent_activity_and_tool_receipts() -> None:
@@ -283,7 +332,16 @@ def test_sidecar_projects_safe_agent_activity_and_tool_receipts() -> None:
         content: [{{ type: 'text', text: 'raw result must not leak' }}],
         details: {{ status: 'ok', code: 'study_context_ready', summary: 'Persisted bounded summary', owner: 'easyicu.study_context' }},
       }});
-      console.log(JSON.stringify({{ events, transcript }}));
+      const blockedEvent = normalizePiEvent({{
+        type: 'tool_execution_end', toolCallId: 'call-2', toolName: 'easyicu_run',
+        isError: false,
+        result: {{ details: {{ status: 'blocked', code: 'pi_session_authority_stale', summary: 'Blocked', owner: 'easyicu.pi' }} }},
+      }});
+      const blockedTranscript = projectTranscriptMessage({{
+        role: 'toolResult', toolCallId: 'call-2', toolName: 'easyicu_run', isError: false,
+        details: {{ status: 'blocked', code: 'pi_session_authority_stale', summary: 'Blocked', owner: 'easyicu.pi' }},
+      }});
+      console.log(JSON.stringify({{ events, transcript, blockedEvent, blockedTranscript }}));
     """
     completed = subprocess.run(
         [node, "--input-type=module", "--eval", script],
@@ -309,6 +367,9 @@ def test_sidecar_projects_safe_agent_activity_and_tool_receipts() -> None:
     assert payload["events"][5]["summary"] == "Bounded summary"
     assert payload["transcript"]["content"][0]["type"] == "tool_result"
     assert payload["transcript"]["content"][0]["summary"] == "Persisted bounded summary"
+    assert payload["blockedEvent"]["is_error"] is True
+    assert payload["blockedEvent"]["code"] == "pi_session_authority_stale"
+    assert payload["blockedTranscript"]["content"][0]["is_error"] is True
     assert "raw result must not leak" not in completed.stdout
     assert "must-not-leak" not in completed.stdout
 

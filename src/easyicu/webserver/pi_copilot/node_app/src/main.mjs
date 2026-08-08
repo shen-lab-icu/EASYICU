@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
 
-import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
+import { InMemoryCredentialStore, lazyStream } from "@earendil-works/pi-ai";
 import {
   createAgentSession,
   createExtensionRuntime,
@@ -16,6 +16,7 @@ import {
 import { Type } from "typebox";
 
 import { normalizePiEvent, projectTranscriptMessage } from "./event-projection.mjs";
+import { ShellBudgetGuard } from "./shell-budget.mjs";
 
 const PROTOCOL_VERSION = "easyicu.pi-copilot/1";
 const MAX_LINE_BYTES = 1024 * 1024;
@@ -138,6 +139,12 @@ function modelConfig() {
       maxTokens,
       integerEnv("EASYICU_PI_SESSION_TOKEN_BUDGET", 1000000, 16384, 100000000),
     ),
+    maxProviderCallsPerMessage: integerEnv(
+      "EASYICU_PI_MAX_PROVIDER_CALLS_PER_MESSAGE", 8, 1, 64,
+    ),
+    maxProviderCallsPerSession: integerEnv(
+      "EASYICU_PI_MAX_PROVIDER_CALLS_PER_SESSION", 128, 1, 10000,
+    ),
   };
 }
 
@@ -212,7 +219,25 @@ function hostTool(sessionId, definition) {
   return defineTool({
     ...definition,
     execute: async (_toolCallId, params) => {
-      const result = await requestHostTool(sessionId, definition.name, params);
+      let result;
+      try {
+        result = await requestHostTool(sessionId, definition.name, params);
+      } catch (error) {
+        const code = boundedText(error?.code || "pi_host_tool_rejected", 160);
+        const modelVisible = {
+          status: "blocked",
+          code,
+          summary: `EasyICU blocked this tool request (${code}).`,
+          owner: "easyicu.webserver.pi_copilot",
+          details: {},
+          authority: {},
+        };
+        return {
+          content: [{ type: "text", text: JSON.stringify(modelVisible) }],
+          details: modelVisible,
+          isError: true,
+        };
+      }
       const code = boundedText(result?.code || "pi_tool_result", 160);
       const summary = boundedText(result?.summary || code, 2000);
       const modelVisible = {
@@ -316,9 +341,11 @@ function sessionState(record) {
     transcript: session.messages.slice(-100).map(projectTranscriptMessage).filter(Boolean),
     shell_usage: {
       tokens: stats.tokens,
-      cost: stats.cost,
+      cost: null,
+      pricing_available: false,
       token_budget: record.sessionTokenBudget,
       tokens_remaining: Math.max(0, record.sessionTokenBudget - stats.tokens.total),
+      ...record.budgetGuard.state(),
     },
   };
 }
@@ -337,7 +364,9 @@ async function createSession(params) {
   const thinkingLevel = "off";
   const settingsManager = SettingsManager.inMemory({
     compaction: { enabled: true },
-    retry: { enabled: true, maxRetries: 2 },
+    // Hidden provider retries bypass host call accounting. EasyICU therefore
+    // disables them and lets every outbound call cross ShellBudgetGuard once.
+    retry: { enabled: false, maxRetries: 0 },
   });
   const { session } = await createAgentSession({
     cwd: CWD,
@@ -365,6 +394,25 @@ async function createSession(params) {
     sessionTokenBudget: config.sessionTokenBudget,
     maxTokens: config.maxTokens,
   };
+  const originalStreamFunction = session.agent.streamFunction;
+  record.budgetGuard = new ShellBudgetGuard({
+    tokenBudget: config.sessionTokenBudget,
+    maxOutputTokens: config.maxTokens,
+    maxProviderCallsPerMessage: config.maxProviderCallsPerMessage,
+    maxProviderCallsPerSession: config.maxProviderCallsPerSession,
+    consumedTokens: () => session.getSessionStats().tokens.total,
+    initialProviderCalls: session.getSessionStats().assistantMessages,
+  });
+  session.agent.streamFunction = (model, context, options = {}) => lazyStream(
+    model,
+    async () => {
+      record.budgetGuard.authorize(context, options);
+      return await originalStreamFunction(model, context, {
+        ...options,
+        maxRetries: 0,
+      });
+    },
+  );
   sessions.set(externalId, record);
   return sessionState(record);
 }
@@ -379,25 +427,13 @@ async function promptSession(requestId, params) {
   if (activeRequestBySession.has(sessionId)) {
     throw Object.assign(new Error("Pi session already has an active prompt"), { code: "pi_session_busy" });
   }
-  const stats = record.session.getSessionStats();
-  if (stats.tokens.total + record.maxTokens > record.sessionTokenBudget) {
-    throw Object.assign(
-      new Error("Pi shell session token budget is exhausted"),
-      {
-        code: "pi_shell_token_budget_exhausted",
-        details: {
-          consumed_tokens: stats.tokens.total,
-          reserved_output_tokens: record.maxTokens,
-          token_budget: record.sessionTokenBudget,
-        },
-      },
-    );
-  }
+  record.budgetGuard.beginMessage();
   activeRequestBySession.set(sessionId, requestId);
   try {
     await record.session.prompt(message);
     return sessionState(record);
   } finally {
+    record.budgetGuard.endMessage();
     activeRequestBySession.delete(sessionId);
   }
 }

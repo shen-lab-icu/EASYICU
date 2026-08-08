@@ -18,7 +18,7 @@ from .contracts import (
     PiCopilotError,
     ToolExecutionContext,
 )
-from .install import preferred_app_dir
+from .install import packaged_app_dir, packaged_runtime_is_complete, preferred_app_dir, runtime_is_installed
 from .provider_config import PiProviderConfig, PiProviderConfigStore
 from .tools import execute_tool
 
@@ -43,6 +43,8 @@ _CHILD_ENV_KEYS = frozenset(
         "EASYICU_PI_CONTEXT_WINDOW",
         "EASYICU_PI_MAX_TOKENS",
         "EASYICU_PI_SESSION_TOKEN_BUDGET",
+        "EASYICU_PI_MAX_PROVIDER_CALLS_PER_MESSAGE",
+        "EASYICU_PI_MAX_PROVIDER_CALLS_PER_SESSION",
     }
 )
 
@@ -165,6 +167,12 @@ class PiGatewayClient:
             / "pi-coding-agent"
             / "package.json"
         )
+        packaged = self.app_dir == packaged_app_dir().resolve()
+        runtime_integrity_verified = (
+            packaged_runtime_is_complete(self.app_dir)
+            if packaged
+            else runtime_is_installed(self.app_dir)
+        )
         return {
             "node_available": bool(node),
             "node_version": (
@@ -178,6 +186,7 @@ class PiGatewayClient:
             "entrypoint_available": self.entrypoint.is_file(),
             "dependency_installed": dependency.is_file(),
             "lockfile_present": (self.app_dir / "package-lock.json").is_file(),
+            "runtime_integrity_verified": runtime_integrity_verified,
             "api_key_configured": bool(
                 str(self.environ.get("EASYICU_PI_API_KEY") or "").strip()
             ),
@@ -224,10 +233,17 @@ class PiGatewayClient:
                     "entrypoint_available",
                     "dependency_installed",
                     "lockfile_present",
+                    "runtime_integrity_verified",
                 )
                 if not status[key]
             ]
             if missing:
+                if missing == ["runtime_integrity_verified"]:
+                    raise PiCopilotError(
+                        "pi_runtime_integrity_mismatch",
+                        "The installed Pi runtime does not match the packaged content manifest.",
+                        status_code=503,
+                    )
                 raise PiCopilotError(
                     "pi_gateway_not_installed",
                     "The pinned Pi Copilot sidecar is not installed.",
