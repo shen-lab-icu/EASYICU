@@ -28,6 +28,8 @@ try:
 except Exception:  # pragma: no cover
     np = None  # type: ignore[assignment]
 
+from scipy.stats import chi2 as scipy_chi2
+
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -268,34 +270,7 @@ def _fit_interaction_p(
         chi2 = float(int_coefs @ np.linalg.solve(cov, int_coefs))
     except np.linalg.LinAlgError:
         return None
-    # chi2 with df = k_levels; survival function via math.gammainc.
-    # math provides lower regularised incomplete gamma only indirectly;
-    # compute upper tail via series for small df (k <= 5).
-    df = k_levels
-    p_val = _upper_chi2(df, chi2)
-    return p_val
-
-
-def _upper_chi2(df: int, x: float) -> float:
-    """Upper-tail CDF of chi2(df) evaluated at x."""
-    # Use the series expansion of the regularised incomplete gamma
-    # function for small df. For df <= 10 and x <= 50 this is plenty
-    # accurate for p-value reporting.
-    if x <= 0:
-        return 1.0
-    # Regularised lower incomplete gamma P(df/2, x/2).
-    a = df / 2.0
-    z = x / 2.0
-    # Series form from Numerical Recipes; capped at 200 terms.
-    term = 1.0 / a
-    total = term
-    for n in range(1, 200):
-        term *= z / (a + n)
-        total += term
-        if abs(term) < 1e-12 * abs(total):
-            break
-    lower = total * math.exp(-z + a * math.log(z) - math.lgamma(a))
-    return max(0.0, 1.0 - lower)
+    return float(scipy_chi2.sf(chi2, df=k_levels))
 
 
 # ---------------------------------------------------------------------------

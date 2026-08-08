@@ -81,6 +81,28 @@ def test_tipping_point_detects_sign_flip(ra):
 # ---------------------------------------------------------------------------
 
 
+def test_interaction_wald_tail_uses_scipy_chi_square(monkeypatch) -> None:
+    import numpy as np
+
+    from easyicu.research_agent.methods import fairness
+
+    calls = []
+    monkeypatch.setattr(
+        fairness.scipy_chi2,
+        "sf",
+        lambda statistic, *, df: calls.append((statistic, df)) or 0.123,
+    )
+    x = np.linspace(-2.0, 2.0, 120)
+    subgroup = np.asarray(["a", "b"] * 60)
+    outcome = np.asarray([(index % 5) < 2 for index in range(120)], dtype=int)
+
+    result = fairness._fit_interaction_p(x, outcome, subgroup)
+
+    assert result == pytest.approx(0.123)
+    assert len(calls) == 1
+    assert calls[0][1] == 1
+
+
 def test_subgroup_analysis_runs_over_age_and_sex(ra, synthetic_cohort):
     # Binary outcome 'death', predictor 'sofa2', subgroups age + sex.
     result = ra.run_subgroup_analysis(
