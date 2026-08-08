@@ -325,13 +325,24 @@ def annotate_with_attempt_history(
 
     if not attempts:
         return
-    add_note = getattr(exc, "add_note", None)
-    if not callable(add_note):  # pragma: no cover - Python < 3.11
-        return
-    add_note(
+    note = (
         "structured-retry history before this failure: "
         + summarise_attempt_history(attempts, role=role)
     )
+    add_note = getattr(exc, "add_note", None)
+    if callable(add_note):
+        add_note(note)
+        return
+
+    # ``BaseException.add_note`` is available only from Python 3.11, while
+    # EasyICU supports 3.10.  Keep the same public ``__notes__`` contract on
+    # 3.10 so callers and post-mortem tooling do not silently lose the retry
+    # history on the oldest supported interpreter.
+    notes = getattr(exc, "__notes__", None)
+    if isinstance(notes, list):
+        notes.append(note)
+    else:
+        setattr(exc, "__notes__", [note])
 
 
 class StructuredResponseFailure(RuntimeError):

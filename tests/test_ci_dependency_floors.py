@@ -168,6 +168,18 @@ def test_agent_ci_installs_the_mcp_transport_test_runtime() -> None:
     )
 
 
+def test_agent_ci_installs_the_provider_boundary_test_runtime() -> None:
+    """Provider ingress tests construct the real FastAPI application."""
+
+    declared = _declared_floors()
+    workflow = _workflow_floors()
+
+    assert workflow.get("fastapi") == declared["fastapi"], (
+        "research_agent CI runs provider-boundary TestClient tests under "
+        "--no-deps, so its explicit list must install the FastAPI floor"
+    )
+
+
 def test_optional_sksurv_adapter_does_not_break_python_310_resolution() -> None:
     """scikit-survival 0.28 requires Python 3.11, while core supports 3.10."""
 

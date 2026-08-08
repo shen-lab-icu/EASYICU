@@ -68,6 +68,7 @@ jobs:
             "packaging>=23.0" \
             "openai>=1.0" \
             "mcp>=1.28,<2" \
+            "fastapi>=0.115" \
             "tomli>=2.0; python_version < '3.11'"
           # Editable install of the easyicu package without extras so
           # import easyicu.research_agent succeeds.

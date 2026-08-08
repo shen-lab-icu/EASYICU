@@ -226,6 +226,24 @@ def test_a_clean_first_call_is_not_described_as_a_failure() -> None:
     assert "parsed cleanly" in joined
 
 
+def test_python_310_compatibility_keeps_retry_notes_without_add_note() -> None:
+    """The supported 3.10 runtime must expose the same audit contract."""
+
+    class _LegacyRuntimeError(RuntimeError):
+        add_note = None
+
+    exc = _LegacyRuntimeError("boom")
+    annotate_with_attempt_history(
+        exc,
+        [_failed(0, "ValueError", "bad structured response")],
+        role="planner",
+    )
+
+    joined = " ".join(getattr(exc, "__notes__", []))
+    assert "1 planner attempt failed" in joined
+    assert "bad structured response" in joined
+
+
 def test_no_history_adds_no_note() -> None:
     """Nothing to say is said by saying nothing, not by an empty note."""
 
