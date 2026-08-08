@@ -225,10 +225,17 @@ def _refresh_one_database(
     candidate_root: Path,
     modules: Sequence[str],
     batch_size: int | None,
+    reuse_completed_export: bool,
 ) -> dict[str, Any]:
     staging_root = candidate_root / ".module_refresh_staging" / database
     destination_database_root = candidate_root / "exports" / database
-    if _module_is_canonical_refresh(destination_database_root, modules):
+    # A newly cloned candidate deliberately starts with the source package's
+    # canonical files.  Their schema alone is not evidence that this checkout
+    # has re-read the selected raw module.  Reuse is permissible only on an
+    # explicit ``--resume`` invocation after an interrupted refresh.
+    if reuse_completed_export and _module_is_canonical_refresh(
+        destination_database_root, modules
+    ):
         return {
             "database": database,
             "data_path": data_path,
@@ -350,6 +357,8 @@ def refresh_candidate(
         (destination / "run_metadata.json").unlink(missing_ok=True)
         (destination / "module_extraction_timing.csv").unlink(missing_ok=True)
         (destination / "republication_provenance.json").unlink(missing_ok=True)
+        (destination / "module_refresh_provenance.json").unlink(missing_ok=True)
+        shutil.rmtree(destination / ".module_refresh_staging", ignore_errors=True)
         shutil.rmtree(destination / "publication_qc", ignore_errors=True)
 
     refreshed: dict[str, dict[str, Any]] = {}
@@ -361,6 +370,7 @@ def refresh_candidate(
                 candidate_root=destination,
                 modules=selected_modules,
                 batch_size=batch_size,
+                reuse_completed_export=resume,
             )
 
         native_manifests: dict[str, dict[str, Any]] = {}

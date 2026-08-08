@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 
 import pytest
@@ -31,3 +32,50 @@ def test_selected_module_refresh_rejects_duplicate_data_path_overrides() -> None
         refresher._parse_data_path_overrides(
             ["miiv=/tmp/one", "miiv=/tmp/two"]
         )
+
+
+def test_new_candidate_never_reuses_source_module_just_because_schema_matches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only an explicit resume may reuse a completed selected-module export."""
+
+    refresher = _load_refresher()
+    candidate = tmp_path / "candidate"
+    destination = candidate / "exports" / "hirid"
+    destination.mkdir(parents=True)
+    calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(refresher, "_module_is_canonical_refresh", lambda *_: True)
+
+    def fake_extract_database(*args, **kwargs):
+        calls.append(kwargs)
+        staging = Path(kwargs["output_dir"])
+        staging.mkdir(parents=True)
+        (staging / "renal.parquet").write_bytes(b"parquet-placeholder")
+        (staging / "renal.manifest.json").write_text(json.dumps({}))
+        return {
+            "num_patients": 1,
+            "batch_size": 1,
+            "total_elapsed": 1.0,
+            "modules": {
+                "renal": {
+                    "errors": [],
+                    "elapsed": 1.0,
+                    "peak_rss_mb": 1.0,
+                    "peak_working_set_mb": 1.0,
+                }
+            },
+        }
+
+    monkeypatch.setattr(refresher, "extract_database", fake_extract_database)
+
+    refresher._refresh_one_database(
+        database="hirid",
+        data_path=str(tmp_path),
+        candidate_root=candidate,
+        modules=("renal",),
+        batch_size=None,
+        reuse_completed_export=False,
+    )
+
+    assert len(calls) == 1
