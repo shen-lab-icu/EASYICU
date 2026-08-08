@@ -148,7 +148,9 @@ def test_web_catalog_groups_are_unique_and_complete() -> None:
     # 2026-07-17: +cvp into the 'vitals' group (was only in concept-dict.json /
     # pulled by a separate cvp_extraction; central venous pressure is a measured
     # vital and now extracts with the vitals module). 280 -> 281.
-    assert len(CONCEPT_DICTIONARY) == 281
+    # 2026-08-08: +7 KDIGO ascertainment-receipt outputs so stage zero can be
+    # distinguished from incomplete observation. 281 -> 288.
+    assert len(CONCEPT_DICTIONARY) == 288
     assert set(CONCEPT_GROUP_NAMES) >= set(CONCEPT_GROUPS_INTERNAL)
     assert len(grouped) == len(set(grouped))
     assert set(grouped) == set(CONCEPT_DICTIONARY)
@@ -246,6 +248,20 @@ def test_composite_output_sources_are_valid() -> None:
     for output_concept, source_concept in COMPOSITE_CONCEPT_OUTPUT_SOURCES.items():
         assert output_concept in CONCEPT_DICTIONARY
         assert source_concept in dict_concepts or source_concept in special_sources
+
+    assert {
+        "aki_assessable",
+        "aki_ascertainment",
+        "aki_assessment_reason",
+        "observation_window_coverage",
+        "creatinine_ascertainment",
+        "urine_ascertainment",
+        "rrt_ascertainment",
+    } <= {
+        output
+        for output, source in COMPOSITE_CONCEPT_OUTPUT_SOURCES.items()
+        if source == "kdigo_aki"
+    }
 
 
 def test_dictionary_source_tables_and_columns_exist() -> None:

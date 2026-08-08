@@ -991,7 +991,7 @@ def _feature_definition_payload(
     callback_source_ref = _shareable_path_reference(
         callback_source, relative_to=project_path
     )
-    project_ref = _shareable_path_reference(project_path)
+    project_ref = _shareable_project_reference(project_path)
     file_by_module: Dict[str, List[str]] = {}
     for item in files:
         module = str(item.get("module") or "")
@@ -1100,6 +1100,15 @@ def _shareable_path_reference(
         ),
         "absolute_path_omitted": bool(raw and path.is_absolute()),
     }
+
+
+def _shareable_project_reference(project_path: Path) -> Dict[str, Any]:
+    """Return stable public provenance for an EasyICU source checkout."""
+    ref = _shareable_path_reference(project_path)
+    # Checkouts and worktrees may have arbitrary directory names. Do not leak
+    # that local name into an otherwise shareable manifest.
+    ref["hint"] = "EASYICU"
+    return ref
 
 
 def _format_shareable_path_reference(ref: Any) -> str:
