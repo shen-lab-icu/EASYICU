@@ -565,6 +565,110 @@ def test_existing_guided_project_migrates_exact_study_coordinates(
     assert captured["data_source"]["path"] == str(exact_export_path)
 
 
+def test_guided_project_rejects_overlong_exact_path_without_persisting(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "guided.json"
+    monkeypatch.setattr(guided_sessions, "_CONFIG_PATH", config_path)
+    monkeypatch.setattr(guided_sessions, "_CONFIG_DIR", tmp_path)
+    config_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "drafts": [],
+                "sessions": [
+                    {
+                        "id": "guided-overlong-write",
+                        "memory_scope": "project_folder",
+                        "slots": {},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    before = config_path.read_bytes()
+
+    result = guided_sessions.execute_guided_action(
+        {
+            "action": "update_slots",
+            "session_id": "guided-overlong-write",
+            "slots": {"active_export": {"path": "/" + "x" * 4096}},
+        }
+    )
+
+    assert result["ok"] is False
+    assert result["blocked"] is True
+    assert result["error"] == "guided_project_path_too_long"
+    assert result["details"] == {
+        "field": "active_export.path",
+        "max_length": 4096,
+    }
+    assert result["persisted"] is False
+    assert config_path.read_bytes() == before
+
+
+def test_overlong_guided_path_cannot_create_study_context_or_authority_binding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "guided.json"
+    monkeypatch.setattr(guided_sessions, "_CONFIG_PATH", config_path)
+    monkeypatch.setattr(guided_sessions, "_CONFIG_DIR", tmp_path)
+    config_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "drafts": [],
+                "sessions": [
+                    {
+                        "id": "guided-overlong-migration",
+                        "draft_id": "project-overlong-migration",
+                        "project_title": "Overlong path project",
+                        "slots": {
+                            "question_hint": "Does lactate predict mortality?",
+                            "outcome_hint": "Hospital mortality",
+                            "time_window_hint": "First 24 hours",
+                            "extraction": {
+                                "cohort": "Adult first ICU stay",
+                                "modules": ["lactate"],
+                            },
+                            "active_export": {"path": "/" + "x" * 4096},
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    upserts: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        service_module.study_contexts,
+        "upsert_context",
+        lambda raw, **kwargs: upserts.append(raw),
+    )
+    service = PiCopilotService(
+        store_path=tmp_path / "sessions.json",
+        gateway=FakeGateway(),
+    )
+
+    with pytest.raises(PiCopilotError) as blocked:
+        service.initialize_project(
+            project_id="project-overlong-migration",
+            title="Overlong path project",
+        )
+
+    assert blocked.value.code == "guided_project_path_too_long"
+    assert blocked.value.status_code == 409
+    assert blocked.value.details == {
+        "field": "data_source.path",
+        "max_length": 4096,
+    }
+    assert upserts == []
+    assert not service.project_store.path.exists()
+
+
 @pytest.mark.parametrize(
     ("window_slots", "expected"),
     [

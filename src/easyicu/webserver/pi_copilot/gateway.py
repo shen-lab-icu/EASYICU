@@ -18,7 +18,12 @@ from .contracts import (
     PiCopilotError,
     ToolExecutionContext,
 )
-from .install import packaged_app_dir, packaged_runtime_is_complete, preferred_app_dir, runtime_is_installed
+from .install import (
+    packaged_app_dir,
+    packaged_runtime_is_complete,
+    preferred_app_dir,
+    runtime_is_installed,
+)
 from .provider_config import PiProviderConfig, PiProviderConfigStore
 from .tools import execute_tool
 
@@ -115,6 +120,10 @@ class PiGatewayClient:
         self._stderr_tail: Deque[str] = collections.deque(maxlen=20)
         self._reader_thread: Optional[threading.Thread] = None
         self._stderr_thread: Optional[threading.Thread] = None
+        # A private installed runtime contains thousands of executable files.
+        # Verify it once per gateway/sidecar lifetime, then invalidate the
+        # receipt whenever that sidecar is closed or exits.
+        self._installed_runtime_integrity: Optional[bool] = None
 
     def _node_binary(self) -> Optional[str]:
         direct = shutil.which("node", path=self.environ.get("PATH"))
@@ -153,6 +162,14 @@ class PiGatewayClient:
             "EASYICU_PI_CWD": str(self.cwd),
         }
 
+    def _runtime_integrity_status(self, *, packaged: bool) -> bool:
+        if packaged:
+            return packaged_runtime_is_complete(self.app_dir)
+        with self._state_lock:
+            if self._installed_runtime_integrity is None:
+                self._installed_runtime_integrity = runtime_is_installed(self.app_dir)
+            return self._installed_runtime_integrity
+
     def installation_status(self) -> Dict[str, Any]:
         node = self._node_binary()
         node_version = self._node_version(node)
@@ -168,11 +185,7 @@ class PiGatewayClient:
             / "package.json"
         )
         packaged = self.app_dir == packaged_app_dir().resolve()
-        runtime_integrity_verified = (
-            packaged_runtime_is_complete(self.app_dir)
-            if packaged
-            else runtime_is_installed(self.app_dir)
-        )
+        runtime_integrity_verified = self._runtime_integrity_status(packaged=packaged)
         return {
             "node_available": bool(node),
             "node_version": (
@@ -406,6 +419,9 @@ class PiGatewayClient:
                 self._handle_payload(payload)
         finally:
             return_code = process.poll()
+            with self._state_lock:
+                if self._process is process:
+                    self._installed_runtime_integrity = None
             self._fail_all(
                 PiCopilotError(
                     "pi_gateway_exited",
@@ -630,6 +646,7 @@ class PiGatewayClient:
         with self._state_lock:
             process = self._process
             self._process = None
+            self._installed_runtime_integrity = None
         if process is None:
             return
         try:
