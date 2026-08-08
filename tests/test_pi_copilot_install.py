@@ -91,6 +91,17 @@ def test_installer_uses_lockfile_without_scripts_or_ambient_secrets(
             "export const pinned = true;\n",
             encoding="utf-8",
         )
+        typebox = Path(cwd) / "node_modules" / "typebox"
+        typebox.mkdir(parents=True)
+        (typebox / "package.json").write_text(
+            json.dumps({"name": "typebox", "version": "1.3.7"}),
+            encoding="utf-8",
+        )
+        (typebox / "build").mkdir()
+        (typebox / "build" / "index.mjs").write_text(
+            "export const Type = {};\n",
+            encoding="utf-8",
+        )
         return Result()
 
     monkeypatch.setattr(
@@ -123,8 +134,15 @@ def test_installer_uses_lockfile_without_scripts_or_ambient_secrets(
     assert (
         "node_modules/@earendil-works/pi-coding-agent/dist/index.js" in executable_files
     )
+    assert "node_modules/typebox/package.json" in executable_files
+    assert "node_modules/typebox/build/index.mjs" in executable_files
     command, cwd, child_env, check = calls[0]
-    assert command == ["/usr/local/bin/npm", "ci", "--ignore-scripts"]
+    assert command == [
+        "/usr/local/bin/npm",
+        "ci",
+        "--ignore-scripts",
+        "--omit=dev",
+    ]
     assert cwd.parent == target.parent
     assert check is True
     assert "OPENAI_API_KEY" not in child_env
@@ -152,6 +170,16 @@ def test_installer_uses_lockfile_without_scripts_or_ambient_secrets(
         / "index.js"
     ).write_text(
         "export const pinned = true;\n",
+        encoding="utf-8",
+    )
+    (target / "node_modules" / "typebox" / "build" / "index.mjs").write_text(
+        "export const Type = { tampered: true };\n",
+        encoding="utf-8",
+    )
+    assert runtime_is_installed(target, source=source) is False
+
+    (target / "node_modules" / "typebox" / "build" / "index.mjs").write_text(
+        "export const Type = {};\n",
         encoding="utf-8",
     )
     (target / "src" / "main.mjs").write_text("tampered", encoding="utf-8")
