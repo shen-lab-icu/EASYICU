@@ -7,7 +7,7 @@ import os
 import tempfile
 import threading
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -17,6 +17,21 @@ _SCHEMA_VERSION = "easyicu.pi-project-authority/1"
 _MAX_PROJECTS = 200
 
 
+class ProjectStudyContextMigrationReceipt(BaseModel):
+    """Stable receipt for the Host-owned project initialization boundary."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["easyicu.project-studycontext-migration/1"] = (
+        "easyicu.project-studycontext-migration/1"
+    )
+    status: Literal["migrated", "initialized"]
+    source_schema: str = Field(min_length=1, max_length=160)
+    source_digest: str = Field(min_length=64, max_length=64)
+    migrated_fields: list[str] = Field(default_factory=list, max_length=16)
+    created_at: str = Field(default_factory=utc_now)
+
+
 class ProjectAuthorityBinding(BaseModel):
     """One immutable scientific namespace owned by one research project."""
 
@@ -24,6 +39,7 @@ class ProjectAuthorityBinding(BaseModel):
 
     project_id: str = Field(min_length=1, max_length=160)
     study_context_id: str = Field(min_length=1, max_length=160)
+    migration_receipt: Optional[ProjectStudyContextMigrationReceipt] = None
     created_at: str = Field(default_factory=utc_now)
 
 
@@ -38,7 +54,9 @@ class ProjectAuthorityStore:
     def _clean(value: str, *, code: str) -> str:
         clean = str(value or "").strip()
         if not clean or len(clean) > 160:
-            raise PiCopilotError(code, "Project authority identifiers must be 1-160 characters.")
+            raise PiCopilotError(
+                code, "Project authority identifiers must be 1-160 characters."
+            )
         return clean
 
     def _read(self) -> list[ProjectAuthorityBinding]:
@@ -119,7 +137,21 @@ class ProjectAuthorityStore:
             )
         return binding.study_context_id if binding else None
 
-    def bind(self, project_id: str, study_context_id: str) -> str:
+    def binding(self, project_id: str) -> Optional[ProjectAuthorityBinding]:
+        clean_project = self._clean(project_id, code="pi_project_binding_required")
+        with self._lock:
+            return next(
+                (row for row in self._read() if row.project_id == clean_project),
+                None,
+            )
+
+    def bind(
+        self,
+        project_id: str,
+        study_context_id: str,
+        *,
+        migration_receipt: Optional[ProjectStudyContextMigrationReceipt] = None,
+    ) -> str:
         clean_project = self._clean(project_id, code="pi_project_binding_required")
         clean_study = self._clean(
             study_context_id,
@@ -162,6 +194,7 @@ class ProjectAuthorityStore:
                 ProjectAuthorityBinding(
                     project_id=clean_project,
                     study_context_id=clean_study,
+                    migration_receipt=migration_receipt,
                 ),
             )
             self._write(rows)
@@ -171,13 +204,12 @@ class ProjectAuthorityStore:
         clean_project = self._clean(project_id, code="pi_project_binding_required")
         mapped = self.resolve(clean_project)
         if mapped is None:
-            if not study_context_id:
-                raise PiCopilotError(
-                    "pi_project_study_context_binding_required",
-                    "The research project has no authoritative StudyContext binding.",
-                    status_code=409,
-                )
-            return self.bind(clean_project, study_context_id)
+            raise PiCopilotError(
+                "pi_project_initialization_required",
+                "The research project has no authoritative StudyContext binding.",
+                status_code=409,
+                details={"project_id": clean_project},
+            )
         if mapped != str(study_context_id or "").strip():
             raise PiCopilotError(
                 "pi_session_project_authority_mismatch",
@@ -188,4 +220,8 @@ class ProjectAuthorityStore:
         return mapped
 
 
-__all__ = ["ProjectAuthorityBinding", "ProjectAuthorityStore"]
+__all__ = [
+    "ProjectAuthorityBinding",
+    "ProjectAuthorityStore",
+    "ProjectStudyContextMigrationReceipt",
+]

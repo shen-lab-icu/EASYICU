@@ -19,14 +19,7 @@ from easyicu.webserver.pi_copilot.gateway import PiGatewayClient, _PendingReques
 from easyicu.webserver.pi_copilot.provider_config import PiProviderConfig
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-APP_DIR = (
-    REPO_ROOT
-    / "src"
-    / "easyicu"
-    / "webserver"
-    / "pi_copilot"
-    / "node_app"
-)
+APP_DIR = REPO_ROOT / "src" / "easyicu" / "webserver" / "pi_copilot" / "node_app"
 
 
 def test_pi_packages_and_upstream_commit_are_exactly_pinned() -> None:
@@ -36,20 +29,114 @@ def test_pi_packages_and_upstream_commit_are_exactly_pinned() -> None:
     assert package["dependencies"]["@earendil-works/pi-coding-agent"] == "0.84.1"
     assert package["dependencies"]["@earendil-works/pi-ai"] == "0.84.1"
     assert package["overrides"]["@earendil-works/pi-agent-core"] == "0.84.1"
-    assert lock["packages"][""]["dependencies"]["@earendil-works/pi-coding-agent"] == "0.84.1"
+    assert (
+        lock["packages"][""]["dependencies"]["@earendil-works/pi-coding-agent"]
+        == "0.84.1"
+    )
     entrypoint = (APP_DIR / "src" / "main.mjs").read_text(encoding="utf-8")
     assert "9dd90a49711d088b86fdd9b4aea575913a8328a8" in entrypoint
     assert 'noTools: "builtin"' in entrypoint
-    assert 'content: [{ type: "text", text: JSON.stringify(modelVisible) }]' in entrypoint
-    assert "details: modelVisible" in entrypoint
-    assert 'isError: true' in entrypoint
-    assert 'error?.code || "pi_host_tool_rejected"' in entrypoint
-    projection = (APP_DIR / "src" / "event-projection.mjs").read_text(
-        encoding="utf-8"
+    assert (
+        'content: [{ type: "text", text: JSON.stringify(modelVisible) }]' in entrypoint
     )
+    assert "details: modelVisible" in entrypoint
+    assert "isError: true" in entrypoint
+    assert 'error?.code || "pi_host_tool_rejected"' in entrypoint
+    projection = (APP_DIR / "src" / "event-projection.mjs").read_text(encoding="utf-8")
     assert "details.summary" in projection
     assert 'receipt.status === "blocked"' in projection
     assert 'receipt.status === "failed"' in projection
+    for name in (
+        "easyicu_update_study_context",
+        "easyicu_run",
+        "easyicu_cancel",
+        "easyicu_request_replan",
+    ):
+        declaration = entrypoint.split(f'name: "{name}"', 1)[1].split("}),", 1)[0]
+        assert 'executionMode: "sequential"' in declaration
+
+
+def test_upstream_multi_tool_batch_serializes_authority_mutations() -> None:
+    node = shutil.which("node")
+    if not node or not (APP_DIR / "node_modules").is_dir():
+        pytest.skip("Pinned Pi Node runtime is unavailable")
+    script = r"""
+import { runAgentLoop } from "./node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-agent-core/dist/agent-loop.js";
+import { Type } from "typebox";
+
+const outcomes = [];
+let authorityRevision = 1;
+const result = (code) => ({ content: [{ type: "text", text: code }], details: { code } });
+const mutate = (name) => ({
+  name,
+  label: name,
+  description: name,
+  parameters: Type.Object({}, { additionalProperties: false }),
+  executionMode: "sequential",
+  execute: async () => {
+    const observed = authorityRevision;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    if (observed !== authorityRevision) {
+      outcomes.push("pi_session_authority_stale");
+      throw new Error("pi_session_authority_stale");
+    }
+    if (name === "easyicu_run" && authorityRevision !== 1) {
+      outcomes.push("pi_session_authority_stale");
+      throw new Error("pi_session_authority_stale");
+    }
+    authorityRevision += 1;
+    outcomes.push(name + ":ok");
+    return result(name + "_ok");
+  },
+});
+const tools = [mutate("easyicu_update_study_context"), mutate("easyicu_run")];
+const user = { role: "user", content: "configure then run", timestamp: Date.now() };
+const assistant = (content, stopReason) => ({
+  role: "assistant", content, stopReason, timestamp: Date.now(),
+  api: "openai-completions", provider: "test", model: "test",
+  usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+});
+const responses = [
+  assistant([
+    { type: "toolCall", id: "configure-1", name: "easyicu_update_study_context", arguments: {} },
+    { type: "toolCall", id: "run-1", name: "easyicu_run", arguments: {} },
+  ], "toolUse"),
+  assistant([{ type: "text", text: "done" }], "stop"),
+];
+const streamFn = async () => {
+  const message = responses.shift();
+  return {
+    async *[Symbol.asyncIterator]() {
+      yield { type: "start", partial: message };
+      yield { type: "done", reason: message.stopReason, message };
+    },
+    result: async () => message,
+  };
+};
+await runAgentLoop(
+  [user],
+  { systemPrompt: "test", messages: [], tools },
+  {
+    model: { api: "openai-completions", provider: "test", id: "test" },
+    convertToLlm: async (messages) => messages,
+    toolExecution: "parallel",
+  },
+  async () => {},
+  undefined,
+  streamFn,
+);
+if (outcomes.filter((item) => item.endsWith(":ok")).length !== 1) throw new Error(JSON.stringify(outcomes));
+if (outcomes.filter((item) => item === "pi_session_authority_stale").length !== 1) throw new Error(JSON.stringify(outcomes));
+"""
+    completed = subprocess.run(
+        [node, "--input-type=module", "--eval", script],
+        cwd=APP_DIR,
+        text=True,
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
 def test_host_reauthorizes_tool_request_and_rejects_unknown_fields(
@@ -60,9 +147,18 @@ def test_host_reauthorizes_tool_request_and_rejects_unknown_fields(
 
     def execute(name, arguments, context):
         calls.append((name, arguments, context))
-        return {"status": "ok", "code": "test_ok", "summary": "ok", "owner": "test", "details": {}, "authority": {}}
+        return {
+            "status": "ok",
+            "code": "test_ok",
+            "summary": "ok",
+            "owner": "test",
+            "details": {},
+            "authority": {},
+        }
 
-    gateway = PiGatewayClient(app_dir=APP_DIR, session_dir=tmp_path, tool_executor=execute)
+    gateway = PiGatewayClient(
+        app_dir=APP_DIR, session_dir=tmp_path, tool_executor=execute
+    )
     context = ToolExecutionContext(session=PiSessionRecord(session_id="pi-test"))
     gateway._pending["parent"] = _PendingRequest(tool_context=context)
     writes = []
@@ -254,9 +350,7 @@ def test_prompt_timeout_aborts_and_refreshes_session(
 def test_sidecar_contract_hides_reasoning_and_enforces_token_budget() -> None:
     source = (APP_DIR / "src" / "main.mjs").read_text(encoding="utf-8")
     budget = (APP_DIR / "src" / "shell-budget.mjs").read_text(encoding="utf-8")
-    projection = (APP_DIR / "src" / "event-projection.mjs").read_text(
-        encoding="utf-8"
-    )
+    projection = (APP_DIR / "src" / "event-projection.mjs").read_text(encoding="utf-8")
 
     assert "EASYICU_PI_SESSION_TOKEN_BUDGET" in source
     assert "pi_shell_token_budget_exhausted" in budget
@@ -274,7 +368,7 @@ def test_shell_budget_guard_blocks_each_provider_boundary() -> None:
         pytest.skip("Node is not installed")
     module = APP_DIR / "src" / "shell-budget.mjs"
     script = f"""
-      import {{ ShellBudgetGuard }} from {json.dumps(module.as_uri())};
+      import {{ providerCallReceipt, restoredProviderCallCount, ShellBudgetGuard }} from {json.dumps(module.as_uri())};
       const tokenGuard = new ShellBudgetGuard({{
         tokenBudget: 5000,
         maxOutputTokens: 1000,
@@ -297,6 +391,13 @@ def test_shell_budget_guard_blocks_each_provider_boundary() -> None:
       callGuard.authorize({{messages: []}}, {{}});
       try {{ callGuard.authorize({{messages: []}}, {{}}); }}
       catch (error) {{ console.log(error.code); }}
+
+      const entries = [
+        {{ type: 'message', role: 'assistant' }},
+        {{ type: 'custom', customType: 'easyicu.shell-budget/1', data: providerCallReceipt(9) }},
+        {{ type: 'compaction', usage: {{ totalTokens: 200 }} }},
+      ];
+      console.log(restoredProviderCallCount(entries, 1));
     """
     completed = subprocess.run(
         [node, "--input-type=module", "-e", script],
@@ -307,6 +408,7 @@ def test_shell_budget_guard_blocks_each_provider_boundary() -> None:
     assert completed.stdout.splitlines() == [
         "pi_shell_token_budget_exhausted",
         "pi_shell_message_provider_call_budget_exhausted",
+        "9",
     ]
 
 
@@ -375,7 +477,13 @@ def test_sidecar_projects_safe_agent_activity_and_tool_receipts() -> None:
 
 
 def test_pinned_sidecar_starts_with_only_easyicu_tools(tmp_path: Path) -> None:
-    dependency = APP_DIR / "node_modules" / "@earendil-works" / "pi-coding-agent" / "package.json"
+    dependency = (
+        APP_DIR
+        / "node_modules"
+        / "@earendil-works"
+        / "pi-coding-agent"
+        / "package.json"
+    )
     if shutil.which("node") is None or not dependency.is_file():
         pytest.skip("Pinned Node dependencies are not installed in this checkout")
 

@@ -117,43 +117,43 @@
 }
 .gpi-message.assistant .gpi-message-body{width:100%;padding:0;background:transparent}
 .gpi-text{white-space:pre-wrap;overflow-wrap:anywhere;font-size:15px;line-height:1.65}
+.gpi-text strong{font-weight:650;color:var(--ink-1)}
+.gpi-text code{padding:1px 4px;border-radius:4px;background:var(--wash);font:500 .88em/1.4 var(--mono)}
 
 /* Timeline structure adapted from pi-gui's MIT-licensed timeline-item/timeline.css.
    EasyICU keeps its own event projection, receipt fields, and shared icon catalog. */
-.gpi-activity,.gpi-tool{max-width:768px;margin:0 auto 15px;color:var(--ink-3)}
-.gpi-activity summary,.gpi-tool summary{
+.gpi-activity,.gpi-activity-live{max-width:768px;margin:0 auto 15px;color:var(--ink-3)}
+.gpi-activity-live{min-height:24px;display:flex;align-items:center;gap:6px;font-size:13px;line-height:1.45}
+.gpi-activity summary{
   min-width:0;min-height:24px;display:flex;align-items:center;gap:5px;padding:1px 0;
   color:inherit;cursor:pointer;font:inherit;font-size:13px;line-height:1.45;list-style:none
 }
-.gpi-activity summary::-webkit-details-marker,.gpi-tool summary::-webkit-details-marker{display:none}
-.gpi-activity summary:focus-visible,.gpi-tool summary:focus-visible{
+.gpi-activity summary::-webkit-details-marker{display:none}
+.gpi-activity summary:focus-visible{
   outline:2px solid color-mix(in srgb,var(--accent) 50%,transparent);outline-offset:4px;border-radius:4px
 }
-.gpi-activity-glyph,.gpi-tool-glyph,.gpi-activity-step-icon{
+.gpi-activity-glyph,.gpi-activity-step-icon{
   width:16px;height:16px;display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;color:var(--ink-4)
 }
-.gpi-activity-glyph .ic,.gpi-tool-glyph .ic,.gpi-activity-step-icon .ic{width:14px;height:14px}
+.gpi-activity-glyph .ic,.gpi-activity-step-icon .ic{width:14px;height:14px}
 .gpi-disclosure{
   width:15px;height:15px;display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;
   color:var(--ink-4);transition:transform .14s ease
 }
 .gpi-disclosure .ic{width:13px;height:13px}
-.gpi-activity[open]>summary .gpi-disclosure,.gpi-tool[open]>summary .gpi-disclosure{transform:rotate(90deg)}
-.gpi-activity-title,.gpi-tool-label{min-width:0;color:var(--ink-3);font-weight:520}
-.gpi-activity.complete summary{color:var(--ink-4);font-size:12px}
-.gpi-activity.complete summary::after{
-  content:"";height:1px;flex:1 1 auto;margin-left:6px;background:var(--line)
-}
-.gpi-activity.running .gpi-activity-title{color:var(--ink-2)}
-.gpi-activity.error .gpi-activity-title,.gpi-tool.error .gpi-tool-label{color:#9b3933}
-.gpi-activity-meta,.gpi-tool-inline-meta{
-  margin-left:6px;display:inline-flex;align-items:center;gap:5px;flex:0 0 auto;
+.gpi-activity[open]>summary .gpi-disclosure{transform:rotate(90deg)}
+.gpi-activity-title{min-width:0;color:var(--ink-3);font-weight:520}
+.gpi-activity.complete summary{color:var(--ink-4)}
+.gpi-activity-live .gpi-activity-title{color:var(--ink-2)}
+.gpi-activity.error .gpi-activity-title{color:#9b3933}
+.gpi-activity-meta{
+  margin-left:auto;display:inline-flex;align-items:center;gap:5px;flex:0 0 auto;
   color:var(--ink-4);font-size:11.5px;white-space:nowrap
 }
 .gpi-status-pip{width:6px;height:6px;flex:0 0 auto;border-radius:99px;background:var(--ink-4)}
-.gpi-activity.running .gpi-status-pip,.gpi-tool.running .gpi-status-pip{background:var(--accent);animation:gpi-status-pulse 1.35s ease-in-out infinite}
-.gpi-activity li.complete .gpi-status-pip,.gpi-tool.success .gpi-status-pip{background:#2d8a62}
-.gpi-activity li.error .gpi-status-pip,.gpi-activity.error .gpi-status-pip,.gpi-tool.error .gpi-status-pip{background:#ba463d}
+.gpi-activity-live .gpi-status-pip{margin-left:2px;background:var(--accent);animation:gpi-status-pulse 1.35s ease-in-out infinite}
+.gpi-activity li.complete .gpi-status-pip{background:#2d8a62}
+.gpi-activity li.error .gpi-status-pip,.gpi-activity.error .gpi-status-pip{background:#ba463d}
 .gpi-activity-body{margin:8px 0 2px 36px}
 .gpi-activity ol{display:grid;gap:4px;margin:0;padding:0;list-style:none}
 .gpi-activity li{
@@ -162,19 +162,10 @@
 }
 .gpi-activity-step-copy{display:flex;min-width:0;flex-direction:column;gap:1px}
 .gpi-activity-step-copy strong{font-weight:500}
+.gpi-activity-step-copy>span{color:var(--ink-3);font-size:11.5px;line-height:1.45}
 .gpi-activity-step-copy small{color:var(--ink-4);font:500 10.5px/1.4 var(--mono);overflow-wrap:anywhere}
 .gpi-activity li>.gpi-status-pip{margin-top:6px}
 .gpi-activity-body>p{margin:8px 0 0;color:var(--ink-4);font-size:10.5px;line-height:1.5}
-.gpi-tool-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.gpi-tool-body{
-  max-height:320px;overflow:auto;margin:8px 0 4px 36px;padding:10px 12px;
-  border:1px solid var(--line);border-radius:8px;background:color-mix(in srgb,var(--wash) 58%,var(--paper))
-}
-.gpi-tool-body p{margin:0 0 9px;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--ink-3);font-size:12.5px;line-height:1.55}
-.gpi-tool-receipt{display:grid;gap:5px;margin:0;padding-top:8px;border-top:1px solid var(--line)}
-.gpi-tool-receipt>div{display:grid;grid-template-columns:74px minmax(0,1fr);gap:8px}
-.gpi-tool-receipt dt{color:var(--ink-4);font:600 10px/1.45 var(--mono);text-transform:uppercase;letter-spacing:.04em}
-.gpi-tool-receipt dd{min-width:0;margin:0;color:var(--ink-4);font:500 10.5px/1.45 var(--mono);overflow-wrap:anywhere}
 @keyframes gpi-status-pulse{50%{opacity:.28;transform:scale(.82)}}
 .gpi-streaming{display:flex;gap:4px;padding:5px}
 .gpi-streaming i{width:5px;height:5px;border-radius:99px;background:var(--ink-4);animation:gpi-dot 1s infinite}
@@ -182,7 +173,7 @@
 @keyframes gpi-dot{50%{transform:translateY(-3px);opacity:.4}}
 
 @media (prefers-reduced-motion:reduce){
-  .gpi-activity.running .gpi-status-pip,.gpi-tool.running .gpi-status-pip,.gpi-streaming i{animation:none}
+  .gpi-activity-live .gpi-status-pip,.gpi-streaming i{animation:none}
   .gpi-disclosure{transition:none}
 }
 

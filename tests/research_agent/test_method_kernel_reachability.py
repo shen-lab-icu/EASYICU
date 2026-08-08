@@ -205,7 +205,11 @@ def test_offered_kernels_are_distinct_and_real_files():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("entry", DECLARED_UNREACHABLE_KERNELS, ids=lambda e: e.module)
+@pytest.mark.parametrize(
+    "entry",
+    DECLARED_UNREACHABLE_KERNELS,
+    ids=lambda entry: getattr(entry, "module", None),
+)
 def test_declared_unreachable_kernels_carry_a_reason_and_a_decision(entry):
     assert (_METHODS_DIR / f"{entry.module}.py").is_file()
     # Without both fields this list degrades into "wire it later", which is the

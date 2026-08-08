@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import secrets
 import tempfile
@@ -10,7 +11,14 @@ import threading
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional
 
-from easyicu.webserver import agent_runs, jobs, provider_gate, settings, study_contexts
+from easyicu.webserver import (
+    agent_runs,
+    guided_sessions,
+    jobs,
+    provider_gate,
+    settings,
+    study_contexts,
+)
 
 from .contracts import (
     MAX_MESSAGE_CHARS,
@@ -21,7 +29,10 @@ from .contracts import (
     utc_now,
 )
 from .gateway import PiGatewayClient
-from .project_authority import ProjectAuthorityStore
+from .project_authority import (
+    ProjectAuthorityStore,
+    ProjectStudyContextMigrationReceipt,
+)
 from .provider_config import PiProviderConfigStore
 from .projections import reject_sensitive_message
 
@@ -103,8 +114,7 @@ class PiCopilotService:
             "schema_version": "easyicu.pi-copilot-store/1",
             "updated_at": utc_now(),
             "sessions": [
-                row.model_dump(mode="json")
-                for row in list(records)[:MAX_SESSIONS]
+                row.model_dump(mode="json") for row in list(records)[:MAX_SESSIONS]
             ],
         }
         handle = tempfile.NamedTemporaryFile(
@@ -299,13 +309,12 @@ class PiCopilotService:
                 "model": install["model"],
                 "api_transport": install["api_transport"],
                 "local_openai_compatible_default": (
-                    install["api_transport"] in {"openai-completions", "openai-responses"}
+                    install["api_transport"]
+                    in {"openai-completions", "openai-responses"}
                 ),
                 "built_in_tools_enabled": [],
                 "credential_values_exposed": False,
-                "configuration": dict(
-                    install.get("provider_configuration") or {}
-                ),
+                "configuration": dict(install.get("provider_configuration") or {}),
             },
         }
 
@@ -371,7 +380,9 @@ class PiCopilotService:
             study_revision=int(context.get("revision") or 0),
             run_id=run_id,
             active_job_id=(
-                str(context.get("active_job_id")) if context.get("active_job_id") else None
+                str(context.get("active_job_id"))
+                if context.get("active_job_id")
+                else None
             ),
         )
 
@@ -391,6 +402,7 @@ class PiCopilotService:
         project_id: str,
         title: str,
         requested_study_context_id: Optional[str] = None,
+        confirm_initialization: bool = False,
     ) -> Dict[str, Any]:
         """Resolve only the Host-owned StudyContext for one research project."""
 
@@ -415,14 +427,55 @@ class PiCopilotService:
                     details={"project_id": project_id},
                 )
         else:
+            setup = guided_sessions.read_project_study_setup(project_id)
+            if setup is not None and not setup.missing_required:
+                initial = setup.study_context_patch()
+                receipt = ProjectStudyContextMigrationReceipt(
+                    status="migrated",
+                    source_schema=setup.schema_version,
+                    source_digest=setup.source_digest,
+                    migrated_fields=setup.migrated_fields,
+                )
+            elif not confirm_initialization:
+                missing = (
+                    list(setup.missing_required)
+                    if setup is not None
+                    else ["question", "cohort", "modules", "outcome", "time_window"]
+                )
+                raise PiCopilotError(
+                    "pi_project_initialization_required",
+                    "Confirm a new Pi study setup before opening this project.",
+                    status_code=409,
+                    details={
+                        "project_id": project_id,
+                        "missing_required": missing,
+                        "saved_metadata_found": setup is not None,
+                    },
+                )
+            else:
+                initial = {
+                    "title": str(title or "Pi Copilot").strip()[:160] or "Pi Copilot",
+                    "current_stage": "study_setup",
+                    "last_route": "guided",
+                }
+                source = json.dumps(
+                    {
+                        "schema_version": "easyicu.pi-project-initialization/1",
+                        "project_id": project_id,
+                        "title": initial["title"],
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+                receipt = ProjectStudyContextMigrationReceipt(
+                    status="initialized",
+                    source_schema="easyicu.pi-project-initialization/1",
+                    source_digest=hashlib.sha256(source).hexdigest(),
+                    migrated_fields=["title"],
+                )
             try:
                 context = study_contexts.upsert_context(
-                    {
-                        "title": str(title or "Pi Copilot").strip()[:160]
-                        or "Pi Copilot",
-                        "current_stage": "study_setup",
-                        "last_route": "guided",
-                    },
+                    initial,
                     active=True,
                     lifecycle_write=True,
                 )
@@ -434,8 +487,106 @@ class PiCopilotService:
                     details=exc.detail,
                 ) from exc
         assert context is not None and context.get("id")
-        self.project_store.bind(project_id, str(context["id"]))
+        if mapped_id:
+            self.project_store.bind(project_id, str(context["id"]))
+        elif requested_study_context_id:
+            requested_source = hashlib.sha256(
+                str(requested_study_context_id).encode("utf-8")
+            ).hexdigest()
+            self.project_store.bind(
+                project_id,
+                str(context["id"]),
+                migration_receipt=ProjectStudyContextMigrationReceipt(
+                    status="initialized",
+                    source_schema="easyicu.explicit-studycontext-binding/1",
+                    source_digest=requested_source,
+                    migrated_fields=["study_context_id"],
+                ),
+            )
+        else:
+            self.project_store.bind(
+                project_id,
+                str(context["id"]),
+                migration_receipt=receipt,
+            )
         return context
+
+    def initialize_project(
+        self,
+        *,
+        project_id: str,
+        title: str,
+        confirm_initialization: bool = False,
+    ) -> Dict[str, Any]:
+        """Explicitly migrate/bind Guided metadata before any session GET."""
+
+        clean_project = str(project_id or "").strip()
+        if not clean_project:
+            raise PiCopilotError(
+                "pi_project_binding_required",
+                "A research project is required for Pi initialization.",
+                status_code=409,
+            )
+        with self._lock:
+            existing_rows = [
+                row for row in self._read_records() if row.project_id == clean_project
+            ]
+        legacy_context_ids = {
+            str(row.binding.study_context_id)
+            for row in existing_rows
+            if row.binding.study_context_id
+        }
+        if len(legacy_context_ids) > 1:
+            raise PiCopilotError(
+                "pi_project_study_context_mismatch",
+                "Legacy Pi sessions disagree about this project's StudyContext.",
+                status_code=409,
+                details={"project_id": clean_project},
+            )
+        requested_context_id = next(iter(legacy_context_ids), None)
+        context = self._resolve_project_context(
+            project_id=clean_project,
+            title=title,
+            requested_study_context_id=requested_context_id,
+            confirm_initialization=confirm_initialization,
+        )
+        with self._lock:
+            rows = self._read_records()
+            migrated = 0
+            for record in rows:
+                if record.project_id != clean_project:
+                    continue
+                if record.binding.study_context_id not in (
+                    None,
+                    str(context["id"]),
+                ):
+                    raise PiCopilotError(
+                        "pi_session_project_authority_mismatch",
+                        "A legacy Pi session belongs to another StudyContext.",
+                        status_code=409,
+                        details={"project_id": clean_project},
+                    )
+                record.binding = self._binding_for_context(
+                    context,
+                    run_id=self._latest_run_id(str(context["id"])),
+                )
+                record.updated_at = utc_now()
+                migrated += 1
+            if migrated:
+                self._write_records(rows)
+        binding = self.project_store.binding(clean_project)
+        return {
+            "ok": True,
+            "status": "ready",
+            "project_id": clean_project,
+            "study_context_id": str(context["id"]),
+            "migrated_sessions": migrated,
+            "migration_receipt": (
+                binding.migration_receipt.model_dump(mode="json")
+                if binding and binding.migration_receipt
+                else None
+            ),
+        }
 
     def _scoped_record(self, session_id: str, *, project_id: str) -> PiSessionRecord:
         clean_project = str(project_id or "").strip()
@@ -457,15 +608,12 @@ class PiCopilotService:
                 },
             )
         if not record.binding.study_context_id:
-            context = self._resolve_project_context(
-                project_id=clean_project,
-                title=record.title,
+            raise PiCopilotError(
+                "pi_project_initialization_required",
+                "Initialize this project's StudyContext before reading its Pi sessions.",
+                status_code=409,
+                details={"project_id": clean_project},
             )
-            record.binding = self._binding_for_context(
-                context,
-                run_id=self._latest_run_id(str(context["id"])),
-            )
-            self._save_record(record)
         self.project_store.assert_matches(
             clean_project,
             record.binding.study_context_id,
@@ -507,6 +655,7 @@ class PiCopilotService:
             project_id=clean_project_id,
             title=title,
             requested_study_context_id=study_context_id,
+            confirm_initialization=True,
         )
         resolved_language = "zh" if language == "zh" else "en"
         # Raw provider reasoning is neither streamed nor persisted by the
@@ -516,9 +665,7 @@ class PiCopilotService:
         session_id = f"pi_{secrets.token_hex(10)}"
         binding = self._binding_for_context(
             context,
-            run_id=self._latest_run_id(
-                str(context.get("id")) if context else None
-            ),
+            run_id=self._latest_run_id(str(context.get("id")) if context else None),
         )
         state = self.gateway.request(
             "session.create",
@@ -589,9 +736,7 @@ class PiCopilotService:
             except study_contexts.StudyContextError as exc:
                 return {
                     "stale": True,
-                    "reason": str(
-                        exc.detail.get("error") or "study_context_invalid"
-                    ),
+                    "reason": str(exc.detail.get("error") or "study_context_invalid"),
                 }
             if active and active.get("id"):
                 return {
@@ -671,9 +816,7 @@ class PiCopilotService:
             )
         record.binding = self._binding_for_context(
             context,
-            run_id=self._latest_run_id(
-                str(context.get("id")) if context else None
-            ),
+            run_id=self._latest_run_id(str(context.get("id")) if context else None),
         )
         self._save_record(record)
         state = self._ensure_open(record)
@@ -718,9 +861,7 @@ class PiCopilotService:
                 details=stale,
             )
         requested_actions = frozenset(
-            str(item).strip()
-            for item in allowed_actions
-            if str(item).strip()
+            str(item).strip() for item in allowed_actions if str(item).strip()
         )
         unknown_actions = sorted(requested_actions - ALLOWED_TURN_ACTIONS)
         if unknown_actions:
@@ -772,19 +913,15 @@ class PiCopilotService:
                 )
                 refreshed = self._get_record(record.session_id)
                 refreshed.pi_session_id = (
-                    str(state.get("pi_session_id") or "")
-                    or refreshed.pi_session_id
+                    str(state.get("pi_session_id") or "") or refreshed.pi_session_id
                 )
                 refreshed.pi_session_file = (
-                    str(state.get("session_file") or "")
-                    or refreshed.pi_session_file
+                    str(state.get("session_file") or "") or refreshed.pi_session_file
                 )
                 refreshed.last_message_job_id = job.id
                 self._save_record(refreshed)
                 return {
-                    "session": self._public_session(
-                        refreshed, gateway_state=state
-                    ),
+                    "session": self._public_session(refreshed, gateway_state=state),
                     "message_status": "aborted" if job.cancel_requested else "done",
                 }
             finally:
@@ -793,9 +930,7 @@ class PiCopilotService:
                     if self._active_message_jobs.get(record.session_id) == job.id:
                         self._active_message_jobs.pop(record.session_id, None)
                     self._busy_sessions.discard(record.session_id)
-                    pending_retirement = (
-                        record.session_id in self._pending_retirements
-                    )
+                    pending_retirement = record.session_id in self._pending_retirements
                 if pending_retirement:
                     self._flush_pending_retirement(record.session_id)
 
@@ -844,9 +979,7 @@ class PiCopilotService:
             )
         target_job_id = str(active_job_id or "").strip()
         job = jobs.MANAGER.get(target_job_id) if target_job_id else None
-        cancel_requested = bool(
-            job and job.request_cancel("pi_copilot_user_abort")
-        )
+        cancel_requested = bool(job and job.request_cancel("pi_copilot_user_abort"))
         state = self.gateway.request(
             "session.abort",
             {"session_id": record.session_id},
@@ -905,8 +1038,7 @@ class PiCopilotService:
             "project_id": record.project_id,
             "title": record.title,
             "language": record.language,
-            "thinking_level": state.get("thinking_level")
-            or record.thinking_level,
+            "thinking_level": state.get("thinking_level") or record.thinking_level,
             "model": state.get("model"),
             "message_count": int(state.get("message_count") or 0),
             "streaming": bool(state.get("streaming")),
@@ -927,6 +1059,14 @@ class PiCopilotService:
             "last_message_job_id": record.last_message_job_id,
             "session_storage": "private_local_jsonl",
             "scientific_authority": "EasyICU",
+            "project_migration": (
+                binding.migration_receipt.model_dump(mode="json")
+                if (
+                    (binding := self.project_store.binding(record.project_id))
+                    and binding.migration_receipt
+                )
+                else None
+            ),
         }
 
     def close(self) -> None:

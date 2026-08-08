@@ -25,6 +25,8 @@ RUNTIME_SOURCE_FILES = (
     "src/shell-budget.mjs",
 )
 RUNTIME_MANIFEST_FILE = "runtime-manifest.json"
+INSTALLATION_SCHEMA_VERSION = "easyicu.pi-runtime-installation/1"
+_EXECUTABLE_SUFFIXES = frozenset({".js", ".mjs", ".cjs"})
 
 
 def packaged_app_dir() -> Path:
@@ -60,9 +62,7 @@ def runtime_manifest(source: Optional[Path] = None) -> dict[str, object]:
         str(relative): str(metadata.get("version") or "")
         for relative, metadata in packages.items()
         if isinstance(metadata, dict)
-        and str(relative).split("node_modules/")[-1].startswith(
-            "@earendil-works/pi-"
-        )
+        and str(relative).split("node_modules/")[-1].startswith("@earendil-works/pi-")
     }
     if not pi_packages or any(not version for version in pi_packages.values()):
         raise RuntimeError("Packaged Pi runtime has incomplete pinned Pi versions")
@@ -78,9 +78,51 @@ def runtime_manifest(source: Optional[Path] = None) -> dict[str, object]:
     return {**identity, "runtime_manifest_sha256": digest}
 
 
+def _installed_executable_hashes(
+    root: Path,
+    pi_packages: Mapping[str, str],
+) -> dict[str, str]:
+    files: dict[str, str] = {}
+    for relative in sorted(pi_packages):
+        package_root = root / relative
+        package_json = package_root / "package.json"
+        if not package_json.is_file():
+            raise RuntimeError(f"Installed Pi package is missing: {relative}")
+        files[package_json.relative_to(root).as_posix()] = _sha256(package_json)
+        for candidate in sorted(package_root.rglob("*")):
+            if not candidate.is_file() or candidate.suffix not in _EXECUTABLE_SUFFIXES:
+                continue
+            inside = candidate.relative_to(package_root)
+            if "node_modules" in inside.parts:
+                continue
+            files[candidate.relative_to(root).as_posix()] = _sha256(candidate)
+    if not files:
+        raise RuntimeError("Installed Pi runtime has no executable package files")
+    return files
+
+
+def _installation_manifest(
+    source_manifest: Mapping[str, object],
+    installed_root: Path,
+    *,
+    node_version: str,
+) -> dict[str, object]:
+    executable_files = _installed_executable_hashes(
+        installed_root,
+        dict(source_manifest["pi_packages"]),
+    )
+    return {
+        **dict(source_manifest),
+        "installation": {
+            "schema_version": INSTALLATION_SCHEMA_VERSION,
+            "node_version": node_version,
+            "executable_files": executable_files,
+        },
+    }
+
+
 PI_RUNTIME_REVISION = (
-    f"{PI_PACKAGE_VERSION}-"
-    f"{str(runtime_manifest()['runtime_manifest_sha256'])[:12]}"
+    f"{PI_PACKAGE_VERSION}-{str(runtime_manifest()['runtime_manifest_sha256'])[:12]}"
 )
 
 
@@ -96,7 +138,15 @@ def runtime_is_installed(path: Path, *, source: Optional[Path] = None) -> bool:
         installed = json.loads(
             (root / RUNTIME_MANIFEST_FILE).read_text(encoding="utf-8")
         )
-        if installed != expected:
+        if any(installed.get(key) != value for key, value in expected.items()):
+            return False
+        installation = installed.get("installation")
+        if not isinstance(installation, dict):
+            return False
+        if installation.get("schema_version") != INSTALLATION_SCHEMA_VERSION:
+            return False
+        node_version = str(installation.get("node_version") or "").strip()
+        if not node_version:
             return False
         for relative, digest in dict(expected["files"]).items():
             candidate = root / relative
@@ -109,7 +159,22 @@ def runtime_is_installed(path: Path, *, source: Optional[Path] = None) -> bool:
             package = json.loads(package_file.read_text(encoding="utf-8"))
             if str(package.get("version") or "") != version:
                 return False
-    except (KeyError, OSError, RuntimeError, TypeError, ValueError, json.JSONDecodeError):
+        executable_files = installation.get("executable_files")
+        if not isinstance(
+            executable_files, dict
+        ) or executable_files != _installed_executable_hashes(
+            root,
+            dict(expected["pi_packages"]),
+        ):
+            return False
+    except (
+        KeyError,
+        OSError,
+        RuntimeError,
+        TypeError,
+        ValueError,
+        json.JSONDecodeError,
+    ):
         return False
     return True
 
@@ -127,7 +192,14 @@ def packaged_runtime_is_complete(path: Optional[Path] = None) -> bool:
             package = json.loads(package_file.read_text(encoding="utf-8"))
             if str(package.get("version") or "") != version:
                 return False
-    except (KeyError, OSError, RuntimeError, TypeError, ValueError, json.JSONDecodeError):
+    except (
+        KeyError,
+        OSError,
+        RuntimeError,
+        TypeError,
+        ValueError,
+        json.JSONDecodeError,
+    ):
         return False
     return True
 
@@ -153,6 +225,7 @@ def install_runtime(
     destination: Optional[Path] = None,
     source: Optional[Path] = None,
     npm_binary: Optional[str] = None,
+    node_binary: Optional[str] = None,
     environ: Optional[Mapping[str, str]] = None,
 ) -> Path:
     """Install the exact lockfile into a private, versioned user runtime."""
@@ -171,6 +244,12 @@ def install_runtime(
     npm = npm_binary or shutil.which("npm", path=source_environment.get("PATH"))
     if not npm:
         raise RuntimeError("npm is required to install the pinned Pi runtime")
+    node = node_binary or shutil.which("node", path=source_environment.get("PATH"))
+    if not node:
+        sibling = Path(npm).with_name("node")
+        node = str(sibling) if sibling.is_file() else None
+    if not node:
+        raise RuntimeError("node is required to record the Pi runtime identity")
 
     target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     staging = Path(
@@ -186,8 +265,24 @@ def install_runtime(
             env=_installer_environment(source_environment),
             check=True,
         )
+        node_result = subprocess.run(
+            [node, "--version"],
+            cwd=staging,
+            env=_installer_environment(source_environment),
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        node_version = str(node_result.stdout or "").strip().removeprefix("v")
+        if not node_version:
+            raise RuntimeError("node did not report a runtime version")
+        installed_receipt = _installation_manifest(
+            expected_manifest,
+            staging,
+            node_version=node_version,
+        )
         (staging / RUNTIME_MANIFEST_FILE).write_text(
-            json.dumps(expected_manifest, ensure_ascii=False, indent=2) + "\n",
+            json.dumps(installed_receipt, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
         (staging / RUNTIME_MANIFEST_FILE).chmod(0o600)
@@ -196,7 +291,7 @@ def install_runtime(
         installed_manifest = json.loads(
             (staging / RUNTIME_MANIFEST_FILE).read_text(encoding="utf-8")
         )
-        if installed_manifest != expected_manifest:
+        if installed_manifest != installed_receipt:
             raise RuntimeError("Pi runtime manifest changed during installation")
         for relative, digest in dict(expected_manifest["files"]).items():
             if _sha256(staging / relative) != digest:

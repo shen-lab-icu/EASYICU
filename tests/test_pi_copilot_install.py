@@ -62,8 +62,21 @@ def test_installer_uses_lockfile_without_scripts_or_ambient_secrets(
     (source / "src" / "shell-budget.mjs").write_text("", encoding="utf-8")
     calls = []
 
-    def fake_run(command, *, cwd, env, check):
+    class Result:
+        stdout = "v24.11.0\n"
+
+    def fake_run(
+        command,
+        *,
+        cwd,
+        env,
+        check,
+        capture_output=False,
+        text=False,
+    ):
         calls.append((command, Path(cwd), dict(env), check))
+        if command[-1] == "--version":
+            return Result()
         package = (
             Path(cwd)
             / "node_modules"
@@ -73,6 +86,12 @@ def test_installer_uses_lockfile_without_scripts_or_ambient_secrets(
         )
         package.parent.mkdir(parents=True)
         package.write_text(json.dumps({"version": "0.84.1"}), encoding="utf-8")
+        (package.parent / "dist").mkdir()
+        (package.parent / "dist" / "index.js").write_text(
+            "export const pinned = true;\n",
+            encoding="utf-8",
+        )
+        return Result()
 
     monkeypatch.setattr(
         "easyicu.webserver.pi_copilot.install.subprocess.run",
@@ -82,6 +101,7 @@ def test_installer_uses_lockfile_without_scripts_or_ambient_secrets(
         destination=tmp_path / "runtime" / "0.84.1",
         source=source,
         npm_binary="/usr/local/bin/npm",
+        node_binary="/usr/local/bin/node",
         environ={
             "PATH": "/usr/local/bin:/usr/bin",
             "HOME": str(tmp_path),
@@ -92,8 +112,17 @@ def test_installer_uses_lockfile_without_scripts_or_ambient_secrets(
     )
 
     assert runtime_is_installed(target, source=source)
-    manifest = json.loads((target / "runtime-manifest.json").read_text(encoding="utf-8"))
-    assert manifest == runtime_manifest(source)
+    manifest = json.loads(
+        (target / "runtime-manifest.json").read_text(encoding="utf-8")
+    )
+    assert all(
+        manifest[key] == value for key, value in runtime_manifest(source).items()
+    )
+    assert manifest["installation"]["node_version"] == "24.11.0"
+    executable_files = manifest["installation"]["executable_files"]
+    assert (
+        "node_modules/@earendil-works/pi-coding-agent/dist/index.js" in executable_files
+    )
     command, cwd, child_env, check = calls[0]
     assert command == ["/usr/local/bin/npm", "ci", "--ignore-scripts"]
     assert cwd.parent == target.parent
@@ -101,6 +130,30 @@ def test_installer_uses_lockfile_without_scripts_or_ambient_secrets(
     assert "OPENAI_API_KEY" not in child_env
     assert "DATABASE_PASSWORD" not in child_env
 
+    (
+        target
+        / "node_modules"
+        / "@earendil-works"
+        / "pi-coding-agent"
+        / "dist"
+        / "index.js"
+    ).write_text(
+        "export const tampered = true;\n",
+        encoding="utf-8",
+    )
+    assert runtime_is_installed(target, source=source) is False
+
+    (
+        target
+        / "node_modules"
+        / "@earendil-works"
+        / "pi-coding-agent"
+        / "dist"
+        / "index.js"
+    ).write_text(
+        "export const pinned = true;\n",
+        encoding="utf-8",
+    )
     (target / "src" / "main.mjs").write_text("tampered", encoding="utf-8")
     assert runtime_is_installed(target, source=source) is False
 

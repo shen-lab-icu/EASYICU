@@ -9,6 +9,7 @@
     messages: [], loading: true, creating: false, busy: false, jobId: '',
     source: null, error: '', shell: 'pi', draft: '', setupSaving: false,
     showSetup: false, availableModels: [], project: null,
+    projectInitialization: null,
   };
 
   function tr(en, zh) { return window.EU_LANG === 'zh' ? zh : en; }
@@ -16,6 +17,12 @@
     return String(value == null ? '' : value)
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+  function assistantTextHtml(value) {
+    return esc(value)
+      .replace(/`([^`\n]+)`/g, '<code>$1</code>')
+      .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
+      .replace(/\n/g, '<br>');
   }
   function api() { return window.EU_API || {}; }
   function isStaticPreview() { return window.location && window.location.protocol === 'file:'; }
@@ -145,6 +152,26 @@
     };
     return labels[String(name || '')] || String(name || tr('EasyICU tool', 'EasyICU 工具'));
   }
+  function completedToolLabel(name) {
+    const labels = {
+      easyicu_workspace_status: tr('Checked workspace status', '已检查工作区状态'),
+      easyicu_inspect_context: tr('Read study setup', '已读取研究配置'),
+      easyicu_inspect_plan: tr('Read scientific plan', '已读取科学计划'),
+      easyicu_inspect_capability: tr('Checked capabilities', '已检查可用能力'),
+      easyicu_inspect_run: tr('Read run status', '已读取运行状态'),
+      easyicu_inspect_step: tr('Read plan step', '已读取计划步骤'),
+      easyicu_inspect_validation: tr('Read validation', '已读取验证状态'),
+      easyicu_list_artifacts: tr('Listed run artefacts', '已列出运行产物'),
+      easyicu_inspect_evidence: tr('Read evidence', '已读取证据状态'),
+      easyicu_explain_blocker: tr('Read blocker details', '已读取阻断原因'),
+      easyicu_update_study_context: tr('Saved study setup', '已保存研究配置'),
+      easyicu_run: tr('Started EasyICU run', '已启动 EasyICU 运行'),
+      easyicu_resume: tr('Resumed EasyICU work', '已恢复 EasyICU 任务'),
+      easyicu_cancel: tr('Cancelled EasyICU job', '已取消 EasyICU 任务'),
+      easyicu_request_replan: tr('Requested replan', '已请求重新规划'),
+    };
+    return labels[String(name || '')] || tr(`Used ${toolLabel(name)}`, `已使用 ${toolLabel(name)}`);
+  }
 
   function activeActivity() {
     return state.messages.slice().reverse().find(row => row.role === 'activity' && row.status === 'running');
@@ -195,7 +222,7 @@
     if (step.kind === 'tool') return failed
       ? tr(`${toolLabel(step.toolName)} returned an error`, `${toolLabel(step.toolName)} 返回错误`)
       : done
-        ? tr(`${toolLabel(step.toolName)} returned`, `${toolLabel(step.toolName)} 已返回`)
+        ? completedToolLabel(step.toolName)
         : tr(`Calling ${toolLabel(step.toolName)}`, `正在调用 ${toolLabel(step.toolName)}`);
     if (step.kind === 'retry') return tr(`Retrying (${step.attempt}/${step.maxAttempts})`, `正在重试（${step.attempt}/${step.maxAttempts}）`);
     if (step.kind === 'compaction') return done ? tr('Context compaction finished', '上下文整理已完成') : tr('Compacting context', '正在整理上下文');
@@ -231,44 +258,44 @@
         };
         upsertActivityStep(activity, { id: 'submitted', kind: 'submitted', status: 'complete', at: rowAt });
         messages.push(activity);
-      } else if (text) {
-        messages.push({ id: 'history-' + index, role: row.role || 'assistant', text, complete: true });
-        if (row.role === 'assistant' && activity) {
-          upsertActivityStep(activity, { id: 'assistant', kind: 'assistant', phase: 1, status: 'complete', at: rowAt });
-          closeHistoryActivity(rowAt);
-        }
       }
       parts.filter(p => p && p.type === 'tool_call').forEach((tool, partIndex) => {
-        const toolRow = {
-          id: tool.tool_call_id || `history-tool-${index}-${partIndex}`,
-          role: 'tool', toolName: tool.tool_name, status: 'running', text: '',
-          startedAt: rowAt,
+        const id = tool.tool_call_id || `history-tool-${index}-${partIndex}`;
+        const toolStep = {
+          id: 'tool-' + id, kind: 'tool', toolName: tool.tool_name,
+          status: 'running', at: rowAt, startedAt: rowAt,
         };
-        messages.push(toolRow); tools.set(toolRow.id, toolRow);
+        tools.set(id, toolStep);
         if (activity) upsertActivityStep(activity, {
-          id: 'tool-' + toolRow.id, kind: 'tool', toolName: tool.tool_name, status: 'running', at: rowAt,
+          ...toolStep,
         });
       });
       parts.filter(p => p && p.type === 'tool_result').forEach((receipt, partIndex) => {
         const id = receipt.tool_call_id || `history-result-${index}-${partIndex}`;
-        let toolRow = tools.get(id);
-        if (!toolRow) {
-          toolRow = { id, role: 'tool', toolName: receipt.tool_name, startedAt: rowAt };
-          messages.push(toolRow); tools.set(id, toolRow);
+        let toolStep = tools.get(id);
+        if (!toolStep) {
+          toolStep = {
+            id: 'tool-' + id, kind: 'tool', toolName: receipt.tool_name,
+            startedAt: rowAt,
+          };
+          tools.set(id, toolStep);
         }
-        Object.assign(toolRow, {
-          status: receipt.is_error ? 'error' : 'success', text: receipt.summary || '',
-          code: receipt.code || '', owner: receipt.owner || '', receiptStatus: receipt.status || '',
+        Object.assign(toolStep, {
+          status: receipt.is_error ? 'error' : 'complete', text: receipt.summary || '',
+          code: receipt.code || '', owner: receipt.owner || '',
           endedAt: rowAt,
         });
-        if (activity) upsertActivityStep(activity, {
-          id: 'tool-' + id, kind: 'tool', toolName: receipt.tool_name,
-          status: receipt.is_error ? 'error' : 'complete', code: receipt.code || '', at: rowAt,
-        });
+        if (activity) upsertActivityStep(activity, toolStep);
       });
+      if (text && row.role !== 'user') {
+        messages.push({ id: 'history-' + index, role: row.role || 'assistant', text, complete: true });
+        if (row.role === 'assistant' && activity && !parts.some(p => p && p.type === 'tool_call')) {
+          closeHistoryActivity(rowAt);
+        }
+      }
     });
     closeHistoryActivity(lastTimestamp);
-    return messages.filter(row => row.text || row.toolName || row.role === 'activity');
+    return messages.filter(row => row.text || row.role === 'activity');
   }
 
   function statusBanner() {
@@ -347,6 +374,7 @@
         <div class="gpi-kicker">PI AGENTSESSION · EASYICU GATEWAY</div>
         <h2>${tr('Start a conversation in this project', '在当前项目中开始对话')}</h2>
         <div class="gpi-config-note ok"><span class="gpi-dot"></span>${tr('Research project', '研究项目')}: <strong>${esc((state.project && state.project.title) || projectId())}</strong></div>
+        ${state.projectInitialization && state.projectInitialization.required ? `<div class="gpi-config-note warn"><strong>${tr('Study setup confirmation required.', '需要确认研究配置初始化。')}</strong> ${tr('No complete saved setup was found. Activating Pi will create an explicitly acknowledged empty StudyContext and collect the missing fields here in conversation.', '未找到完整的已保存配置。启用 Pi 后会在你明确确认下创建空的 StudyContext，并在当前对话中继续收集缺失字段。')}</div>` : ''}
         <p>${tr('Pi handles conversation and tool turns. EasyICU still owns study setup, runs, validation, and evidence. Patient rows and generic coding tools are blocked.', 'Pi 负责对话与工具循环；研究配置、运行、验证和证据仍由 EasyICU 管理。患者行级数据和通用编程工具均被阻止。')}</p>
         <button class="btn primary" type="button" data-gpi-create ${state.creating ? 'disabled' : ''}>
           ${state.creating ? tr('Starting…', '正在启动…') : tr('I agree — activate Pi Copilot', '我同意——启用 Pi Copilot')}
@@ -369,59 +397,52 @@
 
   function messageHtml(row) {
     if (row.role === 'activity') {
-      const latest = row.steps[row.steps.length - 1];
+      const visibleSteps = row.steps.filter(step => ['tool', 'retry', 'compaction'].includes(step.kind));
+      const latest = visibleSteps[visibleSteps.length - 1] || row.steps[row.steps.length - 1];
       const running = row.status === 'running';
       const failed = row.status === 'error' || row.status === 'cancelled';
-      const status = running ? tr('working', '工作中') : failed ? tr('needs attention', '需关注') : tr('complete', '已完成');
-      const title = running
-        ? (latest ? activityStepLabel(latest) : tr('Pi is preparing', 'Pi 正在准备'))
-        : failed
-          ? tr('This turn needs attention', '本轮需要处理')
-          : tr(`Worked for ${durationText(row.startedAt, row.endedAt)}`, `耗时 ${durationText(row.startedAt, row.endedAt)}`);
-      const steps = row.steps.map(step => `
+      if (running) {
+        const title = latest && latest.kind !== 'submitted'
+          ? activityStepLabel(latest)
+          : tr('Pi is preparing the next action', 'Pi 正在准备下一步');
+        return `<div class="gpi-activity-live" role="status">
+          <span class="gpi-activity-glyph" aria-hidden="true">${iconHtml(activityIcon(latest), 15)}</span>
+          <span class="gpi-activity-title">${esc(title)}</span>
+          <span class="gpi-status-pip" aria-hidden="true"></span>
+        </div>`;
+      }
+      const toolSteps = visibleSteps.filter(step => step.kind === 'tool');
+      const completedTitle = toolSteps.length === 1
+        ? activityStepLabel(toolSteps[0])
+        : toolSteps.length === 2
+          ? toolSteps.map(step => completedToolLabel(step.toolName)).join(tr(' and ', '、'))
+          : toolSteps.length > 2
+            ? tr(`Used ${toolSteps.length} EasyICU tools`, `已使用 ${toolSteps.length} 个 EasyICU 工具`)
+            : tr('Finished the agent turn', '已完成本轮 Agent 工作');
+      const title = failed ? tr('This turn needs attention', '本轮需要处理') : completedTitle;
+      const steps = visibleSteps.map(step => `
         <li class="${esc(step.status || 'complete')}">
           <span class="gpi-activity-step-icon" aria-hidden="true">${iconHtml(activityIcon(step), 15)}</span>
-          <span class="gpi-activity-step-copy"><strong>${esc(activityStepLabel(step))}</strong>${step.code ? `<small>${esc(step.code)}</small>` : ''}</span>
+          <span class="gpi-activity-step-copy"><strong>${esc(activityStepLabel(step))}</strong>${step.text ? `<span>${esc(step.text)}</span>` : ''}${step.code ? `<small>${esc([step.code, step.owner].filter(Boolean).join(' · '))}</small>` : ''}</span>
           <span class="gpi-status-pip" aria-hidden="true"></span>
         </li>`).join('');
-      return `<details class="gpi-activity ${running ? 'running' : failed ? 'error' : 'complete'}" ${running ? 'open' : ''}>
+      return `<details class="gpi-activity ${failed ? 'error' : 'complete'}">
         <summary>
-          <span class="gpi-activity-glyph" aria-hidden="true">${iconHtml(running ? activityIcon(latest) : failed ? 'alert' : 'clock', 15)}</span>
+          <span class="gpi-activity-glyph" aria-hidden="true">${iconHtml(failed ? 'alert' : activityIcon(toolSteps[0] || latest), 15)}</span>
           <span class="gpi-disclosure" aria-hidden="true">${iconHtml('chevron', 14)}</span>
           <span class="gpi-activity-title">${esc(title)}</span>
-          ${running ? `<span class="gpi-activity-meta"><span class="gpi-status-pip" aria-hidden="true"></span>${esc(status)}</span>` : ''}
+          <span class="gpi-activity-meta">${esc(durationText(row.startedAt, row.endedAt))}</span>
         </summary>
         <div class="gpi-activity-body">
-          <ol>${steps}</ol>
+          ${steps ? `<ol>${steps}</ol>` : ''}
           <p>${tr('Lifecycle facts and EasyICU receipts only — private chain-of-thought is never displayed.', '这里只显示生命周期事实和 EasyICU 回执，不展示模型的私有思维链。')}</p>
-        </div>
-      </details>`;
-    }
-    if (row.role === 'tool') {
-      const status = row.status || 'running';
-      const statusText = status === 'running' ? tr('running', '运行中') : status === 'error' ? tr('error', '错误') : tr('complete', '已完成');
-      const meta = [row.code, row.startedAt ? durationText(row.startedAt, row.endedAt) : ''].filter(Boolean).join(' · ');
-      return `<details class="gpi-tool ${status}" ${status === 'error' ? 'open' : ''}>
-        <summary>
-          <span class="gpi-tool-glyph" aria-hidden="true">${iconHtml(toolIcon(row.toolName), 15)}</span>
-          <span class="gpi-disclosure" aria-hidden="true">${iconHtml('chevron', 14)}</span>
-          <span class="gpi-tool-label">${esc(toolLabel(row.toolName))}</span>
-          <span class="gpi-tool-inline-meta"><span class="gpi-status-pip" aria-hidden="true"></span>${esc(statusText)}</span>
-        </summary>
-        <div class="gpi-tool-body">
-          <p>${row.text ? esc(row.text) : tr('Waiting for a bounded EasyICU receipt…', '正在等待受限的 EasyICU 回执…')}</p>
-          <dl class="gpi-tool-receipt">
-            <div><dt>${tr('Tool', '工具')}</dt><dd>${esc(row.toolName || 'easyicu_tool')}</dd></div>
-            ${meta ? `<div><dt>${tr('Receipt', '回执')}</dt><dd>${esc(meta)}</dd></div>` : ''}
-            ${row.owner ? `<div><dt>${tr('Owner', '责任边界')}</dt><dd>${esc(row.owner)}</dd></div>` : ''}
-          </dl>
         </div>
       </details>`;
     }
     const cls = row.role === 'user' ? 'user' : 'assistant';
     return `<article class="gpi-message ${cls}">
       <div class="gpi-message-body">
-        ${row.text ? `<div class="gpi-text">${esc(row.text)}</div>` : `<div class="gpi-streaming"><i></i><i></i><i></i></div>`}
+        ${row.text ? `<div class="gpi-text">${row.role === 'assistant' ? assistantTextHtml(row.text) : esc(row.text)}</div>` : `<div class="gpi-streaming"><i></i><i></i><i></i></div>`}
       </div>
     </article>`;
   }
@@ -484,7 +505,7 @@
       const payload = await api().loadPiCopilotStatus();
       state.runtime = payload && payload.runtime;
       if (runtimeReady() && projectId()) {
-        await loadProjectSessions();
+        await prepareProject();
       } else if (!runtimeReady()) {
         state.showSetup = true;
       }
@@ -541,6 +562,7 @@
         thinking_level: 'off', external_llm_opt_in: true,
       });
       state.session = payload.session; state.messages = transcriptMessages(state.session);
+      state.projectInitialization = null;
       rememberSession(state.session.session_id);
       state.sessions = [state.session].concat(state.sessions.filter(row => row.session_id !== state.session.session_id));
     } catch (error) { state.error = errorText(error); }
@@ -591,21 +613,18 @@
     } else if (event.type === 'tool_start') {
       const assistant = activity.steps.slice().reverse().find(item => item.kind === 'assistant' && item.status === 'running');
       if (assistant) assistant.status = 'complete';
-      upsertActivityStep(activity, { id: 'tool-' + event.tool_call_id, kind: 'tool', toolName: event.tool_name, status: 'running', at });
-      state.messages.push({ id: event.tool_call_id, role: 'tool', toolName: event.tool_name, status: 'running', text: '', startedAt: at });
+      upsertActivityStep(activity, {
+        id: 'tool-' + event.tool_call_id, kind: 'tool', toolName: event.tool_name,
+        status: 'running', at, startedAt: at,
+      });
     } else if (event.type === 'tool_progress') {
       upsertActivityStep(activity, { id: 'tool-' + event.tool_call_id, kind: 'tool', toolName: event.tool_name, status: 'running', at });
     }
     else if (event.type === 'tool_end') {
-      const row = state.messages.find(item => item.role === 'tool' && item.id === event.tool_call_id);
-      if (row) {
-        row.status = event.is_error ? 'error' : 'success'; row.text = event.summary || '';
-        row.code = event.code || ''; row.owner = event.owner || ''; row.receiptStatus = event.status || '';
-        row.endedAt = at;
-      }
       upsertActivityStep(activity, {
         id: 'tool-' + event.tool_call_id, kind: 'tool', toolName: event.tool_name,
-        status: event.is_error ? 'error' : 'complete', code: event.code || '', at,
+        status: event.is_error ? 'error' : 'complete', code: event.code || '',
+        owner: event.owner || '', text: event.summary || '', at, endedAt: at,
       });
     } else if (event.type === 'turn_end') {
       const turn = activity.steps.find(item => item.id === 'turn-' + event.turn_index);
@@ -646,6 +665,33 @@
     }
   }
 
+  async function prepareProject() {
+    const expectedProjectId = projectId();
+    if (!runtimeReady() || !expectedProjectId) return;
+    try {
+      const initialized = await api().initializePiCopilotProject({
+        project_id: expectedProjectId,
+        title: (state.project && state.project.title) || expectedProjectId,
+        confirm_initialization: false,
+      });
+      if (expectedProjectId !== projectId()) return;
+      state.projectInitialization = initialized || { status: 'ready' };
+      await loadProjectSessions();
+    } catch (error) {
+      if (expectedProjectId !== projectId()) return;
+      if (error && error.code === 'pi_project_initialization_required') {
+        state.projectInitialization = {
+          required: true,
+          missingRequired: (error.details && error.details.missing_required) || [],
+        };
+        state.error = '';
+        render();
+        return;
+      }
+      throw error;
+    }
+  }
+
   function bindProject(project) {
     const next = project && String(project.id || '').trim()
       ? { id: String(project.id).trim(), title: String(project.title || project.id).trim() }
@@ -659,9 +705,10 @@
     state.busy = false;
     state.jobId = '';
     state.error = '';
+    state.projectInitialization = null;
     render();
     if (next && runtimeReady()) {
-      loadProjectSessions().catch(error => { state.error = errorText(error); render(); });
+      prepareProject().catch(error => { state.error = errorText(error); render(); });
     }
   }
 

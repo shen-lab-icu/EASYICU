@@ -72,6 +72,14 @@ class PiProjectRequest(BaseModel):
     project_id: ShortText
 
 
+class PiProjectInitializeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: ShortText
+    title: str = "Pi Copilot"
+    confirm_initialization: StrictBool = False
+
+
 class PiProviderConfigRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -126,6 +134,20 @@ def post_pi_copilot_session(body: PiSessionCreateRequest) -> dict:
         _raise_http(exc)
 
 
+@router.post("/api/copilot/pi/projects/initialize")
+def post_pi_copilot_project_initialize(
+    body: PiProjectInitializeRequest,
+) -> dict:
+    try:
+        return get_pi_copilot_service().initialize_project(
+            project_id=body.project_id,
+            title=body.title,
+            confirm_initialization=body.confirm_initialization,
+        )
+    except PiCopilotError as exc:
+        _raise_http(exc)
+
+
 @router.get("/api/copilot/pi/sessions")
 def get_pi_copilot_sessions(
     project_id: Annotated[str, Query(min_length=1, max_length=160)],
@@ -155,9 +177,7 @@ def get_pi_copilot_session(
 
 
 @router.post("/api/copilot/pi/sessions/{session_id}/message")
-def post_pi_copilot_message(
-    session_id: ShortText, body: PiMessageRequest
-) -> dict:
+def post_pi_copilot_message(session_id: ShortText, body: PiMessageRequest) -> dict:
     try:
         return get_pi_copilot_service().send_message(
             session_id,
@@ -181,9 +201,7 @@ def post_pi_copilot_rebind(session_id: ShortText, body: PiProjectRequest) -> dic
 
 
 @router.post("/api/copilot/pi/sessions/{session_id}/abort")
-def post_pi_copilot_abort(
-    session_id: ShortText, body: PiAbortRequest
-) -> dict:
+def post_pi_copilot_abort(session_id: ShortText, body: PiAbortRequest) -> dict:
     try:
         return get_pi_copilot_service().abort_session(
             session_id,

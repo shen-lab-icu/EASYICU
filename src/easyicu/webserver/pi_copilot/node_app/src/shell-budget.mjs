@@ -1,6 +1,7 @@
 import { Buffer } from "node:buffer";
 
 const STRUCTURAL_TOKEN_RESERVE = 4096;
+export const SHELL_BUDGET_RECEIPT = "easyicu.shell-budget/1";
 
 function integer(value, fallback, minimum = 0) {
   const parsed = Number.parseInt(String(value ?? ""), 10);
@@ -20,6 +21,24 @@ export function estimatedInputTokenUpperBound(context) {
 
 function budgetError(code, message, details) {
   return Object.assign(new Error(`${code}: ${message}`), { code, details });
+}
+
+export function restoredProviderCallCount(entries, fallback = 0) {
+  const rows = Array.isArray(entries) ? entries : [];
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const entry = rows[index];
+    if (entry?.type !== "custom" || entry.customType !== SHELL_BUDGET_RECEIPT) continue;
+    const calls = Number.parseInt(String(entry.data?.provider_calls ?? ""), 10);
+    if (Number.isFinite(calls) && calls >= 0) return calls;
+  }
+  return integer(fallback, 0, 0);
+}
+
+export function providerCallReceipt(providerCalls) {
+  return {
+    schema_version: SHELL_BUDGET_RECEIPT,
+    provider_calls: integer(providerCalls, 0, 0),
+  };
 }
 
 export class ShellBudgetGuard {
