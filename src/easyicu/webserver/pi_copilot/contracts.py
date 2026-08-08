@@ -68,6 +68,15 @@ class PiSessionRecord(BaseModel):
 
     schema_version: Literal["easyicu.pi-copilot-session/1"] = SESSION_SCHEMA_VERSION
     session_id: str
+    # Product/project ownership is fixed when the Pi AgentSession is created.
+    # ``None`` is accepted only so metadata written before project scoping can
+    # still be read and retired safely; new sessions must always set it.
+    project_id: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=160,
+        frozen=True,
+    )
     pi_session_id: Optional[str] = None
     pi_session_file: Optional[str] = None
     title: str = "Pi Copilot"

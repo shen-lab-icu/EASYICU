@@ -119,7 +119,7 @@ def test_native_shell_language_icon_is_stateful() -> None:
     assert "window.EU_LANG = val;" not in settings_js
     assert "window.EU_API.saveSetting('data_mode', m)" in i18n_js
     assert "js/i18n.js?v=20260728-demo-mode1" in index_html
-    assert "js/api.js?v=20260808-pi-setup1" in index_html
+    assert "js/api.js?v=20260808-pi-project1" in index_html
 
 
 def test_native_mobile_page_guide_fab_does_not_cover_bottom_nav() -> None:
@@ -335,13 +335,13 @@ def test_native_guided_and_page_guide_messages_are_bilingual() -> None:
     assert "htmlOf(t.html)" in dock_js
     assert "htmlOf(label)" in dock_js
     assert (
-        "js/screens-guided-projects.js?v=20260626-guided-projects-split" in index_html
+        "js/screens-guided-projects.js?v=20260808-pi-project1" in index_html
     )
     assert (
         "js/screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
         in index_html
     )
-    assert "js/screens-guided.js?v=20260803-typed-study-intent" in index_html
+    assert "js/screens-guided.js?v=20260808-pi-project1" in index_html
     assert "js/copilot-dock.js?v=20260712-ux-fixes" in index_html
 
 
@@ -383,7 +383,7 @@ def test_native_page_guide_uses_backend_page_guide_contract() -> None:
     assert "sendCopilotMessage" not in dock_js
     assert "runCopilotAction" not in dock_js
     assert "Page guide backend unavailable, using local fallback" in dock_js
-    assert "js/api.js?v=20260808-pi-setup1" in index_html
+    assert "js/api.js?v=20260808-pi-project1" in index_html
     assert "js/copilot-dock.js?v=20260712-ux-fixes" in index_html
 
 
@@ -534,9 +534,9 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
 
     assert "css/guided.css?v=20260712-ux-fixes" in index_html
     assert "css/guided-idea-plan.css?v=20260627-ideas-feasibility-plan" in index_html
-    assert "js/api.js?v=20260808-pi-setup1" in index_html
+    assert "js/api.js?v=20260808-pi-project1" in index_html
     assert (
-        "js/screens-guided-projects.js?v=20260626-guided-projects-split" in index_html
+        "js/screens-guided-projects.js?v=20260808-pi-project1" in index_html
     )
     provider_pos = index_html.find("screens-guided-idea-provider.js")
     projects_pos = index_html.find("screens-guided-projects.js")
@@ -630,7 +630,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert ".gdi-plan-details" in guided_plan_css
     assert ".gdi-feature-row.one" in guided_plan_css
     assert ".gdi-plan-details" not in redesign_css
-    assert "js/screens-guided.js?v=20260803-typed-study-intent" in index_html
+    assert "js/screens-guided.js?v=20260808-pi-project1" in index_html
 
 
 def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
@@ -2214,7 +2214,7 @@ def test_native_dictionary_distinguishes_mapping_audit_from_export_coverage() ->
     assert ".cov-badge.derived" in deepdive_css
     assert ".cov-badge.unaudited" in deepdive_css
     assert "data-catalog.js?v=20260727-patient-demo2" in index_html
-    assert "api.js?v=20260808-pi-setup1" in index_html
+    assert "api.js?v=20260808-pi-project1" in index_html
     assert "screens-dict.js?v=20260712-ux-fixes" in index_html
     assert "deepdive.css?v=20260625-stage85" in index_html
 
@@ -2319,8 +2319,9 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert "Find a Study Idea" in guided_js
     assert "Prepare Data" in guided_js
     assert "Run a Research Project" in guided_js
-    assert "Study folders" in guided_js
-    assert "Conversation memory" in guided_js
+    assert "Research projects" in guided_js
+    assert "Project storage" in guided_js
+    assert "Conversation memory" not in guided_js
     assert "data-localdraft" in guided_js
     assert "Agent run artifacts" not in guided_js
     assert "Read-only results" not in guided_js
@@ -2336,7 +2337,7 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert "Seeded examples" not in guided_js
     assert "data-sess" not in guided_js
     assert "That is a seeded example" not in guided_js
-    assert "New / open study folder" in projects_js
+    assert "New / open research project" in projects_js
     assert "gdFolderControls" in guided_js
     assert "gdFolderDialogHost" in guided_js
     assert "data-folder-menu-toggle" in projects_js
@@ -2460,13 +2461,13 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert ".gdf-memory" in guided_css
     assert ".gdf-card" in guided_css
     assert ".gd-handoff-ready" in guided_css
-    assert "api.js?v=20260808-pi-setup1" in index_html
-    assert "screens-guided-projects.js?v=20260626-guided-projects-split" in index_html
+    assert "api.js?v=20260808-pi-project1" in index_html
+    assert "screens-guided-projects.js?v=20260808-pi-project1" in index_html
     assert (
         "screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
         in index_html
     )
-    assert "screens-guided.js?v=20260803-typed-study-intent" in index_html
+    assert "screens-guided.js?v=20260808-pi-project1" in index_html
     assert "guided.css?v=20260712-ux-fixes" in index_html
     assert "gd-name\">${t('Guided Copilot', '研究引导')}</span>" in guided_js
     assert "Guided Copilot · local first · nothing leaves your machine" in guided_js

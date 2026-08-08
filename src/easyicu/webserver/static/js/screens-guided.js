@@ -3710,7 +3710,12 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       if (!result || result.ok === false) {
         throw new Error((result && (result.reason || result.error)) || 'remove_failed');
       }
-      if (selectedGuidedDraft && selectedGuidedDraft.id === row.id) selectedGuidedDraft = null;
+      if (selectedGuidedDraft && selectedGuidedDraft.id === row.id) {
+        selectedGuidedDraft = null;
+        if (window.EU_GUIDED_PI && window.EU_GUIDED_PI.bindProject) {
+          window.EU_GUIDED_PI.bindProject(null);
+        }
+      }
       guidedDrafts = { loading: false, error: null, data: result.drafts ? { drafts: result.drafts } : null };
       loadGuidedDrafts(true);
       pushBot(
@@ -4032,6 +4037,29 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       return result;
     });
   }
+  function piProjectShellActive() {
+    return !!(
+      window.EU_GUIDED_PI &&
+      window.EU_GUIDED_PI.isActive &&
+      window.EU_GUIDED_PI.isActive()
+    );
+  }
+  function bindProjectToPi(result, row) {
+    const session = result && result.session ? result.session : null;
+    guidedCopilot = { loading: false, error: null, session, last: result || guidedCopilot.last };
+    restoreGuidedSlotsFromSession(session);
+    const projectId = String((session && session.draft_id) || (row && row.id) || '').trim();
+    const projectTitle = String(
+      (session && session.project_title) ||
+      (row && (row.title || row.study_id || row.run_label)) ||
+      projectId
+    ).trim();
+    if (projectId && window.EU_GUIDED_PI && window.EU_GUIDED_PI.bindProject) {
+      window.EU_GUIDED_PI.bindProject({ id: projectId, title: projectTitle });
+    }
+    renderAside();
+    renderSessions();
+  }
   function continuePendingGuidedGoal() {
     if (!pendingGuidedGoal) return false;
     const pending = pendingGuidedGoal;
@@ -4178,10 +4206,13 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       return;
     }
     document.querySelectorAll('.gd-sess').forEach(s => s.classList.toggle('active', s === el));
+    const usePiSession = piProjectShellActive();
     guidedCopilot = { loading: true, error: null, session: null, last: guidedCopilot.last };
-    thread = [{ typing: true }];
-    chips = [];
-    renderThread(); renderChips();
+    if (!usePiSession) {
+      thread = [{ typing: true }];
+      chips = [];
+      renderThread(); renderChips();
+    }
     window.EU_API.openGuidedProject({
       project_dir: row.project_dir,
       draft_id: row.id || null,
@@ -4189,16 +4220,17 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       mode: 'local',
       context: guidedBackendContext(),
     }).then(result => {
-      thread = thread.filter(item => !item.typing);
+      if (!usePiSession) thread = thread.filter(item => !item.typing);
       if (!result || !result.ok) {
         const reason = result && (result.reason || result.error) ? (result.reason || result.error) : 'unknown error';
         pushBot(`Could not open project memory: <span class="mono">${esc(reason)}</span>`, `无法打开项目记忆：<span class="mono">${esc(reason)}</span>`);
         renderThread();
         return;
       }
-      restoreGuidedProjectThread(result, row, kind);
+      if (usePiSession) bindProjectToPi(result, row);
+      else restoreGuidedProjectThread(result, row, kind);
     }).catch(err => {
-      thread = thread.filter(item => !item.typing);
+      if (!usePiSession) thread = thread.filter(item => !item.typing);
       pushBot(`Could not open project memory: <span class="mono">${esc(err.message || String(err))}</span>`, `无法打开项目记忆：<span class="mono">${esc(err.message || String(err))}</span>`);
       renderThread();
     });
@@ -4658,7 +4690,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       setGuidedProjectOpenStatus(
         setupBox,
         'ok',
-        `${icon('check', 12)} <span>${t('Project memory opened. Restoring the conversation...', '项目记忆已打开，正在恢复对话...')}</span>`,
+        `${icon('check', 12)} <span>${t('Research project opened.', '研究项目已打开。')}</span>`,
       );
       selectedGuidedDraft = {
         id: result.session && result.session.draft_id,
@@ -4667,7 +4699,8 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       };
       selectedGuidedRun = null;
       closeGuidedFolderDialog();
-      restoreGuidedProjectThread(result, selectedGuidedDraft, 'draft');
+      if (piProjectShellActive()) bindProjectToPi(result, selectedGuidedDraft);
+      else restoreGuidedProjectThread(result, selectedGuidedDraft, 'draft');
       continuePendingGuidedGoal();
       loadGuidedDrafts(true);
     }).catch(err => {
@@ -4716,6 +4749,10 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       const title = selectedGuidedDraft && selectedGuidedDraft.title ? selectedGuidedDraft.title : text;
       const path = selectedGuidedDraft && selectedGuidedDraft.project_dir ? compactPath(selectedGuidedDraft.project_dir) : '~/easyicu/projects';
       closeGuidedFolderDialog();
+      if (piProjectShellActive() && opened && opened.ok) {
+        bindProjectToPi(opened, selectedGuidedDraft);
+        return;
+      }
       // One-click starter path: keep the goal the user already picked and resume
       // it in the fresh folder, instead of resetting them back to goal cards.
       if (options.continueGoal && pendingGuidedGoal) {
@@ -5025,7 +5062,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         : drafts.length
           ? drafts.slice(0, 8).map((row, i) => `
             <div class="gd-sessline">
-              <button class="gd-sess draft ${selectedGuidedDraft && selectedGuidedDraft.id === row.id ? 'active' : ''}" data-localdraft="${i}" title="${t('Open this folder conversation memory', '打开这个文件夹的对话记忆')}">
+              <button class="gd-sess draft ${selectedGuidedDraft && selectedGuidedDraft.id === row.id ? 'active' : ''}" data-localdraft="${i}" title="${t('Open this research project', '打开这个研究项目')}">
                 <span class="ss-fold">${icon('file', 15)}</span>
                 <span>
                   <span class="ss-t">${esc(row.title || 'Guided draft')}</span>
@@ -5038,11 +5075,11 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
             </div>`).join('')
           : `<div class="gd-empty-local">
               <div class="ss-t">${t('No study folders yet', '还没有研究文件夹')}</div>
-              <div class="ss-m">${t('Use New / open study folder to bind this conversation to a local project folder first.', '先使用“新建/打开研究文件夹”把这条对话绑定到本地项目文件夹。')}</div>
+              <div class="ss-m">${t('Create or open a research project before starting a Pi conversation.', '开始 Pi 对话前，请先创建或打开一个研究项目。')}</div>
             </div>`;
     host.innerHTML = `
-      <div class="gd-rail-sec in-list">${t('Study folders', '研究文件夹')} <button class="gd-refresh-mini" data-refreshdrafts title="${t('Refresh study folders', '刷新研究文件夹')}">${icon('refresh', 10)}</button></div>
-      <div class="gd-rail-note"><strong>${t('Conversation memory', '对话记忆')}</strong><span>${t('Open these to continue setup inside Guided Copilot.', '打开这里可继续研究引导内的配置。')}</span></div>
+      <div class="gd-rail-sec in-list">${t('Research projects', '研究项目')} <button class="gd-refresh-mini" data-refreshdrafts title="${t('Refresh research projects', '刷新研究项目')}">${icon('refresh', 10)}</button></div>
+      <div class="gd-rail-note"><strong>${t('Project storage', '项目存储')}</strong><span>${t('EasyICU keeps study setup, runs, and evidence here. Pi manages conversations separately.', 'EasyICU 在这里保存研究配置、运行和证据；对话由 Pi 单独管理。')}</span></div>
       ${draftHtml}`;
   }
 
@@ -5122,6 +5159,12 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       loadGuidedDrafts();
       if (window.EU_GUIDED_PI && window.EU_GUIDED_PI.mount) {
         window.EU_GUIDED_PI.mount(root.querySelector('#gdPiShell'));
+        if (selectedGuidedDraft && window.EU_GUIDED_PI.bindProject) {
+          window.EU_GUIDED_PI.bindProject({
+            id: selectedGuidedDraft.id,
+            title: selectedGuidedDraft.title || selectedGuidedDraft.id,
+          });
+        }
       }
       // The global topbar Demo/Real toggle is the source of truth on entry:
       // sync UP only (demo → real), so a Real-mode user never sees the aside

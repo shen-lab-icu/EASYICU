@@ -8,7 +8,7 @@
     host: null, conv: null, runtime: null, sessions: [], session: null,
     messages: [], loading: true, creating: false, busy: false, jobId: '',
     source: null, error: '', shell: 'pi', draft: '', setupSaving: false,
-    showSetup: false, availableModels: [],
+    showSetup: false, availableModels: [], project: null,
   };
 
   function tr(en, zh) { return window.EU_LANG === 'zh' ? zh : en; }
@@ -20,19 +20,24 @@
   function api() { return window.EU_API || {}; }
   function isStaticPreview() { return window.location && window.location.protocol === 'file:'; }
   function runtimeReady() { return !!(state.runtime && state.runtime.status === 'ready'); }
+  function projectId() { return String((state.project && state.project.id) || '').trim(); }
   function setShell(shell) {
     state.shell = shell === 'pi' ? 'pi' : 'legacy';
     if (state.conv) state.conv.classList.toggle('pi-active', state.shell === 'pi');
     render();
   }
   function rememberSession(id) {
+    const key = projectId() ? 'easyicu_pi_copilot_session:' + encodeURIComponent(projectId()) : '';
+    if (!key) return;
     try {
-      if (id) localStorage.setItem('easyicu_pi_copilot_session', id);
-      else localStorage.removeItem('easyicu_pi_copilot_session');
+      if (id) localStorage.setItem(key, id);
+      else localStorage.removeItem(key);
     } catch (e) {}
   }
   function rememberedSession() {
-    try { return localStorage.getItem('easyicu_pi_copilot_session') || ''; } catch (e) { return ''; }
+    const key = projectId() ? 'easyicu_pi_copilot_session:' + encodeURIComponent(projectId()) : '';
+    if (!key) return '';
+    try { return localStorage.getItem(key) || ''; } catch (e) { return ''; }
   }
   function errorText(error) {
     if (!error) return '';
@@ -47,6 +52,9 @@
     }
     if (error.code === 'pi_provider_connection_failed') {
       return tr('EasyICU could not reach the model service.', 'EasyICU 无法连接到模型服务，请检查地址和服务状态。');
+    }
+    if (error.code === 'pi_session_project_mismatch') {
+      return tr('That Pi conversation belongs to another research project.', '该 Pi 对话属于另一个研究项目，不能在当前项目中打开。');
     }
     if (isStaticPreview() && String(error.message || '').includes('Failed to fetch')) {
       return tr('This is a static preview without the EasyICU backend. Start EasyICU and open http://127.0.0.1:8765/#guided.', '这是不带 EasyICU 后端的静态预览。请启动 EasyICU，再打开 http://127.0.0.1:8765/#guided。');
@@ -156,13 +164,24 @@
     return `
       <div class="gpi-activate">
         <div class="gpi-kicker">PI AGENTSESSION · EASYICU GATEWAY</div>
-        <h2>${tr('Start a governed research conversation', '开始受治理的科研对话')}</h2>
+        <h2>${tr('Start a conversation in this project', '在当前项目中开始对话')}</h2>
+        <div class="gpi-config-note ok"><span class="gpi-dot"></span>${tr('Research project', '研究项目')}: <strong>${esc((state.project && state.project.title) || projectId())}</strong></div>
         <p>${tr('Pi handles conversation and tool turns. EasyICU still owns study setup, runs, validation, and evidence. Patient rows and generic coding tools are blocked.', 'Pi 负责对话与工具循环；研究配置、运行、验证和证据仍由 EasyICU 管理。患者行级数据和通用编程工具均被阻止。')}</p>
         <button class="btn primary" type="button" data-gpi-create ${state.creating ? 'disabled' : ''}>
           ${state.creating ? tr('Starting…', '正在启动…') : tr('I agree — activate Pi Copilot', '我同意——启用 Pi Copilot')}
         </button>
         <div class="gpi-consent">${tr('This sends only your chat text and PHI-safe EasyICU summaries to the configured shell model. It does not authorize a scientific provider run.', '仅将你的对话文字和经 PHI 安全投影的 EasyICU 摘要发送给已配置的交互模型；这不代表授权科研模型运行。')}</div>
-        ${saved ? `<div class="gpi-saved"><div class="gpi-section-title">${tr('Saved Pi sessions', '已保存的 Pi 会话')}</div>${saved}</div>` : ''}
+        ${saved ? `<div class="gpi-saved"><div class="gpi-section-title">${tr('Pi conversations in this project', '当前项目中的 Pi 对话')}</div>${saved}</div>` : ''}
+        <button class="gpi-link" type="button" data-gpi-legacy>${tr('Use the local Guided workflow', '使用本地研究引导流程')}</button>
+      </div>`;
+  }
+
+  function projectRequiredPanel() {
+    return `
+      <div class="gpi-activate">
+        <div class="gpi-kicker">EASYICU PROJECT · PI CONVERSATIONS</div>
+        <h2>${tr('Select a research project first', '请先选择研究项目')}</h2>
+        <p>${tr('Use the Research projects list on the left, or create a new project. EasyICU keeps study setup, runs, and evidence in that project; Pi keeps its conversation history.', '请从左侧“研究项目”中选择一个项目，或新建项目。EasyICU 在项目中保存研究配置、运行和证据；Pi 保存自己的对话历史。')}</p>
         <button class="gpi-link" type="button" data-gpi-legacy>${tr('Use the local Guided workflow', '使用本地研究引导流程')}</button>
       </div>`;
   }
@@ -192,7 +211,7 @@
     return `
       <div class="gpi-panel">
         <header class="gpi-head">
-          <div><div class="gpi-kicker">PI AGENTSESSION · UX STATE ONLY</div><div class="gpi-title">${esc(session.title || 'Pi Copilot')} <span class="gpi-live">${state.busy ? tr('streaming', '生成中') : tr('ready', '就绪')}</span></div></div>
+          <div><div class="gpi-kicker">PI AGENTSESSION · ${esc((state.project && state.project.title) || projectId())}</div><div class="gpi-title">${esc(session.title || 'Pi Copilot')} <span class="gpi-live">${state.busy ? tr('streaming', '生成中') : tr('ready', '就绪')}</span></div></div>
           <div class="gpi-head-meta">
             <span>${esc(model.id || (state.runtime && state.runtime.model) || 'model')}</span>
             <button class="gpi-link" type="button" data-gpi-config>${tr('Model service', '模型服务')}</button>
@@ -225,7 +244,7 @@
     state.host.hidden = false;
     state.host.innerHTML = state.shell === 'legacy'
       ? statusBanner()
-      : ((state.showSetup || !runtimeReady()) ? setupPanel() : (state.session ? sessionPanel() : activatePanel()));
+      : ((state.showSetup || !runtimeReady()) ? setupPanel() : (!projectId() ? projectRequiredPanel() : (state.session ? sessionPanel() : activatePanel())));
     requestAnimationFrame(() => {
       const log = state.host && state.host.querySelector('[data-gpi-log]');
       if (log) log.scrollTop = log.scrollHeight;
@@ -241,14 +260,9 @@
     try {
       const payload = await api().loadPiCopilotStatus();
       state.runtime = payload && payload.runtime;
-      if (runtimeReady()) {
-        const listed = await api().loadPiCopilotSessions(30);
-        state.sessions = (listed && listed.sessions) || [];
-        const remembered = rememberedSession();
-        if (remembered && state.sessions.some(row => row.session_id === remembered)) {
-          await openSession(remembered); return;
-        }
-      } else {
+      if (runtimeReady() && projectId()) {
+        await loadProjectSessions();
+      } else if (!runtimeReady()) {
         state.showSetup = true;
       }
     } catch (error) {
@@ -283,7 +297,7 @@
         return;
       }
       state.showSetup = false;
-      await createSession();
+      if (projectId()) await createSession();
     } catch (error) {
       state.availableModels = Array.isArray(error && error.details && error.details.available_models)
         ? error.details.available_models.map(String) : [];
@@ -294,11 +308,12 @@
   }
 
   async function createSession() {
-    if (state.creating) return;
+    if (state.creating || !projectId()) return;
     state.creating = true; state.error = ''; render();
     try {
       const payload = await api().createPiCopilotSession({
-        title: tr('EasyICU research session', 'EasyICU 科研会话'),
+        project_id: projectId(),
+        title: `${(state.project && state.project.title) || tr('Research project', '研究项目')} · Pi`,
         language: window.EU_LANG === 'zh' ? 'zh' : 'en',
         thinking_level: 'off', external_llm_opt_in: true,
       });
@@ -310,9 +325,12 @@
   }
 
   async function openSession(sessionId) {
+    const expectedProjectId = projectId();
+    if (!expectedProjectId) return;
     state.error = '';
     try {
-      const payload = await api().loadPiCopilotSession(sessionId);
+      const payload = await api().loadPiCopilotSession(sessionId, expectedProjectId);
+      if (expectedProjectId !== projectId()) return;
       state.session = payload.session; state.messages = transcriptMessages(state.session);
       rememberSession(sessionId); setShell('pi');
     } catch (error) { rememberSession(''); state.error = errorText(error); render(); }
@@ -339,12 +357,45 @@
   }
   function closeSource() { if (state.source) { state.source.close(); state.source = null; } }
   async function refreshSession() {
-    if (!state.session) return;
+    if (!state.session || !projectId()) return;
     try {
-      const payload = await api().loadPiCopilotSession(state.session.session_id);
+      const payload = await api().loadPiCopilotSession(state.session.session_id, projectId());
       state.session = payload.session; state.messages = transcriptMessages(state.session);
     } catch (e) {}
   }
+
+  async function loadProjectSessions() {
+    const expectedProjectId = projectId();
+    if (!runtimeReady() || !expectedProjectId) return;
+    const listed = await api().loadPiCopilotSessions(30, expectedProjectId);
+    if (expectedProjectId !== projectId()) return;
+    state.sessions = (listed && listed.sessions) || [];
+    const remembered = rememberedSession();
+    if (remembered && state.sessions.some(row => row.session_id === remembered)) {
+      await openSession(remembered);
+    }
+  }
+
+  function bindProject(project) {
+    const next = project && String(project.id || '').trim()
+      ? { id: String(project.id).trim(), title: String(project.title || project.id).trim() }
+      : null;
+    if (projectId() === String((next && next.id) || '')) return;
+    closeSource();
+    state.project = next;
+    state.session = null;
+    state.sessions = [];
+    state.messages = [];
+    state.busy = false;
+    state.jobId = '';
+    state.error = '';
+    render();
+    if (next && runtimeReady()) {
+      loadProjectSessions().catch(error => { state.error = errorText(error); render(); });
+    }
+  }
+
+  function isActive() { return state.shell === 'pi'; }
   function watchJob(jobId) {
     closeSource();
     state.source = new EventSource('/api/jobs/' + encodeURIComponent(jobId) + '/events');
@@ -447,5 +498,5 @@
   function unmount() {
     closeSource(); state.host = null; state.conv = null; state.busy = false; state.jobId = '';
   }
-  window.EU_GUIDED_PI = { mount, unmount, setShell };
+  window.EU_GUIDED_PI = { mount, unmount, setShell, bindProject, isActive };
 })();

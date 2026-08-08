@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 
 from easyicu.webserver import settings
 from easyicu.webserver.pi_copilot.contracts import (
@@ -251,12 +252,12 @@ def test_session_requires_both_global_and_per_session_opt_in(
     monkeypatch.setattr(settings, "load_settings", lambda: {"ai_enabled": False, "language": "en"})
     service = PiCopilotService(store_path=tmp_path / "sessions.json", gateway=FakeGateway())
     with pytest.raises(PiCopilotError) as global_block:
-        service.create_session(external_llm_opt_in=True)
+        service.create_session(project_id="project-opt-in", external_llm_opt_in=True)
     assert global_block.value.code == "external_llm_opt_in_required"
 
     monkeypatch.setattr(settings, "load_settings", lambda: {"ai_enabled": True, "language": "en"})
     with pytest.raises(PiCopilotError) as turn_block:
-        service.create_session(external_llm_opt_in=False)
+        service.create_session(project_id="project-opt-in", external_llm_opt_in=False)
     assert turn_block.value.code == "external_llm_opt_in_required"
 
 
@@ -265,7 +266,7 @@ def test_session_binding_stales_then_rebinds_explicitly(
     study_state: dict[str, Any],
 ) -> None:
     service = PiCopilotService(store_path=tmp_path / "sessions.json", gateway=FakeGateway())
-    created = service.create_session(external_llm_opt_in=True)
+    created = service.create_session(project_id="project-binding", external_llm_opt_in=True)
     session_id = created["session"]["session_id"]
     assert created["session"]["binding"]["study_revision"] == 3
 
@@ -290,7 +291,7 @@ def test_session_binding_tracks_the_current_run(
         store_path=tmp_path / "sessions.json",
         gateway=FakeGateway(),
     )
-    created = service.create_session(external_llm_opt_in=True)
+    created = service.create_session(project_id="project-run", external_llm_opt_in=True)
     session_id = created["session"]["session_id"]
     monkeypatch.setattr(
         service_module.agent_runs,
@@ -356,6 +357,44 @@ def test_new_context_created_from_unbound_chat_requires_rebind(
     assert rebound["session"]["binding"]["study_context_id"] == study_state["id"]
 
 
+def test_pi_conversations_are_immutably_scoped_to_one_project(
+    tmp_path: Path,
+) -> None:
+    gateway = FakeGateway()
+    service = PiCopilotService(
+        store_path=tmp_path / "sessions.json",
+        gateway=gateway,
+    )
+    alpha = PiSessionRecord(session_id="pi-alpha", project_id="project-alpha")
+    beta = PiSessionRecord(session_id="pi-beta", project_id="project-beta")
+    legacy = PiSessionRecord(session_id="pi-legacy")
+    service._write_records([alpha, beta, legacy])
+
+    listed = service.list_sessions(project_id="project-alpha")
+    assert [row["session_id"] for row in listed["sessions"]] == ["pi-alpha"]
+    assert listed["sessions"][0]["project_id"] == "project-alpha"
+
+    with pytest.raises(PiCopilotError) as mismatch:
+        service.get_session("pi-alpha", project_id="project-beta")
+    assert mismatch.value.code == "pi_session_project_mismatch"
+    assert not gateway.calls
+
+    with pytest.raises(ValidationError):
+        alpha.project_id = "project-beta"
+
+
+def test_new_pi_conversation_requires_a_project_binding(tmp_path: Path) -> None:
+    service = PiCopilotService(
+        store_path=tmp_path / "sessions.json",
+        gateway=FakeGateway(),
+    )
+
+    with pytest.raises(PiCopilotError) as missing:
+        service.create_session(project_id="", external_llm_opt_in=True)
+
+    assert missing.value.code == "pi_project_binding_required"
+
+
 def test_message_grants_are_host_held_and_message_job_is_not_scientific(
     tmp_path: Path,
     study_state: dict[str, Any],
@@ -363,7 +402,9 @@ def test_message_grants_are_host_held_and_message_job_is_not_scientific(
 ) -> None:
     gateway = FakeGateway()
     service = PiCopilotService(store_path=tmp_path / "sessions.json", gateway=gateway)
-    session_id = service.create_session(external_llm_opt_in=True)["session"]["session_id"]
+    session_id = service.create_session(
+        project_id="project-grants", external_llm_opt_in=True
+    )["session"]["session_id"]
 
     submitted = service.send_message(
         session_id,
@@ -436,7 +477,9 @@ def test_session_rejects_overlapping_prompts(
         store_path=tmp_path / "sessions.json",
         gateway=BlockingGateway(),
     )
-    session_id = service.create_session(external_llm_opt_in=True)["session"]["session_id"]
+    session_id = service.create_session(
+        project_id="project-overlap", external_llm_opt_in=True
+    )["session"]["session_id"]
     first = service.send_message(session_id, message="First aggregate question")
     assert entered.wait(timeout=3)
     try:
