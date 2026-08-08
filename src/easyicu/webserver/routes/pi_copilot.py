@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StringConstraints
 
 from easyicu.webserver.pi_copilot import get_pi_copilot_service
@@ -36,6 +37,10 @@ ModelText = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1, max_length=256),
 ]
+WorkspaceFileText = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=240),
+]
 
 
 class PiSessionCreateRequest(BaseModel):
@@ -43,6 +48,7 @@ class PiSessionCreateRequest(BaseModel):
 
     project_id: ShortText
     title: str = "Pi Copilot"
+    agent_mode: Literal["research", "workspace"] = "research"
     language: Literal["en", "zh"] = "en"
     thinking_level: Literal["off", "minimal", "low", "medium", "high"] = "off"
     external_llm_opt_in: StrictBool = False
@@ -53,9 +59,11 @@ class PiMessageRequest(BaseModel):
 
     project_id: ShortText
     message: MessageText
-    allowed_actions: list[Literal["configure", "run", "cancel"]] = Field(
+    allowed_actions: list[
+        Literal["configure", "run", "cancel", "workspace_write"]
+    ] = Field(
         default_factory=list,
-        max_length=3,
+        max_length=4,
     )
 
 
@@ -126,6 +134,7 @@ def post_pi_copilot_session(body: PiSessionCreateRequest) -> dict:
         return get_pi_copilot_service().create_session(
             project_id=body.project_id,
             title=body.title,
+            agent_mode=body.agent_mode,
             language=body.language,
             thinking_level=body.thinking_level,
             external_llm_opt_in=body.external_llm_opt_in,
@@ -146,6 +155,50 @@ def post_pi_copilot_project_initialize(
         )
     except PiCopilotError as exc:
         _raise_http(exc)
+
+
+@router.get("/api/copilot/pi/projects/{project_id}/workspace/file")
+def get_pi_copilot_workspace_file(
+    project_id: ShortText,
+    file: WorkspaceFileText,
+) -> dict:
+    try:
+        return get_pi_copilot_service().get_workspace_file(
+            project_id=project_id,
+            relative_file=file,
+        )
+    except PiCopilotError as exc:
+        _raise_http(exc)
+
+
+@router.get(
+    "/api/copilot/pi/projects/{project_id}/workspace/preview",
+    response_class=HTMLResponse,
+)
+def get_pi_copilot_workspace_preview(
+    project_id: ShortText,
+    file: WorkspaceFileText,
+) -> HTMLResponse:
+    try:
+        payload = get_pi_copilot_service().get_workspace_preview(
+            project_id=project_id,
+            relative_file=file,
+        )
+    except PiCopilotError as exc:
+        _raise_http(exc)
+    artifact = payload["artifact"]
+    return HTMLResponse(
+        content=str(artifact["text"]),
+        headers={
+            "Content-Security-Policy": (
+                "default-src 'none'; style-src 'unsafe-inline'; "
+                "script-src 'unsafe-inline'; img-src data:; "
+                "connect-src 'none'; form-action 'none'; base-uri 'none'"
+            ),
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @router.get("/api/copilot/pi/sessions")

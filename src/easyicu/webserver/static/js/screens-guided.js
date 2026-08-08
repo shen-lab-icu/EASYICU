@@ -5112,10 +5112,13 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
               </div>
             </div>
           </div>
-          <aside class="gd-aside">
-            <div class="gd-aside-head"><div class="eyebrow">${t('Building your study', '正在搭建你的研究')}</div><div class="at">${t('Study workspace', '研究工作区')}</div><div class="asub">${t('Assembles as we talk · edit any step', '随对话逐步组装 · 任意步骤可编辑')}</div></div>
-            <div class="gd-aside-body" id="gdAsideBody"></div>
-            <div class="gd-aside-foot"><div class="note ok" style="padding:9px 11px;"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="t" style="font-size:11.5px;">${t('Evidence-bound', '证据绑定')}</div><div class="d" style="font-size:10.5px;">${t('Draft stays gated until checks pass.', '草稿在检查通过前保持受限。')}</div></div></div></div>
+          <aside class="gd-aside" id="gdContextAside">
+            <div class="gd-study-aside" id="gdStudyAside">
+              <div class="gd-aside-head"><div class="eyebrow">${t('Building your study', '正在搭建你的研究')}</div><div class="at">${t('Study workspace', '研究工作区')}</div><div class="asub">${t('Assembles as we talk · edit any step', '随对话逐步组装 · 任意步骤可编辑')}</div></div>
+              <div class="gd-aside-body" id="gdAsideBody"></div>
+              <div class="gd-aside-foot"><div class="note ok" style="padding:9px 11px;"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="t" style="font-size:11.5px;">${t('Evidence-bound', '证据绑定')}</div><div class="d" style="font-size:10.5px;">${t('Draft stays gated until checks pass.', '草稿在检查通过前保持受限。')}</div></div></div></div>
+            </div>
+            <div class="gpi-preview-aside" id="gdPreviewAside" hidden></div>
           </aside>
         </div>
         <div id="gdFolderDialogHost"></div>
@@ -5127,6 +5130,9 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       renderGuidedFolderControls();
       renderGuidedFolderDialog();
       renderAside();
+      if (window.EU_GUIDED_PI_PREVIEW && window.EU_GUIDED_PI_PREVIEW.mount) {
+        window.EU_GUIDED_PI_PREVIEW.mount(root.querySelector('#gdPreviewAside'));
+      }
       renderSessions();
       loadGuidedDrafts();
       if (window.EU_GUIDED_PI && window.EU_GUIDED_PI.mount) {

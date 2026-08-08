@@ -30,7 +30,7 @@ const SESSION_DIR = resolve(
   process.env.EASYICU_PI_SESSION_DIR || join(process.cwd(), ".easyicu-pi-sessions"),
 );
 const CWD = resolve(process.env.EASYICU_PI_CWD || process.cwd());
-const TOOL_NAMES = Object.freeze([
+const RESEARCH_TOOL_NAMES = Object.freeze([
   "easyicu_workspace_status",
   "easyicu_inspect_context",
   "easyicu_inspect_plan",
@@ -47,6 +47,16 @@ const TOOL_NAMES = Object.freeze([
   "easyicu_cancel",
   "easyicu_request_replan",
 ]);
+const WORKSPACE_TOOL_NAMES = Object.freeze([
+  "easyicu_load_skill",
+  "easyicu_list_project_files",
+  "easyicu_read_project_file",
+  "easyicu_write_project_file",
+  "easyicu_edit_project_file",
+  "easyicu_check_project_file",
+  "easyicu_preview_project_file",
+]);
+const ALL_TOOL_NAMES = Object.freeze([...RESEARCH_TOOL_NAMES, ...WORKSPACE_TOOL_NAMES]);
 
 const sessions = new Map();
 const activeRequestBySession = new Map();
@@ -195,7 +205,8 @@ async function getModelRuntime() {
   }
 }
 
-function resourceLoader() {
+function resourceLoader(agentMode) {
+  const workspaceMode = agentMode === "workspace";
   return {
     getExtensions: () => ({ extensions: [], errors: [], runtime: createExtensionRuntime() }),
     getSkills: () => ({ skills: [], diagnostics: [] }),
@@ -205,12 +216,18 @@ function resourceLoader() {
     getSystemPrompt: () => [
       "You are the conversational shell for EasyICU, a local ICU research workspace.",
       "EasyICU, not this conversation, owns study configuration, scientific plans, execution, validation, evidence, and readiness.",
-      "Use only the registered EasyICU tools. You have no filesystem, shell, code-editing, raw-data, network, credential, or direct EvidenceStore access.",
+      workspaceMode
+        ? "You are in workspace mode. Use the registered project artifact tools to inspect, create, edit, check, and preview files inside this project's isolated workspace. Never substitute a large code block in chat when an authorized tool can create the requested artifact."
+        : "You are in research mode. Use only the registered EasyICU research tools. You have no project-file authoring capability in this mode.",
+      "You have no arbitrary host filesystem, shell, raw-data, network, credential, or direct EvidenceStore access.",
       "Never ask for or reproduce patient rows, identifiers, timestamps, free-text notes, credentials, or raw files.",
       "Inspection results are bounded host projections. Explain their stable codes and owner; do not invent missing details.",
       "A tool request to save study setup, run, cancel, or replan can be blocked unless the user granted that action for this turn. Do not claim an action happened unless the tool confirms it.",
       "A Pi session is UX history only. EasyICU study revision, run id, plan receipts, and evidence artefacts remain authoritative.",
       "Keep shared guidance case-neutral. Ask for unread study slots rather than filling defaults.",
+      workspaceMode
+        ? "For a webpage, calculator, dashboard, or interactive artifact: load the web-prototype skill, list files, write or edit the artifact, read it back, run the static check, and prepare its web preview. Label simulated formulas and values as unvalidated demo content."
+        : "If the user asks to create code or files, explain that they must open workspace mode; do not paste a pretend substitute artifact.",
     ].join("\n"),
     getSystemPromptSource: () => undefined,
     getAppendSystemPrompt: () => [],
@@ -261,7 +278,7 @@ function hostTool(sessionId, definition) {
   });
 }
 
-function customTools(sessionId) {
+function customTools(sessionId, agentMode) {
   const optionalRunId = Type.Optional(Type.String({ maxLength: 160 }));
   const empty = Type.Object({}, { additionalProperties: false });
   const optionalText = (maxLength) => Type.Optional(Type.String({ maxLength }));
@@ -279,7 +296,7 @@ function customTools(sessionId) {
     hours: Type.Optional(Type.Number()), observation_hours: Type.Optional(Type.Number()),
     anchor: optionalText(500), preset: optionalText(500), label: optionalText(500),
   }, { additionalProperties: false });
-  return [
+  const tools = [
     hostTool(sessionId, { name: "easyicu_workspace_status", label: "EasyICU workspace status", description: "Inspect the current EasyICU workspace and authoritative study/run binding without reading patient rows or source paths.", parameters: empty }),
     hostTool(sessionId, { name: "easyicu_inspect_context", label: "Inspect study context", description: "Read the PHI-safe projection of the bound typed StudyContext and its revision.", parameters: empty }),
     hostTool(sessionId, { name: "easyicu_inspect_plan", label: "Inspect scientific plan", description: "Read a bounded projection of the current or selected EasyICU plan artefact.", parameters: Type.Object({ run_id: optionalRunId }, { additionalProperties: false }) }),
@@ -303,6 +320,17 @@ function customTools(sessionId) {
     hostTool(sessionId, { name: "easyicu_cancel", executionMode: "sequential", label: "Cancel EasyICU job", description: "Request cooperative cancellation of the specifically bound EasyICU job. Requires a host-held one-turn user authorization.", parameters: Type.Object({ job_id: Type.Optional(Type.String({ maxLength: 160 })) }, { additionalProperties: false }) }),
     hostTool(sessionId, { name: "easyicu_request_replan", executionMode: "sequential", label: "Request replan", description: "Request re-planning through EasyICU authority. Version 1 returns a typed blocked result until a public replan owner exists.", parameters: Type.Object({ reason: Type.String({ minLength: 1, maxLength: 1200 }) }, { additionalProperties: false }) }),
   ];
+  if (agentMode !== "workspace") return tools;
+  const projectFile = Type.String({ minLength: 1, maxLength: 240 });
+  return tools.concat([
+    hostTool(sessionId, { name: "easyicu_load_skill", executionMode: "sequential", label: "Load workspace skill", description: "Load one reviewed EasyICU project-workspace skill before authoring an artifact.", parameters: Type.Object({ name: Type.Literal("web-prototype") }, { additionalProperties: false }) }),
+    hostTool(sessionId, { name: "easyicu_list_project_files", executionMode: "sequential", label: "List project files", description: "List bounded text and web artifacts in this project's isolated workspace.", parameters: empty }),
+    hostTool(sessionId, { name: "easyicu_read_project_file", executionMode: "sequential", label: "Read project file", description: "Read a bounded UTF-8 file from this project's isolated workspace.", parameters: Type.Object({ file: projectFile, start_line: Type.Optional(Type.Integer({ minimum: 1, maximum: 100000 })), end_line: Type.Optional(Type.Integer({ minimum: 1, maximum: 100000 })) }, { additionalProperties: false }) }),
+    hostTool(sessionId, { name: "easyicu_write_project_file", executionMode: "sequential", label: "Write project file", description: "Create or replace a bounded text or web artifact in this project's isolated workspace. Requires the host-held workspace-write grant for this message.", parameters: Type.Object({ file: projectFile, content: Type.String({ minLength: 1, maxLength: 262144 }) }, { additionalProperties: false }) }),
+    hostTool(sessionId, { name: "easyicu_edit_project_file", executionMode: "sequential", label: "Edit project file", description: "Apply one exact replacement to a project artifact. Requires the host-held workspace-write grant for this message.", parameters: Type.Object({ file: projectFile, old_text: Type.String({ minLength: 1, maxLength: 120000 }), new_text: Type.String({ maxLength: 120000 }) }, { additionalProperties: false }) }),
+    hostTool(sessionId, { name: "easyicu_check_project_file", executionMode: "sequential", label: "Check project file", description: "Run a bounded non-executing syntax or structure check on a project artifact.", parameters: Type.Object({ file: projectFile }, { additionalProperties: false }) }),
+    hostTool(sessionId, { name: "easyicu_preview_project_file", executionMode: "sequential", label: "Prepare web preview", description: "Prepare a governed browser preview for a bounded HTML artifact in this project workspace.", parameters: Type.Object({ file: projectFile }, { additionalProperties: false }) }),
+  ]);
 }
 
 async function requestHostTool(sessionId, name, args) {
@@ -336,13 +364,14 @@ function sessionState(record) {
   const stats = session.getSessionStats();
   return {
     session_id: record.externalId,
+    agent_mode: record.agentMode,
     pi_session_id: session.sessionId,
     session_file: session.sessionFile,
     model: session.model ? { provider: session.model.provider, id: session.model.id } : null,
     thinking_level: session.thinkingLevel,
     message_count: session.messages.length,
     streaming: session.isStreaming,
-    enabled_tools: session.getActiveToolNames().filter((name) => TOOL_NAMES.includes(name)),
+    enabled_tools: session.getActiveToolNames().filter((name) => ALL_TOOL_NAMES.includes(name)),
     transcript: session.messages.slice(-100).map(projectTranscriptMessage).filter(Boolean),
     shell_usage: {
       tokens: stats.tokens,
@@ -356,12 +385,13 @@ function sessionState(record) {
 }
 
 async function createSession(params) {
-  assertExactKeys(params, new Set(["session_id", "session_file", "thinking_level"]), "pi_session_create_invalid");
+  assertExactKeys(params, new Set(["session_id", "session_file", "thinking_level", "agent_mode"]), "pi_session_create_invalid");
   const externalId = boundedText(params.session_id, 160).trim();
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,159}$/.test(externalId)) {
     throw Object.assign(new Error("invalid external session id"), { code: "pi_session_id_invalid" });
   }
   if (sessions.has(externalId)) return sessionState(sessions.get(externalId));
+  const agentMode = params.agent_mode === "workspace" ? "workspace" : "research";
   const { runtime, selected, config } = await getModelRuntime();
   const manager = params.session_file
     ? SessionManager.open(safeSessionFile(params.session_file), SESSION_DIR, CWD)
@@ -379,12 +409,12 @@ async function createSession(params) {
     model: selected,
     thinkingLevel,
     modelRuntime: runtime,
-    resourceLoader: resourceLoader(),
+    resourceLoader: resourceLoader(agentMode),
     sessionManager: manager,
     settingsManager,
     noTools: "builtin",
-    tools: TOOL_NAMES,
-    customTools: customTools(externalId),
+    tools: agentMode === "workspace" ? ALL_TOOL_NAMES : RESEARCH_TOOL_NAMES,
+    customTools: customTools(externalId, agentMode),
   });
   const unsubscribe = session.subscribe((event) => {
     const requestId = activeRequestBySession.get(externalId);
@@ -394,6 +424,7 @@ async function createSession(params) {
   });
   const record = {
     externalId,
+    agentMode,
     session,
     unsubscribe,
     sessionTokenBudget: config.sessionTokenBudget,
@@ -469,7 +500,11 @@ async function handleRequest(request) {
         model: String(process.env.EASYICU_PI_MODEL || "gpt-5.6-luna"),
         provider: String(process.env.EASYICU_PI_PROVIDER || "easyicu-local"),
         built_in_tools_enabled: [],
-        custom_tools: [...TOOL_NAMES],
+        custom_tools: [...RESEARCH_TOOL_NAMES],
+        custom_tools_by_mode: {
+          research: [...RESEARCH_TOOL_NAMES],
+          workspace: [...ALL_TOOL_NAMES],
+        },
       };
     case "session.create":
       return await createSession(params);

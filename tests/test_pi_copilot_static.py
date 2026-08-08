@@ -20,10 +20,15 @@ def _read(relative: str) -> str:
 
 def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     index = _read("index.html")
-    assert "css/guided-pi.css?v=20260808-pi-timeline5" in index
-    assert "js/screens-guided-pi.js?v=20260808-pi-timeline5" in index
-    assert "js/api.js?v=20260808-pi-authority2" in index
+    assert "css/guided-pi.css?v=20260808-workspace-agent1" in index
+    assert "css/guided-pi-preview.css?v=20260808-workspace-agent1" in index
+    assert "js/screens-guided-pi-preview.js?v=20260808-workspace-agent1" in index
+    assert "js/screens-guided-pi.js?v=20260808-workspace-agent1" in index
+    assert "js/api.js?v=20260808-pi-workspace1" in index
     assert index.index("css/guided.css") < index.index("css/guided-pi.css")
+    assert index.index("js/screens-guided-pi-preview.js") < index.index(
+        "js/screens-guided-pi.js"
+    )
     assert index.index("js/screens-guided-pi.js") < index.index("js/screens-guided.js")
 
 
@@ -72,6 +77,9 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert 'data-gpi-grant="configure"' in pi_owner
     assert 'data-gpi-grant="run"' in pi_owner
     assert 'data-gpi-grant="cancel"' in pi_owner
+    assert 'data-gpi-grant="workspace_write"' in pi_owner
+    assert 'data-gpi-resource-file' in pi_owner
+    assert 'data-gpi-mode-switch="workspace"' in pi_owner
     assert "Used ${toolSteps.length} EasyICU tools" in pi_owner
     assert "gpi-activity-live" in pi_owner
     assert "completedToolLabel" in pi_owner
@@ -96,6 +104,8 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
         "sendPiCopilotMessage",
         "rebindPiCopilotSession",
         "abortPiCopilotSession",
+        "loadPiCopilotWorkspaceFile",
+        "piCopilotWorkspacePreviewUrl",
     ):
         assert method in api
     assert "fetch(" not in pi_owner
@@ -103,13 +113,17 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
 
 def test_pi_css_is_route_owned_and_does_not_pollute_catch_all_files() -> None:
     owner = _read("css/guided-pi.css")
+    preview_owner = _read("css/guided-pi-preview.css")
     assert ".gpi-panel" in owner
     assert ".gpi-activity" in owner
     assert ".gpi-activity-live" in owner
     assert ".gpi-activity-step-copy>span" in owner
     assert "pi-gui's MIT-licensed timeline-item/timeline.css" in owner
     assert ".gpi-message{max-width:768px" in owner
-    assert ".gpi-activity,.gpi-activity-live{max-width:768px" in owner
+    assert ".gpi-activity,.gpi-activity-live,.gpi-activity-running{max-width:768px" in owner
+    assert ".gpi-preview-aside" in preview_owner
+    assert ".gpi-preview-frame" in preview_owner
+    assert ".gpi-preview-code" in preview_owner
     assert ".gpi-tool" not in owner
     assert "gpi-avatar" not in owner
     assert ".gd-conv.pi-active" in owner
@@ -117,6 +131,7 @@ def test_pi_css_is_route_owned_and_does_not_pollute_catch_all_files() -> None:
     assert ":has(" not in owner
     for foreign in (".patient-", ".cohort-", ".crossdb-", ".settings-", ".idea-"):
         assert foreign not in owner
+        assert foreign not in preview_owner
     for relative in (
         "css/app.css",
         "css/redesign.css",
@@ -149,19 +164,21 @@ def test_pi_gui_adaptation_is_attributed_and_packaged() -> None:
 
 
 def test_pi_css_has_balanced_comments_and_braces() -> None:
-    owner = _read("css/guided-pi.css")
-    assert owner.count("/*") == owner.count("*/")
-    without_comments = re.sub(r"/\*.*?\*/", "", owner, flags=re.S)
-    assert without_comments.count("{") == without_comments.count("}")
+    for relative in ("css/guided-pi.css", "css/guided-pi-preview.css"):
+        owner = _read(relative)
+        assert owner.count("/*") == owner.count("*/")
+        without_comments = re.sub(r"/\*.*?\*/", "", owner, flags=re.S)
+        assert without_comments.count("{") == without_comments.count("}")
 
 
 def test_pi_frontend_javascript_parses() -> None:
     node = shutil.which("node")
     if node is None:
         pytest.skip("Node is not installed")
-    subprocess.run(
-        [node, "--check", str(STATIC / "js" / "screens-guided-pi.js")],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    for relative in ("js/screens-guided-pi.js", "js/screens-guided-pi-preview.js"):
+        subprocess.run(
+            [node, "--check", str(STATIC / relative)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )

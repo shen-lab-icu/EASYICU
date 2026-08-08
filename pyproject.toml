@@ -134,7 +134,8 @@ easyicu = ["data/*.json", "data/research_know_how/*.json"]
   "pi_copilot/node_app/THIRD_PARTY_NOTICES.md",
   "pi_copilot/node_app/src/main.mjs",
   "pi_copilot/node_app/src/event-projection.mjs",
-  "pi_copilot/node_app/src/shell-budget.mjs"
+  "pi_copilot/node_app/src/shell-budget.mjs",
+  "pi_copilot/node_app/src/skills/web-prototype/SKILL.md"
 ]
 "easyicu.research_agent.providers.prompts" = ["v1/*.txt"]
 # The DockerRunner docstring tells users to build the sandbox image from

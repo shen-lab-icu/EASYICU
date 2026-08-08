@@ -35,9 +35,12 @@ from .project_authority import (
 )
 from .provider_config import PiProviderConfigStore
 from .projections import reject_sensitive_message
+from .workspace import ProjectWorkspace
 
 MAX_SESSIONS = 100
-ALLOWED_TURN_ACTIONS = frozenset({"configure", "run", "cancel"})
+ALLOWED_TURN_ACTIONS = frozenset(
+    {"configure", "run", "cancel", "workspace_write"}
+)
 
 
 class PiCopilotService:
@@ -72,6 +75,15 @@ class PiCopilotService:
         self._busy_sessions: set[str] = set()
         self._pending_retirements: Dict[str, PiSessionRecord] = {}
         self._project_initialization_locks: Dict[str, threading.RLock] = {}
+        workspace_base = Path(
+            getattr(
+                self.gateway,
+                "cwd",
+                self.store_path.parent / "pi_project_workspace",
+            )
+        )
+        self.workspace_root = workspace_base.resolve()
+        self.workspace = ProjectWorkspace(self.workspace_root)
 
     def _project_initialization_lock(self, project_id: str) -> threading.RLock:
         with self._lock:
@@ -321,6 +333,8 @@ class PiCopilotService:
                     in {"openai-completions", "openai-responses"}
                 ),
                 "built_in_tools_enabled": [],
+                "agent_modes": ["research", "workspace"],
+                "workspace_scope": "isolated_project_artifacts",
                 "credential_values_exposed": False,
                 "configuration": dict(install.get("provider_configuration") or {}),
             },
@@ -650,6 +664,7 @@ class PiCopilotService:
         *,
         project_id: str,
         title: str = "Pi Copilot",
+        agent_mode: str = "research",
         language: str = "en",
         thinking_level: str = "off",
         study_context_id: Optional[str] = None,
@@ -663,6 +678,7 @@ class PiCopilotService:
                 status_code=409,
             )
         self._provider_gate(external_llm_opt_in=external_llm_opt_in)
+        resolved_mode = "workspace" if agent_mode == "workspace" else "research"
         install = self.gateway.installation_status()
         if not install.get("api_key_configured"):
             raise PiCopilotError(
@@ -697,6 +713,7 @@ class PiCopilotService:
             {
                 "session_id": session_id,
                 "thinking_level": resolved_thinking,
+                "agent_mode": resolved_mode,
             },
             timeout=30,
         )
@@ -706,6 +723,7 @@ class PiCopilotService:
             pi_session_id=str(state.get("pi_session_id") or "") or None,
             pi_session_file=str(state.get("session_file") or "") or None,
             title=str(title or "Pi Copilot").strip()[:160] or "Pi Copilot",
+            agent_mode=resolved_mode,
             language=resolved_language,
             thinking_level=resolved_thinking,
             external_llm_opt_in=True,
@@ -733,6 +751,7 @@ class PiCopilotService:
                 "session_id": record.session_id,
                 "session_file": record.pi_session_file,
                 "thinking_level": "off",
+                "agent_mode": record.agent_mode,
             },
             timeout=30,
         )
@@ -903,6 +922,7 @@ class PiCopilotService:
                 binding,
                 project_id=record.project_id,
             ),
+            workspace_root=self.workspace_root,
         )
         with self._lock:
             if record.session_id in self._busy_sessions:
@@ -1051,6 +1071,40 @@ class PiCopilotService:
             "session": self._public_session(record, gateway_state=state),
         }
 
+    def _assert_workspace_project(self, project_id: str) -> str:
+        clean = str(project_id or "").strip()
+        if not clean or not self.project_store.resolve(clean):
+            raise PiCopilotError(
+                "pi_workspace_project_not_initialized",
+                "Initialize the EasyICU project before opening its artifact workspace.",
+                status_code=409,
+            )
+        return clean
+
+    def get_workspace_file(
+        self,
+        *,
+        project_id: str,
+        relative_file: str,
+    ) -> Dict[str, Any]:
+        clean = self._assert_workspace_project(project_id)
+        return {
+            "ok": True,
+            "artifact": self.workspace.read_file(clean, relative_file),
+        }
+
+    def get_workspace_preview(
+        self,
+        *,
+        project_id: str,
+        relative_file: str,
+    ) -> Dict[str, Any]:
+        clean = self._assert_workspace_project(project_id)
+        return {
+            "ok": True,
+            "artifact": self.workspace.preview_file(clean, relative_file),
+        }
+
     def _public_session(
         self,
         record: PiSessionRecord,
@@ -1062,11 +1116,17 @@ class PiCopilotService:
             "session_id": record.session_id,
             "project_id": record.project_id,
             "title": record.title,
+            "agent_mode": record.agent_mode,
             "language": record.language,
             "thinking_level": state.get("thinking_level") or record.thinking_level,
             "model": state.get("model"),
             "message_count": int(state.get("message_count") or 0),
             "streaming": bool(state.get("streaming")),
+            "enabled_tools": (
+                list(state.get("enabled_tools") or [])[:40]
+                if isinstance(state.get("enabled_tools"), list)
+                else []
+            ),
             "transcript": (
                 list(state.get("transcript") or [])[:100]
                 if isinstance(state.get("transcript"), list)
