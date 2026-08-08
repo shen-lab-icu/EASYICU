@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, Literal, Optional
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
@@ -11,6 +12,7 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 PROTOCOL_VERSION = "easyicu.pi-copilot/1"
 SESSION_SCHEMA_VERSION = "easyicu.pi-copilot-session/1"
 MAX_MESSAGE_CHARS = 12_000
+AgentMode = Literal["research", "workspace"]
 
 
 def utc_now() -> str:
@@ -80,6 +82,7 @@ class PiSessionRecord(BaseModel):
     pi_session_id: Optional[str] = None
     pi_session_file: Optional[str] = None
     title: str = "Pi Copilot"
+    agent_mode: AgentMode = "research"
     language: Literal["en", "zh"] = "en"
     thinking_level: Literal["off", "minimal", "low", "medium", "high"] = "off"
     external_llm_opt_in: bool = False
@@ -137,6 +140,12 @@ class HostTurnGrant:
                 action for action, count in self._remaining.items() if count > 0
             )
 
+    @property
+    def provided_actions(self) -> frozenset[str]:
+        """Actions explicitly authorized for this turn, consumed or not."""
+
+        return self._provided
+
 
 AuthorityValidator = Callable[[AuthorityBinding], Dict[str, Any]]
 
@@ -151,10 +160,12 @@ class ToolExecutionContext:
         allowed_actions: Iterable[str] = (),
         grant: Optional[HostTurnGrant] = None,
         authority_validator: Optional[AuthorityValidator] = None,
+        workspace_root: Optional[Path] = None,
     ) -> None:
         self.session = session
         self.grant = grant or HostTurnGrant.from_actions(allowed_actions)
         self.authority_validator = authority_validator
+        self.workspace_root = Path(workspace_root).resolve() if workspace_root else None
         self._authority_invalidated_reason: Optional[str] = None
         self._lock = threading.Lock()
 
@@ -189,6 +200,7 @@ class ToolExecutionContext:
 
 
 __all__ = [
+    "AgentMode",
     "AuthorityBinding",
     "HostTurnGrant",
     "MAX_MESSAGE_CHARS",

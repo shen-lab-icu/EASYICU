@@ -19,6 +19,26 @@ class FakeService:
     def initialize_project(self, **kwargs) -> dict:
         return {"ok": True, "status": "ready", "received": kwargs}
 
+    def get_workspace_file(self, **kwargs) -> dict:
+        return {
+            "ok": True,
+            "artifact": {
+                "file": kwargs["relative_file"],
+                "media_type": "text/html",
+                "text": "<h1>Safe code view</h1>",
+            },
+        }
+
+    def get_workspace_preview(self, **kwargs) -> dict:
+        return {
+            "ok": True,
+            "artifact": {
+                "file": kwargs["relative_file"],
+                "media_type": "text/html",
+                "text": "<h1>Sandboxed preview</h1><script>document.title='demo'</script>",
+            },
+        }
+
     def configure_provider(self, **kwargs) -> dict:
         assert kwargs["api_key"] == "route-private-key"
         return {
@@ -137,6 +157,37 @@ def test_project_initialization_is_an_explicit_typed_mutation(monkeypatch) -> No
                 "project_id": "guided-project-2",
                 "confirm_initialization": "false",
             },
+        ).status_code
+        == 422
+    )
+
+
+def test_project_workspace_file_and_preview_routes_are_bounded(monkeypatch) -> None:
+    fake = FakeService()
+    monkeypatch.setattr(route_module, "get_pi_copilot_service", lambda: fake)
+    client = TestClient(app)
+
+    file_response = client.get(
+        "/api/copilot/pi/projects/guided-project-2/workspace/file",
+        params={"file": "prototype/index.html"},
+    )
+    assert file_response.status_code == 200
+    assert file_response.json()["artifact"]["file"] == "prototype/index.html"
+
+    preview = client.get(
+        "/api/copilot/pi/projects/guided-project-2/workspace/preview",
+        params={"file": "prototype/index.html"},
+    )
+    assert preview.status_code == 200
+    assert "Sandboxed preview" in preview.text
+    assert preview.headers["cache-control"] == "no-store"
+    assert preview.headers["x-content-type-options"] == "nosniff"
+    assert "default-src 'none'" in preview.headers["content-security-policy"]
+    assert "connect-src 'none'" in preview.headers["content-security-policy"]
+
+    assert (
+        client.get(
+            "/api/copilot/pi/projects/guided-project-2/workspace/file"
         ).status_code
         == 422
     )

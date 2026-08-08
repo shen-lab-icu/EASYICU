@@ -54,4 +54,21 @@ The reference and implementation were placed in one comparison image before judg
 - No actionable P0, P1, or P2 visual or interaction defect remains in the audited Guided Pi desktop conversation flow.
 - EasyICU intentionally retains its research-project rail and study authority; parity with Codex applies to Agent activity presentation, not to copying Codex's product shell.
 
+## Workspace Agent extension — 2026-08-08
+
+- Additional Codex reference supplied by the user: `/var/folders/68/cz0swdq52vx1_rh5m4gql6v00000gn/T/codex-clipboard-cfcfcfab-c6aa-4c0d-a627-ff79a6a249e0.png`.
+- Live code-preview state: `task_logs/screenshots/20260808_pi_workspace_code_preview.png`.
+- Live interactive web-preview state: `task_logs/screenshots/20260808_pi_workspace_web_preview.png`.
+- Reference and implementation comparison: `task_logs/screenshots/20260808_pi_workspace_codex_comparison.png`.
+- Route: `http://127.0.0.1:8765/?ui=20260808-workspace-agent1#guided`.
+- Browser state: Chinese UI, project-scoped Workspace mode, real `gpt-5.6-luna` tool turn, desktop/laptop viewport `1226 x 994`.
+
+The same real turn loaded the packaged web-prototype skill, listed the project workspace, wrote `icu-risk-demo.html`, read it back, checked it, and prepared its preview. The completed timeline exposes those six lifecycle facts as semantic, attributable tool rows. File rows open the code view; the webpage row opens a sandboxed live preview in the same right-side panel that otherwise owns study progress. Closing the preview restores the study panel.
+
+- The generated iframe calculator was exercised through the browser: changing age from 65 to 80 changed the displayed result from 39.4% to 42.4%.
+- The right panel supports code and webpage tabs without navigating away from the conversation.
+- The document has no horizontal overflow (`scrollWidth/clientWidth = 1226/1226`); the only detected width mismatch is an intentional hidden/truncated project subtitle.
+- The reference and implementation were judged together in the comparison artifact. EasyICU keeps its own project rail and safety semantics while matching the requested real-time tool-to-preview interaction hierarchy.
+- No actionable P0, P1, or P2 visual, interaction, or provenance defect remains in this Workspace Agent flow.
+
 final result: passed

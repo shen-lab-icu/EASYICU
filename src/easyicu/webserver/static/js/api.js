@@ -404,6 +404,12 @@
   function abortPiCopilotSession(sessionId, body) {
     return postJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/abort', body || {});
   }
+  function loadPiCopilotWorkspaceFile(projectId, file) {
+    return getJSON('/api/copilot/pi/projects/' + encodeURIComponent(projectId) + '/workspace/file?file=' + encodeURIComponent(file));
+  }
+  function piCopilotWorkspacePreviewUrl(projectId, file) {
+    return '/api/copilot/pi/projects/' + encodeURIComponent(projectId) + '/workspace/preview?file=' + encodeURIComponent(file);
+  }
   function createPageGuideSession(body) {
     return postJSON('/api/page-guide/sessions', body || {});
   }
@@ -565,6 +571,8 @@
   window.EU_API.sendPiCopilotMessage = sendPiCopilotMessage;
   window.EU_API.rebindPiCopilotSession = rebindPiCopilotSession;
   window.EU_API.abortPiCopilotSession = abortPiCopilotSession;
+  window.EU_API.loadPiCopilotWorkspaceFile = loadPiCopilotWorkspaceFile;
+  window.EU_API.piCopilotWorkspacePreviewUrl = piCopilotWorkspacePreviewUrl;
   window.EU_API.createPageGuideSession = createPageGuideSession;
   window.EU_API.sendPageGuideMessage = sendPageGuideMessage;
   window.EU_API.runPageGuideAction = runPageGuideAction;

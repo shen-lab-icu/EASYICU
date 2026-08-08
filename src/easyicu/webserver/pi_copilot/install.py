@@ -23,6 +23,7 @@ RUNTIME_SOURCE_FILES = (
     "src/main.mjs",
     "src/event-projection.mjs",
     "src/shell-budget.mjs",
+    "src/skills/web-prototype/SKILL.md",
 )
 RUNTIME_MANIFEST_FILE = "runtime-manifest.json"
 INSTALLATION_SCHEMA_VERSION = "easyicu.pi-runtime-installation/2"

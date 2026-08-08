@@ -1,4 +1,5 @@
-/* Owner: Guided Copilot project rail and its local-project rows only. */
+/* Owner: Guided Copilot project rail, local-project rows, and its responsive
+   shell column allocation. */
 .gd-main.threecol{grid-template-columns:292px minmax(0,1fr) 322px}
 
 .gd-rail{
@@ -113,7 +114,7 @@
 .gd-data-workspace{justify-content:center}
 
 @media (max-width:1180px){
-  .gd-main.threecol{grid-template-columns:minmax(0,1fr) 322px}
-  .gd-main .gd-rail{display:none}
+  .gd-main.threecol{grid-template-columns:292px minmax(0,1fr)}
+  .gd-main.threecol>.gd-aside{display:none}
 }
-@media (max-width:920px){.gd-main.threecol{grid-template-columns:minmax(0,1fr)}}
+@media (max-width:920px){.gd-main.threecol{grid-template-columns:minmax(0,1fr)}.gd-main .gd-rail{display:none}}

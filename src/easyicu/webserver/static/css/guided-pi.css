@@ -72,6 +72,16 @@
 .gpi-activate h2{margin:9px 0 8px;font-size:22px;letter-spacing:-.025em}
 .gpi-activate p{margin:0 0 20px;color:var(--ink-3);font-size:13px;line-height:1.6}
 .gpi-activate>.btn{width:100%;justify-content:center}
+.gpi-mode-picker{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin:0 0 16px}
+.gpi-mode-picker button{
+  display:grid;grid-template-columns:auto minmax(0,1fr);align-items:start;gap:9px;min-width:0;padding:12px;
+  border:1px solid var(--line);border-radius:10px;background:var(--paper);color:var(--ink-3);font:inherit;text-align:left;cursor:pointer
+}
+.gpi-mode-picker button[aria-checked="true"]{border-color:var(--accent-border);background:var(--accent-soft);color:var(--accent-ink);box-shadow:0 0 0 1px color-mix(in srgb,var(--accent) 12%,transparent)}
+.gpi-mode-picker button:focus-visible{outline:2px solid color-mix(in srgb,var(--accent) 55%,transparent);outline-offset:2px}
+.gpi-mode-picker strong,.gpi-mode-picker small{display:block}
+.gpi-mode-picker strong{font-size:12.5px;line-height:1.35}
+.gpi-mode-picker small{margin-top:3px;color:var(--ink-4);font-size:10.5px;line-height:1.4}
 .gpi-consent{margin:10px 0 18px;color:var(--ink-4);font-size:10.5px;line-height:1.5}
 .gpi-saved{margin:20px 0;border-top:1px solid var(--line);padding-top:16px}
 .gpi-section-title{margin-bottom:8px;color:var(--ink-3);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.08em}
@@ -93,6 +103,10 @@
 .gpi-title{margin-top:2px;font-size:15px;font-weight:700;letter-spacing:-.01em}
 .gpi-live{margin-left:6px;padding:2px 7px;border-radius:99px;background:color-mix(in srgb,#2d8a62 10%,transparent);color:#23704f;font:600 10px/1.5 var(--mono)}
 .gpi-head-meta{display:flex;align-items:center;gap:7px;flex-wrap:wrap;justify-content:flex-end}
+.gpi-mode-switch{display:inline-flex;padding:2px;border:1px solid var(--line);border-radius:7px;background:var(--paper)}
+.gpi-mode-switch button{min-height:25px;padding:0 7px;border:0;border-radius:5px;background:transparent;color:var(--ink-4);font:600 10.5px/1 var(--font);cursor:pointer}
+.gpi-mode-switch button[aria-pressed="true"]{background:var(--ink);color:var(--surface)}
+.gpi-mode-switch button:focus-visible{outline:2px solid color-mix(in srgb,var(--accent) 55%,transparent);outline-offset:2px}
 .gpi-head-meta>span{padding:3px 7px;border:1px solid var(--line);border-radius:5px;color:var(--ink-4);font:500 10.5px/1.4 var(--mono)}
 .gpi-head-meta .gpi-link{font-size:12.5px}
 .gpi-stale{
@@ -122,8 +136,11 @@
 
 /* Timeline structure adapted from pi-gui's MIT-licensed timeline-item/timeline.css.
    EasyICU keeps its own event projection, receipt fields, and shared icon catalog. */
-.gpi-activity,.gpi-activity-live{max-width:768px;margin:0 auto 15px;color:var(--ink-3)}
+.gpi-activity,.gpi-activity-live,.gpi-activity-running{max-width:768px;margin:0 auto 15px;color:var(--ink-3)}
 .gpi-activity-live{min-height:24px;display:flex;align-items:center;gap:6px;font-size:13px;line-height:1.45}
+.gpi-activity-running>.gpi-activity-live{margin-bottom:4px}
+.gpi-activity-running>ol{display:grid;gap:4px;margin:0 0 0 22px;padding:0;list-style:none}
+.gpi-activity-running li{min-width:0;display:grid;grid-template-columns:16px minmax(0,1fr) 6px;align-items:start;gap:7px;padding:2px 0;color:var(--ink-3);font-size:12.5px;line-height:1.45}
 .gpi-activity summary{
   min-width:0;min-height:24px;display:flex;align-items:center;gap:5px;padding:1px 0;
   color:inherit;cursor:pointer;font:inherit;font-size:13px;line-height:1.45;list-style:none
@@ -152,8 +169,8 @@
 }
 .gpi-status-pip{width:6px;height:6px;flex:0 0 auto;border-radius:99px;background:var(--ink-4)}
 .gpi-activity-live .gpi-status-pip{margin-left:2px;background:var(--accent);animation:gpi-status-pulse 1.35s ease-in-out infinite}
-.gpi-activity li.complete .gpi-status-pip{background:#2d8a62}
-.gpi-activity li.error .gpi-status-pip,.gpi-activity.error .gpi-status-pip{background:#ba463d}
+.gpi-activity li.complete .gpi-status-pip,.gpi-activity-running li.complete .gpi-status-pip{background:#2d8a62}
+.gpi-activity li.error .gpi-status-pip,.gpi-activity-running li.error .gpi-status-pip,.gpi-activity.error .gpi-status-pip{background:#ba463d}
 .gpi-activity-body{margin:8px 0 2px 36px}
 .gpi-activity ol{display:grid;gap:4px;margin:0;padding:0;list-style:none}
 .gpi-activity li{
@@ -162,6 +179,9 @@
 }
 .gpi-activity-step-copy{display:flex;min-width:0;flex-direction:column;gap:1px}
 .gpi-activity-step-copy strong{font-weight:500}
+.gpi-resource-link{width:max-content;max-width:100%;padding:0;border:0;border-bottom:1px solid color-mix(in srgb,var(--accent) 34%,transparent);background:transparent;color:var(--accent);font:500 12.5px/1.45 var(--font);text-align:left;cursor:pointer;overflow-wrap:anywhere}
+.gpi-resource-link:hover{border-bottom-color:var(--accent);color:var(--accent-ink)}
+.gpi-resource-link:focus-visible{outline:2px solid color-mix(in srgb,var(--accent) 45%,transparent);outline-offset:2px;border-radius:2px}
 .gpi-activity-step-copy>span{color:var(--ink-3);font-size:11.5px;line-height:1.45}
 .gpi-activity-step-copy small{color:var(--ink-4);font:500 10.5px/1.4 var(--mono);overflow-wrap:anywhere}
 .gpi-activity li>.gpi-status-pip{margin-top:6px}
@@ -188,6 +208,7 @@
 .gpi-actions{display:flex;align-items:center;justify-content:space-between;gap:12px;width:min(820px,100%);margin:9px auto 0}
 .gpi-grants{display:flex;align-items:center;gap:14px;flex-wrap:wrap;color:var(--ink-4);font-size:11.5px}
 .gpi-grants label{display:flex;align-items:center;gap:4px;cursor:pointer}
+.gpi-grants label.workspace{color:var(--ink-2);font-weight:650}
 .gpi-grants input{accent-color:var(--accent)}
 .gpi-foot{width:min(820px,100%);margin:8px auto 0;text-align:center;color:var(--ink-4);font-size:10.5px}
 
@@ -201,4 +222,5 @@
   .gpi-setup-grid label.wide{grid-column:auto}
   .gpi-setup-actions{align-items:stretch;flex-direction:column-reverse}
   .gpi-setup-actions .btn,.gpi-setup-actions .gpi-link{width:100%;justify-content:center;text-align:center}
+  .gpi-mode-picker{grid-template-columns:1fr}
 }

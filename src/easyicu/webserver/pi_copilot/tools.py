@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional, Sequence
 
 from fastapi import HTTPException
@@ -26,6 +28,7 @@ from .projections import (
     reject_sensitive_message,
     stable_code,
 )
+from .workspace import ProjectWorkspace
 
 READ_TOOLS = frozenset(
     {
@@ -50,7 +53,18 @@ CONTROL_TOOLS = frozenset(
         "easyicu_request_replan",
     }
 )
-ALLOWED_TOOLS = READ_TOOLS | CONTROL_TOOLS
+WORKSPACE_TOOLS = frozenset(
+    {
+        "easyicu_load_skill",
+        "easyicu_list_project_files",
+        "easyicu_read_project_file",
+        "easyicu_write_project_file",
+        "easyicu_edit_project_file",
+        "easyicu_check_project_file",
+        "easyicu_preview_project_file",
+    }
+)
+ALLOWED_TOOLS = READ_TOOLS | CONTROL_TOOLS | WORKSPACE_TOOLS
 
 
 def _result(
@@ -71,6 +85,40 @@ def _result(
         authority=context.session.binding.model_dump(mode="json"),
     ).model_dump(mode="json")
     return ensure_safe_projection(payload)
+
+
+def _workspace_result(
+    context: ToolExecutionContext,
+    *,
+    status: str,
+    code: str,
+    summary: str,
+    details: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Return bounded project artifacts without applying patient projections.
+
+    Workspace text is either model-authored or explicitly placed in the
+    isolated project artifact directory.  It never reads EasyICU source-data
+    paths.  Keep the JSON-line envelope bounded while preserving useful code.
+    """
+
+    safe_details = dict(details or {})
+    encoded = json.dumps(safe_details, ensure_ascii=False, default=str).encode("utf-8")
+    if len(encoded) > 30_000:
+        raise PiCopilotError(
+            "pi_workspace_projection_too_large",
+            "The project artifact result exceeds the bounded Pi tool contract.",
+            status_code=500,
+            details={"bytes": len(encoded), "max_bytes": 30_000},
+        )
+    return PiToolResult(
+        status=status,
+        code=code,
+        summary=summary[:2000],
+        owner="easyicu.webserver.pi_copilot.workspace",
+        details=safe_details,
+        authority=context.session.binding.model_dump(mode="json"),
+    ).model_dump(mode="json")
 
 
 def _consume_action(
@@ -972,6 +1020,216 @@ def _request_replan(
     )
 
 
+def _workspace_access(
+    context: ToolExecutionContext,
+    *,
+    require_write: bool = False,
+) -> tuple[Optional[ProjectWorkspace], Optional[Dict[str, Any]]]:
+    if context.session.agent_mode != "workspace":
+        return None, _result(
+            context,
+            status="blocked",
+            code="pi_workspace_mode_required",
+            summary="Open a Pi workspace conversation before using project artifact tools.",
+            owner="easyicu.webserver.pi_copilot.workspace",
+        )
+    if context.workspace_root is None or not context.session.project_id:
+        return None, _result(
+            context,
+            status="blocked",
+            code="pi_workspace_unavailable",
+            summary="The isolated Pi project workspace is unavailable for this session.",
+            owner="easyicu.webserver.pi_copilot.workspace",
+        )
+    if require_write and "workspace_write" not in context.grant.provided_actions:
+        return None, _result(
+            context,
+            status="blocked",
+            code="pi_workspace_write_authorization_required",
+            summary="Project file changes require the workspace-write grant for this message.",
+            owner="easyicu.webserver.pi_copilot.workspace",
+        )
+    return ProjectWorkspace(context.workspace_root), None
+
+
+def _workspace_resource(payload: Mapping[str, Any], *, kind: str = "file") -> Dict[str, Any]:
+    return {
+        "kind": kind,
+        "file": str(payload.get("file") or ""),
+        "label": Path(str(payload.get("file") or "artifact")).name,
+        "media_type": str(payload.get("media_type") or "text/plain"),
+    }
+
+
+def _load_skill(
+    context: ToolExecutionContext, params: Mapping[str, Any]
+) -> Dict[str, Any]:
+    _require_args(params, allowed=("name",), required=("name",))
+    _, blocked = _workspace_access(context)
+    if blocked:
+        return blocked
+    name = str(params.get("name") or "").strip()
+    if name != "web-prototype":
+        return _result(
+            context,
+            status="not_found",
+            code="pi_workspace_skill_not_found",
+            summary="The requested governed Pi workspace skill is not installed.",
+            owner="easyicu.webserver.pi_copilot.workspace",
+            details={"available_skills": ["web-prototype"]},
+        )
+    skill_file = (
+        Path(__file__).resolve().with_name("node_app")
+        / "src"
+        / "skills"
+        / "web-prototype"
+        / "SKILL.md"
+    )
+    instructions = skill_file.read_text(encoding="utf-8")[:12_000]
+    return _workspace_result(
+        context,
+        status="ok",
+        code="pi_workspace_skill_loaded",
+        summary="Loaded the governed web-prototype workspace skill.",
+        details={"skill": name, "instructions": instructions},
+    )
+
+
+def _list_project_files(
+    context: ToolExecutionContext, params: Mapping[str, Any]
+) -> Dict[str, Any]:
+    _require_args(params, allowed=())
+    workspace, blocked = _workspace_access(context)
+    if blocked:
+        return blocked
+    assert workspace is not None and context.session.project_id
+    rows = workspace.list_files(context.session.project_id)
+    return _workspace_result(
+        context,
+        status="ok",
+        code="pi_workspace_files_listed",
+        summary=f"Listed {len(rows)} project workspace files.",
+        details={"files": rows, "count": len(rows)},
+    )
+
+
+def _read_project_file(
+    context: ToolExecutionContext, params: Mapping[str, Any]
+) -> Dict[str, Any]:
+    _require_args(
+        params,
+        allowed=("file", "start_line", "end_line"),
+        required=("file",),
+    )
+    workspace, blocked = _workspace_access(context)
+    if blocked:
+        return blocked
+    assert workspace is not None and context.session.project_id
+    payload = workspace.read_file(
+        context.session.project_id,
+        params["file"],
+        start_line=int(params.get("start_line") or 1),
+        end_line=(int(params["end_line"]) if params.get("end_line") else None),
+    )
+    return _workspace_result(
+        context,
+        status="ok",
+        code="pi_workspace_file_read",
+        summary=f"Read {payload['file']}.",
+        details={**payload, "resource": _workspace_resource(payload)},
+    )
+
+
+def _write_project_file(
+    context: ToolExecutionContext, params: Mapping[str, Any]
+) -> Dict[str, Any]:
+    _require_args(params, allowed=("file", "content"), required=("file", "content"))
+    workspace, blocked = _workspace_access(context, require_write=True)
+    if blocked:
+        return blocked
+    assert workspace is not None and context.session.project_id
+    payload = workspace.write_file(
+        context.session.project_id,
+        params["file"],
+        params["content"],
+    )
+    return _workspace_result(
+        context,
+        status="ok",
+        code="pi_workspace_file_written",
+        summary=f"{'Created' if payload['created'] else 'Updated'} {payload['file']}.",
+        details={**payload, "resource": _workspace_resource(payload)},
+    )
+
+
+def _edit_project_file(
+    context: ToolExecutionContext, params: Mapping[str, Any]
+) -> Dict[str, Any]:
+    _require_args(
+        params,
+        allowed=("file", "old_text", "new_text"),
+        required=("file", "old_text"),
+    )
+    workspace, blocked = _workspace_access(context, require_write=True)
+    if blocked:
+        return blocked
+    assert workspace is not None and context.session.project_id
+    payload = workspace.edit_file(
+        context.session.project_id,
+        params["file"],
+        old_text=params["old_text"],
+        new_text=params.get("new_text") or "",
+    )
+    return _workspace_result(
+        context,
+        status="ok",
+        code="pi_workspace_file_edited",
+        summary=f"Edited {payload['file']} with one exact replacement.",
+        details={**payload, "resource": _workspace_resource(payload)},
+    )
+
+
+def _check_project_file(
+    context: ToolExecutionContext, params: Mapping[str, Any]
+) -> Dict[str, Any]:
+    _require_args(params, allowed=("file",), required=("file",))
+    workspace, blocked = _workspace_access(context)
+    if blocked:
+        return blocked
+    assert workspace is not None and context.session.project_id
+    payload = workspace.check_file(context.session.project_id, params["file"])
+    return _workspace_result(
+        context,
+        status="ok",
+        code="pi_workspace_file_checked",
+        summary=f"Checked {payload['file']} with {payload['checker']}.",
+        details={**payload, "resource": _workspace_resource(payload)},
+    )
+
+
+def _preview_project_file(
+    context: ToolExecutionContext, params: Mapping[str, Any]
+) -> Dict[str, Any]:
+    _require_args(params, allowed=("file",), required=("file",))
+    workspace, blocked = _workspace_access(context)
+    if blocked:
+        return blocked
+    assert workspace is not None and context.session.project_id
+    payload = workspace.preview_file(context.session.project_id, params["file"])
+    resource = _workspace_resource(payload, kind="webpage")
+    return _workspace_result(
+        context,
+        status="ok",
+        code="pi_workspace_preview_ready",
+        summary=f"Prepared the live preview for {payload['file']}.",
+        details={
+            "file": payload["file"],
+            "media_type": payload["media_type"],
+            "resource": resource,
+        },
+    )
+
+
 _DISPATCH = {
     "easyicu_workspace_status": _workspace_status,
     "easyicu_inspect_context": _inspect_context,
@@ -988,6 +1246,13 @@ _DISPATCH = {
     "easyicu_resume": _resume,
     "easyicu_cancel": _cancel,
     "easyicu_request_replan": _request_replan,
+    "easyicu_load_skill": _load_skill,
+    "easyicu_list_project_files": _list_project_files,
+    "easyicu_read_project_file": _read_project_file,
+    "easyicu_write_project_file": _write_project_file,
+    "easyicu_edit_project_file": _edit_project_file,
+    "easyicu_check_project_file": _check_project_file,
+    "easyicu_preview_project_file": _preview_project_file,
 }
 
 
@@ -1019,5 +1284,6 @@ __all__ = [
     "ALLOWED_TOOLS",
     "CONTROL_TOOLS",
     "READ_TOOLS",
+    "WORKSPACE_TOOLS",
     "execute_tool",
 ]

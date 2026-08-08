@@ -1,8 +1,10 @@
 # EasyICU Pi Copilot gateway
 
 This private sidecar embeds the upstream Pi `AgentSession` SDK for the native
-EasyICU WebApp. It is not a general coding agent and does not expose Pi's
-built-in filesystem or shell tools.
+EasyICU WebApp. Research conversations expose only governed EasyICU science
+tools. Workspace conversations additionally expose host-governed project
+artifact tools for bounded read, write, edit, static checking, and web preview;
+Pi's unsandboxed built-in filesystem and shell tools remain disabled.
 
 ## Pin and attribution
 
@@ -60,12 +62,14 @@ returned over the gateway protocol. Environment overrides must still match a
 local verification receipt before the chat gate opens. Node `>=22.19.0` is
 required.
 
-The shell registers fifteen EasyICU-only tools. Study setup can be collected
+The shell registers fifteen EasyICU research tools. Study setup can be collected
 and saved inside the conversation with a one-message Configure grant; the
-existing typed StudyContext store remains authoritative. Generic Pi
-filesystem, editing, network, and shell tools stay disabled. The private path is
-the AgentSession's logical workspace; it is not an operating-system sandbox for
-the Node process itself.
+existing typed StudyContext store remains authoritative. Workspace mode adds
+seven governed artifact tools plus the packaged `web-prototype` skill. Writes
+require a one-turn host grant and remain inside the project-specific private
+workspace. Generic Pi filesystem, network, and shell tools stay disabled. The
+private path is the AgentSession's logical workspace; it is not an
+operating-system sandbox for the Node process itself.
 Raw model reasoning is forced off and is not streamed or returned in session
 transcripts.
 

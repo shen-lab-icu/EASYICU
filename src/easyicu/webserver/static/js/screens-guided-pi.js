@@ -9,7 +9,7 @@
     messages: [], loading: true, creating: false, busy: false, jobId: '',
     source: null, error: '', shell: 'pi', draft: '', setupSaving: false,
     showSetup: false, availableModels: [], project: null,
-    projectInitialization: null,
+    projectInitialization: null, agentMode: 'workspace',
   };
 
   function tr(en, zh) { return window.EU_LANG === 'zh' ? zh : en; }
@@ -28,6 +28,9 @@
   function isStaticPreview() { return window.location && window.location.protocol === 'file:'; }
   function runtimeReady() { return !!(state.runtime && state.runtime.status === 'ready'); }
   function projectId() { return String((state.project && state.project.id) || '').trim(); }
+  function agentMode() {
+    return (state.session && state.session.agent_mode) || state.agentMode || 'workspace';
+  }
   function setShell(shell) {
     state.shell = shell === 'pi' ? 'pi' : 'legacy';
     if (state.conv) state.conv.classList.toggle('pi-active', state.shell === 'pi');
@@ -110,6 +113,12 @@
   }
   function toolIcon(name) {
     const tool = String(name || '');
+    if (/preview/.test(tool)) return 'globe';
+    if (/read_project|write_project/.test(tool)) return 'file';
+    if (/edit_project/.test(tool)) return 'edit';
+    if (/check_project/.test(tool)) return 'check';
+    if (/list_project/.test(tool)) return 'folder';
+    if (/load_skill/.test(tool)) return 'wand';
     if (/update|replan/.test(tool)) return 'edit';
     if (/run$/.test(tool)) return 'play';
     if (/resume/.test(tool)) return 'refresh';
@@ -132,7 +141,10 @@
     if (step.kind === 'settled') return 'check';
     return 'spark';
   }
-  function toolLabel(name) {
+  function resourceName(resource) {
+    return resource && String(resource.label || resource.file || '').trim();
+  }
+  function toolLabel(name, resource) {
     const labels = {
       easyicu_workspace_status: tr('Check workspace status', '检查工作区状态'),
       easyicu_inspect_context: tr('Inspect study context', '读取研究配置'),
@@ -149,10 +161,19 @@
       easyicu_resume: tr('Resume EasyICU work', '恢复 EasyICU 任务'),
       easyicu_cancel: tr('Cancel EasyICU job', '取消 EasyICU 任务'),
       easyicu_request_replan: tr('Request replan', '请求重新规划'),
+      easyicu_load_skill: tr('Load web-prototype skill', '加载网页原型技能'),
+      easyicu_list_project_files: tr('List project files', '列出项目文件'),
+      easyicu_read_project_file: tr('Read project file', '读取项目文件'),
+      easyicu_write_project_file: tr('Write project file', '写入项目文件'),
+      easyicu_edit_project_file: tr('Edit project file', '编辑项目文件'),
+      easyicu_check_project_file: tr('Check project file', '检查项目文件'),
+      easyicu_preview_project_file: tr('Prepare web preview', '准备网页预览'),
     };
-    return labels[String(name || '')] || String(name || tr('EasyICU tool', 'EasyICU 工具'));
+    const label = labels[String(name || '')] || String(name || tr('EasyICU tool', 'EasyICU 工具'));
+    const file = resourceName(resource);
+    return file ? `${label} · ${file}` : label;
   }
-  function completedToolLabel(name) {
+  function completedToolLabel(name, resource) {
     const labels = {
       easyicu_workspace_status: tr('Checked workspace status', '已检查工作区状态'),
       easyicu_inspect_context: tr('Read study setup', '已读取研究配置'),
@@ -169,8 +190,17 @@
       easyicu_resume: tr('Resumed EasyICU work', '已恢复 EasyICU 任务'),
       easyicu_cancel: tr('Cancelled EasyICU job', '已取消 EasyICU 任务'),
       easyicu_request_replan: tr('Requested replan', '已请求重新规划'),
+      easyicu_load_skill: tr('Loaded web-prototype skill', '已加载网页原型技能'),
+      easyicu_list_project_files: tr('Listed project files', '已列出项目文件'),
+      easyicu_read_project_file: tr('Read project file', '已读取项目文件'),
+      easyicu_write_project_file: tr('Wrote project file', '已写入项目文件'),
+      easyicu_edit_project_file: tr('Edited project file', '已编辑项目文件'),
+      easyicu_check_project_file: tr('Checked project file', '已检查项目文件'),
+      easyicu_preview_project_file: tr('Prepared web preview', '已准备网页预览'),
     };
-    return labels[String(name || '')] || tr(`Used ${toolLabel(name)}`, `已使用 ${toolLabel(name)}`);
+    const label = labels[String(name || '')] || tr(`Used ${toolLabel(name)}`, `已使用 ${toolLabel(name)}`);
+    const file = resourceName(resource);
+    return file ? `${label} · ${file}` : label;
   }
 
   function activeActivity() {
@@ -220,10 +250,10 @@
       ? tr(`Response phase ${step.phase} finished`, `回复阶段 ${step.phase} 已结束`)
       : tr(`Generating response phase ${step.phase}`, `正在生成回复阶段 ${step.phase}`);
     if (step.kind === 'tool') return failed
-      ? tr(`${toolLabel(step.toolName)} returned an error`, `${toolLabel(step.toolName)} 返回错误`)
+      ? tr(`${toolLabel(step.toolName, step.resource)} returned an error`, `${toolLabel(step.toolName, step.resource)} 返回错误`)
       : done
-        ? completedToolLabel(step.toolName)
-        : tr(`Calling ${toolLabel(step.toolName)}`, `正在调用 ${toolLabel(step.toolName)}`);
+        ? completedToolLabel(step.toolName, step.resource)
+        : tr(`Calling ${toolLabel(step.toolName, step.resource)}`, `正在调用 ${toolLabel(step.toolName, step.resource)}`);
     if (step.kind === 'retry') return tr(`Retrying (${step.attempt}/${step.maxAttempts})`, `正在重试（${step.attempt}/${step.maxAttempts}）`);
     if (step.kind === 'compaction') return done ? tr('Context compaction finished', '上下文整理已完成') : tr('Compacting context', '正在整理上下文');
     if (step.kind === 'cancelled') return tr('This turn was stopped', '本轮已停止');
@@ -264,6 +294,7 @@
         const toolStep = {
           id: 'tool-' + id, kind: 'tool', toolName: tool.tool_name,
           status: 'running', at: rowAt, startedAt: rowAt,
+          resource: tool.resource || null,
         };
         tools.set(id, toolStep);
         if (activity) upsertActivityStep(activity, {
@@ -283,6 +314,7 @@
         Object.assign(toolStep, {
           status: receipt.is_error ? 'error' : 'complete', text: receipt.summary || '',
           code: receipt.code || '', owner: receipt.owner || '',
+          resource: receipt.resource || toolStep.resource || null,
           endedAt: rowAt,
         });
         if (activity) upsertActivityStep(activity, toolStep);
@@ -367,7 +399,7 @@
     const saved = state.sessions.map(row => `
       <button class="gpi-session-row" type="button" data-gpi-session="${esc(row.session_id)}">
         <span><strong>${esc(row.title || 'Pi Copilot')}</strong><small>${esc(row.updated_at || '')}</small></span>
-        <span>${esc((row.binding && row.binding.study_context_id) || tr('Unbound', '未绑定'))}</span>
+        <span>${row.agent_mode === 'workspace' ? tr('Workspace', '工作区') : tr('Research', '研究')}</span>
       </button>`).join('');
     return `
       <div class="gpi-activate">
@@ -375,11 +407,19 @@
         <h2>${tr('Start a conversation in this project', '在当前项目中开始对话')}</h2>
         <div class="gpi-config-note ok"><span class="gpi-dot"></span>${tr('Research project', '研究项目')}: <strong>${esc((state.project && state.project.title) || projectId())}</strong></div>
         ${state.projectInitialization && state.projectInitialization.required ? `<div class="gpi-config-note warn"><strong>${tr('Study setup confirmation required.', '需要确认研究配置初始化。')}</strong> ${tr('No complete saved setup was found. Activating Pi will create an explicitly acknowledged empty StudyContext and collect the missing fields here in conversation.', '未找到完整的已保存配置。启用 Pi 后会在你明确确认下创建空的 StudyContext，并在当前对话中继续收集缺失字段。')}</div>` : ''}
-        <p>${tr('Pi handles conversation and tool turns. EasyICU still owns study setup, runs, validation, and evidence. Patient rows and generic coding tools are blocked.', 'Pi 负责对话与工具循环；研究配置、运行、验证和证据仍由 EasyICU 管理。患者行级数据和通用编程工具均被阻止。')}</p>
+        <p>${tr('Choose the tool boundary for this conversation. Research mode works with study configuration and evidence; Workspace mode also creates, edits, checks, and previews artifacts inside this project’s isolated folder.', '请选择这段对话的工具边界。研究模式处理研究配置与证据；项目工作区模式还可以在当前项目的隔离目录中创建、编辑、检查并预览产物。')}</p>
+        <div class="gpi-mode-picker" role="radiogroup" aria-label="${tr('Agent mode', 'Agent 模式')}">
+          <button type="button" role="radio" data-gpi-mode-choice="workspace" aria-checked="${state.agentMode === 'workspace'}">
+            ${iconHtml('folder', 17)}<span><strong>${tr('Project workspace', '项目工作区')}</strong><small>${tr('Real file tools and web preview', '真实文件工具与网页预览')}</small></span>
+          </button>
+          <button type="button" role="radio" data-gpi-mode-choice="research" aria-checked="${state.agentMode === 'research'}">
+            ${iconHtml('shield', 17)}<span><strong>${tr('Research only', '仅研究')}</strong><small>${tr('Study and evidence tools only', '仅研究与证据工具')}</small></span>
+          </button>
+        </div>
         <button class="btn primary" type="button" data-gpi-create ${state.creating ? 'disabled' : ''}>
           ${state.creating ? tr('Starting…', '正在启动…') : tr('I agree — activate Pi Copilot', '我同意——启用 Pi Copilot')}
         </button>
-        <div class="gpi-consent">${tr('This sends only your chat text and PHI-safe EasyICU summaries to the configured shell model. It does not authorize a scientific provider run.', '仅将你的对话文字和经 PHI 安全投影的 EasyICU 摘要发送给已配置的交互模型；这不代表授权科研模型运行。')}</div>
+        <div class="gpi-consent">${tr('Workspace tools can see only this project’s isolated artifact folder. They cannot browse the EasyICU repository, patient rows, credentials, or arbitrary host files.', '工作区工具只能看到当前项目的隔离产物目录，不能浏览 EasyICU 仓库、患者行级数据、凭据或任意本机文件。')}</div>
         ${saved ? `<div class="gpi-saved"><div class="gpi-section-title">${tr('Pi conversations in this project', '当前项目中的 Pi 对话')}</div>${saved}</div>` : ''}
         <button class="gpi-link" type="button" data-gpi-legacy>${tr('Use the local Guided workflow', '使用本地研究引导流程')}</button>
       </div>`;
@@ -395,6 +435,19 @@
       </div>`;
   }
 
+  function activityStepPrimary(step) {
+    const label = activityStepLabel(step);
+    if (!step.resource || !step.resource.file) return `<strong>${esc(label)}</strong>`;
+    return `<button class="gpi-resource-link" type="button" data-gpi-resource-file="${esc(step.resource.file)}" data-gpi-resource-kind="${esc(step.resource.kind || 'file')}" data-gpi-resource-label="${esc(step.resource.label || step.resource.file)}" data-gpi-resource-media="${esc(step.resource.media_type || 'text/plain')}">${esc(label)}</button>`;
+  }
+  function activityStepRow(step) {
+    return `<li class="${esc(step.status || 'complete')}">
+      <span class="gpi-activity-step-icon" aria-hidden="true">${iconHtml(activityIcon(step), 15)}</span>
+      <span class="gpi-activity-step-copy">${activityStepPrimary(step)}${step.text ? `<span>${esc(step.text)}</span>` : ''}${step.code ? `<small>${esc([step.code, step.owner].filter(Boolean).join(' · '))}</small>` : ''}</span>
+      <span class="gpi-status-pip" aria-hidden="true"></span>
+    </li>`;
+  }
+
   function messageHtml(row) {
     if (row.role === 'activity') {
       const visibleSteps = row.steps.filter(step => ['tool', 'retry', 'compaction'].includes(step.kind));
@@ -405,28 +458,27 @@
         const title = latest && latest.kind !== 'submitted'
           ? activityStepLabel(latest)
           : tr('Pi is preparing the next action', 'Pi 正在准备下一步');
-        return `<div class="gpi-activity-live" role="status">
-          <span class="gpi-activity-glyph" aria-hidden="true">${iconHtml(activityIcon(latest), 15)}</span>
-          <span class="gpi-activity-title">${esc(title)}</span>
-          <span class="gpi-status-pip" aria-hidden="true"></span>
+        const liveToolSteps = visibleSteps.filter(step => step.kind === 'tool');
+        return `<div class="gpi-activity-running" role="status">
+          <div class="gpi-activity-live">
+            <span class="gpi-activity-glyph" aria-hidden="true">${iconHtml(activityIcon(latest), 15)}</span>
+            <span class="gpi-activity-title">${esc(title)}</span>
+            <span class="gpi-status-pip" aria-hidden="true"></span>
+          </div>
+          ${liveToolSteps.length ? `<ol>${liveToolSteps.map(activityStepRow).join('')}</ol>` : ''}
         </div>`;
       }
       const toolSteps = visibleSteps.filter(step => step.kind === 'tool');
       const completedTitle = toolSteps.length === 1
         ? activityStepLabel(toolSteps[0])
         : toolSteps.length === 2
-          ? toolSteps.map(step => completedToolLabel(step.toolName)).join(tr(' and ', '、'))
+          ? toolSteps.map(step => completedToolLabel(step.toolName, step.resource)).join(tr(' and ', '、'))
           : toolSteps.length > 2
             ? tr(`Used ${toolSteps.length} EasyICU tools`, `已使用 ${toolSteps.length} 个 EasyICU 工具`)
-            : tr('Finished the agent turn', '已完成本轮 Agent 工作');
+            : tr('Answered without using tools', '仅回答，未执行操作');
       const title = failed ? tr('This turn needs attention', '本轮需要处理') : completedTitle;
-      const steps = visibleSteps.map(step => `
-        <li class="${esc(step.status || 'complete')}">
-          <span class="gpi-activity-step-icon" aria-hidden="true">${iconHtml(activityIcon(step), 15)}</span>
-          <span class="gpi-activity-step-copy"><strong>${esc(activityStepLabel(step))}</strong>${step.text ? `<span>${esc(step.text)}</span>` : ''}${step.code ? `<small>${esc([step.code, step.owner].filter(Boolean).join(' · '))}</small>` : ''}</span>
-          <span class="gpi-status-pip" aria-hidden="true"></span>
-        </li>`).join('');
-      return `<details class="gpi-activity ${failed ? 'error' : 'complete'}">
+      const steps = visibleSteps.map(activityStepRow).join('');
+      return `<details class="gpi-activity ${failed ? 'error' : 'complete'}" ${toolSteps.length ? 'open' : ''}>
         <summary>
           <span class="gpi-activity-glyph" aria-hidden="true">${iconHtml(failed ? 'alert' : activityIcon(toolSteps[0] || latest), 15)}</span>
           <span class="gpi-disclosure" aria-hidden="true">${iconHtml('chevron', 14)}</span>
@@ -452,11 +504,16 @@
     const model = session.model || {};
     const messages = state.messages.map(messageHtml).join('');
     const stale = sessionIsStale();
+    const workspace = agentMode() === 'workspace';
     return `
       <div class="gpi-panel">
         <header class="gpi-head">
           <div><div class="gpi-kicker">PI AGENTSESSION · ${esc((state.project && state.project.title) || projectId())}</div><div class="gpi-title">${esc(session.title || 'Pi Copilot')} <span class="gpi-live" role="status" aria-live="polite">${state.busy ? tr('working', '工作中') : tr('ready', '就绪')}</span></div></div>
           <div class="gpi-head-meta">
+            <div class="gpi-mode-switch" role="group" aria-label="${tr('Agent mode', 'Agent 模式')}">
+              <button type="button" data-gpi-mode-switch="research" aria-pressed="${!workspace}">${tr('Research', '研究')}</button>
+              <button type="button" data-gpi-mode-switch="workspace" aria-pressed="${workspace}">${tr('Workspace', '工作区')}</button>
+            </div>
             <span>${esc(model.id || (state.runtime && state.runtime.model) || 'model')}</span>
             <button class="gpi-link" type="button" data-gpi-config>${tr('Model service', '模型服务')}</button>
             <button class="gpi-link" type="button" data-gpi-new>${tr('New', '新会话')}</button>
@@ -465,20 +522,23 @@
         </header>
         ${stale ? `<div class="gpi-stale"><strong>${tr('Authority changed', '权威状态已变化')}</strong><span>${tr('The EasyICU study binding, revision, or active run changed. Rebind before continuing.', 'EasyICU 研究绑定、版本或活动运行已变化，请先重新绑定。')}</span><button class="btn sm" type="button" data-gpi-rebind>${tr('Rebind current state', '重新绑定当前状态')}</button></div>` : ''}
         <div class="gpi-log" data-gpi-log>
-          ${messages || `<div class="gpi-empty"><strong>${tr('Ask about the current study', '询问当前研究')}</strong><span>${tr('Pi can inspect context, plans, runs, validation, artefacts, evidence, and blockers through bounded EasyICU tools.', 'Pi 可通过受限的 EasyICU 工具检查上下文、计划、运行、验证、产物、证据和阻断原因。')}</span></div>`}
+          ${messages || (workspace
+            ? `<div class="gpi-empty"><strong>${tr('Build something in this project', '在当前项目中创建产物')}</strong><span>${tr('Pi can read, write, edit, check, and preview files in this project’s isolated workspace, while retaining EasyICU research tools.', 'Pi 可以在当前项目的隔离工作区中读取、写入、编辑、检查并预览文件，同时保留 EasyICU 研究工具。')}</span></div>`
+            : `<div class="gpi-empty"><strong>${tr('Ask about the current study', '询问当前研究')}</strong><span>${tr('Pi can inspect context, plans, runs, validation, artefacts, evidence, and blockers through bounded EasyICU tools.', 'Pi 可通过受限的 EasyICU 工具检查上下文、计划、运行、验证、产物、证据和阻断原因。')}</span></div>`)}
         </div>
         ${state.error ? `<div class="gpi-error">${esc(state.error)}</div>` : ''}
         <div class="gpi-compose">
-          <textarea data-gpi-input rows="3" maxlength="12000" placeholder="${tr('Ask Pi about this EasyICU study — do not paste patient rows or identifiers.', '向 Pi 询问这个 EasyICU 研究——请勿粘贴患者行级数据或标识符。')}" ${state.busy || stale ? 'disabled' : ''}>${esc(state.draft)}</textarea>
+          <textarea data-gpi-input rows="3" maxlength="12000" placeholder="${workspace ? tr('Ask Pi to create or edit a project artifact — do not paste patient rows or identifiers.', '让 Pi 创建或编辑当前项目产物——请勿粘贴患者行级数据或标识符。') : tr('Ask Pi about this EasyICU study — do not paste patient rows or identifiers.', '向 Pi 询问这个 EasyICU 研究——请勿粘贴患者行级数据或标识符。')}" ${state.busy || stale ? 'disabled' : ''}>${esc(state.draft)}</textarea>
           <div class="gpi-actions">
             <div class="gpi-grants" title="${tr('Actions are granted only for this message.', '操作权限仅对本条消息有效。')}">
+              ${workspace ? `<label class="workspace"><input type="checkbox" data-gpi-grant="workspace_write" ${state.busy ? 'disabled' : ''}> ${tr('Allow project file changes', '允许修改项目文件')}</label>` : ''}
               <label><input type="checkbox" data-gpi-grant="configure" ${state.busy ? 'disabled' : ''}> ${tr('Allow one setup update', '允许一次配置更新')}</label>
               <label><input type="checkbox" data-gpi-grant="run" ${state.busy ? 'disabled' : ''}> ${tr('Allow one local preflight', '允许一次本地预检')}</label>
               <label><input type="checkbox" data-gpi-grant="cancel" ${state.busy ? 'disabled' : ''}> ${tr('Allow job cancel', '允许取消任务')}</label>
             </div>
             ${state.busy ? `<button class="btn danger" type="button" data-gpi-stop>${tr('Stop', '停止')}</button>` : `<button class="btn primary" type="button" data-gpi-send ${stale ? 'disabled' : ''}>${tr('Send', '发送')}</button>`}
           </div>
-          <div class="gpi-foot">${tr('Pi session = conversation history. EasyICU = scientific authority and evidence.', 'Pi 会话 = 对话历史；EasyICU = 科学权威与证据。')}</div>
+          <div class="gpi-foot">${workspace ? tr('Workspace files stay inside this project. Click a file or webpage tool step to open the right preview.', '工作区文件仅保存在当前项目中；点击文件或网页工具步骤可在右侧预览。') : tr('Pi session = conversation history. EasyICU = scientific authority and evidence.', 'Pi 会话 = 对话历史；EasyICU = 科学权威与证据。')}</div>
         </div>
       </div>`;
   }
@@ -557,11 +617,13 @@
     try {
       const payload = await api().createPiCopilotSession({
         project_id: projectId(),
-        title: `${(state.project && state.project.title) || tr('Research project', '研究项目')} · Pi`,
+        title: `${(state.project && state.project.title) || tr('Research project', '研究项目')} · ${state.agentMode === 'workspace' ? tr('Workspace', '工作区') : tr('Research', '研究')}`,
+        agent_mode: state.agentMode,
         language: window.EU_LANG === 'zh' ? 'zh' : 'en',
         thinking_level: 'off', external_llm_opt_in: true,
       });
       state.session = payload.session; state.messages = transcriptMessages(state.session);
+      state.agentMode = state.session.agent_mode || state.agentMode;
       state.projectInitialization = null;
       rememberSession(state.session.session_id);
       state.sessions = [state.session].concat(state.sessions.filter(row => row.session_id !== state.session.session_id));
@@ -577,6 +639,7 @@
       const payload = await api().loadPiCopilotSession(sessionId, expectedProjectId);
       if (expectedProjectId !== projectId()) return;
       state.session = payload.session; state.messages = transcriptMessages(state.session);
+      state.agentMode = state.session.agent_mode || 'research';
       rememberSession(sessionId); setShell('pi');
     } catch (error) { rememberSession(''); state.error = errorText(error); render(); }
   }
@@ -592,6 +655,20 @@
   function completeLatestAssistant(stopReason) {
     const row = state.messages.slice().reverse().find(item => item.role === 'assistant' && !item.complete);
     if (row) { row.complete = true; row.stopReason = stopReason || ''; }
+  }
+  async function switchMode(mode) {
+    const next = mode === 'research' ? 'research' : 'workspace';
+    if (state.busy || next === agentMode()) return;
+    closeSource();
+    state.agentMode = next;
+    state.session = null;
+    state.messages = [];
+    state.error = '';
+    rememberSession('');
+    if (window.EU_GUIDED_PI_PREVIEW && window.EU_GUIDED_PI_PREVIEW.close) {
+      window.EU_GUIDED_PI_PREVIEW.close();
+    }
+    await createSession();
   }
   function handlePiEvent(event) {
     if (!event || typeof event !== 'object') return;
@@ -615,7 +692,7 @@
       if (assistant) assistant.status = 'complete';
       upsertActivityStep(activity, {
         id: 'tool-' + event.tool_call_id, kind: 'tool', toolName: event.tool_name,
-        status: 'running', at, startedAt: at,
+        status: 'running', at, startedAt: at, resource: event.resource || null,
       });
     } else if (event.type === 'tool_progress') {
       upsertActivityStep(activity, { id: 'tool-' + event.tool_call_id, kind: 'tool', toolName: event.tool_name, status: 'running', at });
@@ -625,6 +702,7 @@
         id: 'tool-' + event.tool_call_id, kind: 'tool', toolName: event.tool_name,
         status: event.is_error ? 'error' : 'complete', code: event.code || '',
         owner: event.owner || '', text: event.summary || '', at, endedAt: at,
+        resource: event.resource || null,
       });
     } else if (event.type === 'turn_end') {
       const turn = activity.steps.find(item => item.id === 'turn-' + event.turn_index);
@@ -706,6 +784,9 @@
     state.jobId = '';
     state.error = '';
     state.projectInitialization = null;
+    if (window.EU_GUIDED_PI_PREVIEW && window.EU_GUIDED_PI_PREVIEW.clearProject) {
+      window.EU_GUIDED_PI_PREVIEW.clearProject();
+    }
     render();
     if (next && runtimeReady()) {
       prepareProject().catch(error => { state.error = errorText(error); render(); });
@@ -781,6 +862,22 @@
     state.host.addEventListener('click', event => {
       const session = event.target.closest('[data-gpi-session]');
       if (session) { openSession(session.dataset.gpiSession); return; }
+      const resource = event.target.closest('[data-gpi-resource-file]');
+      if (resource) {
+        if (window.EU_GUIDED_PI_PREVIEW && window.EU_GUIDED_PI_PREVIEW.open) {
+          window.EU_GUIDED_PI_PREVIEW.open({
+            file: resource.dataset.gpiResourceFile,
+            kind: resource.dataset.gpiResourceKind,
+            label: resource.dataset.gpiResourceLabel,
+            media_type: resource.dataset.gpiResourceMedia,
+          }, projectId());
+        }
+        return;
+      }
+      const modeChoice = event.target.closest('[data-gpi-mode-choice]');
+      if (modeChoice) { state.agentMode = modeChoice.dataset.gpiModeChoice === 'research' ? 'research' : 'workspace'; render(); return; }
+      const modeSwitch = event.target.closest('[data-gpi-mode-switch]');
+      if (modeSwitch) { switchMode(modeSwitch.dataset.gpiModeSwitch); return; }
       if (event.target.closest('[data-gpi-retry]')) { loadStatus(); return; }
       if (event.target.closest('[data-gpi-setup]')) { state.showSetup = true; setShell('pi'); return; }
       if (event.target.closest('[data-gpi-open]')) { setShell('pi'); return; }

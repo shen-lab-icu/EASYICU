@@ -93,6 +93,21 @@ EXPECTED_PI_COPILOT_ROUTES = [
         "post_pi_copilot_provider_config",
     ),
     ("POST", "/api/copilot/pi/sessions", "post_pi_copilot_session"),
+    (
+        "POST",
+        "/api/copilot/pi/projects/initialize",
+        "post_pi_copilot_project_initialize",
+    ),
+    (
+        "GET",
+        "/api/copilot/pi/projects/{project_id}/workspace/file",
+        "get_pi_copilot_workspace_file",
+    ),
+    (
+        "GET",
+        "/api/copilot/pi/projects/{project_id}/workspace/preview",
+        "get_pi_copilot_workspace_preview",
+    ),
     ("GET", "/api/copilot/pi/sessions", "get_pi_copilot_sessions"),
     ("GET", "/api/copilot/pi/sessions/{session_id}", "get_pi_copilot_session"),
     (

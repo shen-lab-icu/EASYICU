@@ -3,6 +3,13 @@
    output intentionally never cross this boundary. */
 
 const MAX_TEXT_CHARS = 12000;
+const WORKSPACE_FILE_TOOLS = new Set([
+  "easyicu_read_project_file",
+  "easyicu_write_project_file",
+  "easyicu_edit_project_file",
+  "easyicu_check_project_file",
+  "easyicu_preview_project_file",
+]);
 
 function boundedText(value, limit = MAX_TEXT_CHARS) {
   return String(value ?? "").slice(0, limit);
@@ -15,17 +22,58 @@ function eventTimestamp(event) {
     : new Date().toISOString();
 }
 
+function safeRelativeFile(value) {
+  const file = boundedText(value, 240).trim().replaceAll("\\", "/");
+  if (!file || file.startsWith("/") || file.includes("\0")) return "";
+  const parts = file.split("/");
+  if (parts.some((part) => !part || part === "." || part === "..")) return "";
+  return file;
+}
+
+function projectedResource(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const file = safeRelativeFile(value.file);
+  if (!file) return undefined;
+  const kind = value.kind === "webpage" ? "webpage" : "file";
+  const fallbackLabel = file.split("/").at(-1) || file;
+  return {
+    kind,
+    file,
+    label: boundedText(value.label || fallbackLabel, 160),
+    media_type: boundedText(value.media_type || "text/plain", 120),
+  };
+}
+
+function toolResource(toolName, args) {
+  const name = boundedText(toolName, 160);
+  if (!WORKSPACE_FILE_TOOLS.has(name)) return undefined;
+  let params = args;
+  if (typeof params === "string") {
+    try { params = JSON.parse(params); } catch { return undefined; }
+  }
+  return projectedResource({
+    kind: name === "easyicu_preview_project_file" ? "webpage" : "file",
+    file: params?.file,
+    media_type: name === "easyicu_preview_project_file" ? "text/html" : "text/plain",
+  });
+}
+
 function toolReceipt(result) {
   const details = result?.details && typeof result.details === "object"
     ? result.details
     : {};
+  const ownerDetails = details.details && typeof details.details === "object"
+    ? details.details
+    : {};
   const content = Array.isArray(result?.content) ? result.content : [];
   const fallback = content.find((item) => item && item.type === "text")?.text || "";
+  const resource = projectedResource(details.resource || ownerDetails.resource);
   return {
     status: boundedText(details.status || "", 40),
     code: boundedText(details.code || "", 160),
     summary: boundedText(details.summary || fallback, 2000),
     owner: boundedText(details.owner || "", 240),
+    ...(resource ? { resource } : {}),
   };
 }
 
@@ -47,11 +95,13 @@ export function normalizePiEvent(event) {
     return undefined;
   }
   if (event.type === "tool_execution_start") {
+    const resource = toolResource(event.toolName, event.args);
     return {
       type: "tool_start",
       at,
       tool_call_id: boundedText(event.toolCallId, 160),
       tool_name: boundedText(event.toolName, 160),
+      ...(resource ? { resource } : {}),
     };
   }
   if (event.type === "tool_execution_update") {
@@ -143,10 +193,12 @@ export function projectTranscriptMessage(message) {
     if (item.type === "text") {
       parts.push({ type: "text", text: boundedText(item.text, MAX_TEXT_CHARS) });
     } else if (item.type === "toolCall") {
+      const resource = toolResource(item.name, item.arguments);
       parts.push({
         type: "tool_call",
         tool_call_id: boundedText(item.id, 160),
         tool_name: boundedText(item.name, 160),
+        ...(resource ? { resource } : {}),
       });
     }
   }

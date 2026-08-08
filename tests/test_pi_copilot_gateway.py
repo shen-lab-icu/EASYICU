@@ -443,7 +443,24 @@ def test_sidecar_projects_safe_agent_activity_and_tool_receipts() -> None:
         role: 'toolResult', toolCallId: 'call-2', toolName: 'easyicu_run', isError: false,
         details: {{ status: 'blocked', code: 'pi_session_authority_stale', summary: 'Blocked', owner: 'easyicu.pi' }},
       }});
-      console.log(JSON.stringify({{ events, transcript, blockedEvent, blockedTranscript }}));
+      const workspaceStart = normalizePiEvent({{
+        type: 'tool_execution_start', toolCallId: 'call-3',
+        toolName: 'easyicu_read_project_file',
+        args: {{ file: 'prototype/index.html', secret: 'must-not-leak' }},
+      }});
+      const workspaceEnd = normalizePiEvent({{
+        type: 'tool_execution_end', toolCallId: 'call-3',
+        toolName: 'easyicu_read_project_file',
+        result: {{ details: {{ status: 'ok', code: 'pi_workspace_file_read',
+          summary: 'Read index.html', owner: 'easyicu.workspace',
+          details: {{ resource: {{ kind: 'file', file: 'prototype/index.html', label: 'index.html', media_type: 'text/html' }},
+            text: 'must-not-leak' }} }} }},
+      }});
+      const unsafeWorkspace = normalizePiEvent({{
+        type: 'tool_execution_start', toolCallId: 'call-4',
+        toolName: 'easyicu_read_project_file', args: {{ file: '../secret.txt' }},
+      }});
+      console.log(JSON.stringify({{ events, transcript, blockedEvent, blockedTranscript, workspaceStart, workspaceEnd, unsafeWorkspace }}));
     """
     completed = subprocess.run(
         [node, "--input-type=module", "--eval", script],
@@ -472,6 +489,14 @@ def test_sidecar_projects_safe_agent_activity_and_tool_receipts() -> None:
     assert payload["blockedEvent"]["is_error"] is True
     assert payload["blockedEvent"]["code"] == "pi_session_authority_stale"
     assert payload["blockedTranscript"]["content"][0]["is_error"] is True
+    assert payload["workspaceStart"]["resource"] == {
+        "kind": "file",
+        "file": "prototype/index.html",
+        "label": "index.html",
+        "media_type": "text/plain",
+    }
+    assert payload["workspaceEnd"]["resource"]["media_type"] == "text/html"
+    assert "resource" not in payload["unsafeWorkspace"]
     assert "raw result must not leak" not in completed.stdout
     assert "must-not-leak" not in completed.stdout
 
@@ -507,6 +532,15 @@ def test_pinned_sidecar_starts_with_only_easyicu_tools(tmp_path: Path) -> None:
             {"session_id": "pi-smoke", "thinking_level": "medium"},
             timeout=30,
         )
+        workspace_state = gateway.request(
+            "session.create",
+            {
+                "session_id": "pi-workspace-smoke",
+                "thinking_level": "off",
+                "agent_mode": "workspace",
+            },
+            timeout=30,
+        )
     finally:
         gateway.close()
 
@@ -516,3 +550,9 @@ def test_pinned_sidecar_starts_with_only_easyicu_tools(tmp_path: Path) -> None:
     assert state["enabled_tools"] == runtime["custom_tools"]
     assert len(state["enabled_tools"]) == 15
     assert {"read", "write", "edit", "bash"}.isdisjoint(state["enabled_tools"])
+    assert workspace_state["agent_mode"] == "workspace"
+    assert workspace_state["enabled_tools"] == runtime["custom_tools_by_mode"]["workspace"]
+    assert len(workspace_state["enabled_tools"]) == 22
+    assert {"read", "write", "edit", "bash"}.isdisjoint(
+        workspace_state["enabled_tools"]
+    )

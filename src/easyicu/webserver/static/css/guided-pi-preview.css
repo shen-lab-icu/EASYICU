@@ -1,0 +1,33 @@
+/* Owner: Guided Pi's right-side project file/web preview only. */
+.gd-study-aside{display:flex;flex:1;min-height:0;flex-direction:column}
+.gpi-preview-aside{display:flex;flex:1;min-width:0;min-height:0;flex-direction:column;background:var(--surface)}
+.gpi-preview-aside[hidden],.gd-study-aside[hidden]{display:none}
+.gd-main.threecol.gpi-preview-open{grid-template-columns:292px minmax(390px,.92fr) minmax(430px,1.08fr)}
+.gd-aside.gpi-preview-open{background:var(--surface)}
+.gpi-preview-head{display:flex;min-height:54px;align-items:center;gap:10px;padding:8px 10px 8px 14px;border-bottom:1px solid var(--hair);background:var(--surface)}
+.gpi-preview-file-icon{display:grid;width:28px;height:28px;flex:0 0 auto;place-items:center;border:1px solid var(--hair);border-radius:7px;color:var(--ink-3);background:var(--surface-2)}
+.gpi-preview-ident{min-width:0;flex:1}
+.gpi-preview-ident strong,.gpi-preview-ident span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.gpi-preview-ident strong{color:var(--ink);font-size:13px;font-weight:650}
+.gpi-preview-ident span{margin-top:2px;color:var(--ink-4);font:500 10px/1.3 var(--font-mono)}
+.gpi-preview-close{display:grid;width:30px;height:30px;flex:0 0 auto;place-items:center;padding:0;border:1px solid transparent;border-radius:7px;background:transparent;color:var(--ink-4);cursor:pointer}
+.gpi-preview-close:hover,.gpi-preview-close:focus-visible{border-color:var(--hair);background:var(--surface-2);color:var(--ink);outline:0}
+.gpi-preview-tabs{display:flex;gap:2px;padding:7px 10px;border-bottom:1px solid var(--hair);background:color-mix(in srgb,var(--rail) 48%,var(--surface))}
+.gpi-preview-tabs button{display:inline-flex;min-height:30px;align-items:center;gap:6px;padding:0 10px;border:1px solid transparent;border-radius:7px;background:transparent;color:var(--ink-4);font:600 11px/1 var(--font);cursor:pointer}
+.gpi-preview-tabs button[aria-selected="true"]{border-color:var(--hair-2);background:var(--surface);color:var(--ink);box-shadow:var(--shadow-1)}
+.gpi-preview-tabs button:focus-visible{outline:0;box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 18%,transparent)}
+.gpi-preview-body{position:relative;display:flex;flex:1;min-height:0;overflow:hidden}
+.gpi-preview-code{width:100%;height:100%;margin:0;padding:18px 20px;overflow:auto;background:color-mix(in srgb,var(--surface-2) 54%,var(--surface));color:var(--ink-2);font:500 12px/1.62 var(--font-mono);tab-size:2;white-space:pre}
+.gpi-preview-code code{font:inherit}
+.gpi-preview-frame{width:100%;height:100%;border:0;background:#fff}
+.gpi-preview-state{display:flex;flex:1;align-items:center;justify-content:center;gap:9px;padding:24px;color:var(--ink-4);font-size:12px;text-align:center}
+.gpi-preview-state.error{flex-direction:column;color:var(--bad)}
+.gpi-preview-state.error span{max-width:300px;color:var(--ink-4);line-height:1.5}
+.gpi-preview-spinner{width:14px;height:14px;border:2px solid var(--hair-2);border-top-color:var(--accent);border-radius:50%;animation:gpi-preview-spin .8s linear infinite}
+@keyframes gpi-preview-spin{to{transform:rotate(360deg)}}
+@media(max-width:1180px){
+  .gd-main.threecol.gpi-preview-open{grid-template-columns:minmax(390px,.92fr) minmax(430px,1.08fr)}
+  .gd-main.gpi-preview-open .gd-rail{display:none}
+  .gd-main.gpi-preview-open>.gd-aside{display:flex}
+}
+@media(max-width:920px){.gd-main.threecol.gpi-preview-open{grid-template-columns:minmax(0,1fr)}.gd-main.gpi-preview-open .gd-conv{display:none}}

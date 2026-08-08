@@ -942,7 +942,7 @@ def test_control_tools_fail_closed_without_owner_contracts() -> None:
 
 
 def test_tool_surface_has_no_generic_or_scientific_authority_mutators() -> None:
-    assert tool_module.ALLOWED_TOOLS == {
+    research_tools = {
         "easyicu_workspace_status",
         "easyicu_inspect_context",
         "easyicu_inspect_plan",
@@ -959,6 +959,18 @@ def test_tool_surface_has_no_generic_or_scientific_authority_mutators() -> None:
         "easyicu_cancel",
         "easyicu_request_replan",
     }
+    workspace_tools = {
+        "easyicu_load_skill",
+        "easyicu_list_project_files",
+        "easyicu_read_project_file",
+        "easyicu_write_project_file",
+        "easyicu_edit_project_file",
+        "easyicu_check_project_file",
+        "easyicu_preview_project_file",
+    }
+    assert tool_module.READ_TOOLS | tool_module.CONTROL_TOOLS == research_tools
+    assert tool_module.WORKSPACE_TOOLS == workspace_tools
+    assert tool_module.ALLOWED_TOOLS == research_tools | workspace_tools
     forbidden = {
         "read",
         "write",
@@ -969,6 +981,100 @@ def test_tool_surface_has_no_generic_or_scientific_authority_mutators() -> None:
         "easyicu_authorize_paper",
     }
     assert forbidden.isdisjoint(tool_module.ALLOWED_TOOLS)
+
+
+def test_workspace_tools_are_project_scoped_and_reuse_one_turn_write_grant(
+    tmp_path: Path,
+) -> None:
+    research = PiSessionRecord(
+        session_id="pi-research",
+        project_id="project-a",
+        agent_mode="research",
+    )
+    research_context = ToolExecutionContext(
+        session=research,
+        workspace_root=tmp_path,
+    )
+    blocked_mode = tool_module.execute_tool(
+        "easyicu_read_project_file",
+        {"file": "index.html"},
+        research_context,
+    )
+    assert blocked_mode["code"] == "pi_workspace_mode_required"
+
+    workspace = PiSessionRecord(
+        session_id="pi-workspace",
+        project_id="project-a",
+        agent_mode="workspace",
+    )
+    no_grant = ToolExecutionContext(session=workspace, workspace_root=tmp_path)
+    blocked_write = tool_module.execute_tool(
+        "easyicu_write_project_file",
+        {"file": "index.html", "content": "<h1>Blocked</h1>"},
+        no_grant,
+    )
+    assert blocked_write["code"] == "pi_workspace_write_authorization_required"
+
+    granted = ToolExecutionContext(
+        session=workspace,
+        allowed_actions={"workspace_write"},
+        workspace_root=tmp_path,
+    )
+    first = tool_module.execute_tool(
+        "easyicu_write_project_file",
+        {"file": "index.html", "content": "<h1>Draft</h1>"},
+        granted,
+    )
+    second = tool_module.execute_tool(
+        "easyicu_edit_project_file",
+        {"file": "index.html", "old_text": "Draft", "new_text": "Ready"},
+        granted,
+    )
+    checked = tool_module.execute_tool(
+        "easyicu_check_project_file",
+        {"file": "index.html"},
+        granted,
+    )
+    preview = tool_module.execute_tool(
+        "easyicu_preview_project_file",
+        {"file": "index.html"},
+        granted,
+    )
+
+    assert first["code"] == "pi_workspace_file_written"
+    assert second["code"] == "pi_workspace_file_edited"
+    assert checked["details"]["valid"] is True
+    assert preview["details"]["resource"] == {
+        "kind": "webpage",
+        "file": "index.html",
+        "label": "index.html",
+        "media_type": "text/html",
+    }
+    assert "Ready" in tool_module.execute_tool(
+        "easyicu_read_project_file", {"file": "index.html"}, granted
+    )["details"]["text"]
+
+
+def test_workspace_tool_rejects_path_escape_before_host_file_access(
+    tmp_path: Path,
+) -> None:
+    session = PiSessionRecord(
+        session_id="pi-workspace",
+        project_id="project-a",
+        agent_mode="workspace",
+    )
+    context = ToolExecutionContext(
+        session=session,
+        allowed_actions={"workspace_write"},
+        workspace_root=tmp_path,
+    )
+    with pytest.raises(PiCopilotError) as raised:
+        tool_module.execute_tool(
+            "easyicu_write_project_file",
+            {"file": "../outside.html", "content": "blocked"},
+            context,
+        )
+    assert raised.value.code == "pi_workspace_path_escape"
 
 
 def test_study_setup_requires_one_turn_grant_and_uses_typed_owner(

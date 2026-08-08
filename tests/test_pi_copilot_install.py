@@ -34,6 +34,9 @@ def test_pi_event_projection_is_in_both_distribution_manifests() -> None:
     budget_relative = "pi_copilot/node_app/src/shell-budget.mjs"
     assert f"src/easyicu/webserver/{budget_relative}" in manifest
     assert f'"{budget_relative}"' in pyproject
+    skill_relative = "pi_copilot/node_app/src/skills/web-prototype/SKILL.md"
+    assert f"src/easyicu/webserver/{skill_relative}" in manifest
+    assert f'"{skill_relative}"' in pyproject
 
 
 def test_installer_uses_lockfile_without_scripts_or_ambient_secrets(
@@ -60,6 +63,11 @@ def test_installer_uses_lockfile_without_scripts_or_ambient_secrets(
     (source / "src" / "main.mjs").write_text("", encoding="utf-8")
     (source / "src" / "event-projection.mjs").write_text("", encoding="utf-8")
     (source / "src" / "shell-budget.mjs").write_text("", encoding="utf-8")
+    (source / "src" / "skills" / "web-prototype").mkdir(parents=True)
+    (source / "src" / "skills" / "web-prototype" / "SKILL.md").write_text(
+        "# Web prototype\n",
+        encoding="utf-8",
+    )
     calls = []
 
     class Result:
