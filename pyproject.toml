@@ -124,6 +124,7 @@ where = ["src"]
 easyicu = ["data/*.json", "data/research_know_how/*.json"]
 "easyicu.webserver" = [
   "static/index.html",
+  "static/THIRD_PARTY_NOTICES.md",
   "static/css/*.css",
   "static/js/*.js",
   "static/vendor/echarts/*",
