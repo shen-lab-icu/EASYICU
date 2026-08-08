@@ -544,6 +544,10 @@ def test_mimic_dispatcher_uses_intime_los_when_outtime_is_missing() -> None:
             "norepi_dur": [0.1, 0.2],
         }
     )
+    # Reproduce pandas 3's source-unit preservation explicitly.  The ICU LOS
+    # fallback below has nanosecond rounding and must be safely assignable.
+    frame["starttime"] = frame["starttime"].astype("datetime64[us]")
+    frame["endtime"] = frame["endtime"].astype("datetime64[us]")
     source = ConceptSource.from_mapping(
         {
             "table": "inputevents",
