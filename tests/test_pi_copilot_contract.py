@@ -50,6 +50,7 @@ class FakeGateway:
             "entrypoint_available": True,
             "dependency_installed": True,
             "lockfile_present": True,
+            "runtime_integrity_verified": True,
             "api_key_configured": True,
             "provider_connection_verified": True,
             "base_url_configured": True,
@@ -110,6 +111,11 @@ def study_state(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         service_module.study_contexts,
         "get_context",
         lambda context_id: dict(current) if context_id == current["id"] else None,
+    )
+    monkeypatch.setattr(
+        service_module.study_contexts,
+        "upsert_context",
+        lambda raw, **kwargs: dict(current),
     )
     monkeypatch.setattr(
         service_module.agent_runs,
@@ -272,11 +278,15 @@ def test_session_binding_stales_then_rebinds_explicitly(
 
     study_state["revision"] = 4
     with pytest.raises(PiCopilotError) as stale:
-        service.send_message(session_id, message="Explain the current plan.")
+        service.send_message(
+            session_id,
+            project_id="project-binding",
+            message="Explain the current plan.",
+        )
     assert stale.value.code == "pi_session_authority_stale"
     assert stale.value.status_code == 409
 
-    rebound = service.rebind_session(session_id)
+    rebound = service.rebind_session(session_id, project_id="project-binding")
     assert rebound["rebound"] is True
     assert rebound["session"]["binding"]["study_revision"] == 4
     assert rebound["session"]["stale"]["stale"] is False
@@ -300,7 +310,11 @@ def test_session_binding_tracks_the_current_run(
     )
 
     with pytest.raises(PiCopilotError) as caught:
-        service.send_message(session_id, message="Inspect the current run")
+        service.send_message(
+            session_id,
+            project_id="project-run",
+            message="Inspect the current run",
+        )
 
     assert caught.value.code == "pi_session_authority_stale"
     assert caught.value.details["mismatches"]["run_id"] == {
@@ -340,21 +354,56 @@ def test_session_retention_disposes_and_unlinks_evicted_jsonl(
     )
 
 
-def test_new_context_created_from_unbound_chat_requires_rebind(
+def test_busy_session_retirement_is_deferred_until_message_finishes(
+    tmp_path: Path,
+) -> None:
+    session_dir = tmp_path / "pi-sessions"
+    session_dir.mkdir()
+    session_file = session_dir / "busy.jsonl"
+    session_file.write_text("{}\n", encoding="utf-8")
+    gateway = FakeGateway(session_dir=session_dir)
+    service = PiCopilotService(
+        store_path=tmp_path / "sessions.json",
+        gateway=gateway,
+    )
+    record = PiSessionRecord(
+        session_id="pi-busy",
+        pi_session_file=str(session_file),
+    )
+    service._busy_sessions.add(record.session_id)
+
+    service._retire_record(record)
+
+    assert session_file.exists()
+    assert record.session_id in service._pending_retirements
+    service._busy_sessions.clear()
+    service._flush_pending_retirement(record.session_id)
+    assert not session_file.exists()
+    assert record.session_id not in service._pending_retirements
+
+
+def test_legacy_unbound_session_is_migrated_into_project_authority(
     tmp_path: Path,
     study_state: dict[str, Any],
 ) -> None:
     service = PiCopilotService(store_path=tmp_path / "sessions.json", gateway=FakeGateway())
-    record = PiSessionRecord(session_id="pi-unbound", external_llm_opt_in=True)
+    record = PiSessionRecord(
+        session_id="pi-unbound",
+        project_id="project-unbound",
+        external_llm_opt_in=True,
+    )
     service._save_record(record)
 
-    stale = service.get_session("pi-unbound")["session"]["stale"]
-    assert stale["stale"] is True
-    assert stale["reason"] == "authority_binding_available"
-    assert stale["mismatches"]["study_context_id"]["current"] == study_state["id"]
+    listed = service.list_sessions(project_id="project-unbound")
+    assert listed["sessions"][0]["binding"]["study_context_id"] == study_state["id"]
 
-    rebound = service.rebind_session("pi-unbound")
-    assert rebound["session"]["binding"]["study_context_id"] == study_state["id"]
+    opened = service.get_session(
+        "pi-unbound",
+        project_id="project-unbound",
+    )
+    assert opened["session"]["binding"]["study_context_id"] == study_state["id"]
+    assert opened["session"]["stale"]["stale"] is False
+    assert service.project_store.resolve("project-unbound") == study_state["id"]
 
 
 def test_pi_conversations_are_immutably_scoped_to_one_project(
@@ -383,6 +432,86 @@ def test_pi_conversations_are_immutably_scoped_to_one_project(
         alpha.project_id = "project-beta"
 
 
+def test_project_authority_resolves_context_without_global_active_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        settings,
+        "load_settings",
+        lambda: {"ai_enabled": True, "language": "en"},
+    )
+    contexts: dict[str, dict[str, Any]] = {
+        "study-global": {"id": "study-global", "revision": 9}
+    }
+    created_count = 0
+
+    def create_context(raw: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+        nonlocal created_count
+        created_count += 1
+        context = {
+            "id": f"study-project-{created_count}",
+            "revision": 1,
+            **raw,
+            "active_job_id": None,
+        }
+        contexts[context["id"]] = context
+        return dict(context)
+
+    monkeypatch.setattr(
+        service_module.study_contexts,
+        "get_active_context",
+        lambda: dict(contexts["study-global"]),
+    )
+    monkeypatch.setattr(
+        service_module.study_contexts,
+        "get_context",
+        lambda context_id: (
+            dict(contexts[context_id]) if context_id in contexts else None
+        ),
+    )
+    monkeypatch.setattr(
+        service_module.study_contexts,
+        "upsert_context",
+        create_context,
+    )
+    monkeypatch.setattr(
+        service_module.agent_runs,
+        "list_run_history",
+        lambda **kwargs: {"runs": []},
+    )
+    gateway = FakeGateway()
+    service = PiCopilotService(
+        store_path=tmp_path / "sessions.json",
+        gateway=gateway,
+    )
+
+    first = service.create_session(
+        project_id="project-alpha",
+        title="Alpha",
+        external_llm_opt_in=True,
+    )["session"]
+    second = service.create_session(
+        project_id="project-alpha",
+        title="Alpha second chat",
+        external_llm_opt_in=True,
+    )["session"]
+
+    assert first["binding"]["study_context_id"] == "study-project-1"
+    assert second["binding"]["study_context_id"] == "study-project-1"
+    assert first["binding"]["study_context_id"] != "study-global"
+    assert created_count == 1
+
+    with pytest.raises(PiCopilotError) as cross_project:
+        service.send_message(
+            first["session_id"],
+            project_id="project-beta",
+            message="Inspect context",
+        )
+    assert cross_project.value.code == "pi_session_project_mismatch"
+    assert not any(method == "session.prompt" for method, _, _ in gateway.calls)
+
+
 def test_new_pi_conversation_requires_a_project_binding(tmp_path: Path) -> None:
     service = PiCopilotService(
         store_path=tmp_path / "sessions.json",
@@ -408,6 +537,7 @@ def test_message_grants_are_host_held_and_message_job_is_not_scientific(
 
     submitted = service.send_message(
         session_id,
+        project_id="project-grants",
         message="Inspect the study status.",
         allowed_actions=["run"],
     )
@@ -455,7 +585,11 @@ def test_message_grants_are_host_held_and_message_job_is_not_scientific(
     assert manager.lookups == []
 
     with pytest.raises(PiCopilotError) as unrelated_abort:
-        service.abort_session(session_id, message_job_id="some-other-job")
+        service.abort_session(
+            session_id,
+            project_id="project-grants",
+            message_job_id="some-other-job",
+        )
     assert unrelated_abort.value.code == "pi_message_job_mismatch"
 
 
@@ -480,11 +614,19 @@ def test_session_rejects_overlapping_prompts(
     session_id = service.create_session(
         project_id="project-overlap", external_llm_opt_in=True
     )["session"]["session_id"]
-    first = service.send_message(session_id, message="First aggregate question")
+    first = service.send_message(
+        session_id,
+        project_id="project-overlap",
+        message="First aggregate question",
+    )
     assert entered.wait(timeout=3)
     try:
         with pytest.raises(PiCopilotError) as busy:
-            service.send_message(session_id, message="Second aggregate question")
+            service.send_message(
+                session_id,
+                project_id="project-overlap",
+                message="Second aggregate question",
+            )
         assert busy.value.code == "pi_session_busy"
         assert busy.value.status_code == 409
     finally:

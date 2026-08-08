@@ -395,8 +395,8 @@
   function sendPiCopilotMessage(sessionId, body) {
     return postJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/message', body || {});
   }
-  function rebindPiCopilotSession(sessionId) {
-    return postJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/rebind', {});
+  function rebindPiCopilotSession(sessionId, body) {
+    return postJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/rebind', body || {});
   }
   function abortPiCopilotSession(sessionId, body) {
     return postJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/abort', body || {});

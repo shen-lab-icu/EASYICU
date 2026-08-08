@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import os
 import shutil
 import subprocess
@@ -11,18 +13,75 @@ from pathlib import Path
 from typing import Mapping, Optional, Sequence
 
 PI_PACKAGE_VERSION = "0.84.1"
-PI_RUNTIME_REVISION = f"{PI_PACKAGE_VERSION}-easyicu-activity1"
 RUNTIME_FILES = (
     "package.json",
     "package-lock.json",
     "README.md",
     "THIRD_PARTY_NOTICES.md",
 )
-RUNTIME_SOURCE_FILES = ("src/main.mjs", "src/event-projection.mjs")
+RUNTIME_SOURCE_FILES = (
+    "src/main.mjs",
+    "src/event-projection.mjs",
+    "src/shell-budget.mjs",
+)
+RUNTIME_MANIFEST_FILE = "runtime-manifest.json"
 
 
 def packaged_app_dir() -> Path:
     return Path(__file__).resolve().with_name("node_app")
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def runtime_manifest(source: Optional[Path] = None) -> dict[str, object]:
+    """Compile the content identity expected for one executable runtime."""
+
+    root = Path(source or packaged_app_dir()).resolve()
+    files = {}
+    for relative in (*RUNTIME_FILES, *RUNTIME_SOURCE_FILES):
+        candidate = root / relative
+        if not candidate.is_file():
+            raise RuntimeError(f"Packaged Pi runtime file is missing: {relative}")
+        files[relative] = _sha256(candidate)
+    try:
+        lock = json.loads((root / "package-lock.json").read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        raise RuntimeError("Packaged Pi runtime lockfile is invalid") from exc
+    packages = lock.get("packages") if isinstance(lock, dict) else None
+    if not isinstance(packages, dict):
+        raise RuntimeError("Packaged Pi runtime lockfile has no packages map")
+    pi_packages = {
+        str(relative): str(metadata.get("version") or "")
+        for relative, metadata in packages.items()
+        if isinstance(metadata, dict)
+        and str(relative).split("node_modules/")[-1].startswith(
+            "@earendil-works/pi-"
+        )
+    }
+    if not pi_packages or any(not version for version in pi_packages.values()):
+        raise RuntimeError("Packaged Pi runtime has incomplete pinned Pi versions")
+    identity = {
+        "schema_version": "easyicu.pi-runtime-manifest/1",
+        "pi_package_version": PI_PACKAGE_VERSION,
+        "files": files,
+        "pi_packages": dict(sorted(pi_packages.items())),
+    }
+    digest = hashlib.sha256(
+        json.dumps(identity, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return {**identity, "runtime_manifest_sha256": digest}
+
+
+PI_RUNTIME_REVISION = (
+    f"{PI_PACKAGE_VERSION}-"
+    f"{str(runtime_manifest()['runtime_manifest_sha256'])[:12]}"
+)
 
 
 def user_runtime_dir(*, home: Optional[Path] = None) -> Path:
@@ -30,24 +89,54 @@ def user_runtime_dir(*, home: Optional[Path] = None) -> Path:
     return root / ".easyicu" / "pi-agent" / "runtime" / PI_RUNTIME_REVISION
 
 
-def runtime_is_installed(path: Path) -> bool:
+def runtime_is_installed(path: Path, *, source: Optional[Path] = None) -> bool:
     root = Path(path)
-    return all((root / name).is_file() for name in RUNTIME_FILES) and all(
-        candidate.is_file()
-        for candidate in (
-            *(root / name for name in RUNTIME_SOURCE_FILES),
-            root
-            / "node_modules"
-            / "@earendil-works"
-            / "pi-coding-agent"
-            / "package.json",
+    try:
+        expected = runtime_manifest(source)
+        installed = json.loads(
+            (root / RUNTIME_MANIFEST_FILE).read_text(encoding="utf-8")
         )
-    )
+        if installed != expected:
+            return False
+        for relative, digest in dict(expected["files"]).items():
+            candidate = root / relative
+            if not candidate.is_file() or _sha256(candidate) != digest:
+                return False
+        for relative, version in dict(expected["pi_packages"]).items():
+            package_file = root / relative / "package.json"
+            if not package_file.is_file():
+                return False
+            package = json.loads(package_file.read_text(encoding="utf-8"))
+            if str(package.get("version") or "") != version:
+                return False
+    except (KeyError, OSError, RuntimeError, TypeError, ValueError, json.JSONDecodeError):
+        return False
+    return True
+
+
+def packaged_runtime_is_complete(path: Optional[Path] = None) -> bool:
+    """Validate packaged source plus installed exact Pi package versions."""
+
+    root = Path(path or packaged_app_dir()).resolve()
+    try:
+        expected = runtime_manifest(root)
+        for relative, version in dict(expected["pi_packages"]).items():
+            package_file = root / relative / "package.json"
+            if not package_file.is_file():
+                return False
+            package = json.loads(package_file.read_text(encoding="utf-8"))
+            if str(package.get("version") or "") != version:
+                return False
+    except (KeyError, OSError, RuntimeError, TypeError, ValueError, json.JSONDecodeError):
+        return False
+    return True
 
 
 def preferred_app_dir() -> Path:
     installed = user_runtime_dir()
-    return installed if runtime_is_installed(installed) else packaged_app_dir()
+    # An existing but invalid private runtime must remain visible to the
+    # gateway's integrity gate; silently falling back would hide tampering.
+    return installed if installed.exists() else packaged_app_dir()
 
 
 def _installer_environment(source: Mapping[str, str]) -> dict[str, str]:
@@ -70,15 +159,14 @@ def install_runtime(
 
     source_dir = Path(source or packaged_app_dir()).resolve()
     target = Path(destination or user_runtime_dir()).resolve()
-    if runtime_is_installed(target):
+    expected_manifest = runtime_manifest(source_dir)
+    if runtime_is_installed(target, source=source_dir):
         return target
     if target.exists():
         raise RuntimeError(
-            f"Pi runtime target exists but is incomplete: {target}. Remove it explicitly and retry."
+            "pi_runtime_integrity_mismatch: Pi runtime target exists but does "
+            f"not match the packaged content manifest: {target}. Remove it explicitly and retry."
         )
-    for relative in (*RUNTIME_FILES, *RUNTIME_SOURCE_FILES):
-        if not (source_dir / relative).is_file():
-            raise RuntimeError(f"Packaged Pi runtime file is missing: {relative}")
     source_environment = os.environ if environ is None else environ
     npm = npm_binary or shutil.which("npm", path=source_environment.get("PATH"))
     if not npm:
@@ -98,8 +186,27 @@ def install_runtime(
             env=_installer_environment(source_environment),
             check=True,
         )
-        if not runtime_is_installed(staging):
-            raise RuntimeError("npm completed without the pinned Pi dependency")
+        (staging / RUNTIME_MANIFEST_FILE).write_text(
+            json.dumps(expected_manifest, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        (staging / RUNTIME_MANIFEST_FILE).chmod(0o600)
+        # A custom source is useful for installer tests. Validate its exact
+        # manifest directly before the atomic rename.
+        installed_manifest = json.loads(
+            (staging / RUNTIME_MANIFEST_FILE).read_text(encoding="utf-8")
+        )
+        if installed_manifest != expected_manifest:
+            raise RuntimeError("Pi runtime manifest changed during installation")
+        for relative, digest in dict(expected_manifest["files"]).items():
+            if _sha256(staging / relative) != digest:
+                raise RuntimeError(f"Pi runtime integrity mismatch: {relative}")
+        for relative, version in dict(expected_manifest["pi_packages"]).items():
+            package = json.loads(
+                (staging / relative / "package.json").read_text(encoding="utf-8")
+            )
+            if str(package.get("version") or "") != version:
+                raise RuntimeError(f"Pi runtime package version mismatch: {relative}")
         staging.chmod(0o700)
         staging.replace(target)
     except Exception:
@@ -125,10 +232,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 __all__ = [
     "PI_PACKAGE_VERSION",
     "PI_RUNTIME_REVISION",
+    "RUNTIME_MANIFEST_FILE",
     "install_runtime",
     "main",
     "packaged_app_dir",
     "preferred_app_dir",
+    "packaged_runtime_is_complete",
+    "runtime_manifest",
     "runtime_is_installed",
     "user_runtime_dir",
 ]

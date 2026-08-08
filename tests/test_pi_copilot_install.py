@@ -8,6 +8,7 @@ from pathlib import Path
 from easyicu.scripts.extract_features import build_parser
 from easyicu.webserver.pi_copilot.install import (
     install_runtime,
+    runtime_manifest,
     runtime_is_installed,
 )
 
@@ -30,6 +31,9 @@ def test_pi_event_projection_is_in_both_distribution_manifests() -> None:
     relative = "pi_copilot/node_app/src/event-projection.mjs"
     assert f"src/easyicu/webserver/{relative}" in manifest
     assert f'"{relative}"' in pyproject
+    budget_relative = "pi_copilot/node_app/src/shell-budget.mjs"
+    assert f"src/easyicu/webserver/{budget_relative}" in manifest
+    assert f'"{budget_relative}"' in pyproject
 
 
 def test_installer_uses_lockfile_without_scripts_or_ambient_secrets(
@@ -39,11 +43,23 @@ def test_installer_uses_lockfile_without_scripts_or_ambient_secrets(
     source = tmp_path / "source"
     (source / "src").mkdir(parents=True)
     (source / "package.json").write_text("{}", encoding="utf-8")
-    (source / "package-lock.json").write_text("{}", encoding="utf-8")
+    (source / "package-lock.json").write_text(
+        json.dumps(
+            {
+                "packages": {
+                    "node_modules/@earendil-works/pi-coding-agent": {
+                        "version": "0.84.1"
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
     (source / "README.md").write_text("runtime", encoding="utf-8")
     (source / "THIRD_PARTY_NOTICES.md").write_text("MIT", encoding="utf-8")
     (source / "src" / "main.mjs").write_text("", encoding="utf-8")
     (source / "src" / "event-projection.mjs").write_text("", encoding="utf-8")
+    (source / "src" / "shell-budget.mjs").write_text("", encoding="utf-8")
     calls = []
 
     def fake_run(command, *, cwd, env, check):
@@ -75,10 +91,20 @@ def test_installer_uses_lockfile_without_scripts_or_ambient_secrets(
         },
     )
 
-    assert runtime_is_installed(target)
+    assert runtime_is_installed(target, source=source)
+    manifest = json.loads((target / "runtime-manifest.json").read_text(encoding="utf-8"))
+    assert manifest == runtime_manifest(source)
     command, cwd, child_env, check = calls[0]
     assert command == ["/usr/local/bin/npm", "ci", "--ignore-scripts"]
     assert cwd.parent == target.parent
     assert check is True
     assert "OPENAI_API_KEY" not in child_env
     assert "DATABASE_PASSWORD" not in child_env
+
+    (target / "src" / "main.mjs").write_text("tampered", encoding="utf-8")
+    assert runtime_is_installed(target, source=source) is False
+
+    before = runtime_manifest(source)["runtime_manifest_sha256"]
+    (source / "src" / "main.mjs").write_text("changed source", encoding="utf-8")
+    after = runtime_manifest(source)["runtime_manifest_sha256"]
+    assert before != after

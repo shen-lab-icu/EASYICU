@@ -21,6 +21,7 @@ from .contracts import (
     utc_now,
 )
 from .gateway import PiGatewayClient
+from .project_authority import ProjectAuthorityStore
 from .provider_config import PiProviderConfigStore
 from .projections import reject_sensitive_message
 
@@ -37,6 +38,7 @@ class PiCopilotService:
         store_path: Optional[Path] = None,
         gateway: Optional[PiGatewayClient] = None,
         provider_store: Optional[PiProviderConfigStore] = None,
+        project_store: Optional[ProjectAuthorityStore] = None,
     ) -> None:
         self.store_path = (
             Path(store_path)
@@ -49,9 +51,15 @@ class PiCopilotService:
             or getattr(self.gateway, "provider_store", None)
             or PiProviderConfigStore()
         )
+        self.project_store = project_store or ProjectAuthorityStore(
+            None
+            if store_path is None
+            else self.store_path.with_name(f"{self.store_path.stem}.projects.json")
+        )
         self._lock = threading.RLock()
         self._active_message_jobs: Dict[str, str] = {}
         self._busy_sessions: set[str] = set()
+        self._pending_retirements: Dict[str, PiSessionRecord] = {}
 
     def _read_records(self) -> list[PiSessionRecord]:
         try:
@@ -149,8 +157,24 @@ class PiCopilotService:
                 if row.session_id != record.session_id
             ]
             rows.insert(0, record)
-            evicted = rows[MAX_SESSIONS:]
-            self._write_records(rows[:MAX_SESSIONS])
+            overflow = max(0, len(rows) - MAX_SESSIONS)
+            evicted: list[PiSessionRecord] = []
+            if overflow:
+                for candidate in reversed(rows):
+                    if candidate.session_id in self._busy_sessions:
+                        continue
+                    evicted.append(candidate)
+                    if len(evicted) == overflow:
+                        break
+                if len(evicted) != overflow:
+                    raise PiCopilotError(
+                        "pi_session_retention_busy",
+                        "Pi session retention cannot evict an active conversation.",
+                        status_code=409,
+                    )
+                evicted_ids = {row.session_id for row in evicted}
+                rows = [row for row in rows if row.session_id not in evicted_ids]
+            self._write_records(rows)
         for retired in evicted:
             self._retire_record(retired)
         return record
@@ -160,6 +184,7 @@ class PiCopilotService:
 
         with self._lock:
             if record.session_id in self._busy_sessions:
+                self._pending_retirements[record.session_id] = record
                 return
         try:
             self.gateway.request(
@@ -184,6 +209,14 @@ class PiCopilotService:
             candidate.unlink()
         except OSError:
             pass
+
+    def _flush_pending_retirement(self, session_id: str) -> None:
+        with self._lock:
+            if session_id in self._busy_sessions:
+                return
+            record = self._pending_retirements.pop(session_id, None)
+        if record is not None:
+            self._retire_record(record)
 
     def _provider_gate(self, *, external_llm_opt_in: bool) -> Dict[str, Any]:
         current_settings = settings.load_settings()
@@ -228,6 +261,7 @@ class PiCopilotService:
             "entrypoint_available",
             "dependency_installed",
             "lockfile_present",
+            "runtime_integrity_verified",
             "api_key_configured",
             "base_url_configured",
         ):
@@ -245,6 +279,7 @@ class PiCopilotService:
             "entrypoint_available",
             "dependency_installed",
             "lockfile_present",
+            "runtime_integrity_verified",
             "base_url_configured",
         }
         if not blockers:
@@ -350,6 +385,93 @@ class PiCopilotService:
             return str(rows[0].get("run_id") or "") or None
         return None
 
+    def _resolve_project_context(
+        self,
+        *,
+        project_id: str,
+        title: str,
+        requested_study_context_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Resolve only the Host-owned StudyContext for one research project."""
+
+        mapped_id = self.project_store.resolve(project_id)
+        context_id = mapped_id or str(requested_study_context_id or "").strip()
+        context: Optional[Dict[str, Any]] = None
+        if context_id:
+            try:
+                context = study_contexts.get_context(context_id)
+            except study_contexts.StudyContextError as exc:
+                raise PiCopilotError(
+                    str(exc.detail.get("error") or "study_context_invalid"),
+                    "The project's StudyContext could not be loaded.",
+                    status_code=409,
+                    details=exc.detail,
+                ) from exc
+            if context is None:
+                raise PiCopilotError(
+                    "pi_project_study_context_missing",
+                    "The research project's authoritative StudyContext no longer exists.",
+                    status_code=409,
+                    details={"project_id": project_id},
+                )
+        else:
+            try:
+                context = study_contexts.upsert_context(
+                    {
+                        "title": str(title or "Pi Copilot").strip()[:160]
+                        or "Pi Copilot",
+                        "current_stage": "study_setup",
+                        "last_route": "guided",
+                    },
+                    active=True,
+                    lifecycle_write=True,
+                )
+            except study_contexts.StudyContextError as exc:
+                raise PiCopilotError(
+                    str(exc.detail.get("error") or "study_context_invalid"),
+                    "EasyICU could not initialize this project's StudyContext.",
+                    status_code=409,
+                    details=exc.detail,
+                ) from exc
+        assert context is not None and context.get("id")
+        self.project_store.bind(project_id, str(context["id"]))
+        return context
+
+    def _scoped_record(self, session_id: str, *, project_id: str) -> PiSessionRecord:
+        clean_project = str(project_id or "").strip()
+        if not clean_project:
+            raise PiCopilotError(
+                "pi_project_binding_required",
+                "A research project is required for this Pi session operation.",
+                status_code=409,
+            )
+        record = self._get_record(session_id)
+        if record.project_id != clean_project:
+            raise PiCopilotError(
+                "pi_session_project_mismatch",
+                "This Pi conversation belongs to a different EasyICU research project.",
+                status_code=409,
+                details={
+                    "session_id": record.session_id,
+                    "requested_project_id": clean_project,
+                },
+            )
+        if not record.binding.study_context_id:
+            context = self._resolve_project_context(
+                project_id=clean_project,
+                title=record.title,
+            )
+            record.binding = self._binding_for_context(
+                context,
+                run_id=self._latest_run_id(str(context["id"])),
+            )
+            self._save_record(record)
+        self.project_store.assert_matches(
+            clean_project,
+            record.binding.study_context_id,
+        )
+        return record
+
     def create_session(
         self,
         *,
@@ -381,24 +503,11 @@ class PiCopilotService:
                 "Verify the Pi model service before starting a conversation.",
                 status_code=503,
             )
-        context = None
-        if study_context_id:
-            try:
-                context = study_contexts.get_context(study_context_id)
-            except study_contexts.StudyContextError as exc:
-                raise PiCopilotError(
-                    str(exc.detail.get("error") or "study_context_invalid"),
-                    "The requested StudyContext could not be loaded.",
-                    details=exc.detail,
-                ) from exc
-            if context is None:
-                raise PiCopilotError(
-                    "study_context_not_found",
-                    "The requested StudyContext does not exist.",
-                    status_code=404,
-                )
-        else:
-            context = study_contexts.get_active_context()
+        context = self._resolve_project_context(
+            project_id=clean_project_id,
+            title=title,
+            requested_study_context_id=study_context_id,
+        )
         resolved_language = "zh" if language == "zh" else "en"
         # Raw provider reasoning is neither streamed nor persisted by the
         # governed product shell. Historical values remain readable only for
@@ -456,7 +565,24 @@ class PiCopilotService:
             timeout=30,
         )
 
-    def _binding_stale_details(self, binding: AuthorityBinding) -> Dict[str, Any]:
+    def _binding_stale_details(
+        self,
+        binding: AuthorityBinding,
+        *,
+        project_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        if project_id:
+            try:
+                self.project_store.assert_matches(
+                    project_id,
+                    binding.study_context_id,
+                )
+            except PiCopilotError as exc:
+                return {
+                    "stale": True,
+                    "reason": exc.code,
+                    "project_id": project_id,
+                }
         if not binding.study_context_id:
             try:
                 active = study_contexts.get_active_context()
@@ -516,15 +642,19 @@ class PiCopilotService:
         }
 
     def _stale_details(self, record: PiSessionRecord) -> Dict[str, Any]:
-        return self._binding_stale_details(record.binding)
+        return self._binding_stale_details(
+            record.binding,
+            project_id=record.project_id,
+        )
 
-    def rebind_session(self, session_id: str) -> Dict[str, Any]:
-        record = self._get_record(session_id)
+    def rebind_session(self, session_id: str, *, project_id: str) -> Dict[str, Any]:
+        record = self._scoped_record(session_id, project_id=project_id)
         try:
-            context = (
-                study_contexts.get_context(record.binding.study_context_id)
-                if record.binding.study_context_id
-                else study_contexts.get_active_context()
+            context = study_contexts.get_context(
+                self.project_store.assert_matches(
+                    project_id,
+                    record.binding.study_context_id,
+                )
             )
         except study_contexts.StudyContextError as exc:
             raise PiCopilotError(
@@ -557,10 +687,11 @@ class PiCopilotService:
         self,
         session_id: str,
         *,
+        project_id: str,
         message: str,
         allowed_actions: Iterable[str] = (),
     ) -> Dict[str, Any]:
-        record = self._get_record(session_id)
+        record = self._scoped_record(session_id, project_id=project_id)
         self._provider_gate(external_llm_opt_in=record.external_llm_opt_in)
         text = str(message or "").strip()
         if not text:
@@ -602,7 +733,10 @@ class PiCopilotService:
         tool_context = ToolExecutionContext(
             session=record.model_copy(deep=True),
             allowed_actions=requested_actions,
-            authority_validator=self._binding_stale_details,
+            authority_validator=lambda binding: self._binding_stale_details(
+                binding,
+                project_id=record.project_id,
+            ),
         )
         with self._lock:
             if record.session_id in self._busy_sessions:
@@ -654,10 +788,16 @@ class PiCopilotService:
                     "message_status": "aborted" if job.cancel_requested else "done",
                 }
             finally:
+                pending_retirement = False
                 with self._lock:
                     if self._active_message_jobs.get(record.session_id) == job.id:
                         self._active_message_jobs.pop(record.session_id, None)
                     self._busy_sessions.discard(record.session_id)
+                    pending_retirement = (
+                        record.session_id in self._pending_retirements
+                    )
+                if pending_retirement:
+                    self._flush_pending_retirement(record.session_id)
 
         try:
             job = jobs.MANAGER.submit("pi-copilot-message", runner)
@@ -686,9 +826,13 @@ class PiCopilotService:
         }
 
     def abort_session(
-        self, session_id: str, *, message_job_id: Optional[str] = None
+        self,
+        session_id: str,
+        *,
+        project_id: str,
+        message_job_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        record = self._get_record(session_id)
+        record = self._scoped_record(session_id, project_id=project_id)
         with self._lock:
             active_job_id = self._active_message_jobs.get(record.session_id)
         requested_job_id = str(message_job_id or "").strip()
@@ -731,26 +875,18 @@ class PiCopilotService:
                 for row in self._read_records()
                 if row.project_id == clean_project_id
             ][:max_items]
+        records = [
+            self._scoped_record(row.session_id, project_id=clean_project_id)
+            for row in records
+        ]
         return {
             "ok": True,
             "count": len(records),
             "sessions": [self._public_session(row) for row in records],
         }
 
-    def get_session(
-        self, session_id: str, *, project_id: Optional[str] = None
-    ) -> Dict[str, Any]:
-        record = self._get_record(session_id)
-        if project_id is not None and record.project_id != str(project_id).strip():
-            raise PiCopilotError(
-                "pi_session_project_mismatch",
-                "This Pi conversation belongs to a different EasyICU research project.",
-                status_code=409,
-                details={
-                    "session_id": record.session_id,
-                    "requested_project_id": str(project_id).strip(),
-                },
-            )
+    def get_session(self, session_id: str, *, project_id: str) -> Dict[str, Any]:
+        record = self._scoped_record(session_id, project_id=project_id)
         state = self._ensure_open(record)
         return {
             "ok": True,

@@ -37,6 +37,12 @@ class FakeService:
     def get_session(self, session_id: str, **kwargs) -> dict:
         return {"ok": True, "session_id": session_id, "received": kwargs}
 
+    def rebind_session(self, session_id: str, **kwargs) -> dict:
+        return {"ok": True, "session_id": session_id, "received": kwargs}
+
+    def abort_session(self, session_id: str, **kwargs) -> dict:
+        return {"ok": True, "session_id": session_id, "received": kwargs}
+
 
 def test_status_and_create_routes_preserve_strict_boolean_opt_in(monkeypatch) -> None:
     fake = FakeService()
@@ -163,6 +169,7 @@ def test_message_route_rejects_unknown_actions_and_fields(monkeypatch) -> None:
     accepted = client.post(
         "/api/copilot/pi/sessions/pi-test/message",
         json={
+            "project_id": "guided-project-1",
             "message": "Save setup and inspect aggregate validation",
             "allowed_actions": ["configure", "run"],
         },
@@ -172,12 +179,49 @@ def test_message_route_rejects_unknown_actions_and_fields(monkeypatch) -> None:
 
     assert client.post(
         "/api/copilot/pi/sessions/pi-test/message",
-        json={"message": "Inspect", "allowed_actions": ["bash"]},
+        json={
+            "project_id": "guided-project-1",
+            "message": "Inspect",
+            "allowed_actions": ["bash"],
+        },
     ).status_code == 422
     assert client.post(
         "/api/copilot/pi/sessions/pi-test/message",
-        json={"message": "Inspect", "raw_rows": True},
+        json={
+            "project_id": "guided-project-1",
+            "message": "Inspect",
+            "raw_rows": True,
+        },
     ).status_code == 422
+
+
+def test_all_session_mutations_require_project_scope(monkeypatch) -> None:
+    fake = FakeService()
+    monkeypatch.setattr(route_module, "get_pi_copilot_service", lambda: fake)
+    client = TestClient(app)
+
+    for suffix in ("rebind", "abort"):
+        assert client.post(
+            f"/api/copilot/pi/sessions/pi-test/{suffix}",
+            json={},
+        ).status_code == 422
+
+    rebound = client.post(
+        "/api/copilot/pi/sessions/pi-test/rebind",
+        json={"project_id": "guided-project-1"},
+    )
+    assert rebound.status_code == 200
+    assert rebound.json()["received"]["project_id"] == "guided-project-1"
+
+    aborted = client.post(
+        "/api/copilot/pi/sessions/pi-test/abort",
+        json={"project_id": "guided-project-1", "message_job_id": "job-1"},
+    )
+    assert aborted.status_code == 200
+    assert aborted.json()["received"] == {
+        "project_id": "guided-project-1",
+        "message_job_id": "job-1",
+    }
 
 
 def test_owner_error_keeps_stable_code_and_owner(monkeypatch) -> None:

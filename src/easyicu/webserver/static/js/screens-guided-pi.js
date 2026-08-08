@@ -615,7 +615,9 @@
     upsertActivityStep(activity, { id: 'submitted', kind: 'submitted', status: 'complete', at: submittedAt });
     state.draft = ''; state.busy = true; state.error = ''; render();
     try {
-      const payload = await api().sendPiCopilotMessage(state.session.session_id, { message: text, allowed_actions: grants });
+      const payload = await api().sendPiCopilotMessage(state.session.session_id, {
+        project_id: projectId(), message: text, allowed_actions: grants,
+      });
       state.jobId = payload.job_id; watchJob(payload.job_id);
     } catch (error) {
       state.busy = false; finishActivity('error', null, 'failed');
@@ -624,13 +626,20 @@
   }
   async function stopMessage() {
     if (!state.session || !state.busy) return;
-    try { await api().abortPiCopilotSession(state.session.session_id, { message_job_id: state.jobId || null }); }
+    try {
+      await api().abortPiCopilotSession(state.session.session_id, {
+        project_id: projectId(), message_job_id: state.jobId || null,
+      });
+    }
     catch (error) { state.error = errorText(error); render(); }
   }
   async function rebind() {
     if (!state.session) return;
     try {
-      const payload = await api().rebindPiCopilotSession(state.session.session_id);
+      const payload = await api().rebindPiCopilotSession(
+        state.session.session_id,
+        { project_id: projectId() },
+      );
       state.session = payload.session; state.error = ''; render();
     } catch (error) { state.error = errorText(error); render(); }
   }
