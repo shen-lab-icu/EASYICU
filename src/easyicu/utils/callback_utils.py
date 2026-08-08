@@ -1766,6 +1766,11 @@ def _mimic_prepare_time_columns(
             result[col] = pd.to_datetime(result[col], errors="coerce")
             if result[col].dt.tz is not None:
                 result[col] = result[col].dt.tz_localize(None)
+            # pandas 3 preserves the source datetime unit (for example
+            # ``datetime64[us]``).  ICU outtime fallbacks can contain
+            # nanosecond rounding, so normalize the episode clocks before a
+            # clipped end is assigned back into the frame.
+            result[col] = result[col].astype("datetime64[ns]")
     return result, numeric
 
 

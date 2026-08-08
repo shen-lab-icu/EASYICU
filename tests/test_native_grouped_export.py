@@ -850,13 +850,9 @@ def test_arrow_publication_matches_legacy_canonical_values_order_and_schema(
         requested_concepts=["gcs", "delirium_positive", "avpu"],
         dictionary=dictionary,
     )
-    import pyarrow as pa
     import pyarrow.parquet as pq
 
-    expected_arrow_schema = pa.Table.from_pandas(
-        expected,
-        preserve_index=False,
-    ).schema
+    expected_arrow_schema = api._native_export_arrow_schema(expected)
 
     api._publish_native_export_v2(
         database="miiv",
@@ -1029,18 +1025,16 @@ def test_large_duplicate_duckdb_path_is_streamed_and_preserves_schema_order(
     assert exported["avpu"].iloc[0] == "A"
     assert pd.isna(exported["avpu"].iloc[1])
 
-    import pyarrow as pa
     import pyarrow.parquet as pq
 
     dictionary = api.load_dictionary(include_sofa2=True)
-    expected_schema = pa.Table.from_pandas(
+    expected_schema = api._native_export_arrow_schema(
         api._native_export_empty_schema_frame(
             module="neurological",
             requested_concepts=["gcs", "delirium_positive", "avpu"],
             dictionary=dictionary,
-        ),
-        preserve_index=False,
-    ).schema
+        )
+    )
     assert pq.read_schema(path).equals(expected_schema, check_metadata=True)
 
 
