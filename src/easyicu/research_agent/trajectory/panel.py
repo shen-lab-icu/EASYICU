@@ -120,7 +120,7 @@ def fixed_window_panel(
     Windows are half-open except the last, which CLOSES on ``horizon_hours``:
     ``[0,12) [12,24) ... [60,72]``.  A grid declared over "hours 0-72" has to
     contain hour 72, and the long tables this reads are themselves clipped to
-    that closed bound.  MEASURED on h3_trajectory_clustering: 159,095 of
+    that closed bound.  MEASURED on a trajectory-clustering fixture: 159,095 of
     19,067,154 rows sit at exactly hour 72.0, across 67,162 of the 94,442 stays.
     A half-open final window dropped every one of them, which for a stay whose
     only late observation is the endpoint turns a real value into missing --

@@ -4724,10 +4724,10 @@ def run_execute_phase(
         # two was the one thing that could not see it.
         #
         # MEASURED across the recorded corpus: of 12 runs that both materialize
-        # a host cohort and revise their plan, 2 (h1_ventilation_survival,
-        # h2_vasopressor_causal) ended with producer_plan_snapshot_mismatch on
-        # exactly that step, and each lost nearly everything downstream -- h1
-        # completed 1 of 10 steps, h2 1 of 7. Passing the full list is a no-op
+        # a host cohort and revise their plan, 2 fixture runs ended with
+        # producer_plan_snapshot_mismatch on exactly that step, and each lost
+        # nearly everything downstream -- one completed 1 of 10 steps, the
+        # other 1 of 7. Passing the full list is a no-op
         # when nothing else has been sealed yet.
         completed_records=per_step_records,
         directive="\n\n".join(
@@ -11828,12 +11828,12 @@ def run_execute_phase(
         # then "Auditing generated figures / run complete", with the seven
         # remaining steps simply absent: no start, no failure, no reason.
         #
-        # MEASURED on h3_trajectory_clustering (..._e13587c_nine2). The plan had
-        # 9 steps; step_attempt_history recorded 2. Reconstructing why cost a
+        # MEASURED on a trajectory-clustering fixture. The plan had 9 steps;
+        # step_attempt_history recorded 2. Reconstructing why cost a
         # full diagnostic pass over the manifest, run_status and plan before the
-        # trajectory block was found -- and h3 has never executed past step 01
-        # in any of its 7 recorded runs, so this silence is what every one of
-        # them looked like.
+        # trajectory block was found -- and the fixture has never executed past
+        # its cohort step in any of its 7 recorded runs, so this silence is what
+        # every one of them looked like.
         dropped = [
             step.step_id
             for step in plan.steps

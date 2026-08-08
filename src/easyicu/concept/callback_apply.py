@@ -256,6 +256,16 @@ def _load_mimic_icu_outtimes(
         )
     stay_ids = frame[id_col].dropna().unique()
     bounds = bounds.loc[bounds[id_col].isin(stay_ids)].copy()
+    # pandas 3 preserves source datetime units (for example datetime64[s]).
+    # The LOS fallback may contain sub-second rounding, so normalize both
+    # columns before assigning it rather than relying on an implicit lossy cast.
+    bounds["outtime"] = pd.to_datetime(
+        bounds["outtime"], errors="coerce"
+    ).astype("datetime64[ns]")
+    if "intime" in bounds.columns:
+        bounds["intime"] = pd.to_datetime(
+            bounds["intime"], errors="coerce"
+        ).astype("datetime64[ns]")
     missing_outtime = bounds["outtime"].isna()
     if missing_outtime.any() and {"intime", "los"}.issubset(bounds.columns):
         fallback = pd.to_datetime(

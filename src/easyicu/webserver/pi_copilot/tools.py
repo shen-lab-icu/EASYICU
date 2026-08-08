@@ -903,6 +903,9 @@ def _run(
             ),
             owner="easyicu.webserver.provider_gate",
         )
+    grant_block = _consume_action(context, "run")
+    if grant_block is not None:
+        return grant_block
     study = _bound_context(context.session.binding)
     if not study or not study.get("id"):
         return _result(
@@ -912,9 +915,6 @@ def _run(
             summary="Create and bind a typed StudyContext before starting an EasyICU run.",
             owner="easyicu.webserver.study_contexts",
         )
-    grant_block = _consume_action(context, "run")
-    if grant_block is not None:
-        return grant_block
     # Import lazily to keep the route-composition module out of this package's
     # import graph. The function remains the one existing run submission path;
     # this adapter does not reconstruct its validation or JobManager behavior.

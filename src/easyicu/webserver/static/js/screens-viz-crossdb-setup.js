@@ -524,7 +524,7 @@
     const profiles = sampleProfiles(config);
     const catalogTotals = config && config.catalogTotals || {};
     const catalogModuleCount = Number(catalogTotals.modules) || 19;
-    const catalogFeatureCount = Number(catalogTotals.features) || 281;
+    const catalogFeatureCount = Number(catalogTotals.features) || 288;
     const fullScope = state.featureScope === 'all';
     const rawSelection = selectionStatus(root);
     const detectedCount = rawSelection.current && rawSelection.current.ok

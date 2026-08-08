@@ -70,6 +70,33 @@ def table_one_executor_code(
         is not None
         and count_column in declared_inputs
     )
+    measurement_provenance_import = (
+        textwrap.dedent(
+            """
+            from easyicu.research_agent.methods.descriptive_inputs import (
+                measurement_provenance_receipt,
+            )
+            """
+        ).strip()
+        if measurement_pairs
+        else ""
+    )
+    measurement_checks_code = (
+        textwrap.dedent(
+            """
+            measurement_checks = [
+                measurement_provenance_receipt(
+                    frame,
+                    measured_column=measured_column,
+                    count_column=count_column,
+                )
+                for measured_column, count_column in measurement_pairs
+            ]
+            """
+        ).strip()
+        if measurement_pairs
+        else "measurement_checks = []"
+    )
     plausibility_code = (
         render_standard_plausibility_receipt_code(
             plausibility_scope,
@@ -97,9 +124,7 @@ def table_one_executor_code(
             build_grouped_table_one,
             table_one_spec_sha256,
         )
-        from easyicu.research_agent.methods.descriptive_inputs import (
-            measurement_provenance_receipt,
-        )
+        __EASYICU_MEASUREMENT_PROVENANCE_IMPORT__
 
         table_one_spec = {specification!r}
         measurement_pairs = {measurement_pairs!r}
@@ -269,14 +294,7 @@ def table_one_executor_code(
                 "log:source_row_count_reconciliation"
             ] = reconciliation_path.name
 
-        measurement_checks = [
-            measurement_provenance_receipt(
-                frame,
-                measured_column=measured_column,
-                count_column=count_column,
-            )
-            for measured_column, count_column in measurement_pairs
-        ]
+        __EASYICU_MEASUREMENT_PROVENANCE_CHECKS__
 
         summary = {{
             {plausibility_summary_entry}
@@ -320,7 +338,18 @@ def table_one_executor_code(
         print(json.dumps({{"grouped_table_one": "ok", "cohort_n": len(frame)}}))
         """
     )
-    return rendered.replace(
-        "__EASYICU_STANDARD_PLAUSIBILITY_RECEIPT__",
-        plausibility_code,
-    ).strip()
+    return (
+        rendered.replace(
+            "__EASYICU_STANDARD_PLAUSIBILITY_RECEIPT__",
+            plausibility_code,
+        )
+        .replace(
+            "__EASYICU_MEASUREMENT_PROVENANCE_IMPORT__",
+            measurement_provenance_import,
+        )
+        .replace(
+            "__EASYICU_MEASUREMENT_PROVENANCE_CHECKS__",
+            measurement_checks_code,
+        )
+        .strip()
+    )

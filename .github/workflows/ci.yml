@@ -41,6 +41,11 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          # The full-six release sealer proves that runtime commits descend
+          # from the minimum harmonized-semantics commit.  A depth-1 checkout
+          # cannot make that fail-closed ancestry decision.
+          fetch-depth: 0
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5

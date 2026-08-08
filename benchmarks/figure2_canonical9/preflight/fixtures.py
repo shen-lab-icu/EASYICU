@@ -260,7 +260,12 @@ def _table_one_step(
 
 
 def _primary_association_step(
-    *, step_id: str, exposure: str, outcome: str, adjust: List[str], intent: str
+    *,
+    step_id: str,
+    exposure: str,
+    outcome: str,
+    adjust: List[str],
+    intent: str,
 ) -> AnalysisStep:
     """Agent-owned (LLM-coded) typed adjusted-association step."""
 
@@ -270,20 +275,9 @@ def _primary_association_step(
         planned_analysis_role="primary",
         intent=intent,
         inputs=inputs,
-        expected_outputs=["table:adjusted_association_estimates"],
-        method="adjusted_association_models",
-        model_requirements=[
-            {
-                "requirement_id": f"primary_{exposure}_{outcome}",
-                "outcome": outcome,
-                "outcome_type": "binary",
-                "method_family": "logistic_regression",
-                "exposure_source": exposure,
-                "analysis_role": "primary",
-                "analysis_set": "complete_case",
-                "required_for_step_success": True,
-            }
-        ],
+        expected_outputs=["table:association_model_diagnostics"],
+        method="agent_coded_adjusted_association",
+        scientific_capability="association_freeform_v1",
     )
 
 
@@ -318,7 +312,7 @@ def _robustness_step(*, step_id: str) -> AnalysisStep:
     return _aux_step(
         step_id=step_id,
         method="robustness_sensitivity",
-        inputs=["table:adjusted_association_estimates"],
+        inputs=["table:primary_adjusted_estimate"],
         expected_outputs=[
             "table:robustness_matrix",
             "statistic:robustness_summary",
@@ -326,6 +320,26 @@ def _robustness_step(*, step_id: str) -> AnalysisStep:
         intent=(
             "Replay the primary association under the pre-specified baseline-"
             "covariate missingness strategy; never impute the exposure or outcome."
+        ),
+    )
+
+
+def _planned_effect_step(*, step_id: str) -> AnalysisStep:
+    """Keep the formal primary-estimand role visible but unclaimed offline.
+
+    The preceding free-form Coder smoke publishes model diagnostics only.  A
+    downstream lineage step declares where a formally contracted effect would
+    belong, while the generic offline response deliberately cannot produce it.
+    """
+
+    return _aux_step(
+        step_id=step_id,
+        method="planned_primary_effect_estimate",
+        inputs=["table:association_model_diagnostics"],
+        expected_outputs=["table:primary_adjusted_estimate"],
+        intent=(
+            "Reserve the formal primary-effect result for a typed scientific "
+            "contract; the diagnostic-only offline smoke must not emit it."
         ),
     )
 
@@ -469,6 +483,7 @@ def _e1_plan() -> AnalysisPlan:
                 adjust=["age"],
                 intent="Adjusted association of Sepsis-3 with in-hospital mortality.",
             ),
+            _planned_effect_step(step_id="03b_primary_effect"),
             _robustness_step(step_id="04_robustness"),
         ],
         robustness_specs=_baseline_missingness_robustness_spec(),
@@ -604,6 +619,7 @@ def _e2_plan() -> AnalysisPlan:
                 adjust=["age"],
                 intent="Adjusted association of first-24h peak lactate with mortality.",
             ),
+            _planned_effect_step(step_id="04b_primary_effect"),
             _robustness_step(step_id="05_robustness"),
         ],
         robustness_specs=_baseline_missingness_robustness_spec(),
@@ -721,6 +737,7 @@ def _e3_plan() -> AnalysisPlan:
                 adjust=["age"],
                 intent="Adjusted ordinal KDIGO-stage gradient vs mortality.",
             ),
+            _planned_effect_step(step_id="04b_primary_effect"),
             _robustness_step(step_id="05_robustness"),
         ],
         robustness_specs=_baseline_missingness_robustness_spec(),

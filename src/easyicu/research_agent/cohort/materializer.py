@@ -1961,8 +1961,8 @@ def materialize_to_parquet(
         # parser answered None for every column of all 234 sealed contexts,
         # because nothing ever emitted such a column: the wide cohort carries
         # whole-stay summaries and the per-timepoint values live only in the long
-        # table beside it.  h3_trajectory_clustering has never executed past
-        # step 01 in any of its 7 recorded runs.
+        # table beside it.  The affected trajectory-clustering fixture has never
+        # executed past its cohort step in any of its 7 recorded runs.
         #
         # The grid is the caller's declaration; this function does not invent
         # one, and ``trajectory_panel_grid=None`` leaves every existing caller's

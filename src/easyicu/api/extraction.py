@@ -2599,6 +2599,36 @@ def _native_export_empty_schema_frame(
     return pd.DataFrame(columns)
 
 
+def _normalise_native_export_arrow_schema(schema):
+    """Normalize version-sensitive Arrow physical types in a native schema."""
+    import pyarrow as pa
+
+    fields = [
+        pa.field(
+            field.name,
+            pa.string() if pa.types.is_large_string(field.type) else field.type,
+            nullable=field.nullable,
+            metadata=field.metadata,
+        )
+        for field in schema
+    ]
+    return pa.schema(fields, metadata=schema.metadata)
+
+
+def _native_export_arrow_schema(schema_frame):
+    """Return one stable Arrow schema across pandas string backends.
+
+    pandas 3 may expose ``StringDtype`` to Arrow as ``large_string`` while
+    earlier supported combinations expose the same logical column as
+    ``string``.  Native-v2 manifests are reproducibility receipts, so their
+    physical schema must not depend on the runner's pandas version.
+    """
+    import pyarrow as pa
+
+    inferred = pa.Table.from_pandas(schema_frame, preserve_index=False).schema
+    return _normalise_native_export_arrow_schema(inferred)
+
+
 def _load_eicu_tidal_volume_age_lookup(output_root: Path) -> pd.Series:
     """Load the canonical eICU age evidence used by the publication gate."""
 
@@ -3112,10 +3142,7 @@ def _try_publish_native_export_arrow_fast_path(
         requested_concepts=requested_concepts,
         dictionary=dictionary,
     )
-    target_schema = pa.Table.from_pandas(
-        schema_frame,
-        preserve_index=False,
-    ).schema
+    target_schema = _native_export_arrow_schema(schema_frame)
     read_columns = list(
         dict.fromkeys(
             [

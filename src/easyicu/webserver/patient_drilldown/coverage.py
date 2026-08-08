@@ -7,7 +7,7 @@ This owner separates three facts that the UI must not conflate:
 * the exported column contains at least one non-null observation.
 
 Parquet null counts are read from row-group metadata, so even very large exports
-can expose all 281 concept statuses without loading patient rows.
+can expose all 288 concept statuses without loading patient rows.
 """
 
 from __future__ import annotations
@@ -42,7 +42,7 @@ _CACHE_LOCK = threading.Lock()
 def build_feature_coverage(
     export_path: Path, description: Mapping[str, Any]
 ) -> Dict[str, Any]:
-    """Return a row-free 281-concept coverage index for one export."""
+    """Return a row-free 288-concept coverage index for one export."""
 
     root = export_path.expanduser()
     signature = _source_signature(root, description.get("files") or [])

@@ -792,8 +792,8 @@ class ProviderHardStopLedger:
                 # own numbers.  An UNREPORTED call had no release path at all,
                 # so it stayed charged at the floor forever.
                 #
-                # MEASURED on h1_ventilation_survival, 2026-08-03
-                # (``..._7c6bac6_verify07``).  The local gateway was answering
+                # MEASURED on a survival-analysis fixture, 2026-08-03.  The
+                # local gateway was answering
                 # HTTP 500 in 0.98 s with ``Post ".../responses": EOF`` -- the
                 # upstream connection died while the request was still being
                 # sent, about a quarter of the time a successful call needs to

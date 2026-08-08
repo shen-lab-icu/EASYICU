@@ -1826,8 +1826,8 @@ def non_trajectory_clustering_stability_guide(
     The converse of :func:`trajectory_planner_contract_guide`, and gated on the
     same predicate so exactly one of the two ever speaks.
 
-    ``m3_sepsis_subphenotype`` asks to cluster first-24h summaries -- one row
-    per stay, no trajectory in either representation -- and its task requires a
+    A sepsis-subphenotyping fixture asks to cluster first-24h summaries -- one
+    row per stay, no trajectory in either representation -- and requires a
     cluster-stability audit.  ``trajectory_stability_spec`` is the only typed
     stability field a Planner can see, so it declared that, and the plan was
     refused for attaching a stability spec with no validated fixed-window

@@ -1224,13 +1224,12 @@ def _planner_prompt_within_budget(
 ) -> Tuple[str, str]:
     """Return ``(user_prompt, catalog_detail)``, shortening the menu before failing.
 
-    MEASURED 2026-07-30 across the nine canonical tasks: the four that planned
+    MEASURED 2026-07-30 across a nine-task offline fixture: the four that planned
     successfully sat at 85.8%, 92.9%, 94.5% and **97.8%** of the 80,000-byte
-    limit; ``m2_mortality_prediction`` and ``h2_vasopressor_causal`` came to
-    83,622 and were refused outright, producing zero steps.  The failing two are
-    not outliers -- they are 6.9% larger than the largest success.  With both
-    context segments marked ``required=True`` the assembler had nothing to evict,
-    so a 4.5% overflow cost two entire tasks.
+    limit; two larger tasks reached 83,622 bytes and were refused outright,
+    producing zero steps.  Those two were only 6.9% larger than the largest
+    success.  With both context segments marked ``required=True`` the assembler
+    had nothing to evict, so a 4.5% overflow cost two entire tasks.
 
     The only part of that prompt that is pure menu is the analysis-type catalog:
     47% is this task's typed context (drop it and the Planner invents columns),
@@ -1715,8 +1714,8 @@ class PlannerAgent:
                 # product anywhere: roles_covered_by_plan credits it only from
                 # the primary lineage. Naming the product without saying that
                 # sends the Planner back to add the same off-lineage display
-                # step it already wrote, which is how the recorded
-                # h1_ventilation_survival plan spent its attempts.
+                # step it already wrote, which is how one recorded
+                # survival-plan fixture spent its attempts.
                 headline_roles = set(contract.planner_owned_result_roles)
                 missing_headline = [
                     role for role in missing_roles if role in headline_roles

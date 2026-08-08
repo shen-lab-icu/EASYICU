@@ -313,8 +313,8 @@ def render_article_analysis_contract_for_prompt(
     )
     # The rule above is true for ordinary roles and INCOMPLETE for the
     # headline-owned ones, which roles_covered_by_plan credits only from steps
-    # on the primary lineage. Measured 2026-07-30 on the recorded
-    # h1_ventilation_survival failure: the scientifically natural survival plan
+    # on the primary lineage. Measured 2026-07-30 on a recorded
+    # survival-analysis failure: the scientifically natural survival plan
     # -- Cox model as the single primary step, Kaplan-Meier curve as its own
     # secondary display step reading the analysis cohort -- covers
     # survival_effect and misses temporal_absolute_risk, because the display
@@ -458,8 +458,8 @@ def _declared_primary_lineage_step_ids(plan: AnalysisPlan) -> Set[str]:
 #: the schema will reject, while ``table:table_one`` -- which ``_ROLE_ALIASES``
 #: already credits for this role -- is never mentioned.
 #:
-#: MEASURED on h1_ventilation_survival, 2026-08-03: five planner attempts, five
-#: distinct rejections, two of them this loop -- ``missing required article
+#: MEASURED on a survival-analysis fixture, 2026-08-03: five planner attempts,
+#: five distinct rejections, two of them this loop -- ``missing required article
 #: contract role(s): baseline_context ... 'table:baseline_table'`` followed by
 #: ``table_one_spec requires expected output 'table:table_one'``.  The task has
 #: never produced a plan.

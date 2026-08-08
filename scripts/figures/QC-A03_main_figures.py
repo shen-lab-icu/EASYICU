@@ -20,7 +20,7 @@ import json
 import math
 import textwrap
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
@@ -1926,7 +1926,7 @@ def render_submission_bundle(
     manifest = {
         "version": 1,
         "stable_entry": "QC-A03",
-        "created_at_utc": datetime.now(UTC).isoformat(),
+        "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "backend": "python",
         "source_status": source_status,
         "publication_eligible": publication_eligible,

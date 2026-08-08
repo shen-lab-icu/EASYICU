@@ -17,7 +17,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -1574,7 +1574,7 @@ def _build_report_artifact(
 ) -> dict[str, Any]:
     """Build the bounded Data Analytics report payload used for handoff."""
 
-    generated_at = datetime.now(UTC).isoformat()
+    generated_at = datetime.now(timezone.utc).isoformat()
     availability_rows: list[dict[str, Any]] = []
     kind_labels = {
         "continuous": "连续变量",

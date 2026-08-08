@@ -37,7 +37,6 @@ import easyicu.research_agent as ra
 from easyicu.research_agent.evaluation_scorecard import compute_tristate
 from easyicu.research_agent.providers.llm import llm_is_mockish
 from easyicu.research_agent.providers.mocks import (
-    _mock_code_primary_association,
     _mock_code_prediction_model,
     _mock_code_trajectory_clustering,
     PatternScriptedMockLLMClient,
@@ -307,14 +306,7 @@ def _primary_preflight_code(
     """Choose a reviewed local Coder response by typed analysis family."""
 
     if case.primary_code_kind == "association":
-        return _mock_code_primary_association(
-            ctx=context,
-            step_id=case.primary_step_id,
-            outcome=case.target_outcome,
-            predictor=case.primary_exposure,
-            adjust=["age"],
-            typed_model_contract=True,
-        )
+        return _association_preflight_code(case)
     if case.primary_code_kind == "prediction":
         return _mock_code_prediction_model(
             ctx=context,
@@ -334,6 +326,73 @@ def _primary_preflight_code(
     raise ValueError(
         f"unsupported preflight primary_code_kind={case.primary_code_kind!r}"
     )
+
+
+def _association_preflight_code(case: PreflightCase) -> str:
+    """Reviewed Coder smoke that proves execution without claiming an effect.
+
+    The free-form association capability has no closed effect-output contract.
+    This diagnostic therefore fits the declared logistic design but publishes
+    only execution facts.  Coefficients, odds ratios and confidence intervals
+    remain absent until a formal typed effect contract owns them.
+    """
+
+    template = f"""
+    from __future__ import annotations
+    import json
+    import os
+    from pathlib import Path
+
+    import numpy as np
+    import pandas as pd
+    import statsmodels.api as sm
+
+    out_dir = Path(os.environ["STEP_OUT_DIR"])
+    out_dir.mkdir(parents=True, exist_ok=True)
+    frame = pd.read_parquet(os.environ["COHORT_PARQUET"])
+    exposure = {case.primary_exposure!r}
+    outcome = {case.target_outcome!r}
+    covariates = ["age"]
+    model_frame = frame[[exposure, outcome, *covariates]].replace(
+        [np.inf, -np.inf], np.nan
+    ).dropna().copy()
+    design = sm.add_constant(
+        model_frame[[exposure, *covariates]].astype(float),
+        has_constant="add",
+    )
+    result = sm.Logit(model_frame[outcome].astype(int), design).fit(
+        disp=0,
+        maxiter=200,
+    )
+    diagnostics = {{
+        "n": int(len(model_frame)),
+        "event_n": int(model_frame[outcome].astype(int).sum()),
+        "design_column_n": int(design.shape[1]),
+        "design_rank": int(np.linalg.matrix_rank(design.to_numpy(dtype=float))),
+        "converged": bool(result.mle_retvals.get("converged", False)),
+    }}
+    pd.DataFrame([diagnostics]).to_csv(
+        out_dir / "association_model_diagnostics.csv",
+        index=False,
+    )
+    summary = {{
+        "method": "logistic_regression",
+        "status": "ok",
+        "interpretation_class": "diagnostic_only_no_effect_claim",
+        "output_files": {{
+            "table:association_model_diagnostics": (
+                "association_model_diagnostics.csv"
+            )
+        }},
+        "model_diagnostics": diagnostics,
+    }}
+    (out_dir / "step_summary.json").write_text(
+        json.dumps(summary, indent=2),
+        encoding="utf-8",
+    )
+    print(json.dumps(summary))
+    """
+    return textwrap.dedent(template).strip() + "\n"
 
 # Both values must be passed to CodeRunner explicitly.  ``runner_network`` is
 # a DockerRunner option; it does not configure the subprocess runner used by

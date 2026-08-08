@@ -26,6 +26,9 @@ from easyicu.research_agent.audits.validators import LLMConceptAuditor
 from easyicu.research_agent.methods.table_one import build_grouped_table_one
 from easyicu.research_agent.providers.mocks import ExternalCaptureMockLLMClient
 from easyicu.research_agent.providers.prompts import load_prompt_pack
+from easyicu.research_agent.execution.runners.table_one_executor import (
+    table_one_executor_code,
+)
 from easyicu.research_agent.repairs.patch import PATCH_FORMAT
 from easyicu.research_agent.repairs.reasons import (
     RepairPromptAuthority,
@@ -242,6 +245,16 @@ def test_table_one_plan_rejects_outputs_without_a_closed_host_owner() -> None:
 
     with pytest.raises(ValidationError, match="closed host-executable outputs"):
         AnalysisStep.model_validate(payload)
+
+
+def test_table_one_without_measurement_pairs_emits_no_provenance_helper_call() -> None:
+    step = AnalysisStep.model_validate(_step(include_spec=True))
+
+    source = table_one_executor_code(step)
+
+    compile(source, "<table-one-executor>", "exec")
+    assert "measurement_provenance_receipt(" not in source
+    assert "measurement_checks = []" in source
 
 
 def test_planner_prompt_lists_exact_table_one_enums_and_rejects_shorthand() -> None:

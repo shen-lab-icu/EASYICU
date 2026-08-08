@@ -140,6 +140,11 @@ def test_plan_contract_valid(case: PreflightCase) -> None:
     primary = [s for s in plan.steps if s.step_id == case.primary_step_id]
     assert len(primary) == 1
     assert primary[0].planned_analysis_role == "primary"
+    assert primary[0].scientific_capability == "association_freeform_v1"
+    assert primary[0].expected_outputs == [
+        "table:association_model_diagnostics"
+    ]
+    assert primary[0].model_requirements == []
 
 
 def test_expected_products_pairwise_distinct() -> None:
