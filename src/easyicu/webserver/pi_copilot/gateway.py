@@ -187,7 +187,7 @@ class PiGatewayClient:
             "provider": str(
                 self.environ.get("EASYICU_PI_PROVIDER") or "easyicu-local"
             ),
-            "model": str(self.environ.get("EASYICU_PI_MODEL") or "gpt5.6 luna"),
+            "model": str(self.environ.get("EASYICU_PI_MODEL") or "gpt-5.6-luna"),
             "base_url_configured": bool(
                 str(
                     self.environ.get("EASYICU_PI_BASE_URL")

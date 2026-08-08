@@ -10,6 +10,7 @@ import pytest
 
 from easyicu.webserver.pi_copilot.contracts import PiCopilotError
 from easyicu.webserver.pi_copilot.provider_config import (
+    DEFAULT_MODEL,
     PiProviderConfigStore,
 )
 
@@ -21,6 +22,10 @@ def test_pi_provider_owner_uses_shared_url_security_not_scientific_adapter() -> 
     ).read_text(encoding="utf-8")
     assert "provider_url_security" in source
     assert "provider_adapter" not in source
+
+
+def test_cliproxyapi_default_uses_the_reported_model_identifier() -> None:
+    assert DEFAULT_MODEL == "gpt-5.6-luna"
 
 
 def _models_ok(
