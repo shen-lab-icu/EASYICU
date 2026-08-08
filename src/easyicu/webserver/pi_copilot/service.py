@@ -38,6 +38,7 @@ from .projections import reject_sensitive_message
 from .workspace import ProjectWorkspace
 
 MAX_SESSIONS = 100
+MAX_RESEARCH_ARTIFACT_PREVIEW_BYTES = 2 * 1024 * 1024
 ALLOWED_TURN_ACTIONS = frozenset(
     {"configure", "run", "cancel", "workspace_write"}
 )
@@ -1071,12 +1072,12 @@ class PiCopilotService:
             "session": self._public_session(record, gateway_state=state),
         }
 
-    def _assert_workspace_project(self, project_id: str) -> str:
+    def _assert_project_initialized(self, project_id: str) -> str:
         clean = str(project_id or "").strip()
         if not clean or not self.project_store.resolve(clean):
             raise PiCopilotError(
-                "pi_workspace_project_not_initialized",
-                "Initialize the EasyICU project before opening its artifact workspace.",
+                "pi_project_not_initialized",
+                "Initialize the EasyICU project before opening its governed resources.",
                 status_code=409,
             )
         return clean
@@ -1087,7 +1088,7 @@ class PiCopilotService:
         project_id: str,
         relative_file: str,
     ) -> Dict[str, Any]:
-        clean = self._assert_workspace_project(project_id)
+        clean = self._assert_project_initialized(project_id)
         return {
             "ok": True,
             "artifact": self.workspace.read_file(clean, relative_file),
@@ -1099,10 +1100,112 @@ class PiCopilotService:
         project_id: str,
         relative_file: str,
     ) -> Dict[str, Any]:
-        clean = self._assert_workspace_project(project_id)
+        clean = self._assert_project_initialized(project_id)
         return {
             "ok": True,
             "artifact": self.workspace.preview_file(clean, relative_file),
+        }
+
+    @staticmethod
+    def _browser_artifact_payload(value: Any) -> Any:
+        """Remove host-only paths while retaining bounded structured results."""
+
+        if isinstance(value, Mapping):
+            projected: Dict[str, Any] = {}
+            for key, child in value.items():
+                normalized = str(key).strip().lower().replace("-", "_")
+                if normalized in {"project_dir", "source_path"}:
+                    continue
+                if normalized == "path" and isinstance(child, str):
+                    candidate = Path(child).expanduser()
+                    if candidate.is_absolute():
+                        continue
+                projected[str(key)] = PiCopilotService._browser_artifact_payload(
+                    child
+                )
+            return projected
+        if isinstance(value, list):
+            return [PiCopilotService._browser_artifact_payload(item) for item in value]
+        return value
+
+    def get_research_artifact(
+        self,
+        *,
+        project_id: str,
+        run_id: str,
+        artifact_name: str,
+    ) -> Dict[str, Any]:
+        """Resolve a run artefact through project authority without exposing paths."""
+
+        clean_project = self._assert_project_initialized(project_id)
+        study_context_id = self.project_store.resolve(clean_project)
+        clean_run = str(run_id or "").strip()
+        clean_artifact = str(artifact_name or "").strip()
+        history = agent_runs.list_run_history(
+            study_id=study_context_id,
+            limit=200,
+        )
+        row = next(
+            (
+                item
+                for item in (history.get("runs") or [])
+                if isinstance(item, Mapping) and item.get("run_id") == clean_run
+            ),
+            None,
+        )
+        if row is None:
+            raise PiCopilotError(
+                "pi_research_run_not_found",
+                "The requested EasyICU run does not belong to this research project.",
+                status_code=404,
+                details={"run_id": clean_run},
+            )
+        loaded = agent_runs.read_run_artifact(
+            str(row.get("project_dir") or ""),
+            clean_artifact,
+        )
+        if not loaded.get("ok"):
+            code = str(loaded.get("error") or "pi_research_artifact_unavailable")
+            raise PiCopilotError(
+                code,
+                "The requested EasyICU run artefact is unavailable.",
+                status_code=404 if code == "artifact_not_found" else 400,
+                details={"artifact": clean_artifact},
+            )
+        privacy_scan = loaded.get("privacy_scan") or {}
+        if not privacy_scan.get("passed"):
+            raise PiCopilotError(
+                "pi_research_artifact_privacy_blocked",
+                "The artefact preview was withheld by the EasyICU privacy scan.",
+                status_code=409,
+                details={"artifact": clean_artifact},
+            )
+        payload = self._browser_artifact_payload(loaded.get("payload") or {})
+        encoded = json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
+        if len(encoded) > MAX_RESEARCH_ARTIFACT_PREVIEW_BYTES:
+            raise PiCopilotError(
+                "pi_research_artifact_preview_too_large",
+                "The artefact exceeds the bounded browser preview contract.",
+                status_code=413,
+                details={
+                    "artifact": clean_artifact,
+                    "bytes": len(encoded),
+                    "max_bytes": MAX_RESEARCH_ARTIFACT_PREVIEW_BYTES,
+                },
+            )
+        metadata = loaded.get("artifact") or {}
+        return {
+            "ok": True,
+            "run_id": clean_run,
+            "artifact": {
+                "name": metadata.get("name") or clean_artifact,
+                "bytes": metadata.get("bytes"),
+                "sha256": metadata.get("sha256"),
+                "kind": metadata.get("kind") or "json",
+                "media_type": "application/json",
+            },
+            "payload": payload,
+            "privacy": {"passed": True},
         }
 
     def _public_session(

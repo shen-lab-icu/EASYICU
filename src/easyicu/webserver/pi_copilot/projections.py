@@ -247,11 +247,24 @@ def project_run_row(row: Mapping[str, Any]) -> Dict[str, Any]:
 def project_artifacts(rows: Iterable[Mapping[str, Any]]) -> list[Dict[str, Any]]:
     projected = []
     for row in list(rows)[:MAX_LIST_ITEMS]:
+        size = row.get("size")
+        if size is None:
+            size = row.get("bytes")
+        kind = row.get("kind")
+        media_type = row.get("media_type")
+        if media_type is None and kind == "json":
+            media_type = "application/json"
         projected.append(
             {
-                key: row.get(key)
-                for key in ("name", "size", "sha256", "media_type")
-                if row.get(key) is not None
+                key: value
+                for key, value in (
+                    ("name", row.get("name")),
+                    ("size", size),
+                    ("sha256", row.get("sha256")),
+                    ("media_type", media_type),
+                    ("kind", kind),
+                )
+                if value is not None
             }
         )
     return ensure_safe_projection(projected)

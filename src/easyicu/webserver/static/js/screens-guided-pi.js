@@ -9,7 +9,7 @@
     messages: [], loading: true, creating: false, busy: false, jobId: '',
     source: null, error: '', shell: 'pi', draft: '', setupSaving: false,
     showSetup: false, availableModels: [], project: null,
-    projectInitialization: null, agentMode: 'workspace',
+    projectInitialization: null, agentMode: 'research', pendingAuthorityRebind: false,
   };
 
   function tr(en, zh) { return window.EU_LANG === 'zh' ? zh : en; }
@@ -29,7 +29,7 @@
   function runtimeReady() { return !!(state.runtime && state.runtime.status === 'ready'); }
   function projectId() { return String((state.project && state.project.id) || '').trim(); }
   function agentMode() {
-    return (state.session && state.session.agent_mode) || state.agentMode || 'workspace';
+    return (state.session && state.session.agent_mode) || state.agentMode || 'research';
   }
   function setShell(shell) {
     state.shell = shell === 'pi' ? 'pi' : 'legacy';
@@ -142,7 +142,31 @@
     return 'spark';
   }
   function resourceName(resource) {
-    return resource && String(resource.label || resource.file || '').trim();
+    return resource && String(resource.label || resource.artifact || resource.file || '').trim();
+  }
+  function resourceKey(resource) {
+    if (!resource) return '';
+    return resource.kind === 'research_artifact'
+      ? `research:${resource.run_id || ''}:${resource.artifact || ''}`
+      : `${resource.kind || 'file'}:${resource.file || ''}`;
+  }
+  function resourceLabel(resource) {
+    if (!resource) return '';
+    if (resource.kind === 'research_artifact' && window.AGENT_RENDER && typeof window.AGENT_RENDER.artifactTitle === 'function') {
+      return window.AGENT_RENDER.artifactTitle(resource.artifact || resource.label || '');
+    }
+    return resourceName(resource);
+  }
+  function resourceButton(resource, label) {
+    if (!resource) return '';
+    const kind = resource.kind === 'research_artifact' ? 'research_artifact' : (resource.kind === 'webpage' ? 'webpage' : 'file');
+    return `<button class="gpi-resource-link" type="button"
+      data-gpi-resource-kind="${esc(kind)}"
+      data-gpi-resource-file="${esc(resource.file || '')}"
+      data-gpi-resource-run="${esc(resource.run_id || '')}"
+      data-gpi-resource-artifact="${esc(resource.artifact || '')}"
+      data-gpi-resource-label="${esc(resource.label || resource.artifact || resource.file || '')}"
+      data-gpi-resource-media="${esc(resource.media_type || 'text/plain')}">${esc(label || resourceLabel(resource))}</button>`;
   }
   function toolLabel(name, resource) {
     const labels = {
@@ -315,6 +339,7 @@
           status: receipt.is_error ? 'error' : 'complete', text: receipt.summary || '',
           code: receipt.code || '', owner: receipt.owner || '',
           resource: receipt.resource || toolStep.resource || null,
+          resources: Array.isArray(receipt.resources) ? receipt.resources : [],
           endedAt: rowAt,
         });
         if (activity) upsertActivityStep(activity, toolStep);
@@ -409,11 +434,11 @@
         ${state.projectInitialization && state.projectInitialization.required ? `<div class="gpi-config-note warn"><strong>${tr('Study setup confirmation required.', '需要确认研究配置初始化。')}</strong> ${tr('No complete saved setup was found. Activating Pi will create an explicitly acknowledged empty StudyContext and collect the missing fields here in conversation.', '未找到完整的已保存配置。启用 Pi 后会在你明确确认下创建空的 StudyContext，并在当前对话中继续收集缺失字段。')}</div>` : ''}
         <p>${tr('Choose the tool boundary for this conversation. Research mode works with study configuration and evidence; Workspace mode also creates, edits, checks, and previews artifacts inside this project’s isolated folder.', '请选择这段对话的工具边界。研究模式处理研究配置与证据；项目工作区模式还可以在当前项目的隔离目录中创建、编辑、检查并预览产物。')}</p>
         <div class="gpi-mode-picker" role="radiogroup" aria-label="${tr('Agent mode', 'Agent 模式')}">
-          <button type="button" role="radio" data-gpi-mode-choice="workspace" aria-checked="${state.agentMode === 'workspace'}">
-            ${iconHtml('folder', 17)}<span><strong>${tr('Project workspace', '项目工作区')}</strong><small>${tr('Real file tools and web preview', '真实文件工具与网页预览')}</small></span>
-          </button>
           <button type="button" role="radio" data-gpi-mode-choice="research" aria-checked="${state.agentMode === 'research'}">
-            ${iconHtml('shield', 17)}<span><strong>${tr('Research only', '仅研究')}</strong><small>${tr('Study and evidence tools only', '仅研究与证据工具')}</small></span>
+            ${iconHtml('shield', 17)}<span><strong>${tr('Research workflow', '科研流程')}</strong><small>${tr('Question, setup, run, evidence, and results', '问题、配置、运行、证据与结果')}</small></span>
+          </button>
+          <button type="button" role="radio" data-gpi-mode-choice="workspace" aria-checked="${state.agentMode === 'workspace'}">
+            ${iconHtml('folder', 17)}<span><strong>${tr('Artifact workspace', '产物工作区')}</strong><small>${tr('Real file tools and web preview', '真实文件工具与网页预览')}</small></span>
           </button>
         </div>
         <button class="btn primary" type="button" data-gpi-create ${state.creating ? 'disabled' : ''}>
@@ -437,13 +462,20 @@
 
   function activityStepPrimary(step) {
     const label = activityStepLabel(step);
-    if (!step.resource || !step.resource.file) return `<strong>${esc(label)}</strong>`;
-    return `<button class="gpi-resource-link" type="button" data-gpi-resource-file="${esc(step.resource.file)}" data-gpi-resource-kind="${esc(step.resource.kind || 'file')}" data-gpi-resource-label="${esc(step.resource.label || step.resource.file)}" data-gpi-resource-media="${esc(step.resource.media_type || 'text/plain')}">${esc(label)}</button>`;
+    if (!step.resource) return `<strong>${esc(label)}</strong>`;
+    return resourceButton(step.resource, label);
+  }
+  function activityStepResources(step) {
+    const primary = resourceKey(step.resource);
+    const resources = (Array.isArray(step.resources) ? step.resources : [])
+      .filter(resource => resourceKey(resource) && resourceKey(resource) !== primary);
+    if (!resources.length) return '';
+    return `<div class="gpi-resource-list" aria-label="${tr('Run artifacts', '运行产物')}">${resources.map(resource => resourceButton(resource)).join('')}</div>`;
   }
   function activityStepRow(step) {
     return `<li class="${esc(step.status || 'complete')}">
       <span class="gpi-activity-step-icon" aria-hidden="true">${iconHtml(activityIcon(step), 15)}</span>
-      <span class="gpi-activity-step-copy">${activityStepPrimary(step)}${step.text ? `<span>${esc(step.text)}</span>` : ''}${step.code ? `<small>${esc([step.code, step.owner].filter(Boolean).join(' · '))}</small>` : ''}</span>
+      <span class="gpi-activity-step-copy">${activityStepPrimary(step)}${step.text ? `<span>${esc(step.text)}</span>` : ''}${activityStepResources(step)}${step.code ? `<small>${esc([step.code, step.owner].filter(Boolean).join(' · '))}</small>` : ''}</span>
       <span class="gpi-status-pip" aria-hidden="true"></span>
     </li>`;
   }
@@ -613,7 +645,7 @@
 
   async function createSession() {
     if (state.creating || !projectId()) return;
-    state.creating = true; state.error = ''; render();
+    state.creating = true; state.error = ''; state.pendingAuthorityRebind = false; render();
     try {
       const payload = await api().createPiCopilotSession({
         project_id: projectId(),
@@ -635,6 +667,7 @@
     const expectedProjectId = projectId();
     if (!expectedProjectId) return;
     state.error = '';
+    state.pendingAuthorityRebind = false;
     try {
       const payload = await api().loadPiCopilotSession(sessionId, expectedProjectId);
       if (expectedProjectId !== projectId()) return;
@@ -664,6 +697,7 @@
     state.session = null;
     state.messages = [];
     state.error = '';
+    state.pendingAuthorityRebind = false;
     rememberSession('');
     if (window.EU_GUIDED_PI_PREVIEW && window.EU_GUIDED_PI_PREVIEW.close) {
       window.EU_GUIDED_PI_PREVIEW.close();
@@ -703,7 +737,11 @@
         status: event.is_error ? 'error' : 'complete', code: event.code || '',
         owner: event.owner || '', text: event.summary || '', at, endedAt: at,
         resource: event.resource || null,
+        resources: Array.isArray(event.resources) ? event.resources : [],
       });
+      if (['study_context_updated', 'easyicu_run_submitted'].includes(String(event.code || ''))) {
+        state.pendingAuthorityRebind = true;
+      }
     } else if (event.type === 'turn_end') {
       const turn = activity.steps.find(item => item.id === 'turn-' + event.turn_index);
       if (turn) turn.status = 'complete';
@@ -784,6 +822,7 @@
     state.jobId = '';
     state.error = '';
     state.projectInitialization = null;
+    state.pendingAuthorityRebind = false;
     if (window.EU_GUIDED_PI_PREVIEW && window.EU_GUIDED_PI_PREVIEW.clearProject) {
       window.EU_GUIDED_PI_PREVIEW.clearProject();
     }
@@ -811,7 +850,12 @@
         } else {
           finishActivity('complete', null, 'settled');
         }
-        await refreshSession(true); render();
+        await refreshSession(true);
+        if (state.pendingAuthorityRebind && state.session && sessionIsStale()) {
+          await rebind();
+        }
+        state.pendingAuthorityRebind = false;
+        render();
       }
     };
     state.source.onerror = () => { if (!state.busy) closeSource(); };
@@ -862,12 +906,14 @@
     state.host.addEventListener('click', event => {
       const session = event.target.closest('[data-gpi-session]');
       if (session) { openSession(session.dataset.gpiSession); return; }
-      const resource = event.target.closest('[data-gpi-resource-file]');
+      const resource = event.target.closest('[data-gpi-resource-kind]');
       if (resource) {
         if (window.EU_GUIDED_PI_PREVIEW && window.EU_GUIDED_PI_PREVIEW.open) {
           window.EU_GUIDED_PI_PREVIEW.open({
             file: resource.dataset.gpiResourceFile,
             kind: resource.dataset.gpiResourceKind,
+            run_id: resource.dataset.gpiResourceRun,
+            artifact: resource.dataset.gpiResourceArtifact,
             label: resource.dataset.gpiResourceLabel,
             media_type: resource.dataset.gpiResourceMedia,
           }, projectId());

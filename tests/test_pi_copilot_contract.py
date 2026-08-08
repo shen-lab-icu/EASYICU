@@ -1137,6 +1137,7 @@ def test_study_setup_requires_one_turn_grant_and_uses_typed_owner(
     )
     assert saved["code"] == "study_context_updated"
     assert saved["details"]["rebind_required"] is True
+    assert saved["details"]["host_rebind_after_turn"] is True
     assert writes[0][0]["id"] == "study-1"
     assert writes[0][1] == {
         "active": True,
@@ -1335,6 +1336,146 @@ def test_complete_tool_result_sanitizes_summary_and_authority_values(
         tool_module.execute_tool("easyicu_inspect_run", {}, context)
 
     assert caught.value.code == "pi_projection_blocked"
+
+
+def test_run_artifact_tools_emit_path_free_clickable_resources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = ToolExecutionContext(
+        session=PiSessionRecord(
+            session_id="pi-artifacts",
+            binding=AuthorityBinding(run_id="run_20260808"),
+        )
+    )
+    monkeypatch.setattr(
+        tool_module.agent_runs,
+        "list_run_history",
+        lambda **kwargs: {
+            "runs": [
+                {
+                    "run_id": "run_20260808",
+                    "project_dir": "/private/owner-only/run",
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        tool_module.agent_runs,
+        "read_run_review",
+        lambda project_dir: {
+            "ok": True,
+            "artifacts": [
+                {
+                    "name": "table1_summary.json",
+                    "bytes": 412,
+                    "sha256": "a" * 64,
+                    "kind": "json",
+                    "path": "/private/owner-only/run/table1_summary.json",
+                },
+                {
+                    "name": "quality_gate.json",
+                    "bytes": 233,
+                    "sha256": "b" * 64,
+                    "kind": "json",
+                },
+            ],
+            "artifact_payloads": {},
+        },
+    )
+
+    result = tool_module.execute_tool("easyicu_list_artifacts", {}, context)
+
+    assert result["details"]["artifacts"][0]["size"] == 412
+    assert result["details"]["artifacts"][0]["media_type"] == "application/json"
+    assert result["details"]["resources"][0] == {
+        "kind": "research_artifact",
+        "run_id": "run_20260808",
+        "artifact": "table1_summary.json",
+        "label": "table1_summary.json",
+        "media_type": "application/json",
+    }
+    assert "project_dir" not in json.dumps(result)
+    assert "/private/" not in json.dumps(result)
+
+
+def test_project_artifact_preview_resolves_authority_and_scrubs_host_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = PiCopilotService(
+        store_path=tmp_path / "sessions.json",
+        gateway=FakeGateway(),
+    )
+    service.project_store.bind("project-a", "study-a")
+    service.project_store.bind("project-b", "study-b")
+
+    def history(*, study_id: str, **kwargs: Any) -> dict[str, Any]:
+        return {
+            "runs": (
+                [{"run_id": "run_20260808", "project_dir": "/private/run-a"}]
+                if study_id == "study-a"
+                else []
+            )
+        }
+
+    monkeypatch.setattr(service_module.agent_runs, "list_run_history", history)
+    monkeypatch.setattr(
+        service_module.agent_runs,
+        "read_run_artifact",
+        lambda project_dir, artifact_name: {
+            "ok": True,
+            "artifact": {
+                "name": artifact_name,
+                "path": f"{project_dir}/{artifact_name}",
+                "bytes": 120,
+                "sha256": "c" * 64,
+                "kind": "json",
+            },
+            "payload": {
+                "status": "ready",
+                "source": {"path": "/private/export", "database": "mimiciv"},
+                "figures": [{"relative_path": "figures/roc.svg"}],
+            },
+            "privacy_scan": {"passed": True},
+        },
+    )
+
+    payload = service.get_research_artifact(
+        project_id="project-a",
+        run_id="run_20260808",
+        artifact_name="table1_summary.json",
+    )
+    encoded = json.dumps(payload)
+    assert payload["payload"]["source"] == {"database": "mimiciv"}
+    assert payload["payload"]["figures"][0]["relative_path"] == "figures/roc.svg"
+    assert "project_dir" not in encoded
+    assert "/private/" not in encoded
+
+    with pytest.raises(PiCopilotError) as wrong_project:
+        service.get_research_artifact(
+            project_id="project-b",
+            run_id="run_20260808",
+            artifact_name="table1_summary.json",
+        )
+    assert wrong_project.value.code == "pi_research_run_not_found"
+
+    monkeypatch.setattr(
+        service_module.agent_runs,
+        "read_run_artifact",
+        lambda project_dir, artifact_name: {
+            "ok": True,
+            "artifact": {"name": artifact_name},
+            "payload": {"status": "withheld"},
+            "privacy_scan": {"passed": False},
+        },
+    )
+    with pytest.raises(PiCopilotError) as privacy_blocked:
+        service.get_research_artifact(
+            project_id="project-a",
+            run_id="run_20260808",
+            artifact_name="table1_summary.json",
+        )
+    assert privacy_blocked.value.code == "pi_research_artifact_privacy_blocked"
 
 
 def test_unknown_tool_arguments_and_missing_plan_keep_owner_codes(

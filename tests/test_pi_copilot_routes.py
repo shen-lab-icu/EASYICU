@@ -39,6 +39,17 @@ class FakeService:
             },
         }
 
+    def get_research_artifact(self, **kwargs) -> dict:
+        return {
+            "ok": True,
+            "run_id": kwargs["run_id"],
+            "artifact": {
+                "name": kwargs["artifact_name"],
+                "media_type": "application/json",
+            },
+            "payload": {"status": "ready"},
+        }
+
     def configure_provider(self, **kwargs) -> dict:
         assert kwargs["api_key"] == "route-private-key"
         return {
@@ -191,6 +202,25 @@ def test_project_workspace_file_and_preview_routes_are_bounded(monkeypatch) -> N
         ).status_code
         == 422
     )
+
+
+def test_project_research_artifact_route_uses_path_free_identity(monkeypatch) -> None:
+    fake = FakeService()
+    monkeypatch.setattr(route_module, "get_pi_copilot_service", lambda: fake)
+    client = TestClient(app)
+
+    response = client.get(
+        "/api/copilot/pi/projects/guided-project-2/runs/run_20260808/artifacts/table1_summary.json"
+    )
+    assert response.status_code == 200
+    assert response.json()["run_id"] == "run_20260808"
+    assert response.json()["artifact"]["name"] == "table1_summary.json"
+    assert "project_dir" not in response.text
+
+    invalid = client.get(
+        "/api/copilot/pi/projects/guided-project-2/runs/run_20260808/artifacts/not-json.txt"
+    )
+    assert invalid.status_code == 422
 
 
 def test_provider_setup_route_is_typed_and_never_returns_secret(monkeypatch) -> None:

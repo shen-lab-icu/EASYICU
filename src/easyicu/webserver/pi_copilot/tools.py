@@ -224,6 +224,39 @@ def _run_review(row: Mapping[str, Any]) -> Dict[str, Any]:
     return review
 
 
+def _artifact_resource(run_id: Any, artifact_name: Any) -> Optional[Dict[str, Any]]:
+    """Build a path-free browser reference to one whitelisted run artefact."""
+
+    clean_run = stable_code(run_id)
+    clean_name = str(artifact_name or "").strip()
+    if (
+        clean_run is None
+        or not clean_name
+        or len(clean_name) > 160
+        or Path(clean_name).name != clean_name
+        or not clean_name.endswith(".json")
+    ):
+        return None
+    return {
+        "kind": "research_artifact",
+        "run_id": clean_run,
+        "artifact": clean_name,
+        "label": clean_name,
+        "media_type": "application/json",
+    }
+
+
+def _artifact_resources(
+    run_id: Any, artifacts: Iterable[Mapping[str, Any]]
+) -> list[Dict[str, Any]]:
+    resources = []
+    for artifact in list(artifacts)[:80]:
+        resource = _artifact_resource(run_id, artifact.get("name"))
+        if resource is not None:
+            resources.append(resource)
+    return resources
+
+
 def _plan_projection(payload: Mapping[str, Any]) -> Dict[str, Any]:
     steps = payload.get("steps")
     steps = steps if isinstance(steps, list) else []
@@ -405,7 +438,10 @@ def _inspect_plan(
         code="easyicu_plan_projected",
         summary=f"Loaded {projected.get('step_count', 0)} bounded plan steps from run {row.get('run_id')}.",
         owner="easyicu.webserver.agent_runs",
-        details={"plan": projected},
+        details={
+            "plan": projected,
+            "resource": _artifact_resource(row.get("run_id"), "agent_plan.json"),
+        },
     )
 
 
@@ -519,6 +555,9 @@ def _inspect_validation(
             | {"missing_requirement_codes": missing_requirement_codes},
             "signed": bool(review.get("signed")),
             "signoff_stale": bool(review.get("signoff_stale")),
+            "resource": _artifact_resource(
+                row.get("run_id"), "quality_gate.json"
+            ),
         }
     )
     return _result(
@@ -552,7 +591,11 @@ def _list_artifacts(
         code="easyicu_artifacts_projected",
         summary=f"Listed {len(artifacts)} whitelisted artefacts for run {row.get('run_id')}.",
         owner="easyicu.webserver.agent_runs",
-        details={"run_id": row.get("run_id"), "artifacts": artifacts},
+        details={
+            "run_id": row.get("run_id"),
+            "artifacts": artifacts,
+            "resources": _artifact_resources(row.get("run_id"), artifacts),
+        },
     )
 
 
@@ -595,6 +638,9 @@ def _inspect_evidence(
         "status": ledger.get("status"),
         "artifacts": project_artifacts(
             row for row in artifacts if isinstance(row, Mapping)
+        ),
+        "resource": _artifact_resource(
+            row.get("run_id"), "evidence_ledger.json"
         ),
         "provider": {
             key: provider.get(key)
@@ -827,12 +873,13 @@ def _update_study_context(
         code="study_context_updated",
         summary=(
             f"Saved typed StudyContext revision {int(updated.get('revision') or 0)}. "
-            "Rebind this Pi session before the next message."
+            "The conversation host will rebind this Pi session after the turn settles."
         ),
         owner="easyicu.webserver.study_contexts",
         details={
             "study": project_study_context(updated),
             "rebind_required": True,
+            "host_rebind_after_turn": True,
         },
     )
     context.invalidate_authority("study_context_updated")
