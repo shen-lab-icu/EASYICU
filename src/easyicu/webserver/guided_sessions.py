@@ -84,6 +84,25 @@ _GOAL_META = {
 }
 
 
+class GuidedProjectMigrationError(ValueError):
+    """Attribute one fail-closed Guided migration boundary to its owner."""
+
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        field: str,
+        max_length: int,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.details = {
+            "field": field,
+            "max_length": max_length,
+        }
+
+
 class GuidedProjectStudySetup(BaseModel):
     """Typed, PHI-safe project setup exported to the StudyContext owner."""
 
@@ -163,11 +182,23 @@ def _clean_text(value: Any, fallback: str = "", max_len: int = 220) -> str:
     return text[:max_len]
 
 
-def _exact_path_text(value: Any, *, max_len: int = 4096) -> str:
+def _exact_path_text(
+    value: Any,
+    *,
+    max_len: int = 4096,
+    field: str = "data_source.path",
+) -> str:
     """Bound a filesystem path without changing its internal identity."""
 
     text = str(value if value is not None else "").strip()
-    return text[:max_len]
+    if len(text) > max_len:
+        raise GuidedProjectMigrationError(
+            "guided_project_path_too_long",
+            "A saved Guided project path exceeds the exact-path contract.",
+            field=field,
+            max_length=max_len,
+        )
+    return text
 
 
 def _choice(value: Any, allowed: set[str], fallback: str) -> str:
@@ -231,7 +262,11 @@ def _bounded_slot_value(
     if isinstance(value, float):
         return value if value == value and abs(value) != float("inf") else None
     if field_path in {("active_export", "path"), ("extraction", "export_dir")}:
-        return _exact_path_text(value, max_len=4096)
+        return _exact_path_text(
+            value,
+            max_len=4096,
+            field=".".join(field_path),
+        )
     return _clean_text(value, max_len=_MAX_SLOT_TEXT)
 
 
@@ -1128,7 +1163,21 @@ def execute_guided_action(body: Dict[str, Any]) -> Dict[str, Any]:
             step = _clean_text(payload.get("step"), max_len=60)
             if step:
                 session["step"] = step
-            session["slots"] = _merge_slots(session.get("slots"), payload.get("slots"))
+            try:
+                session["slots"] = _merge_slots(
+                    session.get("slots"), payload.get("slots")
+                )
+            except GuidedProjectMigrationError as exc:
+                return {
+                    "ok": False,
+                    "blocked": True,
+                    "error": exc.code,
+                    "reason": str(exc),
+                    "details": exc.details,
+                    "storage": "metadata_only",
+                    "persisted": False,
+                    "local_first": {"uploads": 0, "tokens": 0, "external_calls": 0},
+                }
             session["updated_at"] = now
             _persist_session(session)
             _upsert_session(session)

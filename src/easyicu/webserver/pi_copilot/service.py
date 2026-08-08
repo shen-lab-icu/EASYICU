@@ -450,7 +450,18 @@ class PiCopilotService:
                     details={"project_id": project_id},
                 )
         else:
-            setup = guided_sessions.read_project_study_setup(project_id)
+            try:
+                setup = guided_sessions.read_project_study_setup(project_id)
+            except guided_sessions.GuidedProjectMigrationError as exc:
+                raise PiCopilotError(
+                    exc.code,
+                    (
+                        "Existing Guided project metadata cannot be migrated "
+                        "without changing scientific input identity."
+                    ),
+                    status_code=409,
+                    details=exc.details,
+                ) from exc
             if setup is not None and not setup.missing_required:
                 initial = setup.study_context_patch()
                 receipt = ProjectStudyContextMigrationReceipt(

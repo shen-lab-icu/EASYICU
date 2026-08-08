@@ -108,6 +108,11 @@ EXPECTED_PI_COPILOT_ROUTES = [
         "/api/copilot/pi/projects/{project_id}/workspace/preview",
         "get_pi_copilot_workspace_preview",
     ),
+    (
+        "GET",
+        "/api/copilot/pi/projects/{project_id}/runs/{run_id}/artifacts/{artifact_name}",
+        "get_pi_copilot_research_artifact",
+    ),
     ("GET", "/api/copilot/pi/sessions", "get_pi_copilot_sessions"),
     ("GET", "/api/copilot/pi/sessions/{session_id}", "get_pi_copilot_session"),
     (

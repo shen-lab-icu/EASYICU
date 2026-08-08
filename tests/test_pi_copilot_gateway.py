@@ -56,6 +56,36 @@ def test_pi_packages_and_upstream_commit_are_exactly_pinned() -> None:
         assert 'executionMode: "sequential"' in declaration
 
 
+def test_private_runtime_integrity_is_verified_once_per_gateway_lifetime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app_dir = tmp_path / "private-runtime"
+    app_dir.mkdir()
+    gateway = PiGatewayClient(app_dir=app_dir, session_dir=tmp_path / "sessions")
+    checks: list[Path] = []
+
+    def verify(path: Path) -> bool:
+        checks.append(Path(path))
+        return True
+
+    monkeypatch.setattr(
+        "easyicu.webserver.pi_copilot.gateway.runtime_is_installed",
+        verify,
+    )
+    monkeypatch.setattr(gateway, "_node_binary", lambda: "/usr/local/bin/node")
+    monkeypatch.setattr(gateway, "_node_version", lambda node: (24, 11, 0))
+
+    assert gateway.installation_status()["runtime_integrity_verified"] is True
+    assert gateway.installation_status()["runtime_integrity_verified"] is True
+    assert checks == [app_dir.resolve()]
+
+    gateway.close()
+
+    assert gateway.installation_status()["runtime_integrity_verified"] is True
+    assert checks == [app_dir.resolve(), app_dir.resolve()]
+
+
 def test_upstream_multi_tool_batch_serializes_authority_mutations() -> None:
     node = shutil.which("node")
     if not node or not (APP_DIR / "node_modules").is_dir():
