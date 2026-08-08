@@ -1187,6 +1187,16 @@ def load_concepts(
         "uo_rt_24hr",
         "creat_low_past_48hr",
         "creat_low_past_7day",
+        # A zero stage is a definitive negative only when this receipt says
+        # ``negative_complete``.  Keep these special KDIGO outputs routable
+        # through ``load_concepts`` and the module exporter.
+        "aki_assessable",
+        "aki_ascertainment",
+        "aki_assessment_reason",
+        "observation_window_coverage",
+        "creatinine_ascertainment",
+        "urine_ascertainment",
+        "rrt_ascertainment",
     }
     _CIRC_OUTPUTS = {"circ_failure", "circ_event"}
     # Comorbidity indices live in comorbidity.py (ICD code-set matching over

@@ -8,7 +8,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Version](https://img.shields.io/badge/version-1.0.0-green.svg)](https://github.com/shen-lab-icu/easyicu)
 
-EasyICU is a Python toolkit for intensive care unit (ICU) data analysis. It provides unified access to **6 major public ICU databases**, automated extraction of **200+ standardized clinical concepts** (the canonical web-side catalog exposes **217** — 204 dictionary concepts plus 13 special concepts: 10 KDIGO AKI staging outputs, 2 circulatory-failure indicators, and the Sepsis-3 SOFA-1 diagnosis, all loadable through the same `load_concepts(...)` call), and a **web-based interface** for cohort definition, feature review, visualization, and export.
+EasyICU is a Python toolkit for intensive care unit (ICU) data analysis. It provides unified access to **6 major public ICU databases**, automated extraction of **200+ standardized clinical concepts** (the canonical web-side catalog exposes **224** — 204 dictionary concepts plus 20 special concepts: 17 KDIGO AKI staging and ascertainment outputs, 2 circulatory-failure indicators, and the Sepsis-3 SOFA-1 diagnosis, all loadable through the same `load_concepts(...)` call), and a **web-based interface** for cohort definition, feature review, visualization, and export.
 
 ## Why EasyICU
 
@@ -418,7 +418,9 @@ sepsis = load_concepts(
 # loader transparently.
 aki_and_circ = load_concepts(
     concepts=['aki', 'aki_stage', 'aki_stage_creat', 'aki_stage_uo',
-              'aki_stage_rrt', 'uo_rt_6hr', 'uo_rt_12hr', 'uo_rt_24hr',
+              'aki_stage_rrt', 'aki_assessable', 'aki_ascertainment',
+              'observation_window_coverage',
+              'uo_rt_6hr', 'uo_rt_12hr', 'uo_rt_24hr',
               'creat_low_past_48hr', 'creat_low_past_7day',
               'circ_failure', 'circ_event'],
     database='miiv',
@@ -440,6 +442,10 @@ all_features = load_concepts(
     merge=False,           # return dict instead of one giant merged DataFrame
 )
 ```
+
+`aki_stage == 0` is a definitive absence of AKI only when
+`aki_ascertainment == 'negative_complete'`; rows with partial or indeterminate
+ascertainment must not be used as non-AKI controls.
 
 > **Note on full-cohort extraction**: when you don't pass `patient_ids`
 > and `max_patients`, EasyICU loads every patient in the database. On a
