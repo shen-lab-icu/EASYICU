@@ -185,6 +185,16 @@ def _numeric_test(
             return float(result.pvalue), "welch_t"
         result = stats.f_oneway(*groups, equal_var=False)
         return float(result.pvalue), "welch_anova"
+    # SciPy versions disagree on the fully tied rank-test edge case: some
+    # return 1.0 while newer builds can return NaN.  The groups are exactly
+    # indistinguishable here, so resolve that one mathematical case before
+    # delegating while keeping every other non-finite result fail-closed.
+    reference = groups[0][0]
+    if all(bool(np.equal(values, reference).all()) for values in groups):
+        return (
+            1.0,
+            "mann_whitney_u" if len(groups) == 2 else "kruskal_wallis",
+        )
     if len(groups) == 2:
         result = stats.mannwhitneyu(groups[0], groups[1], alternative="two-sided")
         return float(result.pvalue), "mann_whitney_u"

@@ -139,6 +139,8 @@ def test_grouped_table_one_handles_zero_pooled_variance_without_infinity():
 
     same = build_grouped_table_one(frame, _spec())
     age_same = same[same["variable"] == "age"]
+    assert age_same["p_value"].eq(1.0).all()
+    assert set(age_same["test_name"]) == {"mann_whitney_u"}
     assert age_same["standardized_mean_difference"].eq(0.0).all()
     assert set(age_same["standardized_difference_status"]) == {"computed"}
 
