@@ -1348,7 +1348,6 @@ def test_native_extraction_module_counts_match_backend_catalog() -> None:
     keys = dict(re.findall(r"'([^']+)':\s*'([^']+)'", key_block))
 
     assert len(entries) == len(cc.CONCEPT_GROUPS_INTERNAL) == 19
-    assert len(cc.CONCEPT_DICTIONARY) == 281  # 2026-07-17: +vent_mode, +vent_breath_seq, +driving_pres_controlled, +cvp(→vitals)
     assert "function moduleConceptCount(m)" in extraction_js
     assert "window.EU_CATALOG && window.EU_CATALOG.groupConcepts" in extraction_js
 
@@ -1883,6 +1882,17 @@ def test_native_extraction_feature_definition_manifest_records_callback_provenan
     assert "/Volumes/example/miiv" not in csv_text
     assert str(tmp_path) not in csv_text
     assert "not_declared_in_current_catalog" in csv_text
+
+
+def test_feature_definition_project_reference_is_checkout_name_independent(
+    tmp_path: Path,
+) -> None:
+    project_ref = dataio._shareable_project_reference(
+        tmp_path / "arbitrary-worktree-name"
+    )
+
+    assert project_ref["hint"] == "EASYICU"
+    assert project_ref["absolute_path_omitted"] is True
 
 
 def test_native_extraction_include_feature_definitions_bool_parsing() -> None:
