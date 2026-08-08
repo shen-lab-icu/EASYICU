@@ -8,7 +8,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Version](https://img.shields.io/badge/version-1.0.0-green.svg)](https://github.com/shen-lab-icu/easyicu)
 
-EasyICU 是一个面向重症监护室（ICU）数据分析的 Python 工具包。它统一接入 **6 个主流公开 ICU 数据库**，支持 **200+ 种标准化临床概念**的自动提取（Web 端目录共 **217 个** —— 204 个字典概念加上 13 个专用概念：10 个 KDIGO AKI 分期输出、2 个循环衰竭指标和 Sepsis-3 SOFA-1 诊断，全部都能通过同一个 `load_concepts(...)` 调用获取），并提供 **Web 可视化界面**，帮助用户完成队列定义、特征审阅、可视化分析与数据导出。
+EasyICU 是一个面向重症监护室（ICU）数据分析的 Python 工具包。它统一接入 **6 个主流公开 ICU 数据库**，支持 **200+ 种标准化临床概念**的自动提取（Web 端目录共 **224 个** —— 204 个字典概念加上 20 个专用概念：17 个 KDIGO AKI 分期与可判定性输出、2 个循环衰竭指标和 Sepsis-3 SOFA-1 诊断，全部都能通过同一个 `load_concepts(...)` 调用获取），并提供 **Web 可视化界面**，帮助用户完成队列定义、特征审阅、可视化分析与数据导出。
 
 ## 为什么是 EasyICU
 
@@ -370,7 +370,9 @@ sepsis = load_concepts(
 # 自动路由到对应的加载函数，对调用方完全透明。
 aki_and_circ = load_concepts(
     concepts=['aki', 'aki_stage', 'aki_stage_creat', 'aki_stage_uo',
-              'aki_stage_rrt', 'uo_rt_6hr', 'uo_rt_12hr', 'uo_rt_24hr',
+              'aki_stage_rrt', 'aki_assessable', 'aki_ascertainment',
+              'observation_window_coverage',
+              'uo_rt_6hr', 'uo_rt_12hr', 'uo_rt_24hr',
               'creat_low_past_48hr', 'creat_low_past_7day',
               'circ_failure', 'circ_event'],
     database='miiv',
@@ -392,6 +394,9 @@ all_features = load_concepts(
     merge=False,           # 返回 dict 而不是大合并 DataFrame
 )
 ```
+
+只有当 `aki_ascertainment == 'negative_complete'` 时，`aki_stage == 0`
+才表示可以确定的无 AKI；`partial` 或 `indeterminate` 行不能作为无 AKI 对照。
 
 > **关于全患者提取**：当你不传 `patient_ids` 和 `max_patients` 时，
 > EasyICU 会加载整个数据库的所有患者。在内存紧张（< 6 GB 可用）的机器上

@@ -26,6 +26,7 @@ import pandas as pd
 import pytest
 
 from easyicu.api.extraction import (
+    EXTRACT_MODULES,
     EXTRACT_MODULE_ORDER,
     _SPECIAL_CONCEPT_MODULES,
     _get_extraction_mp_context,
@@ -250,3 +251,17 @@ def test_module_parquet_normalisation_reuses_canonical_numeric_frame():
     normalised = _normalise_module_frame_for_parquet(frame, ["glu"])
 
     assert normalised is frame
+
+
+def test_renal_module_exports_kdigo_ascertainment_receipt():
+    """A full AKI negative must remain distinguishable from missing inputs."""
+    renal = set(EXTRACT_MODULES["renal"])
+    assert {
+        "aki_stage",
+        "aki_assessable",
+        "aki_ascertainment",
+        "observation_window_coverage",
+        "creatinine_ascertainment",
+        "urine_ascertainment",
+        "rrt_ascertainment",
+    }.issubset(renal)
