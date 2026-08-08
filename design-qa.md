@@ -72,3 +72,15 @@ The same real turn loaded the packaged web-prototype skill, listed the project w
 - No actionable P0, P1, or P2 visual, interaction, or provenance defect remains in this Workspace Agent flow.
 
 final result: passed
+
+## Research artifact loop extension — 2026-08-08
+
+- Route: `http://127.0.0.1:8765/?ui=20260808-research-flow1#guided`.
+- Browser state: Chinese UI, Research mode, real `gpt-5.6-luna`, real deterministic preflight `run_cc107553bdda`, desktop/laptop viewport `1141 x 994`.
+- The completed turn shows four attributable research tools inline. Validation and evidence rows open their owning JSON artifacts; the artifact-list row expands to eight individually clickable results.
+- Clicking `Table 1 摘要` replaces the study-progress aside with a readable table plus JSON audit tab. Closing it restores the study panel without leaving the conversation.
+- No horizontal overflow: document `1141/1141`, conversation `525/525`, transcript `525/525`, preview `615/615`, readable artifact `613/613` (`scrollWidth/clientWidth`).
+- Project rail collapses at this audited width while the conversation and preview remain fully usable; this is the existing desktop/laptop layout breakpoint, not clipping.
+- Detailed contract, real model transcript facts, stable codes, and test evidence: `task_logs/20260808_pi_research_artifact_loop.md`.
+
+final result: passed
