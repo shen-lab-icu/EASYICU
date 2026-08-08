@@ -18,14 +18,15 @@ def _read(relative: str) -> str:
 
 def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     index = _read("index.html")
-    assert "css/guided-pi.css?v=20260808-pi-activity1" in index
-    assert "js/screens-guided-pi.js?v=20260808-pi-activity1" in index
+    assert "css/guided-pi.css?v=20260808-pi-layout1" in index
+    assert "js/screens-guided-pi.js?v=20260808-pi-layout1" in index
     assert index.index("css/guided.css") < index.index("css/guided-pi.css")
     assert index.index("js/screens-guided-pi.js") < index.index("js/screens-guided.js")
 
 
 def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     guided = _read("js/screens-guided.js")
+    projects_owner = _read("js/screens-guided-projects.js")
     pi_owner = _read("js/screens-guided-pi.js")
     api = _read("js/api.js")
     assert 'id="gdPiShell"' in guided
@@ -44,7 +45,7 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "if (piProjectShellActive()) bindProjectToPi(result, selectedGuidedDraft);" in guided
     assert "Conversation memory" not in guided
     assert "对话记忆" not in guided
-    assert "Pi manages conversations separately" in guided
+    assert "Pi keeps the conversation" in projects_owner
     assert "data-gpi-provider-form" in pi_owner
     assert "CLIProxyAPI / Local proxy" in pi_owner
     assert "gpt-5.6-luna" in pi_owner
@@ -92,6 +93,17 @@ def test_pi_css_is_route_owned_and_does_not_pollute_catch_all_files() -> None:
         assert foreign not in owner
     for relative in ("css/app.css", "css/redesign.css", "css/guided.css", "css/tweaks.css"):
         assert ".gpi-" not in _read(relative)
+
+
+def test_pi_chat_uses_a_scrolling_transcript_and_bottom_composer() -> None:
+    owner = _read("css/guided-pi.css")
+    assert ".gpi-panel{height:100%;min-height:0;display:flex" in owner
+    assert "flex-direction:column;overflow:hidden" in owner
+    assert ".gpi-log{flex:1 1 auto;min-height:0;overflow:auto" in owner
+    assert ".gpi-compose{flex:0 0 auto" in owner
+    assert "grid-template-rows:auto auto minmax(0,1fr) auto auto" not in owner
+    assert ".gpi-text{white-space:pre-wrap;overflow-wrap:anywhere;font-size:15px" in owner
+    assert "font-size:15px;line-height:1.5" in owner
 
 
 def test_pi_css_has_balanced_comments_and_braces() -> None:
