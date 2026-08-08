@@ -201,7 +201,7 @@ def test_association_feasibility_step_cannot_masquerade_as_primary_model() -> No
         ],
     )
 
-    with pytest.raises(ValueError, match="adjusted_association_models"):
+    with pytest.raises(ValueError, match="Declare which registered"):
         _validate_required_primary_result(plan=plan, context=context)
 
 

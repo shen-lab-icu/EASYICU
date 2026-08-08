@@ -94,7 +94,7 @@ methods = [
 scientific-adapters = [
   "pandera[pandas]>=0.28,<0.33",
   "dowhy>=0.13,<0.14",
-  "scikit-survival>=0.28,<0.29"
+  "scikit-survival>=0.28,<0.29; python_version >= '3.11'"
 ]
 all = [
   "easyicu[dev,viz,webapp,llmserver,agentic,mcp,cli,methods]"

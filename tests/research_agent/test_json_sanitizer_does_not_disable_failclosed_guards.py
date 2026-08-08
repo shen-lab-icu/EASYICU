@@ -88,6 +88,15 @@ def test_an_aliased_import_is_left_alone_rather_than_half_repaired():
     assert "j.dumps({})" in patched
 
 
+def test_distinct_keys_that_canonicalize_to_one_json_key_fail_closed() -> None:
+    patched = _patch_json_dump_numpy_key_sanitizer(
+        "import json\njson.dumps({1: 'numeric', '1': 'text'}, allow_nan=False)\n"
+    )
+
+    with pytest.raises(ValueError, match="easyicu_json_key_collision"):
+        exec(compile(patched, "<patched>", "exec"), {})
+
+
 def test_repair_output_never_assigns_to_an_imported_module_attribute():
     """Static guard against process-global stdlib/third-party monkeypatches."""
 

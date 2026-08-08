@@ -3154,41 +3154,6 @@ class ResearchAgentPipeline:
                             detail={"generation_mode": "cohort_retry"},
                         )
                     )
-            # Endpoint retry, on the same terms as the 纳排 retry above and for
-            # the same reason: the other half of the study's identity was left
-            # undeclared, and one planner miss should not cost the run. Adopt
-            # the retry only if it actually declares the required kind, so a
-            # good plan is never discarded when the retry does not improve it.
-            if not used_mock_llm and endpoint_contract_findings(plan):
-                endpoint_retry = None
-                try:
-                    endpoint_retry = planner.run(
-                        agent_context,
-                        **know_how_binding.planner_kwargs,
-                        enforce_article_contract=True,
-                        article_contract_context=context,
-                        planning_contract_context=planning_contract_context,
-                    )
-                except Exception:
-                    endpoint_retry = None
-                if (
-                    endpoint_retry is not None
-                    and endpoint_retry.steps
-                    and not endpoint_contract_findings(endpoint_retry)
-                ):
-                    plan = endpoint_retry
-                    findings.append(
-                        ValidationFinding(
-                            validator="endpoint_contract",
-                            severity="warning",
-                            message=(
-                                "Planner initially declared no typed study "
-                                "endpoint for a family that requires one; "
-                                "recovered the declaration on retry."
-                            ),
-                            detail={"generation_mode": "endpoint_retry"},
-                        )
-                    )
         # Skip the plan-shaping transforms when resuming: the saved plan is
         # already in its final, transformed form, and re-running split/cap/
         # ensure_* could rename or reorder step_ids and break the resume skip
@@ -3263,7 +3228,7 @@ class ResearchAgentPipeline:
         # The endpoint half of the same declaration, checked for every plan
         # rather than only inside the cohort branch above: a family can require
         # a typed endpoint whether or not it also defines an analysis cohort.
-        findings.extend(endpoint_contract_findings(plan))
+        findings.extend(endpoint_contract_findings(plan, context=context))
         if study_design_brief is not None:
             if (
                 plan.analysis_type

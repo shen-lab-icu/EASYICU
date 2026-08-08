@@ -93,7 +93,10 @@ def _plan_with_no_typed_obligation(family: str) -> AnalysisPlan:
 @pytest.mark.parametrize("family", FAMILIES_WITH_A_TYPED_HEADLINE_OBLIGATION)
 def test_a_covered_family_is_refused_without_the_typed_obligation(family: str) -> None:
     plan = _plan_with_no_typed_obligation(family)
-    with pytest.raises(ValueError, match="model_requirements|family_primary_result"):
+    with pytest.raises(
+        ValueError,
+        match="model_requirements|family_primary_result|Declare which registered",
+    ):
         validate_required_primary_result(
             plan=plan, context=_context(plan.research_question)
         )
