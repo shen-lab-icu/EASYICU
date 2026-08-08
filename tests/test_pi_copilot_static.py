@@ -19,7 +19,7 @@ def _read(relative: str) -> str:
 def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     index = _read("index.html")
     assert "css/guided-pi.css?v=20260808-pi-setup1" in index
-    assert "js/screens-guided-pi.js?v=20260808-pi-setup2" in index
+    assert "js/screens-guided-pi.js?v=20260808-pi-project1" in index
     assert index.index("css/guided.css") < index.index("css/guided-pi.css")
     assert index.index("js/screens-guided-pi.js") < index.index("js/screens-guided.js")
 
@@ -31,9 +31,20 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert 'id="gdPiShell"' in guided
     assert 'id="gdLegacyShell"' in guided
     assert "window.EU_GUIDED_PI.mount" in guided
-    assert "window.EU_GUIDED_PI = { mount, unmount, setShell }" in pi_owner
+    assert "window.EU_GUIDED_PI = { mount, unmount, setShell, bindProject, isActive }" in pi_owner
     assert "new EventSource('/api/jobs/'" in pi_owner
     assert "external_llm_opt_in: true" in pi_owner
+    assert "project_id: projectId()" in pi_owner
+    assert "loadPiCopilotSessions(30, expectedProjectId)" in pi_owner
+    assert "easyicu_pi_copilot_session:' + encodeURIComponent(projectId())" in pi_owner
+    assert "project_dir" not in pi_owner
+    assert "window.EU_GUIDED_PI.bindProject" in guided
+    assert "if (usePiSession) bindProjectToPi(result, row);" in guided
+    assert "else restoreGuidedProjectThread(result, row, kind);" in guided
+    assert "if (piProjectShellActive()) bindProjectToPi(result, selectedGuidedDraft);" in guided
+    assert "Conversation memory" not in guided
+    assert "对话记忆" not in guided
+    assert "Pi manages conversations separately" in guided
     assert "data-gpi-provider-form" in pi_owner
     assert "CLIProxyAPI / Local proxy" in pi_owner
     assert "anthropic-messages" in pi_owner

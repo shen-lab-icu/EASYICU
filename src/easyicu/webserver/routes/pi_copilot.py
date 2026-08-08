@@ -41,6 +41,7 @@ ModelText = Annotated[
 class PiSessionCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    project_id: ShortText
     title: str = "Pi Copilot"
     language: Literal["en", "zh"] = "en"
     thinking_level: Literal["off", "minimal", "low", "medium", "high"] = "off"
@@ -108,6 +109,7 @@ def post_pi_copilot_provider_config(body: PiProviderConfigRequest) -> dict:
 def post_pi_copilot_session(body: PiSessionCreateRequest) -> dict:
     try:
         return get_pi_copilot_service().create_session(
+            project_id=body.project_id,
             title=body.title,
             language=body.language,
             thinking_level=body.thinking_level,
@@ -120,18 +122,28 @@ def post_pi_copilot_session(body: PiSessionCreateRequest) -> dict:
 
 @router.get("/api/copilot/pi/sessions")
 def get_pi_copilot_sessions(
+    project_id: Annotated[str, Query(min_length=1, max_length=160)],
     limit: Annotated[int, Query(ge=1, le=100)] = 30,
 ) -> dict:
     try:
-        return get_pi_copilot_service().list_sessions(limit=limit)
+        return get_pi_copilot_service().list_sessions(
+            project_id=project_id,
+            limit=limit,
+        )
     except PiCopilotError as exc:
         _raise_http(exc)
 
 
 @router.get("/api/copilot/pi/sessions/{session_id}")
-def get_pi_copilot_session(session_id: ShortText) -> dict:
+def get_pi_copilot_session(
+    session_id: ShortText,
+    project_id: Annotated[str, Query(min_length=1, max_length=160)],
+) -> dict:
     try:
-        return get_pi_copilot_service().get_session(session_id)
+        return get_pi_copilot_service().get_session(
+            session_id,
+            project_id=project_id,
+        )
     except PiCopilotError as exc:
         _raise_http(exc)
 

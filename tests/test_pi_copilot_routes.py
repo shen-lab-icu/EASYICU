@@ -31,6 +31,12 @@ class FakeService:
     def send_message(self, session_id: str, **kwargs) -> dict:
         return {"ok": True, "session_id": session_id, "received": kwargs}
 
+    def list_sessions(self, **kwargs) -> dict:
+        return {"ok": True, "sessions": [], "received": kwargs}
+
+    def get_session(self, session_id: str, **kwargs) -> dict:
+        return {"ok": True, "session_id": session_id, "received": kwargs}
+
 
 def test_status_and_create_routes_preserve_strict_boolean_opt_in(monkeypatch) -> None:
     fake = FakeService()
@@ -41,6 +47,7 @@ def test_status_and_create_routes_preserve_strict_boolean_opt_in(monkeypatch) ->
     created = client.post(
         "/api/copilot/pi/sessions",
         json={
+            "project_id": "guided-project-1",
             "title": "Review session",
             "language": "zh",
             "thinking_level": "high",
@@ -52,14 +59,44 @@ def test_status_and_create_routes_preserve_strict_boolean_opt_in(monkeypatch) ->
 
     string_boolean = client.post(
         "/api/copilot/pi/sessions",
-        json={"external_llm_opt_in": "true"},
+        json={"project_id": "guided-project-1", "external_llm_opt_in": "true"},
     )
     assert string_boolean.status_code == 422
     unknown = client.post(
         "/api/copilot/pi/sessions",
-        json={"external_llm_opt_in": True, "api_key": "must-not-be-accepted"},
+        json={
+            "project_id": "guided-project-1",
+            "external_llm_opt_in": True,
+            "api_key": "must-not-be-accepted",
+        },
     )
     assert unknown.status_code == 422
+    assert created.json()["received"]["project_id"] == "guided-project-1"
+
+
+def test_session_queries_are_scoped_to_one_research_project(monkeypatch) -> None:
+    fake = FakeService()
+    monkeypatch.setattr(route_module, "get_pi_copilot_service", lambda: fake)
+    client = TestClient(app)
+
+    assert client.get("/api/copilot/pi/sessions").status_code == 422
+    listed = client.get(
+        "/api/copilot/pi/sessions",
+        params={"project_id": "guided-project-2", "limit": 7},
+    )
+    assert listed.status_code == 200
+    assert listed.json()["received"] == {
+        "project_id": "guided-project-2",
+        "limit": 7,
+    }
+
+    assert client.get("/api/copilot/pi/sessions/pi-test").status_code == 422
+    opened = client.get(
+        "/api/copilot/pi/sessions/pi-test",
+        params={"project_id": "guided-project-2"},
+    )
+    assert opened.status_code == 200
+    assert opened.json()["received"]["project_id"] == "guided-project-2"
 
 
 def test_provider_setup_route_is_typed_and_never_returns_secret(monkeypatch) -> None:
@@ -159,7 +196,7 @@ def test_owner_error_keeps_stable_code_and_owner(monkeypatch) -> None:
     )
     response = TestClient(app).post(
         "/api/copilot/pi/sessions",
-        json={"external_llm_opt_in": True},
+        json={"project_id": "guided-project-1", "external_llm_opt_in": True},
     )
 
     assert response.status_code == 403

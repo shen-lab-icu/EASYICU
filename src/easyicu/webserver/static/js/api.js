@@ -385,12 +385,12 @@
   function createPiCopilotSession(body) {
     return postJSON('/api/copilot/pi/sessions', body || {});
   }
-  function loadPiCopilotSessions(limit) {
+  function loadPiCopilotSessions(limit, projectId) {
     const n = Math.max(1, Math.min(100, Number(limit) || 30));
-    return getJSON('/api/copilot/pi/sessions?limit=' + encodeURIComponent(n));
+    return getJSON('/api/copilot/pi/sessions?project_id=' + encodeURIComponent(projectId || '') + '&limit=' + encodeURIComponent(n));
   }
-  function loadPiCopilotSession(sessionId) {
-    return getJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId));
+  function loadPiCopilotSession(sessionId, projectId) {
+    return getJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '?project_id=' + encodeURIComponent(projectId || ''));
   }
   function sendPiCopilotMessage(sessionId, body) {
     return postJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/message', body || {});

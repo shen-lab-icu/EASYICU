@@ -20,7 +20,7 @@
     host.innerHTML = `
       <div class="gd-folder-picker ${ctx.guidedFolderMenuOpen ? 'open' : ''}">
         <button class="gd-newbtn" type="button" data-newstudy data-folder-menu-toggle aria-haspopup="menu" aria-expanded="${ctx.guidedFolderMenuOpen ? 'true' : 'false'}" title="${t('Choose or create a local study folder', '选择或创建本地研究文件夹')}">
-          ${icon('plus', 14)} ${t('New / open study folder', '新建/打开研究文件夹')}
+          ${icon('plus', 14)} ${t('New / open research project', '新建/打开研究项目')}
         </button>
         ${ctx.guidedFolderMenuOpen ? `
           <div class="gd-folder-menu" role="menu" aria-label="${t('Study folder actions', '研究文件夹操作')}">
@@ -30,7 +30,7 @@
             </button>
             <button class="gd-folder-menu-item" type="button" role="menuitem" data-folder-choice="open">
               <span class="gds-ico">${icon('folder', 14)}</span>
-              <span><strong>${t('Use existing folder', '使用现有文件夹')}</strong><small>${t('Open a Guided, Idea Mining, or Agent project folder as this conversation context.', '把已有 Guided、Idea Mining 或 Agent 项目文件夹作为当前对话上下文打开。')}</small></span>
+              <span><strong>${t('Use existing folder', '使用现有文件夹')}</strong><small>${t('Open a Guided, Idea Mining, or Agent project folder as the current research project.', '把已有 Guided、Idea Mining 或 Agent 项目文件夹作为当前研究项目打开。')}</small></span>
             </button>
           </div>` : ''}
       </div>`;
@@ -127,8 +127,8 @@
     const openForReview = ctx.pendingGuidedGoal && ctx.pendingGuidedGoal.goal === 'review_data';
     const openActions = openForReview ? `
       <button class="btn primary sm" data-reviewexportfolder>${icon('eye', 13)} ${t('Review extracted data', '审阅已提取数据')}</button>
-      <button class="btn sm" data-openprojectfolder>${icon('folder', 13)} ${t('Open project memory', '打开项目记忆')}</button>` : `
-      <button class="btn primary sm" data-openprojectfolder>${icon('folder', 13)} ${t('Open project memory', '打开项目记忆')}</button>
+      <button class="btn sm" data-openprojectfolder>${icon('folder', 13)} ${t('Open research project', '打开研究项目')}</button>` : `
+      <button class="btn primary sm" data-openprojectfolder>${icon('folder', 13)} ${t('Open research project', '打开研究项目')}</button>
       <button class="btn sm" data-reviewexportfolder>${icon('eye', 13)} ${t('Review extracted data', '审阅已提取数据')}</button>`;
     host.innerHTML = `
       <div class="gd-folder-backdrop" data-folder-dialog-close></div>
@@ -137,7 +137,7 @@
           <span class="gds-ico">${icon('folder', 15)}</span>
           <div>
             <strong>${t('Choose a local folder', '选择本地文件夹')}</strong>
-            <span>${t('Open a project folder for Guided memory, or choose an EasyICU export folder when you want to review extracted data.', '打开项目文件夹用于 Guided 记忆；如果要审阅已提取数据，请选择 EasyICU export 文件夹。')}</span>
+            <span>${t('Open a project folder for study setup, runs, and evidence, or choose an EasyICU export folder to review extracted data. Pi manages conversation history separately.', '项目文件夹用于保存研究配置、运行和证据；如果要审阅已提取数据，请选择 EasyICU export 文件夹。对话历史由 Pi 单独管理。')}</span>
           </div>
           <button class="gd-folder-close" type="button" data-folder-dialog-close aria-label="${t('Close', '关闭')}">×</button>
         </div>
@@ -147,7 +147,7 @@
         </div>
         ${mode === 'open' ? `
           <div class="gds-choice">
-            <div class="gds-choice-head"><strong>${t('Open project or extracted data folder', '打开项目或已提取数据文件夹')}</strong><span>${t('Required setup stays here instead of jumping to Classic Workspace. Use a project folder for conversation memory, or an EasyICU export folder to review previously extracted data.', '必需配置都留在这里完成，不强制跳到其他页面。项目文件夹用于对话记忆；EasyICU export 文件夹用于审阅之前提取的数据。')}</span></div>
+            <div class="gds-choice-head"><strong>${t('Open project or extracted data folder', '打开项目或已提取数据文件夹')}</strong><span>${t('Required setup stays here instead of jumping to Classic Workspace. Use a project folder for study state and evidence; Pi keeps its own conversations. Use an EasyICU export folder to review previously extracted data.', '必需配置都留在这里完成，不强制跳到其他页面。项目文件夹保存研究状态和证据，Pi 单独保存对话；EasyICU export 文件夹用于审阅之前提取的数据。')}</span></div>
             <div class="gds-path-row">
               <label class="gds-field"><span>${t('Local folder path', '本地文件夹路径')}</span><input data-existing-project-dir placeholder="${t('Paste a local project or EasyICU export folder path', '粘贴本地项目或 EasyICU 导出文件夹路径')}" autocomplete="off" /></label>
               <button class="btn sm" type="button" data-browseprojectfolder>${icon('folder', 13)} ${t('Browse...', '浏览...')}</button>

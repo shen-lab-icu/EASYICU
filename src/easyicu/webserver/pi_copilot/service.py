@@ -353,12 +353,20 @@ class PiCopilotService:
     def create_session(
         self,
         *,
+        project_id: str,
         title: str = "Pi Copilot",
         language: str = "en",
         thinking_level: str = "off",
         study_context_id: Optional[str] = None,
         external_llm_opt_in: bool = False,
     ) -> Dict[str, Any]:
+        clean_project_id = str(project_id or "").strip()
+        if not clean_project_id:
+            raise PiCopilotError(
+                "pi_project_binding_required",
+                "Select or create an EasyICU research project before starting a Pi conversation.",
+                status_code=409,
+            )
         self._provider_gate(external_llm_opt_in=external_llm_opt_in)
         install = self.gateway.installation_status()
         if not install.get("api_key_configured"):
@@ -413,6 +421,7 @@ class PiCopilotService:
         )
         record = PiSessionRecord(
             session_id=session_id,
+            project_id=clean_project_id,
             pi_session_id=str(state.get("pi_session_id") or "") or None,
             pi_session_file=str(state.get("session_file") or "") or None,
             title=str(title or "Pi Copilot").strip()[:160] or "Pi Copilot",
@@ -707,18 +716,41 @@ class PiCopilotService:
             "pi_aborted": bool(state.get("aborted")),
         }
 
-    def list_sessions(self, *, limit: int = 30) -> Dict[str, Any]:
+    def list_sessions(self, *, project_id: str, limit: int = 30) -> Dict[str, Any]:
+        clean_project_id = str(project_id or "").strip()
+        if not clean_project_id:
+            raise PiCopilotError(
+                "pi_project_binding_required",
+                "A research project is required to list Pi conversations.",
+                status_code=409,
+            )
         max_items = max(1, min(100, int(limit or 30)))
         with self._lock:
-            records = self._read_records()[:max_items]
+            records = [
+                row
+                for row in self._read_records()
+                if row.project_id == clean_project_id
+            ][:max_items]
         return {
             "ok": True,
             "count": len(records),
             "sessions": [self._public_session(row) for row in records],
         }
 
-    def get_session(self, session_id: str) -> Dict[str, Any]:
+    def get_session(
+        self, session_id: str, *, project_id: Optional[str] = None
+    ) -> Dict[str, Any]:
         record = self._get_record(session_id)
+        if project_id is not None and record.project_id != str(project_id).strip():
+            raise PiCopilotError(
+                "pi_session_project_mismatch",
+                "This Pi conversation belongs to a different EasyICU research project.",
+                status_code=409,
+                details={
+                    "session_id": record.session_id,
+                    "requested_project_id": str(project_id).strip(),
+                },
+            )
         state = self._ensure_open(record)
         return {
             "ok": True,
@@ -734,6 +766,7 @@ class PiCopilotService:
         state = gateway_state or {}
         return {
             "session_id": record.session_id,
+            "project_id": record.project_id,
             "title": record.title,
             "language": record.language,
             "thinking_level": state.get("thinking_level")
