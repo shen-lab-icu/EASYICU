@@ -11,12 +11,14 @@ from pathlib import Path
 from typing import Mapping, Optional, Sequence
 
 PI_PACKAGE_VERSION = "0.84.1"
+PI_RUNTIME_REVISION = f"{PI_PACKAGE_VERSION}-easyicu-activity1"
 RUNTIME_FILES = (
     "package.json",
     "package-lock.json",
     "README.md",
     "THIRD_PARTY_NOTICES.md",
 )
+RUNTIME_SOURCE_FILES = ("src/main.mjs", "src/event-projection.mjs")
 
 
 def packaged_app_dir() -> Path:
@@ -25,7 +27,7 @@ def packaged_app_dir() -> Path:
 
 def user_runtime_dir(*, home: Optional[Path] = None) -> Path:
     root = Path(home) if home is not None else Path.home()
-    return root / ".easyicu" / "pi-agent" / "runtime" / PI_PACKAGE_VERSION
+    return root / ".easyicu" / "pi-agent" / "runtime" / PI_RUNTIME_REVISION
 
 
 def runtime_is_installed(path: Path) -> bool:
@@ -33,7 +35,7 @@ def runtime_is_installed(path: Path) -> bool:
     return all((root / name).is_file() for name in RUNTIME_FILES) and all(
         candidate.is_file()
         for candidate in (
-            root / "src" / "main.mjs",
+            *(root / name for name in RUNTIME_SOURCE_FILES),
             root
             / "node_modules"
             / "@earendil-works"
@@ -74,7 +76,7 @@ def install_runtime(
         raise RuntimeError(
             f"Pi runtime target exists but is incomplete: {target}. Remove it explicitly and retry."
         )
-    for relative in (*RUNTIME_FILES, "src/main.mjs"):
+    for relative in (*RUNTIME_FILES, *RUNTIME_SOURCE_FILES):
         if not (source_dir / relative).is_file():
             raise RuntimeError(f"Packaged Pi runtime file is missing: {relative}")
     source_environment = os.environ if environ is None else environ
@@ -84,7 +86,7 @@ def install_runtime(
 
     target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     staging = Path(
-        tempfile.mkdtemp(prefix=f".{PI_PACKAGE_VERSION}-", dir=target.parent)
+        tempfile.mkdtemp(prefix=f".{PI_RUNTIME_REVISION}-", dir=target.parent)
     )
     try:
         for name in RUNTIME_FILES:
@@ -122,6 +124,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
 __all__ = [
     "PI_PACKAGE_VERSION",
+    "PI_RUNTIME_REVISION",
     "install_runtime",
     "main",
     "packaged_app_dir",

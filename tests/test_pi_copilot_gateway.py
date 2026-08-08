@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -41,7 +42,10 @@ def test_pi_packages_and_upstream_commit_are_exactly_pinned() -> None:
     assert 'noTools: "builtin"' in entrypoint
     assert 'content: [{ type: "text", text: JSON.stringify(modelVisible) }]' in entrypoint
     assert "details: modelVisible" in entrypoint
-    assert "event.result?.details?.summary" in entrypoint
+    projection = (APP_DIR / "src" / "event-projection.mjs").read_text(
+        encoding="utf-8"
+    )
+    assert "details.summary" in projection
 
 
 def test_host_reauthorizes_tool_request_and_rejects_unknown_fields(
@@ -245,11 +249,68 @@ def test_prompt_timeout_aborts_and_refreshes_session(
 
 def test_sidecar_contract_hides_reasoning_and_enforces_token_budget() -> None:
     source = (APP_DIR / "src" / "main.mjs").read_text(encoding="utf-8")
+    projection = (APP_DIR / "src" / "event-projection.mjs").read_text(
+        encoding="utf-8"
+    )
 
     assert "EASYICU_PI_SESSION_TOKEN_BUDGET" in source
     assert "pi_shell_token_budget_exhausted" in source
-    assert 'update.type === "thinking_delta"' not in source
-    assert 'item.type === "thinking"' not in source
+    assert 'update.type === "thinking_delta"' not in source + projection
+    assert 'item.type === "thinking"' not in source + projection
+    assert "normalizePiEvent" in source
+    assert "projectTranscriptMessage" in source
+
+
+def test_sidecar_projects_safe_agent_activity_and_tool_receipts() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is not installed")
+    projection = (APP_DIR / "src" / "event-projection.mjs").as_uri()
+    script = f"""
+      import {{ normalizePiEvent, projectTranscriptMessage }} from {json.dumps(projection)};
+      const events = [
+        normalizePiEvent({{ type: 'agent_start' }}),
+        normalizePiEvent({{ type: 'turn_start', turnIndex: 1, timestamp: 1720000000000 }}),
+        normalizePiEvent({{ type: 'message_start', message: {{ role: 'assistant' }} }}),
+        normalizePiEvent({{ type: 'tool_execution_start', toolCallId: 'call-1', toolName: 'easyicu_inspect_context', args: {{ secret: 'must-not-leak' }} }}),
+        normalizePiEvent({{ type: 'tool_execution_update', toolCallId: 'call-1', toolName: 'easyicu_inspect_context', partialResult: 'must-not-leak' }}),
+        normalizePiEvent({{ type: 'tool_execution_end', toolCallId: 'call-1', toolName: 'easyicu_inspect_context', isError: false, result: {{ content: [{{ type: 'text', text: 'unsafe fallback' }}], details: {{ status: 'ok', code: 'study_context_ready', summary: 'Bounded summary', owner: 'easyicu.study_context' }} }} }}),
+        normalizePiEvent({{ type: 'agent_settled' }}),
+        normalizePiEvent({{ type: 'message_update', assistantMessageEvent: {{ type: 'thinking_delta', delta: 'private' }} }}),
+      ];
+      const transcript = projectTranscriptMessage({{
+        role: 'toolResult', toolCallId: 'call-1', toolName: 'easyicu_inspect_context',
+        content: [{{ type: 'text', text: 'raw result must not leak' }}],
+        details: {{ status: 'ok', code: 'study_context_ready', summary: 'Persisted bounded summary', owner: 'easyicu.study_context' }},
+      }});
+      console.log(JSON.stringify({{ events, transcript }}));
+    """
+    completed = subprocess.run(
+        [node, "--input-type=module", "--eval", script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(completed.stdout)
+
+    assert [event["type"] if event else None for event in payload["events"]] == [
+        "run_start",
+        "turn_start",
+        "assistant_start",
+        "tool_start",
+        "tool_progress",
+        "tool_end",
+        "run_end",
+        None,
+    ]
+    assert "args" not in payload["events"][3]
+    assert "partial_result" not in payload["events"][4]
+    assert payload["events"][5]["code"] == "study_context_ready"
+    assert payload["events"][5]["summary"] == "Bounded summary"
+    assert payload["transcript"]["content"][0]["type"] == "tool_result"
+    assert payload["transcript"]["content"][0]["summary"] == "Persisted bounded summary"
+    assert "raw result must not leak" not in completed.stdout
+    assert "must-not-leak" not in completed.stdout
 
 
 def test_pinned_sidecar_starts_with_only_easyicu_tools(tmp_path: Path) -> None:

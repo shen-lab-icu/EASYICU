@@ -15,6 +15,8 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
+import { normalizePiEvent, projectTranscriptMessage } from "./event-projection.mjs";
+
 const PROTOCOL_VERSION = "easyicu.pi-copilot/1";
 const MAX_LINE_BYTES = 1024 * 1024;
 const MAX_TEXT_CHARS = 12000;
@@ -299,54 +301,6 @@ async function requestHostTool(sessionId, name, args) {
   });
 }
 
-function normalizeEvent(event) {
-  if (!event || typeof event !== "object") return undefined;
-  if (event.type === "message_update") {
-    const update = event.assistantMessageEvent || {};
-    if (update.type === "text_delta") return { type: "text_delta", delta: boundedText(update.delta, 8000) };
-    return undefined;
-  }
-  if (event.type === "tool_execution_start") {
-    return { type: "tool_start", tool_call_id: boundedText(event.toolCallId, 160), tool_name: boundedText(event.toolName, 160) };
-  }
-  if (event.type === "tool_execution_end") {
-    const content = Array.isArray(event.result?.content) ? event.result.content : [];
-    const summary = event.result?.details?.summary
-      || content.find((item) => item && item.type === "text")?.text
-      || "";
-    return { type: "tool_end", tool_call_id: boundedText(event.toolCallId, 160), tool_name: boundedText(event.toolName, 160), is_error: Boolean(event.isError), summary: boundedText(summary, 2000) };
-  }
-  if (event.type === "message_end" && event.message?.role === "assistant") {
-    return { type: "message_end", stop_reason: boundedText(event.message.stopReason || "complete", 80) };
-  }
-  if (event.type === "compaction_start") return { type: "compaction_start", reason: boundedText(event.reason, 80) };
-  if (event.type === "compaction_end") return { type: "compaction_end", reason: boundedText(event.reason, 80), aborted: Boolean(event.aborted) };
-  if (event.type === "auto_retry_start") return { type: "retry", attempt: Number(event.attempt || 0), max_attempts: Number(event.maxAttempts || 0) };
-  if (event.type === "agent_start" || event.type === "agent_settled") return { type: event.type };
-  return undefined;
-}
-
-function transcriptMessage(message) {
-  if (!message || typeof message !== "object") return undefined;
-  const role = boundedText(message.role, 40);
-  if (!new Set(["user", "assistant", "toolResult"]).has(role)) return undefined;
-  const content = Array.isArray(message.content) ? message.content : [{ type: "text", text: message.content }];
-  const parts = [];
-  for (const item of content.slice(0, 80)) {
-    if (!item || typeof item !== "object") continue;
-    if (item.type === "text") {
-      parts.push({ type: "text", text: boundedText(item.text, 12000) });
-    } else if (item.type === "toolCall") {
-      parts.push({ type: "tool_call", tool_call_id: boundedText(item.id, 160), tool_name: boundedText(item.name, 160) });
-    }
-  }
-  return {
-    role: role === "toolResult" ? "tool" : role,
-    content: parts,
-    stop_reason: role === "assistant" ? boundedText(message.stopReason || "", 80) : undefined,
-  };
-}
-
 function sessionState(record) {
   const { session } = record;
   const stats = session.getSessionStats();
@@ -359,7 +313,7 @@ function sessionState(record) {
     message_count: session.messages.length,
     streaming: session.isStreaming,
     enabled_tools: session.getActiveToolNames().filter((name) => TOOL_NAMES.includes(name)),
-    transcript: session.messages.slice(-100).map(transcriptMessage).filter(Boolean),
+    transcript: session.messages.slice(-100).map(projectTranscriptMessage).filter(Boolean),
     shell_usage: {
       tokens: stats.tokens,
       cost: stats.cost,
@@ -401,7 +355,7 @@ async function createSession(params) {
   const unsubscribe = session.subscribe((event) => {
     const requestId = activeRequestBySession.get(externalId);
     if (!requestId) return;
-    const normalized = normalizeEvent(event);
+    const normalized = normalizePiEvent(event);
     if (normalized) emit({ kind: "event", request_id: requestId, session_id: externalId, event: normalized });
   });
   const record = {
