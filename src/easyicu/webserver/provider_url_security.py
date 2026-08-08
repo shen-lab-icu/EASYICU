@@ -14,6 +14,14 @@ _METADATA_HOSTNAMES = frozenset(
         "instance-data",
     }
 )
+_TRUSTED_PROVIDER_HOSTNAMES = frozenset(
+    {
+        "api.anthropic.com",
+        "api.openai.com",
+        "generativelanguage.googleapis.com",
+    }
+)
+_PROXY_FAKE_IP_NETWORK = ipaddress.ip_network("198.18.0.0/15")
 
 
 class ProviderUrlSecurityError(ValueError):
@@ -65,8 +73,17 @@ def validate_credential_endpoint(base_url: str) -> str:
         _refuse("host_does_not_resolve")
 
     loopback_only = all(address.is_loopback for address in addresses)
+    trusted_https_provider = (
+        parsed.scheme == "https" and host.lower() in _TRUSTED_PROVIDER_HOSTNAMES
+    )
     for address in addresses:
         if address.is_loopback:
+            continue
+        # Clash-style local proxies commonly synthesize RFC 2544 benchmark
+        # addresses for public domains. Limit this exception to exact official
+        # provider hostnames over certificate-validated HTTPS; arbitrary custom
+        # hosts and every other private range remain fail-closed.
+        if trusted_https_provider and address in _PROXY_FAKE_IP_NETWORK:
             continue
         if address.is_link_local or address.is_reserved or address.is_multicast:
             _refuse("link_local_or_reserved_address")

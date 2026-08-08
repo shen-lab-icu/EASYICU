@@ -115,7 +115,12 @@ function modelConfig() {
   if (!baseUrl || !model || !provider) {
     throw Object.assign(new Error("Pi provider configuration is incomplete"), { code: "pi_model_config_invalid" });
   }
-  if (!new Set(["openai-completions", "openai-responses"]).has(api)) {
+  if (!new Set([
+    "anthropic-messages",
+    "google-generative-ai",
+    "openai-completions",
+    "openai-responses",
+  ]).has(api)) {
     throw Object.assign(new Error(`unsupported Pi API transport: ${api}`), { code: "pi_api_transport_unsupported" });
   }
   const maxTokens = integerEnv("EASYICU_PI_MAX_TOKENS", 16384, 256, 131072);
@@ -145,7 +150,7 @@ async function getModelRuntime() {
         [config.provider]: {
           baseUrl: config.baseUrl,
           api: config.api,
-          authHeader: true,
+          authHeader: config.api === "openai-completions" || config.api === "openai-responses",
           models: [
             {
               id: config.model,

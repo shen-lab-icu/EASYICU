@@ -8,7 +8,7 @@
     host: null, conv: null, runtime: null, sessions: [], session: null,
     messages: [], loading: true, creating: false, busy: false, jobId: '',
     source: null, error: '', shell: 'pi', draft: '', setupSaving: false,
-    showSetup: false,
+    showSetup: false, availableModels: [],
   };
 
   function tr(en, zh) { return window.EU_LANG === 'zh' ? zh : en; }
@@ -18,6 +18,7 @@
       .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
   function api() { return window.EU_API || {}; }
+  function isStaticPreview() { return window.location && window.location.protocol === 'file:'; }
   function runtimeReady() { return !!(state.runtime && state.runtime.status === 'ready'); }
   function setShell(shell) {
     state.shell = shell === 'pi' ? 'pi' : 'legacy';
@@ -42,12 +43,29 @@
       return tr('The model service rejected this API credential.', '模型服务拒绝了这个 API 凭据，请检查后重试。');
     }
     if (error.code === 'pi_provider_model_unavailable') {
-      return tr('The selected model was not reported by this service.', '该服务没有返回所选模型，请检查模型名称。');
+      return tr('The selected model was not reported by this service.', '该服务没有返回所选模型，请从下方发现的模型中选择。');
     }
     if (error.code === 'pi_provider_connection_failed') {
       return tr('EasyICU could not reach the model service.', 'EasyICU 无法连接到模型服务，请检查地址和服务状态。');
     }
+    if (isStaticPreview() && String(error.message || '').includes('Failed to fetch')) {
+      return tr('This is a static preview without the EasyICU backend. Start EasyICU and open http://127.0.0.1:8765/#guided.', '这是不带 EasyICU 后端的静态预览。请启动 EasyICU，再打开 http://127.0.0.1:8765/#guided。');
+    }
     return String(error.message || error.code || error);
+  }
+
+  function providerPreset(config, runtime) {
+    const transport = config.api_transport || runtime.api_transport || 'openai-completions';
+    const base = String(config.base_url || '').toLowerCase();
+    if (transport === 'anthropic-messages') return 'anthropic';
+    if (transport === 'google-generative-ai') return 'google';
+    if (base.includes('api.openai.com')) return 'openai';
+    if (base.includes('127.0.0.1:8317') || base.includes('localhost:8317')) return 'cliproxyapi';
+    return 'custom-openai';
+  }
+
+  function option(value, selected, label) {
+    return `<option value="${value}" ${value === selected ? 'selected' : ''}>${label}</option>`;
   }
   function sessionIsStale() {
     return !!(state.session && state.session.stale && state.session.stale.stale);
@@ -95,6 +113,10 @@
     ].includes(code));
     const savedCredential = !!config.credential_present;
     const canCancel = runtimeReady();
+    const staticPreview = isStaticPreview();
+    const preset = providerPreset(config, runtime);
+    const transport = config.api_transport || runtime.api_transport || 'openai-completions';
+    const discovered = state.availableModels.map(model => `<option value="${esc(model)}"></option>`).join('');
     return `
       <div class="gpi-setup-wrap">
         <form class="gpi-setup" data-gpi-provider-form autocomplete="off">
@@ -102,19 +124,23 @@
           <h2>${tr('Connect your model service', '连接你的模型服务')}</h2>
           <p>${tr('Like signing in to Codex or Claude Code, this one-time check must succeed before the conversation opens. The API credential is saved only in EasyICU’s private local credential file and is never returned to this page.', '就像登录 Codex 或 Claude Code 一样，只有这次连接验证成功后才会开放对话。API 凭据只保存在 EasyICU 本机私有凭据文件中，不会回传到页面。')}</p>
           <div class="gpi-setup-grid">
-            <label><span>${tr('Service name', '服务名称')}</span><input name="provider" maxlength="80" value="${esc(config.provider || runtime.provider || 'easyicu-local')}" required></label>
-            <label><span>${tr('API transport', 'API 协议')}</span><select name="api_transport"><option value="openai-completions" ${(config.api_transport || runtime.api_transport) === 'openai-responses' ? '' : 'selected'}>OpenAI Chat Completions</option><option value="openai-responses" ${(config.api_transport || runtime.api_transport) === 'openai-responses' ? 'selected' : ''}>OpenAI Responses</option></select></label>
+            <label><span>${tr('Service type', '服务类型')}</span><select data-gpi-provider-preset>${option('cliproxyapi', preset, 'CLIProxyAPI / Local proxy')}${option('custom-openai', preset, 'OpenAI-compatible gateway')}${option('openai', preset, 'OpenAI API')}${option('anthropic', preset, 'Anthropic API')}${option('google', preset, 'Google Gemini API')}</select></label>
+            <label><span>${tr('Provider ID', '提供方标识')}</span><input name="provider" maxlength="80" value="${esc(config.provider || runtime.provider || 'easyicu-local')}" required></label>
             <label class="wide"><span>${tr('Service address', '服务地址')}</span><input name="base_url" maxlength="2048" value="${esc(config.base_url || 'http://127.0.0.1:8317/v1')}" inputmode="url" spellcheck="false" required></label>
-            <label><span>${tr('Model', '模型')}</span><input name="model" maxlength="256" value="${esc(config.model || runtime.model || 'gpt5.6 luna')}" spellcheck="false" required></label>
+            <label><span>${tr('Compatibility protocol', '兼容协议')}</span><select name="api_transport">${option('openai-completions', transport, 'OpenAI Chat Completions')}${option('openai-responses', transport, 'OpenAI Responses')}${option('anthropic-messages', transport, 'Anthropic Messages')}${option('google-generative-ai', transport, 'Google Generative AI')}</select></label>
+            <label><span>${tr('Model', '模型')}</span><input name="model" list="gpi-model-options" maxlength="256" value="${esc(config.model || runtime.model || 'gpt5.6 luna')}" spellcheck="false" required><datalist id="gpi-model-options">${discovered}</datalist></label>
             <label><span>${tr('API credential', 'API 凭据')}</span><input name="api_key" type="password" maxlength="8192" autocomplete="new-password" placeholder="${savedCredential ? tr('Re-enter to verify or replace', '重新输入以验证或更换') : tr('Paste once; it will not be shown again', '仅粘贴一次，之后不再显示')}" required></label>
           </div>
+          <div class="gpi-config-note">${tr('Pi supports many provider brands. Service type selects the provider; compatibility protocol selects its wire API. For CLIProxyAPI on port 8317, use OpenAI Chat Completions.', 'Pi 支持很多模型提供方。“服务类型”表示接入对象，“兼容协议”表示实际通信格式；CLIProxyAPI 的 8317 端口请选择 OpenAI Chat Completions。')}</div>
+          ${state.availableModels.length ? `<div class="gpi-config-note ok"><span class="gpi-dot"></span>${tr('Models reported by this service:', '该服务返回的可用模型：')} ${esc(state.availableModels.slice(0, 12).join(', '))}</div>` : ''}
           ${savedCredential ? `<div class="gpi-config-note ok"><span class="gpi-dot"></span>${tr('A private credential is saved, but a newly entered credential is still required to verify or change this connection.', '本机已有私有凭据；为验证或更换连接，仍需重新输入一次凭据。')}</div>` : ''}
           ${runtimeMissing.length ? `<div class="gpi-config-note warn">${tr('The Pi runtime also needs attention before chat can open:', '聊天开放前还需要处理 Pi 运行环境：')} ${esc(runtimeMissing.join(', '))}</div>` : ''}
+          ${staticPreview ? `<div class="gpi-config-note warn"><strong>${tr('Static preview only.', '当前只是静态预览。')}</strong>&nbsp;${tr('Start EasyICU, then open http://127.0.0.1:8765/#guided. This file:// page cannot verify any credential.', '请启动 EasyICU，再打开 http://127.0.0.1:8765/#guided；当前 file:// 页面无法验证任何凭据。')}</div>` : ''}
           <label class="gpi-optin"><input name="enable_ai" type="checkbox" required> <span>${tr('I authorize this verification request and external AI use for Pi Copilot. Chat text and PHI-safe summaries may be sent to this service.', '我授权本次连接验证，并允许 Pi Copilot 使用外部 AI；对话文字和经 PHI 安全投影的摘要可能发送到该服务。')}</span></label>
           ${state.error ? `<div class="gpi-error inline">${esc(state.error)}</div>` : ''}
           <div class="gpi-setup-actions">
             ${canCancel ? `<button class="btn" type="button" data-gpi-cancel-setup>${tr('Back to conversation', '返回对话')}</button>` : `<button class="gpi-link" type="button" data-gpi-legacy>${tr('Use local Guided workflow', '使用本地研究引导流程')}</button>`}
-            <button class="btn primary" type="submit" ${state.setupSaving ? 'disabled' : ''}>${state.setupSaving ? tr('Verifying…', '正在验证…') : tr('Verify and enter Copilot', '验证并进入 Copilot')}</button>
+            <button class="btn primary" type="submit" ${state.setupSaving || staticPreview ? 'disabled' : ''}>${state.setupSaving ? tr('Verifying…', '正在验证…') : tr('Verify and enter Copilot', '验证并进入 Copilot')}</button>
           </div>
           <div class="gpi-consent">${tr('Verification calls only the service model-list endpoint. The credential is never written to project files, browser storage, logs, or Pi session history.', '验证仅调用服务的模型列表接口。凭据不会写入项目文件、浏览器存储、日志或 Pi 会话历史。')}</div>
         </form>
@@ -208,6 +234,10 @@
 
   async function loadStatus() {
     state.loading = true; state.error = ''; render();
+    if (isStaticPreview()) {
+      state.runtime = { status: 'unavailable', blockers: ['static_preview_no_backend'] };
+      state.showSetup = true; state.loading = false; render(); return;
+    }
     try {
       const payload = await api().loadPiCopilotStatus();
       state.runtime = payload && payload.runtime;
@@ -255,6 +285,8 @@
       state.showSetup = false;
       await createSession();
     } catch (error) {
+      state.availableModels = Array.isArray(error && error.details && error.details.available_models)
+        ? error.details.available_models.map(String) : [];
       state.error = errorText(error);
     } finally {
       state.setupSaving = false; render();
@@ -373,6 +405,27 @@
     });
     state.host.addEventListener('input', event => {
       if (event.target.matches('[data-gpi-input]')) state.draft = event.target.value;
+    });
+    state.host.addEventListener('change', event => {
+      if (!event.target.matches('[data-gpi-provider-preset]')) return;
+      const form = event.target.closest('[data-gpi-provider-form]');
+      if (!form) return;
+      const presets = {
+        cliproxyapi: { provider: 'easyicu-local', base_url: 'http://127.0.0.1:8317/v1', api_transport: 'openai-completions', model: 'gpt5.6 luna' },
+        'custom-openai': { provider: 'custom-openai', base_url: 'https://example.com/v1', api_transport: 'openai-completions', model: '' },
+        openai: { provider: 'openai', base_url: 'https://api.openai.com/v1', api_transport: 'openai-responses', model: 'gpt-5.6-luna' },
+        anthropic: { provider: 'anthropic', base_url: 'https://api.anthropic.com/v1', api_transport: 'anthropic-messages', model: 'claude-sonnet-4-6' },
+        google: { provider: 'google', base_url: 'https://generativelanguage.googleapis.com/v1beta', api_transport: 'google-generative-ai', model: 'gemini-3.5-flash' },
+      };
+      const selected = presets[event.target.value];
+      if (!selected) return;
+      Object.keys(selected).forEach(name => {
+        const field = form.elements.namedItem(name);
+        if (field) field.value = selected[name];
+      });
+      state.availableModels = [];
+      const modelList = form.querySelector('#gpi-model-options');
+      if (modelList) modelList.replaceChildren();
     });
     state.host.addEventListener('keydown', event => {
       if (event.target.matches('[data-gpi-input]') && event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {

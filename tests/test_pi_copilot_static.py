@@ -19,7 +19,7 @@ def _read(relative: str) -> str:
 def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     index = _read("index.html")
     assert "css/guided-pi.css?v=20260808-pi-setup1" in index
-    assert "js/screens-guided-pi.js?v=20260808-pi-setup1" in index
+    assert "js/screens-guided-pi.js?v=20260808-pi-setup2" in index
     assert index.index("css/guided.css") < index.index("css/guided-pi.css")
     assert index.index("js/screens-guided-pi.js") < index.index("js/screens-guided.js")
 
@@ -35,6 +35,12 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "new EventSource('/api/jobs/'" in pi_owner
     assert "external_llm_opt_in: true" in pi_owner
     assert "data-gpi-provider-form" in pi_owner
+    assert "CLIProxyAPI / Local proxy" in pi_owner
+    assert "anthropic-messages" in pi_owner
+    assert "google-generative-ai" in pi_owner
+    assert "static_preview_no_backend" in pi_owner
+    assert "http://127.0.0.1:8765/#guided" in pi_owner
+    assert "gpi-model-options" in pi_owner
     assert 'type="password"' in pi_owner
     assert "savePiCopilotProviderConfig" in pi_owner
     assert "provider_connection_unverified" in pi_owner

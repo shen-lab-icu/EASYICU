@@ -30,7 +30,12 @@ DEFAULT_BASE_URL = "http://127.0.0.1:8317/v1"
 DEFAULT_MODEL = "gpt5.6 luna"
 DEFAULT_API_TRANSPORT = "openai-completions"
 SUPPORTED_API_TRANSPORTS = frozenset(
-    {"openai-completions", "openai-responses"}
+    {
+        "anthropic-messages",
+        "google-generative-ai",
+        "openai-completions",
+        "openai-responses",
+    }
 )
 _DEFAULT_CONFIG_PATH = Path.home() / ".easyicu" / "pi-provider.env"
 _DEFAULT_RECEIPT_PATH = (
@@ -129,7 +134,7 @@ class PiProviderConfigStore:
         if transport_text not in SUPPORTED_API_TRANSPORTS:
             raise PiCopilotError(
                 "pi_provider_api_transport_unsupported",
-                "Choose an OpenAI-compatible chat-completions or responses transport.",
+                "Choose one of Pi's supported custom-provider API transports.",
             )
         try:
             validate_credential_endpoint(base_url_text)
@@ -419,7 +424,12 @@ def verify_provider_connection(
     transport: Optional[Verifier] = None,
     timeout: float = 10.0,
 ) -> Dict[str, Any]:
-    """Verify authentication and exact model availability via ``/models``."""
+    """Verify authentication and exact model availability via ``/models``.
+
+    Pi supports many provider brands, but custom providers converge on four
+    wire protocols.  Keep discovery protocol-aware here so a native Anthropic
+    or Google endpoint is not incorrectly treated as OpenAI-compatible.
+    """
 
     # Validate immediately before the request as well as during input parsing.
     try:
@@ -430,10 +440,18 @@ def verify_provider_connection(
             "The model-service address is not allowed by the local security policy.",
         ) from exc
     url = f"{config.base_url.rstrip('/')}/models"
-    headers = {
-        "Authorization": f"Bearer {config.api_key}",
-        "Accept": "application/json",
-    }
+    headers = {"Accept": "application/json"}
+    if config.api_transport == "anthropic-messages":
+        headers.update(
+            {
+                "x-api-key": config.api_key,
+                "anthropic-version": "2023-06-01",
+            }
+        )
+    elif config.api_transport == "google-generative-ai":
+        headers["x-goog-api-key"] = config.api_key
+    else:
+        headers["Authorization"] = f"Bearer {config.api_key}"
     status_code, payload = (transport or _default_models_transport)(
         url,
         headers,
@@ -450,21 +468,40 @@ def verify_provider_connection(
             "The model service did not accept the verification request.",
             details={"status_code": int(status_code)},
         )
-    rows = payload.get("data") if isinstance(payload, Mapping) else None
+    if config.api_transport == "google-generative-ai":
+        rows = payload.get("models") if isinstance(payload, Mapping) else None
+        identifier_key = "name"
+    else:
+        rows = payload.get("data") if isinstance(payload, Mapping) else None
+        identifier_key = "id"
     if not isinstance(rows, list):
         raise PiCopilotError(
             "pi_provider_models_response_invalid",
             "The model service returned an invalid model list.",
         )
     identifiers = {
-        str(row.get("id") or "").strip()
+        identifier
         for row in rows
-        if isinstance(row, Mapping) and row.get("id")
+        if isinstance(row, Mapping) and row.get(identifier_key)
+        for identifier in [str(row.get(identifier_key) or "").strip()]
+        if 0 < len(identifier) <= 256
+        and "\n" not in identifier
+        and "\r" not in identifier
+        and "\0" not in identifier
+        and config.api_key not in identifier
     }
+    if config.api_transport == "google-generative-ai":
+        identifiers = {
+            identifier.removeprefix("models/") for identifier in identifiers
+        }
     if config.model not in identifiers:
         raise PiCopilotError(
             "pi_provider_model_unavailable",
             "The selected model was not reported by this model service.",
+            details={
+                "available_models": sorted(identifiers)[:100],
+                "models_reported": len(identifiers),
+            },
         )
     return {
         "connection_verified": True,

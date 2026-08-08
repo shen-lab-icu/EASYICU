@@ -407,6 +407,35 @@ def test_a_provider_url_that_should_not_receive_a_key_is_refused(
     assert excinfo.value.detail["reason"] == reason
 
 
+def test_official_https_provider_allows_local_proxy_fake_ip(monkeypatch) -> None:
+    from easyicu.webserver.provider_url_security import (
+        ProviderUrlSecurityError,
+        validate_credential_endpoint,
+    )
+
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+                socket.IPPROTO_TCP,
+                "",
+                ("198.18.0.50", 443),
+            )
+        ],
+    )
+
+    assert (
+        validate_credential_endpoint("https://api.anthropic.com/v1")
+        == "https://api.anthropic.com/v1"
+    )
+    with pytest.raises(ProviderUrlSecurityError) as caught:
+        validate_credential_endpoint("https://untrusted.example/v1")
+    assert caught.value.reason == "private_address"
+
+
 @pytest.mark.parametrize(
     "url",
     ["https://api.openai.com/v1", "http://127.0.0.1:8787/v1"],
