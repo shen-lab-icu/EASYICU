@@ -523,8 +523,12 @@
     const currentProfile = sampleProfile(config);
     const profiles = sampleProfiles(config);
     const catalogTotals = config && config.catalogTotals || {};
-    const catalogModuleCount = Number(catalogTotals.modules) || 19;
-    const catalogFeatureCount = Number(catalogTotals.features) || 288;
+    const catalog = window.EU_CATALOG || {};
+    const catalogModuleCount = Number(catalogTotals.modules)
+      || (Array.isArray(catalog.groups) ? catalog.groups.length : 0);
+    const catalogFeatureCount = Number(catalogTotals.features)
+      || Number(catalog.totalConcepts)
+      || 0;
     const fullScope = state.featureScope === 'all';
     const rawSelection = selectionStatus(root);
     const detectedCount = rawSelection.current && rawSelection.current.ok

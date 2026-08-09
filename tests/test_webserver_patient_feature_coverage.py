@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
 
+from easyicu import concept_catalog
 from easyicu.webserver import dataio
 from easyicu.webserver import sources as source_store
 from easyicu.webserver.app import app
@@ -198,7 +199,9 @@ def test_feature_coverage_separates_observed_all_null_and_unsupported(
         for row in module["features"]
     }
 
-    assert payload["summary"]["definitions"] == 288
+    assert payload["summary"]["definitions"] == len(
+        concept_catalog.CONCEPT_DICTIONARY
+    )
     assert payload["summary"]["modules"] == 19
     assert rows["hr"]["status"] == "observed"
     assert rows["hr"]["non_null_count"] == 4
@@ -222,7 +225,7 @@ def test_drilldown_summary_uses_export_wide_catalog_coverage(
     payload = TestClient(app).post("/api/patient-review/drilldown", json={}).json()
 
     loaded = payload["data_tables"]["loaded_summary"]
-    assert loaded["review_features"] == 288
+    assert loaded["review_features"] == len(concept_catalog.CONCEPT_DICTIONARY)
     assert loaded["module_count"] == 19
     assert loaded["observed_features"] == 5
     modules = {row["module"]: row for row in payload["data_tables"]["modules"]}

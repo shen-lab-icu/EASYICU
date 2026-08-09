@@ -4828,7 +4828,8 @@ def test_crossdb_demo_distribution_uses_legacy_simulated_frames_without_row_payl
 def test_crossdb_demo_all_catalog_scope_resolves_every_module_and_feature() -> None:
     features = crossdb_review._resolve_demo_features({"feature_scope": "all_catalog"})
     assert len(features) == len(concept_catalog.CONCEPT_DICTIONARY)
-    assert features[:7] == concept_catalog.CONCEPT_GROUPS_INTERNAL["sofa2_score"]
+    sofa2_features = concept_catalog.CONCEPT_GROUPS_INTERNAL["sofa2_score"]
+    assert features[: len(sofa2_features)] == sofa2_features
 
     module_map = {
         feature: module
