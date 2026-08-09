@@ -2580,8 +2580,15 @@ def _callback_sofa_component(
             if col_name in data.columns:
                 # Extract the column as a Series
                 col_data = data[col_name]
-                if ctx.concept_name == "sofa2_resp" and name == "ecmo_indication":
-                    kwargs[name] = col_data if isinstance(col_data, pd.Series) else pd.Series(col_data)
+                if name == "ecmo_indication" and ctx.concept_name in {
+                    "sofa2_resp",
+                    "sofa2_cardio",
+                }:
+                    kwargs[name] = (
+                        col_data.astype("string")
+                        if isinstance(col_data, pd.Series)
+                        else pd.Series(col_data, dtype="string")
+                    )
                     continue
                 # Ensure it's a Series before converting to numeric
                 if isinstance(col_data, pd.Series):
@@ -2608,13 +2615,13 @@ def _callback_sofa_component(
                 elif ctx.concept_name == 'sofa_renal' and name == 'urine24':
                     # Optional urine24 parameter - pass None
                     kwargs[name] = None
-                elif ctx.concept_name == 'sofa2_renal' and name in ['uo_6h', 'uo_12h', 'uo_24h', 'rrt', 'rrt_criteria', 'potassium', 'ph', 'bicarb']:
+                elif ctx.concept_name == 'sofa2_renal' and name in ['uo_6h', 'uo_12h', 'uo_24h', 'rrt', 'rrt_criteria', 'rrt_episode_active', 'rrt_nonrenal_only', 'potassium', 'ph', 'bicarb']:
                     # SOFA-2 renal optional parameters - pass None
                     kwargs[name] = None
-                elif ctx.concept_name == 'sofa2_resp' and name in ['spo2', 'fio2', 'adv_resp', 'ecmo', 'ecmo_indication']:
+                elif ctx.concept_name == 'sofa2_resp' and name in ['spo2', 'fio2', 'adv_resp', 'ecmo', 'ecmo_indication', 'support_unavailable_or_ceiling', 'oxygenation_sustained_1h']:
                     # SOFA-2 respiratory optional parameters - pass None
                     kwargs[name] = None
-                elif ctx.concept_name == 'sofa2_cns' and name in ['delirium_tx', 'delirium_positive', 'motor_response']:
+                elif ctx.concept_name == 'sofa2_cns' and name in ['delirium_tx', 'delirium_positive', 'motor_response', 'sedated_gcs', 'pre_sedation_gcs', 'sedated']:
                     # SOFA-2 CNS optional parameters - pass None
                     kwargs[name] = None
                 else:
@@ -3113,6 +3120,7 @@ def _callback_sofa2_score(
     
     # Calculate total SOFA-2 score (note: output column is 'sofa2')
     # R's na.rm=TRUE means skip NA, NOT fill with 0
+    data["sofa2_n_components"] = data[required].notna().sum(axis=1).astype(int)
     data["sofa2"] = (
         data[required]
         .sum(axis=1, skipna=True)
@@ -3122,9 +3130,9 @@ def _callback_sofa2_score(
     
     # Select output columns
     if keep_components:
-        cols = id_columns + ([index_column] if index_column else []) + required + ["sofa2"]
+        cols = id_columns + ([index_column] if index_column else []) + required + ["sofa2", "sofa2_n_components"]
     else:
-        cols = id_columns + ([index_column] if index_column else []) + ["sofa2"]
+        cols = id_columns + ([index_column] if index_column else []) + ["sofa2", "sofa2_n_components"]
     
     # Filter to existing columns
     cols = [c for c in cols if c in data.columns]
@@ -3573,7 +3581,7 @@ def _match_fio2(
     fio2_col: str,  # fio2
     match_win: pd.Timedelta,
     mode: str = "match_vals",
-    fix_na_fio2: bool = True,
+    fix_na_fio2: bool = False,
     ctx: Optional[ConceptCallbackContext] = None,  # Use ConceptCallbackContext
     database: str = None,  # 数据库名称，用于FiO2单位转换
 ) -> tuple[pd.DataFrame, list[str], Optional[str]]:
@@ -3591,7 +3599,7 @@ def _match_fio2(
         fio2_col: Name of FiO2 measurement
         match_win: Time window for matching
         mode: Matching mode
-        fix_na_fio2: Fill missing FiO2 with 21% room air
+        fix_na_fio2: Explicit opt-in to assume 21% room air when FiO2 is missing
         ctx: ConceptCallbackContext for automatic ID conversion
         
     Returns:
@@ -3700,8 +3708,13 @@ def _match_fio2(
         if fio2_subset.empty:
             merged = o2_subset.copy()
             merged[fio2_col] = float('nan')
+            merged["fio2_observed"] = False
+            merged["fio2_imputed"] = False
+            merged["fio2_assessment_reason"] = "missing_fio2"
             if fix_na_fio2:
                 merged[fio2_col] = 21.0
+                merged["fio2_imputed"] = True
+                merged["fio2_assessment_reason"] = "room_air_assumption"
             return merged, id_columns, index_column
 
         # 🚀 Determine tolerance: use numeric tolerance for numeric time columns
@@ -3847,9 +3860,33 @@ def _match_fio2(
                     full_window=False
                 )
     
-    # Fix missing FiO2 with 21% room air
-    if fix_na_fio2 and fio2_col in merged.columns:
-        merged[fio2_col] = merged[fio2_col].fillna(21.0)
+    # The bidirectional as-of match can produce the same physiological pair
+    # twice when O2 and FiO2 share an exact timestamp. A ratio concept is one
+    # observation per unique matched pair, not one row per join direction.
+    dedup_columns = [
+        column
+        for column in [*id_columns, index_column, o2_col, fio2_col]
+        if column and column in merged.columns
+    ]
+    if dedup_columns:
+        merged = merged.drop_duplicates(subset=dedup_columns).reset_index(drop=True)
+
+    if fio2_col in merged.columns:
+        missing_fio2 = merged[fio2_col].isna()
+        merged["fio2_observed"] = ~missing_fio2
+        merged["fio2_imputed"] = False
+        merged["fio2_assessment_reason"] = np.where(
+            missing_fio2,
+            "missing_fio2",
+            "observed",
+        )
+        if fix_na_fio2:
+            merged.loc[missing_fio2, fio2_col] = 21.0
+            merged.loc[missing_fio2, "fio2_imputed"] = True
+            merged.loc[
+                missing_fio2,
+                "fio2_assessment_reason",
+            ] = "room_air_assumption"
     
     return merged, id_columns, index_column
 
@@ -3868,7 +3905,7 @@ def _callback_pafi(
     完整复刻 R ricu 的 pafi/safi 函数:
     - 支持3种匹配模式: match_vals, extreme_vals, fill_gaps
     - 在时间窗口内匹配 po2/o2sat 和 fio2
-    - 填充缺失的 fio2 为 21% (室内空气)
+    - 默认保留缺失 FiO2；仅在显式选择时假定 21% 室内空气
     - 过滤无效值
     
     Args:
@@ -3876,7 +3913,7 @@ def _callback_pafi(
         ctx: 回调上下文,可包含:
             - match_win: 匹配时间窗口 (默认: 2小时)
             - mode: 匹配模式 (默认: "match_vals")
-            - fix_na_fio2: 填充缺失FiO2 (默认: True)
+            - fix_na_fio2: 显式填充缺失FiO2 (默认: False)
         source_col_a: po2 或 o2sat 列名
         source_col_b: fio2 列名
         output_col: 输出列名 (pafi 或 safi)
@@ -3897,7 +3934,7 @@ def _callback_pafi(
     # Get parameters from context (with R ricu defaults)
     match_win = ctx.kwargs.get('match_win', pd.Timedelta(hours=2))
     mode = ctx.kwargs.get('mode', 'match_vals')
-    fix_na_fio2 = ctx.kwargs.get('fix_na_fio2', True)
+    fix_na_fio2 = ctx.kwargs.get('fix_na_fio2', False)
     
     # Validate mode
     if mode not in ['match_vals', 'extreme_vals', 'fill_gaps']:
@@ -3976,26 +4013,6 @@ def _callback_pafi(
         if len(non_null) > 0 and (non_null.le(1.0).mean() > 0.5):
             fio2 = fio2 * 100.0
     
-    # Filter: !is.na(po2) & !is.na(fio2) & fio2 != 0
-    valid_mask = o2.notna() & fio2.notna() & (fio2 != 0)
-    data = data[valid_mask].copy()
-    
-    if data.empty:
-        cols = id_columns + ([index_column] if index_column else []) + [output_col]
-        return _as_icutbl(pd.DataFrame(columns=cols), id_columns=id_columns, index_column=index_column, value_column=output_col)
-    
-    # Recalculate after filtering
-    o2 = pd.to_numeric(data[source_col_a], errors="coerce")
-    fio2 = pd.to_numeric(data[source_col_b], errors="coerce")
-    
-    # Apply the same normalization to the filtered data
-    if fio2_unit == "fraction":
-        fio2 = fio2 * 100.0
-    elif fio2_unit is None:
-        non_null = fio2.dropna()
-        if len(non_null) > 0 and (non_null.le(1.0).mean() > 0.5):
-            fio2 = fio2 * 100.0
-    
     # Physiological guards (2026-07): make P/F (and S/F) robust to per-database
     # FiO2 unit inconsistencies (AUMC/SIC/HiRID raw or mixed values) and PaO2
     # outliers. Without these the ratio has a non-physiological tail (P/F>800).
@@ -4004,12 +4021,20 @@ def _callback_pafi(
     #  3. drop non-physiological ratios (<0 or >800)
     fio2 = fio2.mask((fio2 > 0.15) & (fio2 <= 1.0), fio2 * 100.0)
     fio2 = fio2.where((fio2 >= 21) & (fio2 <= 100))
+    invalid_observed = data.get("fio2_observed", False) & fio2.isna()
+    if isinstance(invalid_observed, pd.Series):
+        data.loc[invalid_observed, "fio2_assessment_reason"] = "fio2_out_of_range"
     # Calculate ratio: pafi/safi = 100 * po2/o2sat / fio2
     ratio = 100 * o2 / fio2
     data[output_col] = ratio.where((ratio >= 0) & (ratio <= 800))
     
     # Keep only essential columns (like R's rm_cols)
-    cols = id_columns + ([index_column] if index_column else []) + [output_col]
+    provenance_cols = [
+        col
+        for col in ("fio2_observed", "fio2_imputed", "fio2_assessment_reason")
+        if col in data.columns
+    ]
+    cols = id_columns + ([index_column] if index_column else []) + [output_col] + provenance_cols
     frame = data[cols]
     
     return _as_icutbl(frame.reset_index(drop=True), id_columns=id_columns, index_column=index_column, value_column=output_col)

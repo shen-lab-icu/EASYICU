@@ -11,11 +11,25 @@ from easyicu.clinical_contracts import (
     render_clinical_conformance_matrix_markdown,
     validate_clinical_contracts,
 )
+from easyicu.concept.callbacks import (
+    ConceptCallbackContext,
+    _callback_sofa2_score,
+    _callback_sofa_component,
+)
 from easyicu.resources import load_dictionary
 from easyicu.scores.kdigo_aki import _calc_aki_stage_creat
 from easyicu.scores.sepsis import sep3
 from easyicu.scores.sepsis_sofa2 import sep3_sofa2
-from easyicu.scores.sofa2 import sofa2_cns, sofa2_score
+from easyicu.scores.sofa2 import (
+    sofa2_cardio,
+    sofa2_cns,
+    sofa2_coag,
+    sofa2_liver,
+    sofa2_renal,
+    sofa2_resp,
+    sofa2_score,
+)
+from easyicu.table import ICUTable
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -26,6 +40,27 @@ def test_clinical_contract_registry_has_complete_definition_and_vector_coverage(
     dictionary = load_dictionary(include_sofa2=True)
 
     assert validate_clinical_contracts(dictionary, repo_root=ROOT) == []
+
+
+@pytest.mark.clinical_conformance
+def test_sofa2_aggregate_cannot_outrank_or_omit_a_component_contract(tmp_path: Path) -> None:
+    registry_path = ROOT / "src/easyicu/data/clinical-contracts.json"
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    aggregate = registry["sofa2_aggregate_2025"]
+    aggregate["status"] = "validated_definition"
+    aggregate["depends_on_contracts"].remove("sofa2_renal_2025")
+    mutated = tmp_path / "clinical-contracts.json"
+    mutated.write_text(json.dumps(registry), encoding="utf-8")
+
+    findings = validate_clinical_contracts(
+        load_dictionary(include_sofa2=True),
+        repo_root=ROOT,
+        contracts_path=mutated,
+    )
+
+    assert "sofa2_aggregate_2025:status_exceeds_weakest_dependency" in findings
+    assert "sofa2_aggregate_2025:component_dependencies_incomplete" in findings
+    assert "sofa2_aggregate_2025:dictionary_status_mismatch:sofa2" in findings
 
 
 @pytest.mark.clinical_conformance
@@ -42,18 +77,66 @@ def test_kdigo_creatinine_golden_vectors_are_executed_from_independent_fixture()
     assert result.tolist() == [row["expected_stage"] for row in fixture]
 
 
-@pytest.mark.clinical_conformance
-def test_sofa2_cns_golden_vectors_are_executed_from_independent_fixture() -> None:
-    vectors = json.loads(
-        (ROOT / "tests/clinical_specs/sofa2_cns_2025.json").read_text(encoding="utf-8")
-    )["vectors"]
-    result = sofa2_cns(
-        pd.Series([row["gcs"] for row in vectors]),
-        delirium_tx=pd.Series([row["delirium_treatment"] for row in vectors]),
-        delirium_positive=pd.Series([row["cam_positive"] for row in vectors]),
+_SOFA2_COMPONENT_EXECUTORS = [
+    ("sofa2_resp_2025.json", "sofa2_resp", sofa2_resp),
+    ("sofa2_coag_2025.json", "sofa2_coag", sofa2_coag),
+    ("sofa2_liver_2025.json", "sofa2_liver", sofa2_liver),
+    ("sofa2_cardio_2025.json", "sofa2_cardio", sofa2_cardio),
+    ("sofa2_cns_2025.json", "sofa2_cns", sofa2_cns),
+    ("sofa2_renal_2025.json", "sofa2_renal", sofa2_renal),
+]
+
+
+def _clinical_context(name: str, **kwargs) -> ConceptCallbackContext:
+    return ConceptCallbackContext(
+        concept_name=name,
+        target=None,
+        interval=None,
+        resolver=None,
+        data_source=None,
+        patient_ids=None,
+        kwargs=kwargs,
     )
 
-    assert result.tolist() == [row["expected"] for row in vectors]
+
+def _clinical_table(name: str, values) -> ICUTable:
+    return ICUTable(
+        pd.DataFrame(
+            {
+                "stay_id": [1] * len(values),
+                "charttime": list(range(len(values))),
+                name: values,
+            }
+        ),
+        id_columns=["stay_id"],
+        index_column="charttime",
+        value_column=name,
+    )
+
+
+@pytest.mark.clinical_conformance
+@pytest.mark.parametrize(
+    ("fixture_name", "concept_name", "executor"),
+    _SOFA2_COMPONENT_EXECUTORS,
+)
+def test_sofa2_component_golden_vectors_execute_direct_and_production_paths(
+    fixture_name: str,
+    concept_name: str,
+    executor,
+) -> None:
+    fixture = json.loads(
+        (ROOT / "tests/clinical_specs" / fixture_name).read_text(encoding="utf-8")
+    )
+    inputs = {name: pd.Series(values) for name, values in fixture["inputs"].items()}
+
+    direct = executor(**inputs)
+    production = _callback_sofa_component(executor)(
+        {name: _clinical_table(name, values) for name, values in fixture["inputs"].items()},
+        _clinical_context(concept_name),
+    )
+
+    assert direct.tolist() == fixture["expected"]
+    assert production.data[concept_name].tolist() == fixture["expected"]
 
 
 @pytest.mark.clinical_conformance
@@ -67,8 +150,19 @@ def test_sofa2_aggregate_golden_vector_preserves_completeness() -> None:
     }
     result = sofa2_score(frames)
 
+    production_frames = {
+        name: _clinical_table(name, [score])
+        for name, score in fixture["components"].items()
+    }
+    production = _callback_sofa2_score(
+        production_frames,
+        _clinical_context("sofa2"),
+    ).data
+
     assert result["sofa2"].tolist() == [fixture["expected_total"]]
     assert result["sofa2_n_components"].tolist() == [fixture["expected_components_observed"]]
+    assert production["sofa2"].tolist() == [fixture["expected_total"]]
+    assert production["sofa2_n_components"].tolist() == [fixture["expected_components_observed"]]
 
 
 @pytest.mark.clinical_conformance
@@ -122,6 +216,11 @@ def test_committed_clinical_conformance_matrix_is_generated_from_registry() -> N
     assert committed == render_clinical_conformance_matrix_markdown()
     assert set(load_clinical_contracts()) >= {
         "kdigo_aki_2012",
+        "sofa2_resp_2025",
+        "sofa2_coag_2025",
+        "sofa2_liver_2025",
+        "sofa2_cardio_2025",
         "sofa2_cns_2025",
+        "sofa2_renal_2025",
         "sepsis3_sofa2_sensitivity_2025",
     }

@@ -85,6 +85,8 @@ def sofa2_resp(
     adv_resp: Optional[pd.Series] = None,
     ecmo: Optional[pd.Series] = None,
     ecmo_indication: Optional[pd.Series] = None,
+    support_unavailable_or_ceiling: Optional[pd.Series] = None,
+    oxygenation_sustained_1h: Optional[pd.Series] = None,
 ) -> pd.Series:
     """SOFA-2 respiratory component.
 
@@ -119,6 +121,10 @@ def sofa2_resp(
         adv_resp: Boolean - advanced respiratory support active
         ecmo: Boolean - ECMO in use
         ecmo_indication: String - 'respiratory' or 'cardiovascular'
+        support_unavailable_or_ceiling: Boolean - advanced support was unavailable
+            or precluded by a documented ceiling of treatment (Table 2 footnote h)
+        oxygenation_sustained_1h: Boolean - oxygenation threshold persisted for
+            at least 1 hour. Unknown is fail-closed for ratio-based scores 3-4.
         
     Returns:
         Series of respiratory SOFA-2 scores (0-4)
@@ -136,7 +142,18 @@ def sofa2_resp(
     # Build support/ECMO masks
     support = _is_true(adv_resp) if adv_resp is not None else pd.Series(False, index=idx)
     on_ecmo = _is_true(ecmo) if ecmo is not None else pd.Series(False, index=idx)
-    sup_or_ecmo = support | on_ecmo
+    support_exception = (
+        _is_true(support_unavailable_or_ceiling)
+        if support_unavailable_or_ceiling is not None
+        else pd.Series(False, index=idx)
+    )
+    sustained = (
+        _is_true(oxygenation_sustained_1h)
+        if oxygenation_sustained_1h is not None
+        else pd.Series(False, index=idx)
+    )
+    ratio_eligible = sustained
+    severe_ratio_eligible = ratio_eligible & (support | support_exception)
     
     # Initialize score
     score = pd.Series(0, index=idx, dtype=int)
@@ -164,19 +181,19 @@ def sofa2_resp(
     # === Per-row scoring logic ===
     
     # Case 1: P/F available → use P/F thresholds
-    pf_mask = pf_available
+    pf_mask = pf_available & ratio_eligible
     score[pf_mask & (pf <= 300)] = 1
     score[pf_mask & (pf <= 225)] = 2
     # For 3/4, advanced support or ECMO is required
-    score[pf_mask & (pf <= 150) & sup_or_ecmo] = 3
-    score[pf_mask & (pf <= 75) & sup_or_ecmo] = 4
+    score[pf_mask & (pf <= 150) & severe_ratio_eligible] = 3
+    score[pf_mask & (pf <= 75) & severe_ratio_eligible] = 4
     
     # Case 2: P/F unavailable but S/F applicable → use S/F thresholds
-    sf_mask = ~pf_available & sf_applicable
+    sf_mask = ~pf_available & sf_applicable & ratio_eligible
     score[sf_mask & (sf <= 300)] = 1
     score[sf_mask & (sf <= 250)] = 2
-    score[sf_mask & (sf <= 200) & sup_or_ecmo] = 3
-    score[sf_mask & (sf <= 120) & sup_or_ecmo] = 4
+    score[sf_mask & (sf <= 200) & severe_ratio_eligible] = 3
+    score[sf_mask & (sf <= 120) & severe_ratio_eligible] = 4
     
     # SOFA-2 footnote (i): any patient on ECMO scores 4 on the respiratory
     # component regardless of PaO2:FiO2. (ECMO for respiratory failure scores 4
@@ -388,17 +405,18 @@ def sofa2_cardio(
     score[ne_ep_mask & (total > 0.2) & (total <= 0.4)] = 3  # Medium dose
     score[ne_ep_mask & (total > 0.4)] = 4  # High dose
 
-    # Escalate if medium + other vasoactive drugs → 4pt
-    score[(total > 0.2) & (total <= 0.4) & others] = 4
-    # Escalate if low dose + other vasoactive drugs → 3pt
-    score[(total > 0) & (total <= 0.2) & others] = 3
+    # Table 2 uses "any other vasopressor or inotrope". Dopamine and
+    # dobutamine are therefore adjuncts here, not only in the zero-NE/Epi path.
+    adjunct = (da > 0) | (db > 0) | others
+    score[(total > 0.2) & (total <= 0.4) & adjunct] = 4
+    score[(total > 0) & (total <= 0.2) & adjunct] = 3
 
     # Any other vasopressor/inotrope (when no norepi+epi)
-    no_ne_ep = (total == 0) & (da.fillna(0) == 0)
-    score[no_ne_ep & ((db > 0) | others)] = 2
+    no_ne_ep = total == 0
+    score[no_ne_ep & adjunct] = 2
 
     # ALTERNATE: Dopamine-only scoring when norepi+epi == 0 (SOFA-2 backup rule)
-    dopamine_only = (total == 0) & (da > 0)
+    dopamine_only = (total == 0) & (da > 0) & (db <= 0) & (~others)
     score[dopamine_only & (da <= 20)] = 2
     score[dopamine_only & (da > 20) & (da <= 40)] = 3
     score[dopamine_only & (da > 40)] = 4
@@ -427,6 +445,9 @@ def sofa2_cns(
     delirium_tx: Optional[pd.Series] = None,
     delirium_positive: Optional[pd.Series] = None,
     motor_response: Optional[pd.Series] = None,
+    sedated_gcs: Optional[pd.Series] = None,
+    pre_sedation_gcs: Optional[pd.Series] = None,
+    sedated: Optional[pd.Series] = None,
 ) -> pd.Series:
     """SOFA-2 brain/CNS component.
 
@@ -464,6 +485,9 @@ def sofa2_cns(
             analyses; it does not score without delirium treatment
         motor_response: Motor response score when GCS cannot be fully assessed
                        (6=localizing, 5=withdrawal, 4=flexion, 3=extension, 2=no response)
+        sedated_gcs/pre_sedation_gcs: Last GCS recorded before sedation
+        sedated: Boolean sedation status. When true without a pre-sedation GCS,
+            Table 2 footnote c assigns 0 points from GCS.
 
     Returns:
         Series of brain/CNS SOFA-2 scores (0-4)
@@ -474,6 +498,28 @@ def sofa2_cns(
     - When GCS 3 domains cannot be assessed, use best motor scale domain score
     """
     g = pd.to_numeric(gcs, errors="coerce")
+    pre_sedation = _coalesce_series(sedated_gcs, pre_sedation_gcs)
+    sedated_mask = (
+        _is_true(sedated) if sedated is not None else pd.Series(False, index=g.index)
+    )
+    if pre_sedation is not None:
+        pre = pd.to_numeric(pre_sedation, errors="coerce")
+        # A recorded pre-sedation GCS is the authoritative value. This also
+        # supports databases that expose the value without a separate status.
+        recorded_pre = pre.notna()
+        g = g.where(~recorded_pre, pre)
+        sedated_mask = sedated_mask | recorded_pre
+
+    unknown_pre_sedation = pd.Series(False, index=g.index)
+    if sedated is not None:
+        pre = (
+            pd.to_numeric(pre_sedation, errors="coerce")
+            if pre_sedation is not None
+            else pd.Series(np.nan, index=g.index)
+        )
+        unknown_pre_sedation = sedated_mask & pre.isna()
+        # Table 2 footnote c: if the pre-sedation GCS is unknown, assign 0.
+        g = g.mask(unknown_pre_sedation)
 
     score = pd.Series(0, index=g.index, dtype=int)
 
@@ -504,8 +550,11 @@ def sofa2_cns(
     # If receiving delirium treatment and GCS==15, upgrade to 1pt
     if delirium_tx is not None:
         dtx = _is_true(delirium_tx)
-        mask = (g == 15) & dtx
-        score[mask] = np.maximum(score[mask], 1)
+        score[dtx] = np.maximum(score[dtx], 1)
+    else:
+        dtx = pd.Series(False, index=g.index)
+
+    score[unknown_pre_sedation & ~dtx] = 0
 
     return score
 
@@ -515,6 +564,8 @@ def sofa2_renal(
     creatinine: Optional[pd.Series] = None,
     rrt: Optional[pd.Series] = None,
     rrt_criteria: Optional[pd.Series] = None,
+    rrt_episode_active: Optional[pd.Series] = None,
+    rrt_nonrenal_only: Optional[pd.Series] = None,
     uo_6h: Optional[pd.Series] = None,
     uo_12h: Optional[pd.Series] = None,
     uo_24h: Optional[pd.Series] = None,
@@ -567,8 +618,13 @@ def sofa2_renal(
     Args:
         crea: Serum creatinine (mg/dL) - EasyICU/runtime-style name
         creatinine: Serum creatinine (mg/dL) - readable alias
-        rrt: Boolean - receiving RRT
+        rrt: Boolean - receiving RRT at this time
         rrt_criteria: Boolean - meets RRT criteria but not receiving it
+        rrt_episode_active: Boolean state that remains true on intermittent
+            non-treatment days until documented permanent termination, including
+            chronic RRT
+        rrt_nonrenal_only: Boolean - RRT was provided solely for a non-renal
+            indication and must not trigger the 4-point RRT rule
         uo_6h: 6-hour average urine output (mL/kg/h) - EasyICU runtime concept name
         uo_12h: 12-hour average urine output (mL/kg/h) - EasyICU runtime concept name
         uo_24h: 24-hour average urine output (mL/kg/h) - EasyICU runtime concept name
@@ -598,11 +654,27 @@ def sofa2_renal(
     score = pd.Series(0, index=idx, dtype=int)
     bicarbonate_series = _coalesce_series(bicarb, bicarbonate)
 
-    # RRT = auto 4pt (SOFA-2 major addition)
-    if rrt is not None:
-        score[_is_true(rrt)] = 4
-    if rrt_criteria is not None:
-        score[_is_true(rrt_criteria)] = 4
+    # Table 2 footnotes o/q: an episode remains active between intermittent
+    # sessions until termination; therapy solely for a non-renal indication is
+    # excluded. Raw treatment-event evidence alone cannot manufacture off-days,
+    # so callers must pass the explicit episode state when they have it.
+    treatment_state = pd.Series(False, index=idx)
+    for candidate in (rrt, rrt_episode_active):
+        if candidate is not None:
+            treatment_state = treatment_state | _is_true(candidate)
+    criteria_state = (
+        _is_true(rrt_criteria)
+        if rrt_criteria is not None
+        else pd.Series(False, index=idx)
+    )
+    nonrenal_only = (
+        _is_true(rrt_nonrenal_only)
+        if rrt_nonrenal_only is not None
+        else pd.Series(False, index=idx)
+    )
+    # A non-renal-only indication excludes treatment evidence, but it cannot
+    # suppress an independently documented renal RRT criterion.
+    score[(treatment_state & ~nonrenal_only) | criteria_state] = 4
 
     # EasyICU runtime-aligned path: use windowed urine concepts when available.
     if any(series is not None for series in (uo_6h, uo_12h, uo_24h)):

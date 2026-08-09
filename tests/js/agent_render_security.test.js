@@ -36,4 +36,21 @@ const activeData = renderer.figureGallery({
 });
 assert.equal(activeData, '', 'only bounded PNG data URLs may render');
 
-process.stdout.write(JSON.stringify({ ok: true, cases: 3 }));
+const hostileKey = '<img src=x onerror="globalThis.pwned=1">';
+const hostileStructured = renderer.artifactStructuredView('fallback.json', {
+  rows: [{ [hostileKey]: 'value' }],
+});
+assert.ok(hostileStructured.includes('&lt;img'), 'object keys must be rendered as text');
+assert.ok(!hostileStructured.includes(`<th>${hostileKey}</th>`), 'object key must not create table-header markup');
+
+const hostileTableChrome = renderer.artifactTable(
+  '<svg onload="globalThis.pwned=2">',
+  ['safe'],
+  [],
+  '<img src=x onerror="globalThis.pwned=3">',
+);
+assert.ok(hostileTableChrome.includes('&lt;svg'), 'table title must be rendered as text');
+assert.ok(hostileTableChrome.includes('&lt;img'), 'empty-state text must be rendered as text');
+assert.ok(!hostileTableChrome.includes('<svg onload='), 'table title must not create markup');
+
+process.stdout.write(JSON.stringify({ ok: true, cases: 5 }));

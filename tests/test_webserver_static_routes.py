@@ -840,7 +840,7 @@ def test_native_agent_render_layer_is_split_into_owner_file() -> None:
     assert (
         render_pos < main_pos
     ), "screens-agent-render.js must load before screens-agent.js"
-    assert "js/screens-agent-render.js?v=20260809-artifact-security1" in index_html
+    assert "js/screens-agent-render.js?v=20260809-artifact-security2" in index_html
 
 
 def test_native_agent_overview_renders_object_idea_plan_steps() -> None:

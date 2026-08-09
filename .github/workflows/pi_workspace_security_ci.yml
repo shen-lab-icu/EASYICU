@@ -69,5 +69,10 @@ jobs:
           node --check src/easyicu/webserver/pi_copilot/node_app/src/event-projection.mjs
           node --check src/easyicu/webserver/pi_copilot/node_app/src/shell-budget.mjs
 
+      - name: Run research artifact renderer security vectors
+        run: |
+          node tests/js/agent_render_security.test.js \
+            src/easyicu/webserver/static/js/screens-agent-render.js
+
       - name: Prove hostile preview origin isolation in Chromium
         run: python tools/qa_pi_workspace_preview_security.py
