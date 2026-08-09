@@ -41,6 +41,8 @@ from ..scores.sofa2 import (
     sofa2_liver,
     sofa2_cardio,
     sofa2_cns,
+    sofa2_cns_ascertainment,
+    sofa2_cns_proxy_sensitivity,
 )
 from ..scores.sepsis import (
     delta_cummin,
@@ -2586,6 +2588,17 @@ def _callback_sofa_component(
             if col_name in data.columns:
                 # Extract the column as a Series
                 col_data = data[col_name]
+                if name == "delirium_tx_evidence" and ctx.concept_name in {
+                    "sofa2_cns",
+                    "sofa2_cns_proxy_sensitivity",
+                    "sofa2_cns_ascertainment",
+                }:
+                    kwargs[name] = (
+                        col_data.astype("string")
+                        if isinstance(col_data, pd.Series)
+                        else pd.Series(col_data, dtype="string")
+                    )
+                    continue
                 if name == "ecmo_indication" and ctx.concept_name in {
                     "sofa2_resp",
                     "sofa2_cardio",
@@ -2627,7 +2640,20 @@ def _callback_sofa_component(
                 elif ctx.concept_name == 'sofa2_resp' and name in ['spo2', 'fio2', 'adv_resp', 'ecmo', 'ecmo_indication', 'support_unavailable_or_ceiling', 'oxygenation_sustained_1h']:
                     # SOFA-2 respiratory optional parameters - pass None
                     kwargs[name] = None
-                elif ctx.concept_name == 'sofa2_cns' and name in ['delirium_tx', 'delirium_positive', 'motor_response', 'sedated_gcs', 'pre_sedation_gcs', 'sedated']:
+                elif ctx.concept_name in {
+                    'sofa2_cns',
+                    'sofa2_cns_proxy_sensitivity',
+                    'sofa2_cns_ascertainment',
+                } and name in [
+                    'delirium_tx_proxy',
+                    'delirium_tx_evidence',
+                    'delirium_tx',
+                    'delirium_positive',
+                    'motor_response',
+                    'sedated_gcs',
+                    'pre_sedation_gcs',
+                    'sedated',
+                ]:
                     # SOFA-2 CNS optional parameters - pass None
                     kwargs[name] = None
                 else:
@@ -2727,6 +2753,79 @@ def _callback_sofa_component(
         return _as_icutbl(frame.reset_index(drop=True), id_columns=id_columns, index_column=index_column, value_column=ctx.concept_name)
 
     return wrapper
+
+
+def _callback_delirium_tx_alias(
+    tables: Dict[str, ICUTable],
+    ctx: ConceptCallbackContext,
+) -> ICUTable:
+    """Expose the deprecated ``delirium_tx`` name without strengthening it."""
+
+    source = tables.get("delirium_tx_proxy")
+    if source is None:
+        return _as_icutbl(
+            pd.DataFrame(columns=[ctx.concept_name]),
+            id_columns=[],
+            index_column=None,
+            value_column=ctx.concept_name,
+        )
+    frame = source.data.copy()
+    value_col = source.value_column or "delirium_tx_proxy"
+    if value_col in frame.columns:
+        frame = frame.rename(columns={value_col: ctx.concept_name})
+    elif "delirium_tx_proxy" in frame.columns:
+        frame = frame.rename(columns={"delirium_tx_proxy": ctx.concept_name})
+    return _as_icutbl(
+        frame,
+        id_columns=list(source.id_columns),
+        index_column=source.index_column,
+        value_column=ctx.concept_name,
+    )
+
+
+def _callback_delirium_tx_evidence(
+    tables: Dict[str, ICUTable],
+    ctx: ConceptCallbackContext,
+) -> ICUTable:
+    """Derive honest evidence states from the currently mapped proxy.
+
+    Existing database mappings identify candidate medication exposure but do
+    not carry an attributable indication.  They can therefore emit only
+    ``proxy_only`` for positive rows.  A false or absent sparse event cannot be
+    upgraded to ``not_detected`` without an explicit source/time coverage
+    receipt and remains ``unavailable``.
+    """
+
+    source = tables.get("delirium_tx_proxy")
+    if source is None:
+        return _as_icutbl(
+            pd.DataFrame(columns=[ctx.concept_name]),
+            id_columns=[],
+            index_column=None,
+            value_column=ctx.concept_name,
+        )
+    frame = source.data.copy()
+    value_col = source.value_column or "delirium_tx_proxy"
+    if value_col not in frame.columns and "delirium_tx_proxy" in frame.columns:
+        value_col = "delirium_tx_proxy"
+    proxy = (
+        frame[value_col].fillna(False).astype(bool)
+        if value_col in frame.columns
+        else pd.Series(False, index=frame.index)
+    )
+    frame[ctx.concept_name] = pd.Series(
+        np.where(proxy, "proxy_only", "unavailable"),
+        index=frame.index,
+        dtype="string",
+    )
+    if value_col in frame.columns and value_col != ctx.concept_name:
+        frame = frame.drop(columns=[value_col])
+    return _as_icutbl(
+        frame,
+        id_columns=list(source.id_columns),
+        index_column=source.index_column,
+        value_column=ctx.concept_name,
+    )
 
 
 def _expand_wintbl_to_hourly(vent_df, vent_id_cols, start_col, dur_col, time_col_name):
@@ -3076,6 +3175,16 @@ def _callback_sofa2_score(
     for name in required:
         if name not in data:
             data[name] = np.nan
+
+    # Observation is a windowed event property and must be captured before any
+    # legal LOCF.  Availability is evaluated later, after LOCF and the active
+    # worst-value window.  Keeping these markers separate prevents a carried
+    # value from being mislabeled as a new measurement.
+    observed_markers = {
+        name: f"__sofa2_observed__{name}" for name in required
+    }
+    for name, marker in observed_markers.items():
+        data[marker] = data[name].notna().astype(int)
     
     # Fill gaps and apply sliding window (same logic as SOFA-1)
     if index_column and index_column in data.columns:
@@ -3106,6 +3215,8 @@ def _callback_sofa2_score(
                     limits=limits_df,
                     method="none",
                 )
+                for marker in observed_markers.values():
+                    data[marker] = data[marker].fillna(0).astype(int)
                 # 🚀 fill_gaps fast path returns sorted data, skip redundant sort
 
         # SOFA-2 longitudinal bedside rule: day 1 missing values contribute the
@@ -3127,6 +3238,9 @@ def _callback_sofa2_score(
         for comp in required:
             if comp in data.columns:
                 agg_dict[comp] = worst_val_fun
+        for marker in observed_markers.values():
+            if marker in data.columns:
+                agg_dict[marker] = 'max_or_na'
         
         if agg_dict:
             data = slide(
@@ -3142,7 +3256,18 @@ def _callback_sofa2_score(
     
     # Calculate total SOFA-2 score (note: output column is 'sofa2')
     # R's na.rm=TRUE means skip NA, NOT fill with 0
-    data["sofa2_n_components"] = data[required].notna().sum(axis=1).astype(int)
+    data["sofa2_n_observed_components"] = (
+        data[list(observed_markers.values())]
+        .fillna(0)
+        .sum(axis=1)
+        .astype(int)
+    )
+    data["sofa2_n_available_components"] = (
+        data[required].notna().sum(axis=1).astype(int)
+    )
+    # Deprecated compatibility alias: historically this field described the
+    # post-LOCF value, so it remains an alias of *available*, not observed.
+    data["sofa2_n_components"] = data["sofa2_n_available_components"]
     data["sofa2"] = (
         data[required]
         .sum(axis=1, skipna=True)
@@ -3152,9 +3277,19 @@ def _callback_sofa2_score(
     
     # Select output columns
     if keep_components:
-        cols = id_columns + ([index_column] if index_column else []) + required + ["sofa2", "sofa2_n_components"]
+        cols = id_columns + ([index_column] if index_column else []) + required + [
+            "sofa2",
+            "sofa2_n_observed_components",
+            "sofa2_n_available_components",
+            "sofa2_n_components",
+        ]
     else:
-        cols = id_columns + ([index_column] if index_column else []) + ["sofa2", "sofa2_n_components"]
+        cols = id_columns + ([index_column] if index_column else []) + [
+            "sofa2",
+            "sofa2_n_observed_components",
+            "sofa2_n_available_components",
+            "sofa2_n_components",
+        ]
     
     # Filter to existing columns
     cols = [c for c in cols if c in data.columns]
@@ -8181,8 +8316,12 @@ CALLBACK_REGISTRY: MutableMapping[str, CallbackFn] = {
     "sofa2_liver": _callback_sofa_component(sofa2_liver),
     "sofa2_cardio": _callback_sofa_component(sofa2_cardio),
     "sofa2_cns": _callback_sofa_component(sofa2_cns),
+    "sofa2_cns_proxy_sensitivity": _callback_sofa_component(sofa2_cns_proxy_sensitivity),
+    "sofa2_cns_ascertainment": _callback_sofa_component(sofa2_cns_ascertainment),
     "sofa2_renal": _callback_sofa_component(sofa2_renal),  # SOFA-2 version with RRT criteria
     "sofa2_score": _callback_sofa2_score,  # SOFA-2 总分计算（使用 sofa2_* 组件）
+    "delirium_tx_alias": _callback_delirium_tx_alias,
+    "delirium_tx_evidence": _callback_delirium_tx_evidence,
     # AUMC-specific callbacks
     "aumc_death": _callback_aumc_death,
     "sic_death": _callback_sic_death,

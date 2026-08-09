@@ -26,6 +26,8 @@ from easyicu.scores.sepsis_sofa2 import sep3_sofa2
 from easyicu.scores.sofa2 import (
     sofa2_cardio,
     sofa2_cns,
+    sofa2_cns_ascertainment,
+    sofa2_cns_proxy_sensitivity,
     sofa2_coag,
     sofa2_liver,
     sofa2_renal,
@@ -43,6 +45,23 @@ def test_clinical_contract_registry_has_complete_definition_and_vector_coverage(
     dictionary = load_dictionary(include_sofa2=True)
 
     assert validate_clinical_contracts(dictionary, repo_root=ROOT) == []
+
+
+@pytest.mark.clinical_conformance
+def test_registry_separates_spec_and_runtime_golden_vectors() -> None:
+    registry = json.loads(
+        (ROOT / "src/easyicu/data/clinical-contracts.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    for contract in registry.values():
+        assert "golden_vector" not in contract
+        assert contract["spec_golden_vectors"]
+        assert contract["runtime_golden_vectors"]
+
+    cns = registry["sofa2_cns_2025"]
+    assert cns["spec_golden_vectors"] != cns["runtime_golden_vectors"]
 
 
 @pytest.mark.clinical_conformance
@@ -81,7 +100,7 @@ def test_sofa2_contract_rejects_fixture_input_without_runtime_owner(tmp_path: Pa
     )
 
     assert "sofa2_resp_2025:runtime_inputs_mismatch:sofa2_resp" in findings
-    assert "sofa2_resp_2025:golden_input_unowned:pafi" in findings
+    assert "sofa2_resp_2025:runtime_golden_input_unowned:pafi" in findings
 
 
 @pytest.mark.clinical_conformance
@@ -99,7 +118,10 @@ def test_sofa2_aggregate_rejects_component_without_runtime_owner(tmp_path: Path)
     )
 
     assert "sofa2_aggregate_2025:runtime_inputs_mismatch:sofa2" in findings
-    assert "sofa2_aggregate_2025:golden_input_unowned:sofa2_resp" in findings
+    assert (
+        "sofa2_aggregate_2025:runtime_golden_input_unowned:sofa2_resp"
+        in findings
+    )
 
 
 @pytest.mark.clinical_conformance
@@ -117,12 +139,12 @@ def test_kdigo_creatinine_golden_vectors_are_executed_from_independent_fixture()
 
 
 _SOFA2_COMPONENT_EXECUTORS = [
-    ("sofa2_resp_2025.json", "sofa2_resp", sofa2_resp),
-    ("sofa2_coag_2025.json", "sofa2_coag", sofa2_coag),
-    ("sofa2_liver_2025.json", "sofa2_liver", sofa2_liver),
-    ("sofa2_cardio_2025.json", "sofa2_cardio", sofa2_cardio),
-    ("sofa2_cns_2025.json", "sofa2_cns", sofa2_cns),
-    ("sofa2_renal_2025.json", "sofa2_renal", sofa2_renal),
+    ("sofa2_resp_2025.json", "sofa2_resp_2025_spec.json", "sofa2_resp", sofa2_resp),
+    ("sofa2_coag_2025.json", "sofa2_coag_2025_spec.json", "sofa2_coag", sofa2_coag),
+    ("sofa2_liver_2025.json", "sofa2_liver_2025_spec.json", "sofa2_liver", sofa2_liver),
+    ("sofa2_cardio_2025.json", "sofa2_cardio_2025_spec.json", "sofa2_cardio", sofa2_cardio),
+    ("sofa2_cns_2025.json", "sofa2_cns_2025_spec.json", "sofa2_cns", sofa2_cns),
+    ("sofa2_renal_2025.json", "sofa2_renal_2025_spec.json", "sofa2_renal", sofa2_renal),
 ]
 
 
@@ -155,14 +177,16 @@ def _clinical_table(name: str, values) -> ICUTable:
 
 @pytest.mark.clinical_conformance
 @pytest.mark.parametrize(
-    ("fixture_name", "concept_name", "executor"),
+    ("fixture_name", "spec_fixture_name", "concept_name", "executor"),
     _SOFA2_COMPONENT_EXECUTORS,
 )
 def test_sofa2_component_golden_vectors_execute_direct_and_production_paths(
     fixture_name: str,
+    spec_fixture_name: str,
     concept_name: str,
     executor,
 ) -> None:
+    del spec_fixture_name
     fixture = json.loads(
         (ROOT / "tests/clinical_specs" / fixture_name).read_text(encoding="utf-8")
     )
@@ -179,63 +203,94 @@ def test_sofa2_component_golden_vectors_execute_direct_and_production_paths(
 
 
 @pytest.mark.clinical_conformance
-def test_shipped_sofa2_resp_resolver_graph_scores_unknown_persistence() -> None:
-    """Exercise shipped dictionary -> resolver -> adapter -> scorer.
+@pytest.mark.parametrize(
+    ("runtime_fixture_name", "fixture_name", "concept_name", "executor"),
+    _SOFA2_COMPONENT_EXECUTORS,
+)
+def test_sofa2_spec_golden_vectors_are_not_limited_to_runtime_inputs(
+    runtime_fixture_name: str,
+    fixture_name: str,
+    concept_name: str,
+    executor,
+) -> None:
+    del runtime_fixture_name
+    fixture = json.loads(
+        (ROOT / "tests/clinical_specs" / fixture_name).read_text(encoding="utf-8")
+    )
+    inputs = {name: pd.Series(values) for name, values in fixture["inputs"].items()}
 
-    The fixture data source replaces only the physical database read; the
-    recursive graph and callback binding come from the packaged dictionary.
-    """
+    assert executor(**inputs).tolist() == fixture["expected"]
+    if concept_name == "sofa2_cns":
+        assert sofa2_cns_proxy_sensitivity(**inputs).tolist() == fixture[
+            "expected_proxy_sensitivity"
+        ]
+        assert sofa2_cns_ascertainment(**inputs).tolist() == fixture[
+            "expected_ascertainment"
+        ]
 
+
+class _FixtureDataSource:
+    base_path = None
+    config = DataSourceConfig(
+        name="fixture",
+        tables={
+            "events": {
+                "defaults": {
+                    "id_var": "stay_id",
+                    "index_var": "charttime",
+                    "val_var": "value",
+                }
+            }
+        },
+    )
+
+    def __init__(self, frame: pd.DataFrame):
+        self.frame = frame
+
+    def load_table(self, table_name, columns=None, filters=None, verbose=False):
+        del table_name, filters, verbose
+        frame = self.frame.copy()
+        if columns:
+            keep = list(
+                dict.fromkeys(
+                    [
+                        "stay_id",
+                        "charttime",
+                        *(column for column in columns if column in frame.columns),
+                    ]
+                )
+            )
+            frame = frame[keep]
+        values = [c for c in frame if c not in {"stay_id", "charttime"}]
+        return ICUTable(
+            frame,
+            id_columns=["stay_id"],
+            index_column="charttime",
+            value_column=values[0] if len(values) == 1 else None,
+        )
+
+
+@pytest.mark.clinical_conformance
+def test_delirium_proxy_evidence_and_legacy_alias_resolve_from_dictionary() -> None:
     dictionary = copy.deepcopy(load_dictionary(include_sofa2=True))
-    dictionary["pafi"].sources["fixture"] = [
+    dictionary["delirium_tx_proxy"].sources["fixture"] = [
         ConceptSource(
             table="events",
-            value_var="pafi",
+            value_var="delirium_tx_proxy",
             index_var="charttime",
         )
     ]
-
-    class FixtureDataSource:
-        base_path = None
-        config = DataSourceConfig(
-            name="fixture",
-            tables={
-                "events": {
-                    "defaults": {
-                        "id_var": "stay_id",
-                        "index_var": "charttime",
-                        "val_var": "pafi",
-                    }
-                }
-            },
-        )
-
-        def load_table(self, table_name, columns=None, filters=None, verbose=False):
-            del table_name, filters, verbose
-            frame = pd.DataFrame(
-                {"stay_id": [1], "charttime": [0.0], "pafi": [180.0]}
-            )
-            if columns:
-                keep = list(
-                    dict.fromkeys(
-                        [
-                            "stay_id",
-                            "charttime",
-                            *(column for column in columns if column in frame.columns),
-                        ]
-                    )
-                )
-                frame = frame[keep]
-            return ICUTable(
-                frame,
-                id_columns=["stay_id"],
-                index_column="charttime",
-                value_column="pafi",
-            )
+    events = pd.DataFrame(
+        {
+            "stay_id": [1, 1],
+            "charttime": [0, 1],
+            "delirium_tx_proxy": [True, False],
+        }
+    )
 
     loaded = ConceptResolver(dictionary).load_concepts(
-        ["sofa2_resp"],
-        FixtureDataSource(),
+        ["delirium_tx_proxy", "delirium_tx_evidence", "delirium_tx"],
+        _FixtureDataSource(events),
         merge=False,
         interval=pd.Timedelta(hours=1),
         r_compatible=False,
@@ -243,15 +298,60 @@ def test_shipped_sofa2_resp_resolver_graph_scores_unknown_persistence() -> None:
         concept_workers=1,
     )
 
-    assert dictionary["sofa2_resp"].sub_concepts == [
-        "pafi",
-        "spo2",
-        "fio2",
-        "adv_resp",
-        "ecmo",
-        "ecmo_indication",
+    assert loaded["delirium_tx_proxy"].data["delirium_tx_proxy"].tolist() == [
+        True,
+        False,
     ]
-    assert loaded["sofa2_resp"].data["sofa2_resp"].tolist() == [2]
+    assert loaded["delirium_tx_evidence"].data[
+        "delirium_tx_evidence"
+    ].tolist() == ["proxy_only", "unavailable"]
+    assert loaded["delirium_tx"].data["delirium_tx"].tolist() == [True, False]
+
+
+@pytest.mark.clinical_conformance
+@pytest.mark.parametrize(
+    ("fixture_name", "spec_fixture_name", "concept_name", "executor"),
+    _SOFA2_COMPONENT_EXECUTORS,
+)
+def test_shipped_sofa2_component_resolver_graphs_execute_runtime_vectors(
+    fixture_name: str,
+    spec_fixture_name: str,
+    concept_name: str,
+    executor,
+) -> None:
+    del spec_fixture_name, executor
+    fixture = json.loads(
+        (ROOT / "tests/clinical_specs" / fixture_name).read_text(encoding="utf-8")
+    )
+    dictionary = copy.deepcopy(load_dictionary(include_sofa2=True))
+    for input_name in fixture["inputs"]:
+        dictionary[input_name].sources["fixture"] = [
+            ConceptSource(
+                table="events",
+                value_var=input_name,
+                index_var="charttime",
+            )
+        ]
+    row_count = len(next(iter(fixture["inputs"].values())))
+    events = pd.DataFrame(
+        {
+            "stay_id": [1] * row_count,
+            "charttime": list(range(row_count)),
+            **fixture["inputs"],
+        }
+    )
+
+    loaded = ConceptResolver(dictionary).load_concepts(
+        [concept_name],
+        _FixtureDataSource(events),
+        merge=False,
+        interval=pd.Timedelta(hours=1),
+        r_compatible=False,
+        verbose=False,
+        concept_workers=1,
+    )
+
+    assert loaded[concept_name].data[concept_name].tolist() == fixture["expected"]
 
 
 @pytest.mark.clinical_conformance
@@ -275,9 +375,94 @@ def test_sofa2_aggregate_golden_vector_preserves_completeness() -> None:
     ).data
 
     assert result["sofa2"].tolist() == [fixture["expected_total"]]
-    assert result["sofa2_n_components"].tolist() == [fixture["expected_components_observed"]]
+    assert result["sofa2_n_observed_components"].tolist() == [
+        fixture["expected_observed_components"]
+    ]
+    assert result["sofa2_n_available_components"].tolist() == [
+        fixture["expected_available_components"]
+    ]
+    assert result["sofa2_n_components"].tolist() == [
+        fixture["expected_available_components"]
+    ]
     assert production["sofa2"].tolist() == [fixture["expected_total"]]
-    assert production["sofa2_n_components"].tolist() == [fixture["expected_components_observed"]]
+    assert production["sofa2_n_observed_components"].tolist() == [
+        fixture["expected_observed_components"]
+    ]
+    assert production["sofa2_n_available_components"].tolist() == [
+        fixture["expected_available_components"]
+    ]
+    assert production["sofa2_n_components"].tolist() == [
+        fixture["expected_available_components"]
+    ]
+
+
+@pytest.mark.clinical_conformance
+def test_sofa2_aggregate_spec_vector_executes_independently() -> None:
+    fixture = json.loads(
+        (ROOT / "tests/clinical_specs/sofa2_aggregate_2025_spec.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    frames = {
+        name: pd.DataFrame({"stay_id": [1], name: [score]})
+        for name, score in fixture["components"].items()
+    }
+
+    result = sofa2_score(frames)
+
+    assert result["sofa2"].tolist() == [fixture["expected_total"]]
+    assert result["sofa2_n_observed_components"].tolist() == [
+        fixture["expected_observed_components"]
+    ]
+    assert result["sofa2_n_available_components"].tolist() == [
+        fixture["expected_available_components"]
+    ]
+
+
+@pytest.mark.clinical_conformance
+def test_shipped_sofa2_aggregate_resolver_graph_executes_runtime_vector() -> None:
+    fixture = json.loads(
+        (ROOT / "tests/clinical_specs/sofa2_aggregate_2025.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    dictionary = copy.deepcopy(load_dictionary(include_sofa2=True))
+    for component_name in fixture["components"]:
+        dictionary[component_name].sources["fixture"] = [
+            ConceptSource(
+                table="events",
+                value_var=component_name,
+                index_var="charttime",
+            )
+        ]
+    events = pd.DataFrame(
+        {
+            "stay_id": [1],
+            "charttime": [0],
+            **{name: [value] for name, value in fixture["components"].items()},
+        }
+    )
+
+    loaded = ConceptResolver(dictionary).load_concepts(
+        ["sofa2"],
+        _FixtureDataSource(events),
+        merge=False,
+        interval=pd.Timedelta(hours=1),
+        r_compatible=False,
+        verbose=False,
+        concept_workers=1,
+    )["sofa2"].data
+
+    assert loaded["sofa2"].tolist() == [fixture["expected_total"]]
+    assert loaded["sofa2_n_observed_components"].tolist() == [
+        fixture["expected_observed_components"]
+    ]
+    assert loaded["sofa2_n_available_components"].tolist() == [
+        fixture["expected_available_components"]
+    ]
+    assert loaded["sofa2_n_components"].tolist() == [
+        fixture["expected_available_components"]
+    ]
 
 
 @pytest.mark.clinical_conformance

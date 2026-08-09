@@ -10,6 +10,8 @@ from easyicu.concept.callbacks import (
 )
 from easyicu.scores.sofa2 import sofa2_cardio as standalone_sofa2_cardio
 from easyicu.scores.sofa2 import sofa2_cns as standalone_sofa2_cns
+from easyicu.scores.sofa2 import sofa2_cns_ascertainment
+from easyicu.scores.sofa2 import sofa2_cns_proxy_sensitivity
 from easyicu.scores.sofa2 import sofa2_renal as standalone_sofa2_renal
 from easyicu.scores.sofa2 import sofa2_resp as standalone_sofa2_resp
 from easyicu.table import ICUTable
@@ -51,11 +53,11 @@ def test_sofa2_cns_uses_motor_response_when_gcs_missing():
 
 @pytest.mark.clinical_conformance
 @pytest.mark.parametrize("scorer", [sofa2_cns, standalone_sofa2_cns])
-def test_sofa2_brain_score_one_requires_gcs_13_14_or_delirium_treatment(scorer):
+def test_sofa2_brain_score_one_requires_gcs_13_14_or_confirmed_delirium_treatment(scorer):
     """SOFA-2 Table 2 does not score a positive CAM assessment by itself."""
     score = scorer(
         pd.Series([15, 15, 14]),
-        delirium_tx=pd.Series([False, True, False]),
+        delirium_tx_evidence=pd.Series(["unavailable", "confirmed", "unavailable"]),
         delirium_positive=pd.Series([True, False, False]),
     )
 
@@ -169,16 +171,58 @@ def test_sofa2_cardio_counts_dopamine_and_dobutamine_as_adjuncts(scorer):
 
 @pytest.mark.clinical_conformance
 @pytest.mark.parametrize("scorer", [sofa2_cns, standalone_sofa2_cns])
-def test_sofa2_cns_uses_pre_sedation_gcs_and_delirium_treatment_is_independent(scorer):
+def test_sofa2_cns_uses_pre_sedation_gcs_and_confirmed_treatment_is_independent(scorer):
     score = scorer(
         pd.Series([6.0, None, 6.0]),
         sedated_gcs=pd.Series([15.0, None, None]),
         sedated=pd.Series([True, False, True]),
         motor_response=pd.Series([2.0, 6.0, 2.0]),
-        delirium_tx=pd.Series([False, True, False]),
+        delirium_tx_evidence=pd.Series(["unavailable", "confirmed", "unavailable"]),
     )
 
     assert score.tolist() == [0, 1, 0]
+
+
+@pytest.mark.clinical_conformance
+def test_delirium_treatment_proxy_never_confirms_main_cns_score():
+    gcs = pd.Series([15, 15, 15, 15])
+    evidence = pd.Series(
+        ["confirmed", "proxy_only", "not_detected", "unavailable"]
+    )
+    proxy = pd.Series([True, True, False, False])
+
+    assert standalone_sofa2_cns(
+        gcs,
+        delirium_tx_proxy=proxy,
+        delirium_tx_evidence=evidence,
+    ).tolist() == [1, 0, 0, 0]
+    assert sofa2_cns_proxy_sensitivity(
+        gcs,
+        delirium_tx_proxy=proxy,
+        delirium_tx_evidence=evidence,
+    ).tolist() == [1, 1, 0, 0]
+    assert sofa2_cns_ascertainment(
+        gcs,
+        delirium_tx_proxy=proxy,
+        delirium_tx_evidence=evidence,
+    ).tolist() == [
+        "complete",
+        "proxy_only",
+        "complete_for_proxy_source",
+        "unavailable",
+    ]
+
+
+@pytest.mark.clinical_conformance
+def test_deprecated_delirium_tx_alias_is_proxy_only():
+    legacy = pd.Series([True])
+
+    assert standalone_sofa2_cns(
+        pd.Series([15]), delirium_tx=legacy
+    ).tolist() == [0]
+    assert sofa2_cns_proxy_sensitivity(
+        pd.Series([15]), delirium_tx=legacy
+    ).tolist() == [1]
 
 
 @pytest.mark.clinical_conformance
@@ -341,4 +385,6 @@ def test_sofa2_production_aggregate_carries_last_component_beyond_24_hours():
 
     assert result.loc[25.0, "sofa2_liver"] == 3
     assert result.loc[25.0, "sofa2"] == 3
+    assert result.loc[25.0, "sofa2_n_observed_components"] == 5
+    assert result.loc[25.0, "sofa2_n_available_components"] == 6
     assert result.loc[25.0, "sofa2_n_components"] == 6

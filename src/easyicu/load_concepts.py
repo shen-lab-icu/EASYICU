@@ -468,10 +468,13 @@ class ConceptLoader:
             # 从字典加载概念
             # 如果请求的概念中包含 SOFA-2 相关概念，自动加载 sofa2-dict
             sofa2_concepts = {'sofa2', 'sofa2_resp', 'sofa2_coag', 'sofa2_liver', 
-                              'sofa2_cardio', 'sofa2_cns', 'sofa2_renal',
+                              'sofa2_cardio', 'sofa2_cns',
+                              'sofa2_cns_proxy_sensitivity', 'sofa2_cns_ascertainment',
+                              'sofa2_renal',
                               'uo_6h', 'uo_12h', 'uo_24h', 'rrt_criteria', 'rrt',
                               'adv_resp', 'ecmo', 'ecmo_indication', 'sedated_gcs',
                               'mech_circ_support', 'other_vaso', 'delirium_tx',
+                              'delirium_tx_proxy', 'delirium_tx_evidence',
                               'motor_response', 'delirium_positive'}
             include_sofa2 = any(c in sofa2_concepts for c in concepts)
             

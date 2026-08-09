@@ -445,17 +445,63 @@ def sofa2_cardio(
 
     return score
 
-def sofa2_cns(
+DELIRIUM_TX_EVIDENCE_STATES = frozenset(
+    {"confirmed", "proxy_only", "not_detected", "unavailable"}
+)
+
+
+def _normalize_delirium_tx_evidence(
+    index: pd.Index,
+    *,
+    delirium_tx_evidence: Optional[pd.Series],
+    delirium_tx_proxy: Optional[pd.Series],
+    delirium_tx: Optional[pd.Series],
+) -> pd.Series:
+    """Return the explicit four-state delirium-treatment evidence contract.
+
+    ``delirium_tx`` is the historical compatibility alias.  It is deliberately
+    treated as a medication-exposure proxy, never as confirmation that the drug
+    was prescribed for delirium.  ``not_detected`` means no qualifying evidence
+    was detected in an assessable source; it does not mean delirium was absent.
+    A negative proxy alone cannot prove that state because source and
+    time-window coverage may be incomplete.
+    """
+
+    evidence = pd.Series("unavailable", index=index, dtype="string")
+    if delirium_tx_evidence is not None:
+        raw = pd.Series(delirium_tx_evidence, index=index, dtype="string")
+        normalized = raw.str.strip().str.lower()
+        evidence = normalized.where(
+            normalized.isin(DELIRIUM_TX_EVIDENCE_STATES),
+            "unavailable",
+        )
+
+    proxy = pd.Series(False, index=index, dtype=bool)
+    if delirium_tx_proxy is not None:
+        proxy = _is_true(pd.Series(delirium_tx_proxy, index=index))
+    if delirium_tx is not None:
+        legacy_proxy = _is_true(pd.Series(delirium_tx, index=index))
+        proxy = proxy | legacy_proxy
+
+    # Only fill an otherwise unavailable state from exposure evidence.  An
+    # explicit ``not_detected`` or ``confirmed`` receipt remains authoritative.
+    evidence = evidence.mask((evidence == "unavailable") & proxy, "proxy_only")
+    return evidence
+
+
+def _sofa2_cns_assessment(
     gcs: pd.Series,
     *,
+    delirium_tx_proxy: Optional[pd.Series] = None,
+    delirium_tx_evidence: Optional[pd.Series] = None,
     delirium_tx: Optional[pd.Series] = None,
     delirium_positive: Optional[pd.Series] = None,
     motor_response: Optional[pd.Series] = None,
     sedated_gcs: Optional[pd.Series] = None,
     pre_sedation_gcs: Optional[pd.Series] = None,
     sedated: Optional[pd.Series] = None,
-) -> pd.Series:
-    """SOFA-2 brain/CNS component.
+) -> pd.DataFrame:
+    """Build conservative, sensitivity and ascertainment CNS outputs once.
 
     GCS-based scoring (same thresholds as SOFA-1):
     ┌────────┬──────────────┬──────────────────────────────────────┐
@@ -468,12 +514,11 @@ def sofa2_cns(
     │   4    │ 3-5          │ Extension/no response/myoclonus      │
     └────────┴──────────────┴──────────────────────────────────────┘
     
-    NEW in SOFA-2: Delirium treatment rule
-    - If receiving delirium treatment drugs → score 1pt even if GCS=15
-    - Delirium drugs (PADIS Guidelines):
-      * Haloperidol, quetiapine, olanzapine, risperidone
-      * Dexmedetomidine (if used for delirium)
-    - Applies to short-term OR long-term treatment
+    SOFA-2 delirium-treatment rule
+    - Confirmed treatment attributable to delirium → at least 1 point.
+    - Candidate medication exposure without an attributable indication does not
+      change the conservative main score.
+    - The explicitly named proxy sensitivity score counts ``proxy_only``.
     
     When GCS 3 domains cannot be assessed:
     - Use best motor scale domain score
@@ -486,7 +531,11 @@ def sofa2_cns(
     
     Args:
         gcs: Glasgow Coma Scale (3-15)
-        delirium_tx: Boolean - receiving delirium treatment
+        delirium_tx_proxy: Candidate medication exposure.
+        delirium_tx_evidence: One of ``confirmed``, ``proxy_only``,
+            ``not_detected`` or ``unavailable``.
+        delirium_tx: Deprecated compatibility alias for
+            ``delirium_tx_proxy``.  It never implies confirmation.
         delirium_positive: Positive CAM-ICU metadata retained for sensitivity
             analyses; it does not score without delirium treatment
         motor_response: Motor response score when GCS cannot be fully assessed
@@ -496,10 +545,12 @@ def sofa2_cns(
             Table 2 footnote c assigns 0 points from GCS.
 
     Returns:
-        Series of brain/CNS SOFA-2 scores (0-4)
+        DataFrame with the conservative score, proxy sensitivity score,
+        ascertainment state and normalized evidence state.
 
     Notes:
-    - Delirium treatment overrides GCS=15 to minimum 1pt
+    - Only ``confirmed`` treatment overrides GCS=15 in the main score.
+    - ``proxy_only`` overrides GCS=15 only in the sensitivity score.
     - Motor alternatives allow scoring in intubated/non-verbal patients
     - When GCS 3 domains cannot be assessed, use best motor scale domain score
     """
@@ -527,7 +578,7 @@ def sofa2_cns(
         # Table 2 footnote c: if the pre-sedation GCS is unknown, assign 0.
         g = g.mask(unknown_pre_sedation)
 
-    score = pd.Series(0, index=g.index, dtype=int)
+    base_score = pd.Series(0, index=g.index, dtype=int)
 
     # Use motor response if GCS cannot be fully assessed
     if motor_response is not None:
@@ -544,25 +595,132 @@ def sofa2_cns(
 
         # Use motor response when GCS is missing or cannot be assessed
         gcs_available = ~g.isna()
-        score[~gcs_available] = motor_score[~gcs_available]
+        base_score[~gcs_available] = motor_score[~gcs_available]
 
     # GCS thresholds (same as SOFA-1)
-    score[g < 15] = 1
-    score[g < 13] = 2
-    score[g < 9] = 3
-    score[g < 6] = 4
+    base_score[g < 15] = 1
+    base_score[g < 13] = 2
+    base_score[g < 9] = 3
+    base_score[g < 6] = 4
+    base_score[unknown_pre_sedation] = 0
 
-    # SOFA-2 NEW: Delirium treatment rule
-    # If receiving delirium treatment and GCS==15, upgrade to 1pt
-    if delirium_tx is not None:
-        dtx = _is_true(delirium_tx)
-        score[dtx] = np.maximum(score[dtx], 1)
-    else:
-        dtx = pd.Series(False, index=g.index)
+    evidence = _normalize_delirium_tx_evidence(
+        g.index,
+        delirium_tx_evidence=delirium_tx_evidence,
+        delirium_tx_proxy=delirium_tx_proxy,
+        delirium_tx=delirium_tx,
+    )
+    confirmed = evidence == "confirmed"
+    sensitivity_positive = evidence.isin({"confirmed", "proxy_only"})
 
-    score[unknown_pre_sedation & ~dtx] = 0
+    conservative = base_score.copy()
+    sensitivity = base_score.copy()
+    conservative[confirmed] = np.maximum(conservative[confirmed], 1)
+    sensitivity[sensitivity_positive] = np.maximum(
+        sensitivity[sensitivity_positive], 1
+    )
 
-    return score
+    # Once a neurologic observation already yields a non-zero score, treatment
+    # evidence cannot change the component and ascertainment is complete for the
+    # score.  At the zero-score boundary, expose the treatment-evidence state.
+    ascertainment = pd.Series("complete", index=g.index, dtype="string")
+    zero_boundary = base_score == 0
+    ascertainment[zero_boundary & (evidence == "proxy_only")] = "proxy_only"
+    ascertainment[
+        zero_boundary & (evidence == "not_detected")
+    ] = "complete_for_proxy_source"
+    ascertainment[zero_boundary & (evidence == "unavailable")] = "unavailable"
+
+    return pd.DataFrame(
+        {
+            "sofa2_cns": conservative.astype(int),
+            "sofa2_cns_proxy_sensitivity": sensitivity.astype(int),
+            "sofa2_cns_ascertainment": ascertainment,
+            "delirium_tx_evidence": evidence,
+        },
+        index=g.index,
+    )
+
+
+def sofa2_cns(
+    gcs: pd.Series,
+    *,
+    delirium_tx_proxy: Optional[pd.Series] = None,
+    delirium_tx_evidence: Optional[pd.Series] = None,
+    delirium_tx: Optional[pd.Series] = None,
+    delirium_positive: Optional[pd.Series] = None,
+    motor_response: Optional[pd.Series] = None,
+    sedated_gcs: Optional[pd.Series] = None,
+    pre_sedation_gcs: Optional[pd.Series] = None,
+    sedated: Optional[pd.Series] = None,
+) -> pd.Series:
+    """Conservative database implementation of the canonical SOFA-2 CNS rule."""
+
+    return _sofa2_cns_assessment(
+        gcs,
+        delirium_tx_proxy=delirium_tx_proxy,
+        delirium_tx_evidence=delirium_tx_evidence,
+        delirium_tx=delirium_tx,
+        delirium_positive=delirium_positive,
+        motor_response=motor_response,
+        sedated_gcs=sedated_gcs,
+        pre_sedation_gcs=pre_sedation_gcs,
+        sedated=sedated,
+    )["sofa2_cns"]
+
+
+def sofa2_cns_proxy_sensitivity(
+    gcs: pd.Series,
+    *,
+    delirium_tx_proxy: Optional[pd.Series] = None,
+    delirium_tx_evidence: Optional[pd.Series] = None,
+    delirium_tx: Optional[pd.Series] = None,
+    delirium_positive: Optional[pd.Series] = None,
+    motor_response: Optional[pd.Series] = None,
+    sedated_gcs: Optional[pd.Series] = None,
+    pre_sedation_gcs: Optional[pd.Series] = None,
+    sedated: Optional[pd.Series] = None,
+) -> pd.Series:
+    """Sensitivity analysis that treats candidate drug exposure as positive."""
+
+    return _sofa2_cns_assessment(
+        gcs,
+        delirium_tx_proxy=delirium_tx_proxy,
+        delirium_tx_evidence=delirium_tx_evidence,
+        delirium_tx=delirium_tx,
+        delirium_positive=delirium_positive,
+        motor_response=motor_response,
+        sedated_gcs=sedated_gcs,
+        pre_sedation_gcs=pre_sedation_gcs,
+        sedated=sedated,
+    )["sofa2_cns_proxy_sensitivity"]
+
+
+def sofa2_cns_ascertainment(
+    gcs: pd.Series,
+    *,
+    delirium_tx_proxy: Optional[pd.Series] = None,
+    delirium_tx_evidence: Optional[pd.Series] = None,
+    delirium_tx: Optional[pd.Series] = None,
+    delirium_positive: Optional[pd.Series] = None,
+    motor_response: Optional[pd.Series] = None,
+    sedated_gcs: Optional[pd.Series] = None,
+    pre_sedation_gcs: Optional[pd.Series] = None,
+    sedated: Optional[pd.Series] = None,
+) -> pd.Series:
+    """Return the CNS treatment-evidence ascertainment state."""
+
+    return _sofa2_cns_assessment(
+        gcs,
+        delirium_tx_proxy=delirium_tx_proxy,
+        delirium_tx_evidence=delirium_tx_evidence,
+        delirium_tx=delirium_tx,
+        delirium_positive=delirium_positive,
+        motor_response=motor_response,
+        sedated_gcs=sedated_gcs,
+        pre_sedation_gcs=pre_sedation_gcs,
+        sedated=sedated,
+    )["sofa2_cns_ascertainment"]
 
 def sofa2_renal(
     crea: Optional[pd.Series] = None,
@@ -752,12 +910,13 @@ def sofa2_renal(
     return score
 
 def sofa2_score(data_dict: Dict[str, pd.DataFrame], *, keep_components: bool = False) -> pd.DataFrame:
-    """Aggregate SOFA-2 score from component DataFrames.
+    """Aggregate the conservative database implementation of canonical SOFA-2.
 
     Expected component keys in data_dict:
     - sofa2_resp, sofa2_coag, sofa2_liver, sofa2_cardio, sofa2_cns, sofa2_renal
 
-    Returns a DataFrame with a 'sofa2' column (and optional *_comp columns).
+    Returns ``sofa2`` plus explicit observed/available component counts.  The
+    deprecated ``sofa2_n_components`` field aliases available components.
     """
     required = [
         "sofa2_resp",
@@ -781,12 +940,12 @@ def sofa2_score(data_dict: Dict[str, pd.DataFrame], *, keep_components: bool = F
 
     # Score value: faithful to MIMIC-IV official / ricu (missing component -> 0).
     result["sofa2"] = result[required].fillna(0).sum(axis=1).astype(int)
-    # Outcome-blind completeness signal: how many of the 6 components were
-    # actually measured for this row (0-6). The score above coalesces missing
-    # to 0, so a sofa2==0 row may be a fully-measured low-severity patient OR a
-    # row with unmeasured components; this column lets pre-analysis QC tell them
-    # apart WITHOUT changing the standard score semantics.
-    result["sofa2_n_components"] = result[required].notna().sum(axis=1).astype(int)
+    present = result[required].notna().sum(axis=1).astype(int)
+    result["sofa2_n_observed_components"] = present
+    result["sofa2_n_available_components"] = present
+    # Deprecated compatibility alias.  In a single-snapshot scorer there is no
+    # LOCF lifecycle, so observed and available are identical.
+    result["sofa2_n_components"] = result["sofa2_n_available_components"]
 
     if keep_components:
         for comp in required:
