@@ -1131,7 +1131,12 @@ def test_workspace_tools_are_project_scoped_and_reuse_one_turn_write_grant(
     )
     second = tool_module.execute_tool(
         "easyicu_edit_project_file",
-        {"file": "index.html", "old_text": "Draft", "new_text": "Ready"},
+        {
+            "file": "index.html",
+            "old_text": "Draft",
+            "new_text": "Ready",
+            "expected_sha256": first["details"]["sha256"],
+        },
         granted,
     )
     checked = tool_module.execute_tool(
@@ -1153,6 +1158,10 @@ def test_workspace_tools_are_project_scoped_and_reuse_one_turn_write_grant(
         "file": "index.html",
         "label": "index.html",
         "media_type": "text/html",
+        "authority_class": "workspace_artifact",
+        "scientific_evidence": False,
+        "validation_status": "unvalidated",
+        "claim_ceiling": "unsupported",
     }
     assert "Ready" in tool_module.execute_tool(
         "easyicu_read_project_file", {"file": "index.html"}, granted
@@ -1263,9 +1272,13 @@ def test_study_setup_requires_one_turn_grant_and_uses_typed_owner(
     assert invalidated.value.code == "pi_session_authority_stale"
 
     grant = HostTurnGrant.from_actions(["configure"])
-    assert grant.consume("configure") == "granted"
-    assert grant.consume("configure") == "consumed"
-    assert grant.consume("run") == "missing"
+    assert grant.consume_once("configure") == "granted"
+    assert grant.consume_once("configure") == "consumed"
+    assert grant.consume_once("run") == "missing"
+    workspace_grant = HostTurnGrant.from_actions(["workspace_write"])
+    assert workspace_grant.has_capability("workspace_write") is True
+    assert workspace_grant.has_capability("configure") is False
+    assert workspace_grant.consume_once("workspace_write") == "capability"
 
 
 def test_preflight_delegates_to_the_existing_agent_submission_owner(

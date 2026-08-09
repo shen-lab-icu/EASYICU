@@ -209,12 +209,14 @@ def get_pi_copilot_workspace_preview(
         content=str(artifact["text"]),
         headers={
             "Content-Security-Policy": (
-                "default-src 'none'; style-src 'unsafe-inline'; "
+                "sandbox allow-scripts; default-src 'none'; style-src 'unsafe-inline'; "
                 "script-src 'unsafe-inline'; img-src data:; "
-                "connect-src 'none'; form-action 'none'; base-uri 'none'"
+                "connect-src 'none'; form-action 'none'; base-uri 'none'; "
+                "frame-ancestors 'self'"
             ),
             "Cache-Control": "no-store",
             "X-Content-Type-Options": "nosniff",
+            "Referrer-Policy": "no-referrer",
         },
     )
 

@@ -28,7 +28,7 @@ from .projections import (
     reject_sensitive_message,
     stable_code,
 )
-from .workspace import ProjectWorkspace
+from .workspace import WORKSPACE_ARTIFACT_AUTHORITY, ProjectWorkspace
 
 READ_TOOLS = frozenset(
     {
@@ -124,7 +124,7 @@ def _workspace_result(
 def _consume_action(
     context: ToolExecutionContext, action: str
 ) -> Optional[Dict[str, Any]]:
-    outcome = context.grant.consume(action)
+    outcome = context.grant.consume_once(action)
     if outcome == "granted":
         return None
     if outcome == "consumed":
@@ -1088,7 +1088,7 @@ def _workspace_access(
             summary="The isolated Pi project workspace is unavailable for this session.",
             owner="easyicu.webserver.pi_copilot.workspace",
         )
-    if require_write and "workspace_write" not in context.grant.provided_actions:
+    if require_write and not context.grant.has_capability("workspace_write"):
         return None, _result(
             context,
             status="blocked",
@@ -1105,6 +1105,7 @@ def _workspace_resource(payload: Mapping[str, Any], *, kind: str = "file") -> Di
         "file": str(payload.get("file") or ""),
         "label": Path(str(payload.get("file") or "artifact")).name,
         "media_type": str(payload.get("media_type") or "text/plain"),
+        **dict(WORKSPACE_ARTIFACT_AUTHORITY),
     }
 
 
@@ -1190,7 +1191,11 @@ def _read_project_file(
 def _write_project_file(
     context: ToolExecutionContext, params: Mapping[str, Any]
 ) -> Dict[str, Any]:
-    _require_args(params, allowed=("file", "content"), required=("file", "content"))
+    _require_args(
+        params,
+        allowed=("file", "content", "expected_sha256"),
+        required=("file", "content"),
+    )
     workspace, blocked = _workspace_access(context, require_write=True)
     if blocked:
         return blocked
@@ -1199,6 +1204,7 @@ def _write_project_file(
         context.session.project_id,
         params["file"],
         params["content"],
+        expected_sha256=params.get("expected_sha256"),
     )
     return _workspace_result(
         context,
@@ -1214,8 +1220,8 @@ def _edit_project_file(
 ) -> Dict[str, Any]:
     _require_args(
         params,
-        allowed=("file", "old_text", "new_text"),
-        required=("file", "old_text"),
+        allowed=("file", "old_text", "new_text", "expected_sha256"),
+        required=("file", "old_text", "expected_sha256"),
     )
     workspace, blocked = _workspace_access(context, require_write=True)
     if blocked:
@@ -1226,6 +1232,7 @@ def _edit_project_file(
         params["file"],
         old_text=params["old_text"],
         new_text=params.get("new_text") or "",
+        expected_sha256=params["expected_sha256"],
     )
     return _workspace_result(
         context,
