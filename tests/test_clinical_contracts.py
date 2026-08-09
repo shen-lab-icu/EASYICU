@@ -27,6 +27,7 @@ from easyicu.scores.sofa2 import (
     sofa2_cardio,
     sofa2_cns,
     sofa2_cns_ascertainment,
+    sofa2_cns_delirium_tx_ascertainment,
     sofa2_cns_proxy_sensitivity,
     sofa2_coag,
     sofa2_liver,
@@ -38,6 +39,15 @@ from easyicu.table import ICUTable
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+_SOFA2_COMPONENT_NAMES = {
+    "sofa2_resp",
+    "sofa2_coag",
+    "sofa2_liver",
+    "sofa2_cardio",
+    "sofa2_cns",
+    "sofa2_renal",
+}
 
 
 @pytest.mark.clinical_conformance
@@ -62,6 +72,9 @@ def test_registry_separates_spec_and_runtime_golden_vectors() -> None:
 
     cns = registry["sofa2_cns_2025"]
     assert cns["spec_golden_vectors"] != cns["runtime_golden_vectors"]
+
+    loaded_cns = load_clinical_contracts()["sofa2_cns_2025"]
+    assert loaded_cns.golden_vector == loaded_cns.runtime_golden_vectors[0]
 
 
 @pytest.mark.clinical_conformance
@@ -161,14 +174,19 @@ def _clinical_context(name: str, **kwargs) -> ConceptCallbackContext:
 
 
 def _clinical_table(name: str, values) -> ICUTable:
+    frame = pd.DataFrame(
+        {
+            "stay_id": [1] * len(values),
+            "charttime": list(range(len(values))),
+            name: values,
+        }
+    )
+    if name in _SOFA2_COMPONENT_NAMES:
+        present = frame[name].notna().astype(int)
+        frame[f"{name}_observed"] = present
+        frame[f"{name}_available"] = present
     return ICUTable(
-        pd.DataFrame(
-            {
-                "stay_id": [1] * len(values),
-                "charttime": list(range(len(values))),
-                name: values,
-            }
-        ),
+        frame,
         id_columns=["stay_id"],
         index_column="charttime",
         value_column=name,
@@ -223,6 +241,9 @@ def test_sofa2_spec_golden_vectors_are_not_limited_to_runtime_inputs(
     if concept_name == "sofa2_cns":
         assert sofa2_cns_proxy_sensitivity(**inputs).tolist() == fixture[
             "expected_proxy_sensitivity"
+        ]
+        assert sofa2_cns_delirium_tx_ascertainment(**inputs).tolist() == fixture[
+            "expected_ascertainment"
         ]
         assert sofa2_cns_ascertainment(**inputs).tolist() == fixture[
             "expected_ascertainment"
@@ -289,7 +310,14 @@ def test_delirium_proxy_evidence_and_legacy_alias_resolve_from_dictionary() -> N
     )
 
     loaded = ConceptResolver(dictionary).load_concepts(
-        ["delirium_tx_proxy", "delirium_tx_evidence", "delirium_tx"],
+        [
+            "delirium_tx_proxy",
+            "delirium_tx_evidence",
+            "delirium_tx",
+            "sofa2_cns_proxy_sensitivity",
+            "sofa2_cns_delirium_tx_ascertainment",
+            "sofa2_cns_ascertainment",
+        ],
         _FixtureDataSource(events),
         merge=False,
         interval=pd.Timedelta(hours=1),
@@ -306,6 +334,15 @@ def test_delirium_proxy_evidence_and_legacy_alias_resolve_from_dictionary() -> N
         "delirium_tx_evidence"
     ].tolist() == ["proxy_only", "unavailable"]
     assert loaded["delirium_tx"].data["delirium_tx"].tolist() == [True, False]
+    assert loaded["sofa2_cns_proxy_sensitivity"].data[
+        "sofa2_cns_proxy_sensitivity"
+    ].tolist() == [1, 0]
+    assert loaded["sofa2_cns_delirium_tx_ascertainment"].data[
+        "sofa2_cns_delirium_tx_ascertainment"
+    ].tolist() == ["proxy_only", "unavailable"]
+    assert loaded["sofa2_cns_ascertainment"].data[
+        "sofa2_cns_ascertainment"
+    ].tolist() == ["proxy_only", "unavailable"]
 
 
 @pytest.mark.clinical_conformance
@@ -420,18 +457,23 @@ def test_sofa2_aggregate_spec_vector_executes_independently() -> None:
 
 
 @pytest.mark.clinical_conformance
-def test_shipped_sofa2_aggregate_resolver_graph_executes_runtime_vector() -> None:
-    fixture = json.loads(
-        (ROOT / "tests/clinical_specs/sofa2_aggregate_2025.json").read_text(
-            encoding="utf-8"
-        )
-    )
+def test_shipped_sofa2_aggregate_resolver_graph_uses_component_receipts() -> None:
     dictionary = copy.deepcopy(load_dictionary(include_sofa2=True))
-    for component_name in fixture["components"]:
-        dictionary[component_name].sources["fixture"] = [
+    raw_inputs = {
+        "pafi": [None],
+        "adv_resp": [True],
+        "plt": [200.0],
+        "bili": [1.0],
+        "map": [75.0],
+        "gcs": [15.0],
+        "delirium_tx_proxy": [False],
+        "crea": [1.0],
+    }
+    for input_name in raw_inputs:
+        dictionary[input_name].sources["fixture"] = [
             ConceptSource(
                 table="events",
-                value_var=component_name,
+                value_var=input_name,
                 index_var="charttime",
             )
         ]
@@ -439,7 +481,7 @@ def test_shipped_sofa2_aggregate_resolver_graph_executes_runtime_vector() -> Non
         {
             "stay_id": [1],
             "charttime": [0],
-            **{name: [value] for name, value in fixture["components"].items()},
+            **raw_inputs,
         }
     )
 
@@ -453,16 +495,10 @@ def test_shipped_sofa2_aggregate_resolver_graph_executes_runtime_vector() -> Non
         concept_workers=1,
     )["sofa2"].data
 
-    assert loaded["sofa2"].tolist() == [fixture["expected_total"]]
-    assert loaded["sofa2_n_observed_components"].tolist() == [
-        fixture["expected_observed_components"]
-    ]
-    assert loaded["sofa2_n_available_components"].tolist() == [
-        fixture["expected_available_components"]
-    ]
-    assert loaded["sofa2_n_components"].tolist() == [
-        fixture["expected_available_components"]
-    ]
+    assert loaded["sofa2"].tolist() == [0]
+    assert loaded["sofa2_n_observed_components"].tolist() == [5]
+    assert loaded["sofa2_n_available_components"].tolist() == [5]
+    assert loaded["sofa2_n_components"].tolist() == [5]
 
 
 @pytest.mark.clinical_conformance

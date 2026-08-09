@@ -192,7 +192,8 @@ CONCEPT_DICTIONARY = {
     'sofa2_cardio': ('SOFA-2 Cardiovascular', 'SOFA-2心血管评分', '0-4'),
     'sofa2_cns': ('SOFA-2 Central Nervous System', 'SOFA-2神经评分', '0-4'),
     'sofa2_cns_proxy_sensitivity': ('SOFA-2 CNS Proxy Sensitivity', 'SOFA-2神经代理敏感性评分', '0-4'),
-    'sofa2_cns_ascertainment': ('SOFA-2 CNS Ascertainment', 'SOFA-2神经评估完整性', 'state'),
+    'sofa2_cns_delirium_tx_ascertainment': ('SOFA-2 CNS Delirium-treatment Ascertainment', 'SOFA-2神经谵妄治疗评估回执', 'state'),
+    'sofa2_cns_ascertainment': ('SOFA-2 CNS Ascertainment (Deprecated Alias)', 'SOFA-2神经评估回执（已弃用别名）', 'state'),
     'sofa2_renal': ('SOFA-2 Renal', 'SOFA-2肾脏评分', '0-4'),
 
     # Sepsis 诊断
@@ -365,14 +366,15 @@ CONCEPT_DICTIONARY = {
 # 特征详细描述（英文和中文）
 CONCEPT_DESCRIPTIONS = {
     # SOFA-2
-    'sofa2': ('Conservative database implementation of the canonical SOFA-2 score; CNS treatment points require attributable evidence', '标准SOFA-2的保守型数据库实现；神经系统治疗加分需可归因证据'),
+    'sofa2': ('Database operationalization of SOFA-2 with conservative handling of unconfirmed delirium-treatment proxies', 'SOFA-2数据库操作化实现；对未确认的谵妄治疗代理采取保守处理'),
     'sofa2_resp': ('Respiratory: PaO2/FiO2 (or SpO2/FiO2 if unavailable), scores 3-4 require advanced respiratory support (IMV/NIV/HFNC) or ECMO', '呼吸系统：基于氧合指数，3-4分需要高级呼吸支持（IMV/NIV/HFNC）或ECMO'),
     'sofa2_coag': ('Coagulation: platelet count with updated thresholds (≤50→4, ≤80→3, ≤100→2, ≤150→1)', '凝血系统：基于血小板计数，使用更新的阈值（≤50→4分，≤80→3分，≤100→2分，≤150→1分）'),
     'sofa2_liver': ('Liver: bilirubin with relaxed 1-point threshold (>1.2 mg/dL instead of >1.9)', '肝脏：基于胆红素，1分阈值放宽（>1.2 mg/dL，原为>1.9）'),
     'sofa2_cardio': ('Cardiovascular: combined NE+Epi dose, other vasopressors/inotropes, or mechanical circulatory support (IABP/LVAD/Impella)', '心血管：基于去甲肾+肾上腺素联合剂量、其他血管活性药物或机械循环支持'),
-    'sofa2_cns': ('Conservative CNS score: GCS thresholds are canonical; GCS=15 gains one point only with confirmed attributable delirium-treatment evidence', '保守型神经评分：GCS阈值与标准一致；GCS=15仅在谵妄治疗归因证据已确认时加1分'),
+    'sofa2_cns': ('Database operationalization of SOFA-2 CNS: GCS=15 gains one point only with confirmed attributable delirium-treatment evidence', 'SOFA-2神经组件的数据库操作化实现：GCS=15仅在谵妄治疗归因证据已确认时加1分'),
     'sofa2_cns_proxy_sensitivity': ('Explicit sensitivity score that also counts candidate delirium-treatment medication exposure at GCS=15', '显式敏感性评分：GCS=15时也计入候选谵妄治疗药物暴露'),
-    'sofa2_cns_ascertainment': ('CNS ascertainment receipt distinguishing complete, proxy-only, proxy-source-complete negative, and unavailable states', '神经评估回执：区分完整、仅代理、代理源可评估阴性和不可用'),
+    'sofa2_cns_delirium_tx_ascertainment': ('Clause-specific receipt distinguishing complete, proxy-only, proxy-source-complete negative, unavailable, and not-score-relevant states', '谵妄治疗条款回执：区分完整、仅代理、代理源可评估阴性、不可用和与评分无关'),
+    'sofa2_cns_ascertainment': ('Deprecated compatibility alias for sofa2_cns_delirium_tx_ascertainment', 'sofa2_cns_delirium_tx_ascertainment 的已弃用兼容别名'),
     'delirium_tx_proxy': ('Candidate medication exposure only; indication is unknown and must not be read as confirmed delirium treatment', '仅表示候选药物暴露；适应证未知，不得视为谵妄治疗已确认'),
     'delirium_tx_evidence': ('Four-state attributable evidence: confirmed, proxy_only, not_detected, or unavailable', '四态可归因证据：已确认、仅代理、未检出或不可用'),
     'delirium_tx': ('Deprecated compatibility alias of delirium_tx_proxy; never confirmation', 'delirium_tx_proxy 的已弃用兼容别名；不表示已确认'),
@@ -493,7 +495,7 @@ def _get_patient_id_table_files(database: str) -> list:
 # 全局特征分组定义 - 供侧边栏和数据字典共用
 # 使用英文key，并提供双语显示名称
 CONCEPT_GROUPS_INTERNAL = {
-    'sofa2_score': ['sofa2', 'sofa2_resp', 'sofa2_coag', 'sofa2_liver', 'sofa2_cardio', 'sofa2_cns', 'sofa2_cns_proxy_sensitivity', 'sofa2_cns_ascertainment', 'sofa2_renal'],
+    'sofa2_score': ['sofa2', 'sofa2_resp', 'sofa2_coag', 'sofa2_liver', 'sofa2_cardio', 'sofa2_cns', 'sofa2_cns_proxy_sensitivity', 'sofa2_cns_delirium_tx_ascertainment', 'sofa2_cns_ascertainment', 'sofa2_renal'],
     'sofa1_score': ['sofa', 'sofa_resp', 'sofa_coag', 'sofa_liver', 'sofa_cardio', 'sofa_cns', 'sofa_renal'],
     'sepsis3_sofa2': ['sep3_sofa2'],  # 🔧 共享概念移到单独的 sepsis_shared 模块
     'sepsis3_sofa1': ['sep3_sofa1'],  # 🔧 共享概念移到单独的 sepsis_shared 模块

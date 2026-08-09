@@ -28,7 +28,7 @@
    "sofa2_cns",
    "sofa2_renal"
   ],
-  "description": "Conservative database implementation of the canonical SOFA-2 (2025) aggregate; CNS delirium-treatment points require attributable confirmation",
+  "description": "Database operationalization of SOFA-2 (2025) with conservative handling of unconfirmed delirium-treatment proxies",
   "clinical_status": "source_bound_golden",
   "canonical_definition": false,
   "requires_explicit_opt_in": false,
@@ -130,7 +130,7 @@
    "motor_response",
    "sedated_gcs"
   ],
-  "description": "Conservative database implementation of the canonical SOFA-2 brain component; GCS thresholds are canonical, while the GCS=15 delirium-treatment point requires confirmed attributable evidence and candidate exposure alone remains 0",
+  "description": "Database operationalization of the SOFA-2 brain component with conservative handling of unconfirmed delirium-treatment proxies; GCS=15 gains a treatment point only from confirmed attributable evidence",
   "clinical_status": "source_bound_golden",
   "canonical_definition": false,
   "requires_explicit_opt_in": false,
@@ -159,6 +159,24 @@
   "callback": "sofa2_cns_proxy_sensitivity",
   "class_name": "rec_cncpt"
  },
+ "sofa2_cns_delirium_tx_ascertainment": {
+  "concepts": [
+   "gcs",
+   "delirium_tx_proxy",
+   "delirium_tx_evidence",
+   "delirium_positive",
+   "motor_response",
+   "sedated_gcs"
+  ],
+  "description": "SOFA-2 CNS delirium-treatment-clause receipt: complete, proxy_only, complete_for_proxy_source, unavailable, or not_score_relevant",
+  "canonical_definition": false,
+  "requires_explicit_opt_in": false,
+  "definition_source": "EasyICU SOFA-2 evidence contract",
+  "definition_version": "2025-delirium-tx-ascertainment-v2",
+  "category": "outcome",
+  "callback": "sofa2_cns_delirium_tx_ascertainment",
+  "class_name": "rec_cncpt"
+ },
  "sofa2_cns_ascertainment": {
   "concepts": [
    "gcs",
@@ -168,11 +186,11 @@
    "motor_response",
    "sedated_gcs"
   ],
-  "description": "SOFA-2 CNS ascertainment receipt: complete, proxy_only, complete_for_proxy_source, or unavailable",
+  "description": "Deprecated compatibility alias for sofa2_cns_delirium_tx_ascertainment",
   "canonical_definition": false,
   "requires_explicit_opt_in": false,
-  "definition_source": "EasyICU SOFA-2 evidence contract",
-  "definition_version": "2025-ascertainment-v1",
+  "definition_source": "EasyICU SOFA-2 evidence contract compatibility surface",
+  "definition_version": "2025-ascertainment-alias-v2",
   "category": "outcome",
   "callback": "sofa2_cns_ascertainment",
   "class_name": "rec_cncpt"
