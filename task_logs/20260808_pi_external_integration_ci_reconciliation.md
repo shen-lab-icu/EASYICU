@@ -5,7 +5,7 @@
 - Shared remote branch: `fix/external-review-20260724-p0-p1`
 - Integration worktree branch: `integration/pi-external-20260808`
 - Code checkpoint: `25edc214742e856b570b2c1e09dd135da57396b3`
-- Pi review/rollback checkpoint: `feat/pi-copilot-shell@bbd15d0` (unchanged)
+- Pi integration checkpoint: `feat/pi-copilot-shell@bbd15d0`
 
 ## Outcome
 
@@ -97,3 +97,9 @@ explicitly authorized stages after exact-SHA CI and independent review.
 - Browser automation policy did not permit an automated localhost tab reload;
   the operator must refresh the already-open tab once. No model message or tool
   action was sent during this service handoff.
+- During the final read-only check, a concurrent session advanced
+  `feat/pi-copilot-shell` by one child commit from `bbd15d0` to `5ad1799`
+  (`fix(qc): bind anomaly tracebacks to latest release`). That commit does not
+  contain the four external data commits and was not silently merged into the
+  accepted shared code. The running 8765 process remains bound to the clean
+  integration worktree.
