@@ -72,6 +72,16 @@ not invent these signals or claim clinical validation.
   binary phenotype as non-binary. The dictionary now declares an explicit
   `outcome_type: binary`, and the catalog prefers that typed contract.
 
+### Exact-head Research Agent contract alignment
+
+- The previous `c50e6d7` full Research Agent CI had three stale-contract reds.
+  The Sepsis-3 catalog red is fixed by the typed outcome contract above.
+- The ordinal association test and normalized characterisation bundle still
+  expected `reportable`, although the validated registry intentionally permits
+  only survival and adjusted association to default to reportable. They now
+  assert and freeze the fail-closed `analysis_only` receipt with
+  `scientific_validator_unavailable`; no production authority was relaxed.
+
 ## Verification
 
 - Direct renderer regression: `5` hostile-input cases passed under Node.
@@ -80,6 +90,8 @@ not invent these signals or claim clinical validation.
 - Wider callback, dictionary, Research Agent catalog and static-route suite:
   `406 passed`; this run exposed and then verified the explicit Sepsis-3 binary
   outcome contract described above.
+- Capability registry, assessment, normalized golden bundle and catalog closure:
+  `28 passed`.
 - Ruff on all changed Python owners/tests: passed.
 - Python compilation, JSON parsing, clinical-contract validation and
   `git diff --check`: passed.
