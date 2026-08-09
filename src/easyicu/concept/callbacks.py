@@ -3182,6 +3182,8 @@ def _callback_sofa2_score(
     # column. Re-project the sidecar receipts through the same schema-normalizing
     # merger instead of teaching that generic boundary about SOFA-2 internals.
     receipt_tables: dict[str, ICUTable] = {}
+    issued_observed_receipts: set[str] = set()
+    issued_available_receipts: set[str] = set()
     for name, table in tables.items():
         if name not in required:
             continue
@@ -3189,6 +3191,10 @@ def _callback_sofa2_score(
             receipt_name = f"{name}_{suffix}"
             if receipt_name not in table.data:
                 continue
+            if suffix == "observed":
+                issued_observed_receipts.add(receipt_name)
+            else:
+                issued_available_receipts.add(receipt_name)
             receipt_tables[receipt_name] = ICUTable(
                 table.data,
                 id_columns=list(table.id_columns),
@@ -3213,14 +3219,36 @@ def _callback_sofa2_score(
             value_column="sofa2",
         )
 
-    # Score synthesis remains missing-as-normal. Evidence completeness fails
-    # closed when a producer does not supply its owner-issued receipt.
+    # Owner-issued receipts are authoritative. A legacy score-only input is an
+    # explicit assertion by its caller and keeps the pre-receipt behavior.
     for name in required:
         if name not in data:
             data[name] = np.nan
-    for name in observed_columns + available_columns:
-        if name not in data:
-            data[name] = 0
+        asserted = data[name].notna().astype(int)
+        observed_name = f"{name}_observed"
+        available_name = f"{name}_available"
+        if observed_name not in issued_observed_receipts:
+            data[observed_name] = asserted
+        elif observed_name not in data:
+            data[observed_name] = 0
+        if available_name not in issued_available_receipts:
+            data[available_name] = asserted
+        elif available_name not in data:
+            data[available_name] = 0
+
+    # A component scorer can emit a missing-as-normal zero while its owner says
+    # no valid state was available. Convert only those owner-attested synthetic
+    # values to missing before LOCF. This preserves day-1 sum(skipna=True) == 0,
+    # while allowing a prior valid state to carry across auxiliary-only events.
+    for name in required:
+        available_name = f"{name}_available"
+        if available_name not in issued_available_receipts:
+            continue
+        owner_available = pd.to_numeric(
+            data[available_name], errors="coerce"
+        ).eq(1) & data[name].notna()
+        data[name] = data[name].where(owner_available)
+        data[available_name] = data[available_name].where(owner_available)
 
     win_length = ctx.kwargs.get("win_length", hours(24))
     worst_val_fun = ctx.kwargs.get("worst_val_fun", "max")
