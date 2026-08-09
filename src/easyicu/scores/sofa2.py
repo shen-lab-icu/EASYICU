@@ -60,10 +60,11 @@ References:
 
 from __future__ import annotations
 
-from typing import Optional, Dict
+from typing import Dict, Optional
 
 import numpy as np
 import pandas as pd
+
 
 def _is_true(series: pd.Series) -> pd.Series:
     """Replicate R's is_true: non-NA and True."""
@@ -76,6 +77,142 @@ def _coalesce_series(*series_list: Optional[pd.Series]) -> Optional[pd.Series]:
         if series is not None:
             return series
     return None
+
+
+SOFA2_COMPONENT_NAMES = (
+    "sofa2_resp",
+    "sofa2_coag",
+    "sofa2_liver",
+    "sofa2_cardio",
+    "sofa2_cns",
+    "sofa2_renal",
+)
+
+
+def sofa2_component_evidence(
+    component: str,
+    *,
+    index: pd.Index,
+    **inputs: Optional[pd.Series],
+) -> pd.DataFrame:
+    """Return component-owned observation and availability receipts.
+
+    A numeric component score is not itself evidence: every SOFA-2 scorer may
+    emit zero when its physiology is missing.  ``observed`` records a genuine
+    domain observation at this time point; ``available`` records whether the
+    component has an evidence-backed value eligible for longitudinal LOCF.
+    """
+
+    if component not in SOFA2_COMPONENT_NAMES:
+        raise ValueError(f"Unsupported SOFA-2 component evidence owner: {component}")
+
+    def first(*names: str) -> Optional[pd.Series]:
+        return next(
+            (inputs[name] for name in names if inputs.get(name) is not None),
+            None,
+        )
+
+    def numeric(value: Optional[pd.Series]) -> pd.Series:
+        if value is None:
+            return pd.Series(False, index=index, dtype=bool)
+        return pd.to_numeric(pd.Series(value, index=index), errors="coerce").notna()
+
+    def numeric_values(value: Optional[pd.Series]) -> pd.Series:
+        if value is None:
+            return pd.Series(np.nan, index=index, dtype=float)
+        return pd.to_numeric(pd.Series(value, index=index), errors="coerce")
+
+    def positive(value: Optional[pd.Series]) -> pd.Series:
+        if value is None:
+            return pd.Series(False, index=index, dtype=bool)
+        return _is_true(pd.Series(value, index=index))
+
+    observed = pd.Series(False, index=index, dtype=bool)
+    available = pd.Series(False, index=index, dtype=bool)
+
+    if component == "sofa2_resp":
+        pafi = numeric(inputs.get("pafi"))
+        spo2 = numeric_values(inputs.get("spo2"))
+        fio2 = numeric_values(inputs.get("fio2"))
+        sf_observed = spo2.notna() & fio2.notna()
+        ecmo = positive(inputs.get("ecmo"))
+        persistence = inputs.get("oxygenation_sustained_1h")
+        transient = pd.Series(False, index=index, dtype=bool)
+        if persistence is not None:
+            persistence_series = pd.Series(persistence, index=index)
+            transient = persistence_series.notna() & ~_is_true(persistence_series)
+        observed = pafi | sf_observed | ecmo
+        available = ((pafi | (sf_observed & (spo2 < 98) & (fio2 > 0))) & ~transient) | ecmo
+    elif component == "sofa2_coag":
+        observed = numeric(first("plt", "platelets"))
+        available = observed.copy()
+    elif component == "sofa2_liver":
+        observed = numeric(first("bili", "bilirubin"))
+        available = observed.copy()
+    elif component == "sofa2_cardio":
+        map_observed = numeric(inputs.get("map"))
+        positive_drug = pd.Series(False, index=index, dtype=bool)
+        for names in (
+            ("norepi60", "norepi"),
+            ("epi60", "epi"),
+            ("dopa60", "dopamine60"),
+            ("dobu60", "dobutamine60"),
+        ):
+            positive_drug |= numeric_values(first(*names)).fillna(0) > 0
+        positive_support = positive(inputs.get("other_vaso")) | positive(
+            inputs.get("mech_circ_support")
+        )
+        ecmo = positive(inputs.get("ecmo"))
+        indication = pd.Series(
+            inputs.get("ecmo_indication"), index=index, dtype="string"
+        )
+        cardiac_ecmo = ecmo & (indication == "cardiovascular")
+        observed = map_observed | positive_drug | positive_support | cardiac_ecmo
+        available = observed.copy()
+    elif component == "sofa2_cns":
+        gcs_observed = numeric(inputs.get("gcs"))
+        motor_observed = numeric(inputs.get("motor_response"))
+        pre_observed = numeric(first("sedated_gcs", "pre_sedation_gcs"))
+        evidence = _normalize_delirium_tx_evidence(
+            index,
+            delirium_tx_evidence=inputs.get("delirium_tx_evidence"),
+            delirium_tx_proxy=inputs.get("delirium_tx_proxy"),
+            delirium_tx=inputs.get("delirium_tx"),
+        )
+        confirmed = evidence == "confirmed"
+        sedated = positive(inputs.get("sedated"))
+        sedation_blocks_current = sedated & ~pre_observed
+        observed = gcs_observed | motor_observed | pre_observed | confirmed
+        available = (
+            pre_observed
+            | ((gcs_observed | motor_observed) & ~sedation_blocks_current)
+            | confirmed
+        )
+    elif component == "sofa2_renal":
+        creatinine = numeric(first("crea", "creatinine"))
+        urine_windows = pd.Series(False, index=index, dtype=bool)
+        for name in ("uo_6h", "uo_12h", "uo_24h"):
+            urine_windows |= numeric(inputs.get(name))
+        urine_rate = numeric(inputs.get("urine_mlkgph"))
+        urine_duration = numeric(inputs.get("urine_duration_h"))
+        treatment = positive(inputs.get("rrt")) | positive(
+            inputs.get("rrt_episode_active")
+        )
+        treatment &= ~positive(inputs.get("rrt_nonrenal_only"))
+        qualifying_rrt = treatment | positive(inputs.get("rrt_criteria"))
+        observed = creatinine | urine_windows | urine_rate | qualifying_rrt
+        available = (
+            creatinine | urine_windows | (urine_rate & urine_duration) | qualifying_rrt
+        )
+
+    return pd.DataFrame(
+        {
+            f"{component}_observed": observed.astype("int8"),
+            f"{component}_available": available.astype("int8"),
+        },
+        index=index,
+    )
+
 
 def sofa2_resp(
     pafi: Optional[pd.Series] = None,
@@ -620,11 +757,12 @@ def _sofa2_cns_assessment(
         sensitivity[sensitivity_positive], 1
     )
 
-    # Once a neurologic observation already yields a non-zero score, treatment
-    # evidence cannot change the component and ascertainment is complete for the
-    # score.  At the zero-score boundary, expose the treatment-evidence state.
-    ascertainment = pd.Series("complete", index=g.index, dtype="string")
+    # This receipt describes only whether the delirium-treatment clause can be
+    # ascertained.  A non-zero GCS score makes that clause irrelevant; it does
+    # not make treatment evidence complete.
+    ascertainment = pd.Series("not_score_relevant", index=g.index, dtype="string")
     zero_boundary = base_score == 0
+    ascertainment[zero_boundary & (evidence == "confirmed")] = "complete"
     ascertainment[zero_boundary & (evidence == "proxy_only")] = "proxy_only"
     ascertainment[
         zero_boundary & (evidence == "not_detected")
@@ -635,7 +773,7 @@ def _sofa2_cns_assessment(
         {
             "sofa2_cns": conservative.astype(int),
             "sofa2_cns_proxy_sensitivity": sensitivity.astype(int),
-            "sofa2_cns_ascertainment": ascertainment,
+            "sofa2_cns_delirium_tx_ascertainment": ascertainment,
             "delirium_tx_evidence": evidence,
         },
         index=g.index,
@@ -654,7 +792,11 @@ def sofa2_cns(
     pre_sedation_gcs: Optional[pd.Series] = None,
     sedated: Optional[pd.Series] = None,
 ) -> pd.Series:
-    """Conservative database implementation of the canonical SOFA-2 CNS rule."""
+    """Database operationalization of SOFA-2 CNS.
+
+    Unconfirmed delirium-treatment proxies are handled conservatively and are
+    exposed separately through the sensitivity and ascertainment outputs.
+    """
 
     return _sofa2_cns_assessment(
         gcs,
@@ -696,6 +838,33 @@ def sofa2_cns_proxy_sensitivity(
     )["sofa2_cns_proxy_sensitivity"]
 
 
+def sofa2_cns_delirium_tx_ascertainment(
+    gcs: pd.Series,
+    *,
+    delirium_tx_proxy: Optional[pd.Series] = None,
+    delirium_tx_evidence: Optional[pd.Series] = None,
+    delirium_tx: Optional[pd.Series] = None,
+    delirium_positive: Optional[pd.Series] = None,
+    motor_response: Optional[pd.Series] = None,
+    sedated_gcs: Optional[pd.Series] = None,
+    pre_sedation_gcs: Optional[pd.Series] = None,
+    sedated: Optional[pd.Series] = None,
+) -> pd.Series:
+    """Return ascertainment of the CNS delirium-treatment clause."""
+
+    return _sofa2_cns_assessment(
+        gcs,
+        delirium_tx_proxy=delirium_tx_proxy,
+        delirium_tx_evidence=delirium_tx_evidence,
+        delirium_tx=delirium_tx,
+        delirium_positive=delirium_positive,
+        motor_response=motor_response,
+        sedated_gcs=sedated_gcs,
+        pre_sedation_gcs=pre_sedation_gcs,
+        sedated=sedated,
+    )["sofa2_cns_delirium_tx_ascertainment"]
+
+
 def sofa2_cns_ascertainment(
     gcs: pd.Series,
     *,
@@ -708,9 +877,9 @@ def sofa2_cns_ascertainment(
     pre_sedation_gcs: Optional[pd.Series] = None,
     sedated: Optional[pd.Series] = None,
 ) -> pd.Series:
-    """Return the CNS treatment-evidence ascertainment state."""
+    """Deprecated alias for :func:`sofa2_cns_delirium_tx_ascertainment`."""
 
-    return _sofa2_cns_assessment(
+    return sofa2_cns_delirium_tx_ascertainment(
         gcs,
         delirium_tx_proxy=delirium_tx_proxy,
         delirium_tx_evidence=delirium_tx_evidence,
@@ -720,7 +889,8 @@ def sofa2_cns_ascertainment(
         sedated_gcs=sedated_gcs,
         pre_sedation_gcs=pre_sedation_gcs,
         sedated=sedated,
-    )["sofa2_cns_ascertainment"]
+    )
+
 
 def sofa2_renal(
     crea: Optional[pd.Series] = None,
@@ -909,49 +1079,66 @@ def sofa2_renal(
 
     return score
 
-def sofa2_score(data_dict: Dict[str, pd.DataFrame], *, keep_components: bool = False) -> pd.DataFrame:
-    """Aggregate the conservative database implementation of canonical SOFA-2.
+def sofa2_score(
+    data_dict: Dict[str, pd.DataFrame], *, keep_components: bool = False
+) -> pd.DataFrame:
+    """Aggregate the database operationalization of SOFA-2.
 
     Expected component keys in data_dict:
     - sofa2_resp, sofa2_coag, sofa2_liver, sofa2_cardio, sofa2_cns, sofa2_renal
 
-    Returns ``sofa2`` plus explicit observed/available component counts.  The
+    Component tables may include owner-issued ``*_observed`` and
+    ``*_available`` receipts.  Direct callers that provide only a component
+    score are explicitly asserting that score as an observation.  Production
+    callbacks always provide receipts derived from raw component inputs.
+
+    Returns ``sofa2`` plus explicit observed/available component counts. The
     deprecated ``sofa2_n_components`` field aliases available components.
     """
-    required = [
-        "sofa2_resp",
-        "sofa2_coag",
-        "sofa2_liver",
-        "sofa2_cardio",
-        "sofa2_cns",
-        "sofa2_renal",
-    ]
+    required = list(SOFA2_COMPONENT_NAMES)
 
     result = None
     for comp in required:
         if comp not in data_dict:
             raise ValueError(f"Missing required component: {comp}")
         df = data_dict[comp].copy()
+        asserted = df[comp].notna().astype("int8")
+        if f"{comp}_observed" not in df:
+            df[f"{comp}_observed"] = asserted
+        if f"{comp}_available" not in df:
+            df[f"{comp}_available"] = asserted
         if result is None:
             result = df
         else:
-            id_cols = [col for col in df.columns if col in result.columns and col != comp]
+            value_columns = {
+                comp,
+                f"{comp}_observed",
+                f"{comp}_available",
+            }
+            id_cols = [
+                col
+                for col in df.columns
+                if col in result.columns and col not in value_columns
+            ]
             result = pd.merge(result, df, on=id_cols, how="outer")
 
     # Score value: faithful to MIMIC-IV official / ricu (missing component -> 0).
     result["sofa2"] = result[required].fillna(0).sum(axis=1).astype(int)
-    present = result[required].notna().sum(axis=1).astype(int)
-    result["sofa2_n_observed_components"] = present
-    result["sofa2_n_available_components"] = present
-    # Deprecated compatibility alias.  In a single-snapshot scorer there is no
-    # LOCF lifecycle, so observed and available are identical.
+    observed_columns = [f"{comp}_observed" for comp in required]
+    available_columns = [f"{comp}_available" for comp in required]
+    result["sofa2_n_observed_components"] = (
+        result[observed_columns].fillna(0).sum(axis=1).astype(int)
+    )
+    result["sofa2_n_available_components"] = (
+        result[available_columns].fillna(0).sum(axis=1).astype(int)
+    )
     result["sofa2_n_components"] = result["sofa2_n_available_components"]
 
     if keep_components:
         for comp in required:
             result[f"{comp}_comp"] = result[comp]
     else:
-        result = result.drop(columns=required)
+        result = result.drop(columns=required + observed_columns + available_columns)
 
     return result
 

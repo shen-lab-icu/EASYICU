@@ -249,7 +249,7 @@
     ['demographics', 'Demographics', '人口统计', 6, true],
     ['vitals', 'Vital signs', '生命体征', 12, true],
     ['chemistry', 'Lab — Chemistry', '实验室-生化', 49, true],
-    ['sofa2_score', 'SOFA-2 scores', 'SOFA-2 评分', 7, true],
+    ['sofa2_score', 'SOFA-2 scores', 'SOFA-2 评分', 10, true],
     ['sepsis3_sofa2', 'Sepsis-3 (SOFA-2)', 'Sepsis-3 (SOFA-2)', 1, true],
     ['outcome', 'Outcome', '结局', 10, true],
     ['sofa1_score', 'SOFA-1 scores', 'SOFA-1 评分', 7, false],
@@ -1262,7 +1262,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         `<button class="btn primary sm" data-go="toConcepts">Use <span id="gdDbN">3</span> databases ${icon('arrow', 13)}</button>`);
     },
     concepts() {
-      const ALL = [['Demographics', 6], ['Vital signs', 8], ['Lab — Chemistry', 22], ['SOFA-2 scores', 7], ['Sepsis-3 (SOFA-2)', 1], ['Outcome', 3], ['Respiratory', 14], ['Renal & urine output', 20]];
+      const ALL = [['Demographics', 6], ['Vital signs', 8], ['Lab — Chemistry', 22], ['SOFA-2 scores', 10], ['Sepsis-3 (SOFA-2)', 1], ['Outcome', 3], ['Respiratory', 14], ['Renal & urine output', 20]];
       return cardShell('concepts', 'layers', 'Feature modules', 'pre-selected from cohort', `
         <div class="gd-mods" id="gdMods">
           ${ALL.map(([n, c]) => { const on = mods.includes(n); return `<button class="gd-mod ${on ? 'on' : ''}" data-mod="${n}"><span class="mk">${on ? icon('check', 10, 3) : ''}</span>${n}<span class="mc">${c}</span></button>`; }).join('')}

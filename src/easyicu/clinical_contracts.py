@@ -67,7 +67,7 @@ class ClinicalConceptContract:
     def golden_vector(self) -> str:
         """Deprecated singular-vector compatibility surface."""
 
-        vectors = self.spec_golden_vectors or self.runtime_golden_vectors
+        vectors = self.runtime_golden_vectors or self.spec_golden_vectors
         return vectors[0] if vectors else ""
 
     @classmethod

@@ -39,7 +39,7 @@
   },
   "sofa2_aggregate_2025": {
     "concepts": ["sofa2"],
-    "definition": "Conservative database implementation of the canonical SOFA-2 aggregate",
+    "definition": "Database operationalization of SOFA-2 with conservative handling of unconfirmed delirium-treatment proxies",
     "version": "2025",
     "source_id": "DOI:10.1001/jama.2025.20516",
     "source_table": "Table 2",
@@ -153,7 +153,7 @@
   },
   "sofa2_cns_2025": {
     "concepts": ["sofa2_cns"],
-    "definition": "Conservative database implementation of the canonical SOFA-2 brain component",
+    "definition": "Database operationalization of SOFA-2 CNS with conservative handling of unconfirmed delirium-treatment proxies",
     "version": "2025",
     "source_id": "DOI:10.1001/jama.2025.20516",
     "source_table": "Table 2",

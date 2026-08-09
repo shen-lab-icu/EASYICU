@@ -151,8 +151,8 @@ def test_web_catalog_groups_are_unique_and_complete() -> None:
     # 2026-08-08: +7 KDIGO ascertainment-receipt outputs so stage zero can be
     # distinguished from incomplete observation. 281 -> 288.
     # 2026-08-09: +delirium_tx_proxy/evidence and explicit SOFA-2 CNS proxy
-    # sensitivity/ascertainment outputs. 288 -> 292.
-    assert len(CONCEPT_DICTIONARY) == 292
+    # sensitivity and clause-specific/legacy ascertainment outputs. 288 -> 293.
+    assert len(CONCEPT_DICTIONARY) == 293
     assert set(CONCEPT_GROUP_NAMES) >= set(CONCEPT_GROUPS_INTERNAL)
     assert len(grouped) == len(set(grouped))
     assert set(grouped) == set(CONCEPT_DICTIONARY)

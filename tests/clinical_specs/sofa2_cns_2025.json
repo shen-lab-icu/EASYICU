@@ -9,5 +9,5 @@
   },
   "expected": [0, 0, 1, 0, 0],
   "expected_proxy_sensitivity": [0, 1, 1, 1, 0],
-  "expected_ascertainment": ["unavailable", "proxy_only", "complete", "proxy_only", "unavailable"]
+  "expected_ascertainment": ["unavailable", "proxy_only", "not_score_relevant", "proxy_only", "unavailable"]
 }

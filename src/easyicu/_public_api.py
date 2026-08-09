@@ -251,6 +251,7 @@ _EXPORT_GROUPS: Final[dict[str, tuple[str, ...]]] = {
         "sofa2_cardio",
         "sofa2_cns",
         "sofa2_cns_proxy_sensitivity",
+        "sofa2_cns_delirium_tx_ascertainment",
         "sofa2_cns_ascertainment",
         "sofa2_renal",
     ),
