@@ -66,6 +66,13 @@
   existing external-model disclosure and PHI/credential prohibition. A future
   import manifest may improve origin tracking, but no incomplete manifest was
   added in this closure.
-- Push checks for the implementation SHA are running as scoped security run
-  `31296758756` and repository CI `31296758750`. A PR-head run is still required
-  before release because this evidence note will advance the branch once more.
+- PR [#7](https://github.com/shen-lab-icu/EASYICU/pull/7) targets `main` and is
+  mergeable. The first Linux scoped run exposed a test-only portability error:
+  the assertion required macOS ambient `LC_CTYPE` even though Linux correctly
+  omitted it. Commit `4d4f573` changed the test to derive the allowed
+  `PATH/HOME/TMPDIR/LANG/LC_*` set from the current platform while still
+  explicitly rejecting `NODE_OPTIONS` and provider secrets; production code
+  did not change. Exact PR-head scoped run `31296920448` then passed all steps,
+  including 90 tests / 2 expected skips, three sidecar parse checks, and hostile
+  Chromium QA. Repository CI `31296920428` is still running and remains a merge
+  gate.
