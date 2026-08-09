@@ -1204,6 +1204,37 @@ class PiCopilotService:
                     "max_bytes": MAX_RESEARCH_ARTIFACT_PREVIEW_BYTES,
                 },
             )
+        review = agent_runs.read_run_review(str(row.get("project_dir") or ""))
+        if not review.get("ok"):
+            raise PiCopilotError(
+                str(review.get("error") or "pi_research_artifact_governance_unavailable"),
+                "The EasyICU run governance state is unavailable for this artefact.",
+                status_code=409,
+                details={"artifact": clean_artifact},
+            )
+        gate = review.get("gate")
+        gate = gate if isinstance(gate, Mapping) else {}
+        readiness = review.get("readiness")
+        readiness = readiness if isinstance(readiness, Mapping) else {}
+        readiness_status = str(readiness.get("status") or "unknown")
+        signed = bool(readiness.get("signed"))
+        signoff_stale = bool(readiness.get("signoff_stale"))
+        reportable = bool(readiness.get("reportable"))
+        if signoff_stale:
+            human_signoff = "stale"
+        elif signed:
+            human_signoff = "signed"
+        elif readiness_status == "awaiting_human_signoff":
+            human_signoff = "required"
+        else:
+            human_signoff = "not_signable"
+        claim_ceiling = "reportable" if reportable else "unsupported"
+        if (
+            not reportable
+            and gate.get("status") == "analysis_only"
+            and readiness_status in {"awaiting_human_signoff", "signed_analysis_only"}
+        ):
+            claim_ceiling = "analysis_only"
         metadata = loaded.get("artifact") or {}
         return {
             "ok": True,
@@ -1217,6 +1248,14 @@ class PiCopilotService:
             },
             "payload": payload,
             "privacy": {"passed": True},
+            "governance": {
+                "authority_class": "easyicu_run_artifact",
+                "gate_status": gate.get("status"),
+                "readiness_status": readiness_status,
+                "human_signoff": human_signoff,
+                "reportable": reportable,
+                "claim_ceiling": claim_ceiling,
+            },
         }
 
     def _public_session(

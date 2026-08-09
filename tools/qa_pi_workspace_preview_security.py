@@ -3,8 +3,8 @@
 
 The check writes a hostile HTML artifact into an isolated temporary Pi
 workspace, starts the native FastAPI app with the same temporary HOME, and
-proves that EasyICU-origin localStorage is unavailable both inside the product
-iframe contract and when the preview URL is opened directly.
+proves that EasyICU-origin localStorage is unavailable inside the nested model
+document while Host provenance remains visible in product and direct views.
 """
 
 from __future__ import annotations
@@ -123,15 +123,42 @@ def run() -> dict[str, object]:
                     }""",
                     preview_url,
                 )
-                iframe = page.frame_locator("#hostile-preview-frame")
-                iframe_result = iframe.locator("#storage-result").inner_text(
+                product_wrapper = page.frame_locator("#hostile-preview-frame")
+                product_banner = product_wrapper.locator(
+                    "[data-easyicu-workspace-provenance]"
+                ).inner_text(timeout=10_000)
+                product_content = product_wrapper.frame_locator(
+                    "#easyicu-workspace-preview-content"
+                )
+                iframe_result = product_content.locator("#storage-result").inner_text(
                     timeout=10_000
                 )
 
                 direct = context.new_page()
                 direct.goto(preview_url, wait_until="domcontentloaded")
-                direct_result = direct.locator("#storage-result").inner_text(
+                direct_banner = direct.locator(
+                    "[data-easyicu-workspace-provenance]"
+                ).inner_text(timeout=10_000)
+                direct_result = direct.frame_locator(
+                    "#easyicu-workspace-preview-content"
+                ).locator("#storage-result").inner_text(
                     timeout=10_000
+                )
+                direct_layout = direct.evaluate(
+                    """() => {
+                      const root = document.documentElement;
+                      const banner = document.querySelector('[data-easyicu-workspace-provenance]');
+                      const frame = document.querySelector('#easyicu-workspace-preview-content');
+                      const bannerRect = banner.getBoundingClientRect();
+                      const frameRect = frame.getBoundingClientRect();
+                      return {
+                        viewport_width: window.innerWidth,
+                        scroll_width: root.scrollWidth,
+                        banner_height: bannerRect.height,
+                        frame_width: frameRect.width,
+                        frame_height: frameRect.height,
+                      };
+                    }"""
                 )
                 browser.close()
         finally:
@@ -146,8 +173,11 @@ def run() -> dict[str, object]:
     result = {
         "base_url": base_url,
         "preview_url": preview_url,
+        "product_provenance": product_banner,
+        "direct_provenance": direct_banner,
         "iframe_storage_result": iframe_result,
         "direct_storage_result": direct_result,
+        "direct_layout": direct_layout,
         "content_security_policy": policy,
         "referrer_policy": response_headers.get("referrer-policy"),
         "passed": (
@@ -155,7 +185,14 @@ def run() -> dict[str, object]:
             and direct_result.startswith("BLOCKED:")
             and "must-not-leak" not in iframe_result
             and "must-not-leak" not in direct_result
+            and "Workspace artifact · Unvalidated" in product_banner
+            and "Workspace artifact · Unvalidated" in direct_banner
+            and direct_layout["scroll_width"] <= direct_layout["viewport_width"]
+            and direct_layout["banner_height"] > 0
+            and direct_layout["frame_width"] > 0
+            and direct_layout["frame_height"] > 0
             and policy.startswith("sandbox allow-scripts;")
+            and "frame-src 'self'" in policy
             and "frame-ancestors 'self'" in policy
         ),
     }

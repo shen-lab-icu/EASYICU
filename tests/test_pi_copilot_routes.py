@@ -48,6 +48,14 @@ class FakeService:
                 "media_type": "application/json",
             },
             "payload": {"status": "ready"},
+            "governance": {
+                "authority_class": "easyicu_run_artifact",
+                "gate_status": "analysis_only",
+                "readiness_status": "awaiting_human_signoff",
+                "human_signoff": "required",
+                "reportable": False,
+                "claim_ceiling": "analysis_only",
+            },
         }
 
     def configure_provider(self, **kwargs) -> dict:
@@ -190,7 +198,11 @@ def test_project_workspace_file_and_preview_routes_are_bounded(monkeypatch) -> N
         params={"file": "prototype/index.html"},
     )
     assert preview.status_code == 200
-    assert "Sandboxed preview" in preview.text
+    assert "Workspace artifact · Unvalidated" in preview.text
+    assert "Not scientific evidence" in preview.text
+    assert 'id="easyicu-workspace-preview-content"' in preview.text
+    assert "&lt;h1&gt;Sandboxed preview&lt;/h1&gt;" in preview.text
+    assert "<h1>Sandboxed preview</h1>" not in preview.text
     assert preview.headers["cache-control"] == "no-store"
     assert preview.headers["x-content-type-options"] == "nosniff"
     policy = preview.headers["content-security-policy"]
@@ -219,6 +231,14 @@ def test_project_research_artifact_route_uses_path_free_identity(monkeypatch) ->
     assert response.status_code == 200
     assert response.json()["run_id"] == "run_20260808"
     assert response.json()["artifact"]["name"] == "table1_summary.json"
+    assert response.json()["governance"] == {
+        "authority_class": "easyicu_run_artifact",
+        "gate_status": "analysis_only",
+        "readiness_status": "awaiting_human_signoff",
+        "human_signoff": "required",
+        "reportable": False,
+        "claim_ceiling": "analysis_only",
+    }
     assert "project_dir" not in response.text
 
     invalid = client.get(

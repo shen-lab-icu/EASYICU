@@ -2,7 +2,8 @@
 
 This owner deliberately exposes relative project files rather than arbitrary
 host paths.  It is the only filesystem boundary used by Pi workspace tools and
-the browser preview endpoints.
+the browser preview endpoints. V1 compare-and-swap locks are process-local;
+multi-worker WebApp deployment is not a supported write configuration.
 """
 
 from __future__ import annotations
@@ -63,6 +64,17 @@ def _authority_metadata() -> Dict[str, Any]:
     return dict(WORKSPACE_ARTIFACT_AUTHORITY)
 
 
+def _node_check_environment() -> Dict[str, str]:
+    """Return the small non-secret environment needed by ``node --check``."""
+
+    allowed = {"PATH", "HOME", "TMPDIR", "LANG"}
+    return {
+        key: value
+        for key, value in os.environ.items()
+        if key in allowed or key.startswith("LC_")
+    }
+
+
 def project_workspace_id(project_id: str) -> str:
     clean = str(project_id or "").strip()
     if not clean or len(clean) > 160:
@@ -104,7 +116,32 @@ class ProjectWorkspace:
     """Read and mutate bounded UTF-8 artifacts under one project root."""
 
     def __init__(self, base_dir: Path) -> None:
-        self.base_dir = Path(base_dir).expanduser().resolve()
+        declared = Path(base_dir).expanduser().absolute()
+        if declared.is_symlink():
+            raise PiCopilotError(
+                "pi_workspace_base_root_symlink_blocked",
+                "The Pi workspace root must not be a symbolic link.",
+            )
+        self.declared_base_dir = declared
+        self.base_dir = declared.resolve()
+
+    def _ensure_base_root(self) -> None:
+        if self.declared_base_dir.is_symlink():
+            raise PiCopilotError(
+                "pi_workspace_base_root_symlink_blocked",
+                "The Pi workspace root must not be a symbolic link.",
+            )
+        self.declared_base_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if self.declared_base_dir.is_symlink():
+            raise PiCopilotError(
+                "pi_workspace_base_root_symlink_blocked",
+                "The Pi workspace root must not be a symbolic link.",
+            )
+        if self.declared_base_dir.resolve() != self.base_dir:
+            raise PiCopilotError(
+                "pi_workspace_base_root_changed",
+                "The Pi workspace root changed after this workspace was opened.",
+            )
 
     def _project_lock(self, project_id: str) -> threading.RLock:
         key = (str(self.base_dir), project_workspace_id(project_id))
@@ -112,7 +149,7 @@ class ProjectWorkspace:
             return _PROJECT_LOCKS.setdefault(key, threading.RLock())
 
     def project_root(self, project_id: str) -> Path:
-        self.base_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self._ensure_base_root()
         projects_root = self.base_dir / "projects"
         if projects_root.is_symlink():
             raise PiCopilotError(
@@ -334,8 +371,6 @@ class ProjectWorkspace:
         project_id: str,
         relative_file: Any,
         content: Any,
-        *,
-        expected_sha256: Any = None,
     ) -> Dict[str, Any]:
         with self._project_lock(project_id):
             candidate, relative = self._candidate(
@@ -351,30 +386,13 @@ class ProjectWorkspace:
                     details={"file": relative, "max_bytes": MAX_FILE_BYTES},
                 )
             rows = self._file_rows(project_id)
-            existing = candidate.is_file()
-            supplied_digest = self._expected_sha256(expected_sha256)
+            existing = candidate.exists()
             if existing:
-                current_digest = hashlib.sha256(candidate.read_bytes()).hexdigest()
-                if supplied_digest is None:
-                    raise PiCopilotError(
-                        "pi_workspace_expected_sha256_required",
-                        "Replacing a project file requires its current SHA-256 digest.",
-                        status_code=409,
-                        details={"file": relative, "current_sha256": current_digest},
-                    )
-                if supplied_digest != current_digest:
-                    raise PiCopilotError(
-                        "pi_workspace_file_changed",
-                        "The project file changed after it was read; read it again before replacing it.",
-                        status_code=409,
-                        details={"file": relative, "current_sha256": current_digest},
-                    )
-            elif supplied_digest is not None:
                 raise PiCopilotError(
-                    "pi_workspace_file_changed",
-                    "The project file no longer exists; list or read the workspace before retrying.",
+                    "pi_workspace_write_create_only",
+                    "Write creates new project files only; use an exact edit for an existing file.",
                     status_code=409,
-                    details={"file": relative, "current_sha256": None},
+                    details={"file": relative},
                 )
             if not existing and len(rows) >= MAX_FILES:
                 raise PiCopilotError(
@@ -391,24 +409,7 @@ class ProjectWorkspace:
                     "The Pi project workspace reached its bounded size limit.",
                     details={"max_bytes": MAX_PROJECT_BYTES},
                 )
-            handle = tempfile.NamedTemporaryFile(
-                mode="wb",
-                dir=str(candidate.parent),
-                prefix=".pi-workspace-",
-                suffix=".tmp",
-                delete=False,
-            )
-            temporary = Path(handle.name)
-            try:
-                with handle:
-                    handle.write(encoded)
-                    handle.flush()
-                    os.fsync(handle.fileno())
-                temporary.chmod(0o600)
-                temporary.replace(candidate)
-                candidate.chmod(0o600)
-            finally:
-                temporary.unlink(missing_ok=True)
+            self._atomic_write(candidate, encoded)
             return {
                 "file": relative,
                 "media_type": self._media_type(candidate),
@@ -417,6 +418,27 @@ class ProjectWorkspace:
                 "created": not existing,
                 **_authority_metadata(),
             }
+
+    @staticmethod
+    def _atomic_write(candidate: Path, encoded: bytes) -> None:
+        handle = tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=str(candidate.parent),
+            prefix=".pi-workspace-",
+            suffix=".tmp",
+            delete=False,
+        )
+        temporary = Path(handle.name)
+        try:
+            with handle:
+                handle.write(encoded)
+                handle.flush()
+                os.fsync(handle.fileno())
+            temporary.chmod(0o600)
+            temporary.replace(candidate)
+            candidate.chmod(0o600)
+        finally:
+            temporary.unlink(missing_ok=True)
 
     @staticmethod
     def _expected_sha256(value: Any) -> Optional[str]:
@@ -472,13 +494,34 @@ class ProjectWorkspace:
                     "The exact edit target must occur once in the project file.",
                     details={"file": relative, "occurrences": occurrences},
                 )
-            result = self.write_file(
-                project_id,
-                relative,
-                source.replace(needle, str(new_text if new_text is not None else ""), 1),
-                expected_sha256=current_digest,
-            )
-            return {**result, "replacements": 1}
+            encoded = source.replace(
+                needle, str(new_text if new_text is not None else ""), 1
+            ).encode("utf-8")
+            if len(encoded) > MAX_FILE_BYTES:
+                raise PiCopilotError(
+                    "pi_workspace_file_too_large",
+                    "The Pi project file exceeds the edit limit.",
+                    details={"file": relative, "max_bytes": MAX_FILE_BYTES},
+                )
+            if (
+                self._project_size_without(project_id, candidate) + len(encoded)
+                > MAX_PROJECT_BYTES
+            ):
+                raise PiCopilotError(
+                    "pi_workspace_size_limit",
+                    "The Pi project workspace reached its bounded size limit.",
+                    details={"max_bytes": MAX_PROJECT_BYTES},
+                )
+            self._atomic_write(candidate, encoded)
+            return {
+                "file": relative,
+                "media_type": self._media_type(candidate),
+                "size": len(encoded),
+                "sha256": hashlib.sha256(encoded).hexdigest(),
+                "created": False,
+                "replacements": 1,
+                **_authority_metadata(),
+            }
 
     def check_file(self, project_id: str, relative_file: Any) -> Dict[str, Any]:
         candidate, relative, text = self._read_complete_file(project_id, relative_file)
@@ -505,6 +548,7 @@ class ProjectWorkspace:
                 result = subprocess.run(
                     [node, "--check", str(candidate)],
                     cwd=self.project_root(project_id),
+                    env=_node_check_environment(),
                     capture_output=True,
                     text=True,
                     timeout=10,

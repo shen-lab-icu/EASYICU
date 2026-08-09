@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from html import escape as html_escape
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, HTTPException, Query
@@ -126,6 +127,37 @@ def _raise_http(error: PiCopilotError) -> None:
     raise HTTPException(status_code=error.status_code, detail=error.detail) from error
 
 
+def _workspace_preview_document(*, file_name: str, artifact_html: str) -> str:
+    """Keep Host provenance outside the sandboxed model-authored document."""
+
+    safe_file = html_escape(file_name, quote=True)
+    safe_srcdoc = html_escape(artifact_html, quote=True)
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>EasyICU workspace preview · {safe_file}</title>
+  <style>
+    *{{box-sizing:border-box}}
+    html,body{{width:100%;height:100%;margin:0}}
+    body{{display:grid;grid-template-rows:auto minmax(0,1fr);background:#fff;color:#202124;font:13px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}}
+    header{{display:flex;flex-wrap:wrap;gap:4px 10px;padding:10px 14px;border-bottom:1px solid #ead9aa;background:#fff9e9}}
+    header strong{{font-weight:700}}
+    header span{{color:#5f6368}}
+    iframe{{width:100%;height:100%;border:0;background:#fff}}
+  </style>
+</head>
+<body data-easyicu-workspace-preview="unvalidated">
+  <header role="note" data-easyicu-workspace-provenance>
+    <strong>Workspace artifact · Unvalidated / 工作区产物 · 未验证</strong>
+    <span>Not scientific evidence; unsupported for clinical or manuscript claims. / 不是科学证据；不支持临床或论文结论。</span>
+  </header>
+  <iframe id="easyicu-workspace-preview-content" sandbox="allow-scripts" referrerpolicy="no-referrer" title="Unvalidated workspace artifact: {safe_file}" srcdoc="{safe_srcdoc}"></iframe>
+</body>
+</html>"""
+
+
 @router.get("/api/copilot/pi/status")
 def get_pi_copilot_status() -> dict:
     return get_pi_copilot_service().runtime_status()
@@ -206,11 +238,15 @@ def get_pi_copilot_workspace_preview(
         _raise_http(exc)
     artifact = payload["artifact"]
     return HTMLResponse(
-        content=str(artifact["text"]),
+        content=_workspace_preview_document(
+            file_name=str(artifact["file"]),
+            artifact_html=str(artifact["text"]),
+        ),
         headers={
             "Content-Security-Policy": (
                 "sandbox allow-scripts; default-src 'none'; style-src 'unsafe-inline'; "
                 "script-src 'unsafe-inline'; img-src data:; "
+                "frame-src 'self'; "
                 "connect-src 'none'; form-action 'none'; base-uri 'none'; "
                 "frame-ancestors 'self'"
             ),
