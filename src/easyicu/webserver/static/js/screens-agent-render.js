@@ -470,14 +470,14 @@
   function artifactTable(title, headers, rows, emptyText) {
     const safeRows = Array.isArray(rows) ? rows.filter(Boolean) : [];
     if (!safeRows.length) {
-      return `<div class="ag-artifact-section"><div class="ag-artifact-section-title">${title}</div><div class="ag-artifact-empty">${emptyText || t('No table rows in this artifact.', '这个产物没有可展示的表格行。')}</div></div>`;
+      return `<div class="ag-artifact-section"><div class="ag-artifact-section-title">${esc(title)}</div><div class="ag-artifact-empty">${esc(emptyText || t('No table rows in this artifact.', '这个产物没有可展示的表格行。'))}</div></div>`;
     }
     return `
       <div class="ag-artifact-section">
-        <div class="ag-artifact-section-title">${title}</div>
+        <div class="ag-artifact-section-title">${esc(title)}</div>
         <div class="ag-artifact-table-wrap">
           <table class="ag-artifact-table">
-            <thead><tr>${headers.map(h => `<th>${h}</th>`).join('')}</tr></thead>
+            <thead><tr>${headers.map(h => `<th>${esc(h)}</th>`).join('')}</tr></thead>
             <tbody>
               ${safeRows.map(row => `<tr>${row.map(cell => `<td>${esc(artifactScalar(cell))}</td>`).join('')}</tr>`).join('')}
             </tbody>

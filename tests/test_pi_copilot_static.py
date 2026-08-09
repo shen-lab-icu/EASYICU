@@ -251,5 +251,7 @@ def test_workspace_security_workflow_covers_sidecar_and_browser_helper_dependenc
     assert '"src/easyicu/webserver/agent_runs.py"' in workflow
     assert '"src/easyicu/webserver/static/js/screens-agent-render.js"' in workflow
     assert '"tests/js/agent_render_security.test.js"' in workflow
+    assert "node tests/js/agent_render_security.test.js" in workflow
+    assert "src/easyicu/webserver/static/js/screens-agent-render.js" in workflow
     for sidecar in ("main.mjs", "event-projection.mjs", "shell-budget.mjs"):
         assert f"node --check src/easyicu/webserver/pi_copilot/node_app/src/{sidecar}" in workflow

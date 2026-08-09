@@ -1,8 +1,12 @@
 {
   "source": "SOFA-2 Table 2, DOI:10.1001/jama.2025.20516",
-  "vectors": [
-    {"gcs": 15, "delirium_treatment": false, "cam_positive": true, "expected": 0},
-    {"gcs": 15, "delirium_treatment": true, "cam_positive": false, "expected": 1},
-    {"gcs": 14, "delirium_treatment": false, "cam_positive": false, "expected": 1}
-  ]
+  "inputs": {
+    "gcs": [15, 15, 14, null, 6, 6],
+    "delirium_tx": [false, true, false, true, false, false],
+    "delirium_positive": [true, false, false, false, false, false],
+    "motor_response": [null, null, null, 6, 2, 2],
+    "sedated_gcs": [null, null, null, null, 15, null],
+    "sedated": [false, false, false, false, true, true]
+  },
+  "expected": [0, 1, 1, 1, 0, 0]
 }

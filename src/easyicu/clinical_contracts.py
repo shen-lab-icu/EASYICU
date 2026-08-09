@@ -20,6 +20,20 @@ from .concept.schema import ConceptDictionary
 _CONTRACT_PATH = Path(__file__).resolve().parent / "data" / "clinical-contracts.json"
 _DATABASES = ("mimic", "miiv", "eicu", "aumc", "hirid", "sic")
 _CONFORMANCE_LEVELS = {"not_assessed", "mapping_only", "algorithm_golden"}
+_CLINICAL_STATUS_RANK = {
+    "experimental": 0,
+    "source_bound_golden": 1,
+    "automated_conformance": 2,
+    "validated_definition": 3,
+}
+_SOFA2_COMPONENT_CONTRACTS = {
+    "sofa2_resp": "sofa2_resp_2025",
+    "sofa2_coag": "sofa2_coag_2025",
+    "sofa2_liver": "sofa2_liver_2025",
+    "sofa2_cardio": "sofa2_cardio_2025",
+    "sofa2_cns": "sofa2_cns_2025",
+    "sofa2_renal": "sofa2_renal_2025",
+}
 
 
 @dataclass(frozen=True)
@@ -40,7 +54,10 @@ class ClinicalConceptContract:
     reviewer: str
     last_reviewed_at: str
     reference_implementation: Optional[str]
+    production_executor: Optional[str]
     reference_commit: Optional[str]
+    depends_on_contracts: tuple[str, ...]
+    ascertainment_limitations: tuple[str, ...]
     database_conformance: Mapping[str, str]
 
     @classmethod
@@ -68,10 +85,21 @@ class ClinicalConceptContract:
                 if payload.get("reference_implementation")
                 else None
             ),
+            production_executor=(
+                str(payload["production_executor"])
+                if payload.get("production_executor")
+                else None
+            ),
             reference_commit=(
                 str(payload["reference_commit"])
                 if payload.get("reference_commit")
                 else None
+            ),
+            depends_on_contracts=tuple(
+                str(item) for item in payload.get("depends_on_contracts", ())
+            ),
+            ascertainment_limitations=tuple(
+                str(item) for item in payload.get("ascertainment_limitations", ())
             ),
             database_conformance={
                 str(key): str(value)
@@ -96,10 +124,11 @@ def validate_clinical_contracts(
     dictionary: ConceptDictionary,
     *,
     repo_root: Path,
+    contracts_path: Optional[Path] = None,
 ) -> list[str]:
     """Return stable findings; an empty list is the formal coverage gate."""
 
-    contracts = load_clinical_contracts()
+    contracts = load_clinical_contracts(contracts_path)
     findings: list[str] = []
     for contract_id, contract in contracts.items():
         if not contract.concepts:
@@ -116,6 +145,11 @@ def validate_clinical_contracts(
             or not contract.last_reviewed_at
         ):
             findings.append(f"{contract_id}:validation_provenance_incomplete")
+        if contract.status not in _CLINICAL_STATUS_RANK:
+            findings.append(f"{contract_id}:clinical_status_invalid")
+        for dependency_id in contract.depends_on_contracts:
+            if dependency_id not in contracts:
+                findings.append(f"{contract_id}:dependency_unknown:{dependency_id}")
         for database, level in contract.database_conformance.items():
             if database not in _DATABASES or level not in _CONFORMANCE_LEVELS:
                 findings.append(f"{contract_id}:database_conformance_invalid:{database}")
@@ -125,6 +159,43 @@ def validate_clinical_contracts(
                 findings.append(f"{contract_id}:concept_missing:{concept_id}")
             elif definition.clinical_contract_id != contract_id:
                 findings.append(f"{contract_id}:concept_binding_mismatch:{concept_id}")
+
+    for contract_id, contract in contracts.items():
+        dependency_contracts = [
+            contracts[dependency_id]
+            for dependency_id in contract.depends_on_contracts
+            if dependency_id in contracts
+        ]
+        if dependency_contracts and contract.status in _CLINICAL_STATUS_RANK:
+            weakest = min(
+                _CLINICAL_STATUS_RANK.get(dependency.status, -1)
+                for dependency in dependency_contracts
+            )
+            if _CLINICAL_STATUS_RANK[contract.status] > weakest:
+                findings.append(f"{contract_id}:status_exceeds_weakest_dependency")
+
+    aggregate = contracts.get("sofa2_aggregate_2025")
+    if aggregate is None:
+        findings.append("sofa2_aggregate_2025:contract_missing")
+    elif set(aggregate.depends_on_contracts) != set(_SOFA2_COMPONENT_CONTRACTS.values()):
+        findings.append("sofa2_aggregate_2025:component_dependencies_incomplete")
+
+    for concept_id, contract_id in _SOFA2_COMPONENT_CONTRACTS.items():
+        contract = contracts.get(contract_id)
+        if contract is None:
+            findings.append(f"{contract_id}:contract_missing")
+            continue
+        if contract.production_executor != "easyicu.concept.callbacks._callback_sofa_component":
+            findings.append(f"{contract_id}:production_executor_unbound")
+        definition = dictionary.get(concept_id)
+        if definition is not None and definition.clinical_status != contract.status:
+            findings.append(f"{contract_id}:dictionary_status_mismatch:{concept_id}")
+    if aggregate is not None:
+        if aggregate.production_executor != "easyicu.concept.callbacks._callback_sofa2_score":
+            findings.append("sofa2_aggregate_2025:production_executor_unbound")
+        definition = dictionary.get("sofa2")
+        if definition is not None and definition.clinical_status != aggregate.status:
+            findings.append("sofa2_aggregate_2025:dictionary_status_mismatch:sofa2")
 
     for concept_id, definition in dictionary.items():
         if definition.clinical_status and not definition.clinical_contract_id:
@@ -144,10 +215,10 @@ def render_clinical_conformance_matrix_markdown() -> str:
         "",
         "_Generated from `easyicu/data/clinical-contracts.json`. `mapping_only` means extraction wiring is covered; it does not claim that a database-specific clinical result has an independent gold-standard validation._",
         "",
-        "| Contract | Concepts | Definition/version | Source | Status | Validation | Golden vector | "
+        "| Contract | Concepts | Definition/version | Source | Status | Validation | Golden vector | Production binding | Dependencies / limitations | "
         + " | ".join(_DATABASES)
         + " |",
-        "| --- | --- | --- | --- | --- | --- | --- | " + " | ".join("---" for _ in _DATABASES) + " |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | " + " | ".join("---" for _ in _DATABASES) + " |",
     ]
     for contract in contracts.values():
         source = contract.source_id + (f" ({contract.source_table})" if contract.source_table else "")
@@ -159,6 +230,13 @@ def render_clinical_conformance_matrix_markdown() -> str:
             contract.status,
             contract.validation_status,
             f"`{contract.golden_vector}`",
+            f"`{contract.production_executor}`" if contract.production_executor else "not bound",
+            "; ".join(
+                [
+                    *(f"depends on `{item}`" for item in contract.depends_on_contracts),
+                    *contract.ascertainment_limitations,
+                ]
+            ) or "none declared",
         ]
         row.extend(contract.database_conformance.get(db, "not_assessed") for db in _DATABASES)
         lines.append("| " + " | ".join(row) + " |")

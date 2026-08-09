@@ -507,7 +507,7 @@ def sofa_renal(
     
     return score
 
-def sofa2_renal(
+def _legacy_sofa2_renal(
     crea: pd.Series,
     rrt: Optional[pd.Series] = None,
     rrt_criteria: Optional[pd.Series] = None,
@@ -599,7 +599,7 @@ def sofa2_renal(
     
     return score
 
-def sofa2_resp(
+def _legacy_sofa2_resp(
     pafi: pd.Series,
     spo2: Optional[pd.Series] = None,
     fio2: Optional[pd.Series] = None,
@@ -738,7 +738,7 @@ def sofa2_liver(bili: pd.Series) -> pd.Series:
     
     return score
 
-def sofa2_cardio(
+def _legacy_sofa2_cardio(
     map: pd.Series,
     norepi60: Optional[pd.Series] = None,
     epi60: Optional[pd.Series] = None,
@@ -814,7 +814,7 @@ def sofa2_cardio(
     
     return score
 
-def sofa2_cns(
+def _legacy_sofa2_cns(
     gcs: pd.Series,
     delirium_tx: Optional[pd.Series] = None,
     delirium_positive: Optional[pd.Series] = None,
@@ -878,6 +878,113 @@ def sofa2_cns(
         score[mask] = np.maximum(score[mask], 1)
     
     return score
+
+
+# Public SOFA-2 compatibility surface. Scientific rules live in exactly one
+# owner (`easyicu.scores.sofa2`); these wrappers preserve the historical
+# positional callback signatures without maintaining a second rule set.
+def sofa2_resp(
+    pafi: pd.Series,
+    spo2: Optional[pd.Series] = None,
+    fio2: Optional[pd.Series] = None,
+    adv_resp: Optional[pd.Series] = None,
+    ecmo: Optional[pd.Series] = None,
+    ecmo_indication: Optional[pd.Series] = None,
+    support_unavailable_or_ceiling: Optional[pd.Series] = None,
+    oxygenation_sustained_1h: Optional[pd.Series] = None,
+) -> pd.Series:
+    from .scores.sofa2 import sofa2_resp as canonical
+
+    return canonical(
+        pafi,
+        spo2=spo2,
+        fio2=fio2,
+        adv_resp=adv_resp,
+        ecmo=ecmo,
+        ecmo_indication=ecmo_indication,
+        support_unavailable_or_ceiling=support_unavailable_or_ceiling,
+        oxygenation_sustained_1h=oxygenation_sustained_1h,
+    )
+
+
+def sofa2_cardio(
+    map: pd.Series,
+    norepi60: Optional[pd.Series] = None,
+    epi60: Optional[pd.Series] = None,
+    dopa60: Optional[pd.Series] = None,
+    dobu60: Optional[pd.Series] = None,
+    other_vaso: Optional[pd.Series] = None,
+    mech_circ_support: Optional[pd.Series] = None,
+    ecmo: Optional[pd.Series] = None,
+    ecmo_indication: Optional[pd.Series] = None,
+    vasopressors_unavailable: Optional[pd.Series] = None,
+) -> pd.Series:
+    from .scores.sofa2 import sofa2_cardio as canonical
+
+    return canonical(
+        map,
+        norepi60=norepi60,
+        epi60=epi60,
+        dopa60=dopa60,
+        dobu60=dobu60,
+        other_vaso=other_vaso,
+        mech_circ_support=mech_circ_support,
+        ecmo=ecmo,
+        ecmo_indication=ecmo_indication,
+        vasopressors_unavailable=vasopressors_unavailable,
+    )
+
+
+def sofa2_cns(
+    gcs: pd.Series,
+    delirium_tx: Optional[pd.Series] = None,
+    delirium_positive: Optional[pd.Series] = None,
+    motor_response: Optional[pd.Series] = None,
+    sedated_gcs: Optional[pd.Series] = None,
+    pre_sedation_gcs: Optional[pd.Series] = None,
+    sedated: Optional[pd.Series] = None,
+) -> pd.Series:
+    from .scores.sofa2 import sofa2_cns as canonical
+
+    return canonical(
+        gcs,
+        delirium_tx=delirium_tx,
+        delirium_positive=delirium_positive,
+        motor_response=motor_response,
+        sedated_gcs=sedated_gcs,
+        pre_sedation_gcs=pre_sedation_gcs,
+        sedated=sedated,
+    )
+
+
+def sofa2_renal(
+    crea: pd.Series,
+    rrt: Optional[pd.Series] = None,
+    rrt_criteria: Optional[pd.Series] = None,
+    uo_6h: Optional[pd.Series] = None,
+    uo_12h: Optional[pd.Series] = None,
+    uo_24h: Optional[pd.Series] = None,
+    potassium: Optional[pd.Series] = None,
+    ph: Optional[pd.Series] = None,
+    bicarb: Optional[pd.Series] = None,
+    rrt_episode_active: Optional[pd.Series] = None,
+    rrt_nonrenal_only: Optional[pd.Series] = None,
+) -> pd.Series:
+    from .scores.sofa2 import sofa2_renal as canonical
+
+    return canonical(
+        crea,
+        rrt=rrt,
+        rrt_criteria=rrt_criteria,
+        rrt_episode_active=rrt_episode_active,
+        rrt_nonrenal_only=rrt_nonrenal_only,
+        uo_6h=uo_6h,
+        uo_12h=uo_12h,
+        uo_24h=uo_24h,
+        potassium=potassium,
+        ph=ph,
+        bicarb=bicarb,
+    )
 
 def sirs_score(
     temp: pd.Series,
@@ -1234,7 +1341,7 @@ def pafi(
     fio2: pd.DataFrame,
     match_win: pd.Timedelta = pd.Timedelta(hours=2),
     mode: str = "match_vals",
-    fix_na_fio2: bool = True,
+    fix_na_fio2: bool = False,
     database: str = None,
 ) -> pd.DataFrame:
     """Calculate PaO2/FiO2 ratio (P/F ratio) from oxygen partial pressure and FiO2.
@@ -1313,9 +1420,18 @@ def pafi(
     else:
         raise ValueError(f"Unknown mode: {mode}")
     
-    # Fix missing FiO2 (assume room air = 21%)
+    result['fio2_observed'] = result['fio2'].notna()
+    result['fio2_imputed'] = False
+    result['fio2_assessment_reason'] = np.where(
+        result['fio2_observed'], 'observed', 'missing_fio2'
+    )
+
+    # Room-air imputation is an explicit opt-in and leaves durable provenance.
     if fix_na_fio2:
-        result.loc[result['fio2'].isna(), 'fio2'] = 21.0
+        missing_fio2 = result['fio2'].isna()
+        result.loc[missing_fio2, 'fio2'] = 21.0
+        result.loc[missing_fio2, 'fio2_imputed'] = True
+        result.loc[missing_fio2, 'fio2_assessment_reason'] = 'room_air_assumption'
     
     # Convert to numeric, handling None and string values
     result['po2'] = pd.to_numeric(result['po2'], errors='coerce')
@@ -1341,7 +1457,7 @@ def safi(
     fio2: pd.DataFrame,
     match_win: pd.Timedelta = pd.Timedelta(hours=2),
     mode: str = "match_vals",
-    fix_na_fio2: bool = True,
+    fix_na_fio2: bool = False,
     database: str = None,
 ) -> pd.DataFrame:
     """Calculate SaO2/FiO2 ratio (S/F ratio) from oxygen saturation and FiO2.
