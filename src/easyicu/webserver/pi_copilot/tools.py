@@ -1080,7 +1080,9 @@ def _workspace_access(
             summary="Open a Pi workspace conversation before using project artifact tools.",
             owner="easyicu.webserver.pi_copilot.workspace",
         )
-    if context.workspace_root is None or not context.session.project_id:
+    if (
+        context.workspace is None and context.workspace_root is None
+    ) or not context.session.project_id:
         return None, _result(
             context,
             status="blocked",
@@ -1096,6 +1098,8 @@ def _workspace_access(
             summary="Project file changes require the workspace-write grant for this message.",
             owner="easyicu.webserver.pi_copilot.workspace",
         )
+    if context.workspace is not None:
+        return context.workspace, None
     return ProjectWorkspace(context.workspace_root), None
 
 

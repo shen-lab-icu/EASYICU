@@ -4,6 +4,11 @@ This owner deliberately exposes relative project files rather than arbitrary
 host paths.  It is the only filesystem boundary used by Pi workspace tools and
 the browser preview endpoints. V1 compare-and-swap locks are process-local;
 multi-worker WebApp deployment is not a supported write configuration.
+
+The declared workspace entry itself must not be a symbolic link. Stable
+ancestor links are supported so an operator may relocate ``~/.easyicu`` as one
+unit; their resolved identity is sealed at construction and any later retarget
+fails closed with ``pi_workspace_base_root_changed``.
 """
 
 from __future__ import annotations

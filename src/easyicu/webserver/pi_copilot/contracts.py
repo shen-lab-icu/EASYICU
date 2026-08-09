@@ -5,9 +5,12 @@ from __future__ import annotations
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, Literal, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, Literal, Optional
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+
+if TYPE_CHECKING:
+    from .workspace import ProjectWorkspace
 
 PROTOCOL_VERSION = "easyicu.pi-copilot/1"
 SESSION_SCHEMA_VERSION = "easyicu.pi-copilot-session/1"
@@ -172,11 +175,15 @@ class ToolExecutionContext:
         grant: Optional[HostTurnGrant] = None,
         authority_validator: Optional[AuthorityValidator] = None,
         workspace_root: Optional[Path] = None,
+        workspace: Optional["ProjectWorkspace"] = None,
     ) -> None:
         self.session = session
         self.grant = grant or HostTurnGrant.from_actions(allowed_actions)
         self.authority_validator = authority_validator
-        self.workspace_root = Path(workspace_root).resolve() if workspace_root else None
+        self.workspace_root = (
+            Path(workspace_root).expanduser().absolute() if workspace_root else None
+        )
+        self.workspace = workspace
         self._authority_invalidated_reason: Optional[str] = None
         self._lock = threading.Lock()
 

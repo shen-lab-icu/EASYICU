@@ -58,6 +58,40 @@ def test_patient_review_numeric_charttime_keeps_icu_hour_semantics() -> None:
         ["2026-01-01 00:00", "2026-01-01 01:00"],
     )["kind"] == "datetime"
 
+
+def test_project_artifact_governance_owns_analysis_only_projection() -> None:
+    governance = agent_runs.project_artifact_governance(
+        {
+            "ok": True,
+            "gate": {"status": "analysis_only"},
+            "readiness": {
+                "status": "awaiting_human_signoff",
+                "signed": False,
+                "signoff_stale": False,
+                "reportable": False,
+            },
+        }
+    )
+
+    assert governance == {
+        "ok": True,
+        "authority_class": "easyicu_run_artifact",
+        "gate_status": "analysis_only",
+        "readiness_status": "awaiting_human_signoff",
+        "human_signoff": "required",
+        "reportable": False,
+        "claim_ceiling": "analysis_only",
+    }
+
+
+def test_project_artifact_governance_fails_closed_without_readiness() -> None:
+    assert agent_runs.project_artifact_governance(
+        {"ok": True, "gate": {"status": "analysis_only"}}
+    ) == {
+        "ok": False,
+        "error": "run_artifact_governance_readiness_invalid",
+    }
+
 AGENT_PREFLIGHT_ARTIFACTS = {
     "run_context.json",
     "cohort_summary.json",
