@@ -66,8 +66,9 @@ The shell registers fifteen EasyICU research tools. Study setup can be collected
 and saved inside the conversation with a one-message Configure grant; the
 existing typed StudyContext store remains authoritative. Workspace mode adds
 seven governed artifact tools plus the packaged `web-prototype` skill. Writes
-require a one-turn host grant and remain inside the project-specific private
-workspace. Generic Pi filesystem, network, and shell tools stay disabled. The
+require a reusable host-held capability for that message and remain inside the
+project-specific private workspace. Generic Pi filesystem, network, and shell
+tools stay disabled. The
 private path is the AgentSession's logical workspace; it is not an
 operating-system sandbox for the Node process itself.
 Raw model reasoning is forced off and is not streamed or returned in session

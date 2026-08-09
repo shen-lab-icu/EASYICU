@@ -12,6 +12,7 @@ import pytest
 STATIC = (
     Path(__file__).resolve().parents[1] / "src" / "easyicu" / "webserver" / "static"
 )
+NODE_APP = STATIC.parent / "pi_copilot" / "node_app"
 
 
 def _read(relative: str) -> str:
@@ -20,10 +21,10 @@ def _read(relative: str) -> str:
 
 def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     index = _read("index.html")
-    assert "css/guided-pi.css?v=20260808-research-flow1" in index
-    assert "css/guided-pi-preview.css?v=20260808-research-flow1" in index
-    assert "js/screens-guided-pi-preview.js?v=20260808-research-flow1" in index
-    assert "js/screens-guided-pi.js?v=20260808-research-flow1" in index
+    assert "css/guided-pi.css?v=20260809-workspace-security1" in index
+    assert "css/guided-pi-preview.css?v=20260809-workspace-security1" in index
+    assert "js/screens-guided-pi-preview.js?v=20260809-workspace-security1" in index
+    assert "js/screens-guided-pi.js?v=20260809-workspace-security1" in index
     assert "js/api.js?v=20260808-pi-research-flow1" in index
     assert index.index("css/guided.css") < index.index("css/guided-pi.css")
     assert index.index("js/screens-guided-pi-preview.js") < index.index(
@@ -100,6 +101,8 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "event.type === 'run_start'" in pi_owner
     assert "event.type === 'tool_progress'" in pi_owner
     assert "event.type === 'run_end'" in pi_owner
+    assert "Workspace file contents may be sent to your configured Pi model service." in pi_owner
+    assert "Do not place PHI, patient rows, credentials, or private clinical data" in pi_owner
     for method in (
         "loadPiCopilotStatus",
         "savePiCopilotProviderConfig",
@@ -131,6 +134,7 @@ def test_pi_css_is_route_owned_and_does_not_pollute_catch_all_files() -> None:
     assert ".gpi-preview-aside" in preview_owner
     assert ".gpi-preview-frame" in preview_owner
     assert ".gpi-preview-code" in preview_owner
+    assert ".gpi-preview-provenance" in preview_owner
     assert ".gpi-resource-list" in owner
     assert "research-artifact preview" in preview_owner
     assert ".gpi-tool" not in owner
@@ -191,3 +195,27 @@ def test_pi_frontend_javascript_parses() -> None:
             capture_output=True,
             text=True,
         )
+
+
+def test_workspace_preview_hard_codes_unvalidated_authority_and_iframe_sandbox() -> None:
+    preview = _read("js/screens-guided-pi-preview.js")
+    assert "authority_class: 'workspace_artifact'" in preview
+    assert "scientific_evidence: false" in preview
+    assert "validation_status: 'unvalidated'" in preview
+    assert "claim_ceiling: 'unsupported'" in preview
+    assert "Workspace artifact · Unvalidated" in preview
+    assert "scientific evidence" in preview
+    assert 'sandbox="allow-scripts"' in preview
+    assert 'referrerpolicy="no-referrer"' in preview
+
+
+def test_workspace_sidecar_requires_digest_for_edit_and_teaches_safe_egress() -> None:
+    sidecar = (NODE_APP / "src" / "main.mjs").read_text(encoding="utf-8")
+    skill = (
+        NODE_APP / "src" / "skills" / "web-prototype" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+    assert sidecar.count("expected_sha256") >= 2
+    assert "Read the current file first" in skill
+    assert "expected_sha256" in skill
+    assert "may be sent to the\nconfigured Pi model service" in skill
+    assert "PHI" in skill

@@ -13,6 +13,7 @@ PROTOCOL_VERSION = "easyicu.pi-copilot/1"
 SESSION_SCHEMA_VERSION = "easyicu.pi-copilot-session/1"
 MAX_MESSAGE_CHARS = 12_000
 AgentMode = Literal["research", "workspace"]
+TURN_CAPABILITIES = frozenset({"workspace_write"})
 
 
 def utc_now() -> str:
@@ -109,23 +110,33 @@ class PiToolResult(BaseModel):
 
 
 class HostTurnGrant:
-    """Atomically consumable one-use action grants held only by the host."""
+    """Host-held one-use actions and explicitly reusable turn capabilities."""
 
     def __init__(self, remaining: Optional[Dict[str, int]] = None) -> None:
-        self._remaining = {
+        requested = {
             str(action): max(0, int(count))
             for action, count in dict(remaining or {}).items()
         }
-        self._provided = frozenset(self._remaining)
+        self._capabilities = frozenset(requested).intersection(TURN_CAPABILITIES)
+        self._remaining = {
+            action: count
+            for action, count in requested.items()
+            if action not in self._capabilities
+        }
+        self._provided = frozenset(requested)
         self._lock = threading.Lock()
 
     @classmethod
     def from_actions(cls, actions: Iterable[str]) -> "HostTurnGrant":
         return cls({str(action): 1 for action in actions})
 
-    def consume(self, action: str) -> Literal["granted", "consumed", "missing"]:
+    def consume_once(
+        self, action: str
+    ) -> Literal["granted", "consumed", "missing", "capability"]:
         name = str(action)
         with self._lock:
+            if name in self._capabilities:
+                return "capability"
             if name not in self._provided:
                 return "missing"
             if self._remaining.get(name, 0) <= 0:
@@ -133,19 +144,19 @@ class HostTurnGrant:
             self._remaining[name] -= 1
             return "granted"
 
+    def has_capability(self, action: str) -> bool:
+        """Return whether a reusable capability was granted for this turn."""
+
+        with self._lock:
+            return str(action) in self._capabilities
+
     @property
     def available_actions(self) -> frozenset[str]:
         with self._lock:
-            return frozenset(
+            one_use = frozenset(
                 action for action, count in self._remaining.items() if count > 0
             )
-
-    @property
-    def provided_actions(self) -> frozenset[str]:
-        """Actions explicitly authorized for this turn, consumed or not."""
-
-        return self._provided
-
+            return one_use | self._capabilities
 
 AuthorityValidator = Callable[[AuthorityBinding], Dict[str, Any]]
 

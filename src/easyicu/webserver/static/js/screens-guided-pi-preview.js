@@ -46,6 +46,10 @@
       file: file.slice(0, 240),
       label: String(value.label || file.split('/').pop() || file).slice(0, 160),
       media_type: String(value.media_type || 'text/plain').slice(0, 120),
+      authority_class: 'workspace_artifact',
+      scientific_evidence: false,
+      validation_status: 'unvalidated',
+      claim_ceiling: 'unsupported',
     };
   }
   function isResearchArtifact() { return !!state.resource && state.resource.kind === 'research_artifact'; }
@@ -104,12 +108,18 @@
     const reference = isResearchArtifact()
       ? `${state.resource.run_id} · ${state.resource.artifact}`
       : state.resource.file;
+    const provenance = isResearchArtifact() ? '' : `
+      <div class="gpi-preview-provenance" role="note">
+        <strong>${tr('Workspace artifact · Unvalidated', '工作区产物 · 未验证')}</strong>
+        <span>${tr('Not scientific evidence; unsupported for clinical or manuscript claims.', '不是科学证据；不支持临床或论文结论。')}</span>
+      </div>`;
     state.host.innerHTML = `
       <header class="gpi-preview-head">
         <div class="gpi-preview-file-icon" aria-hidden="true">${icon(state.mode === 'web' ? 'globe' : 'file', 16)}</div>
         <div class="gpi-preview-ident"><strong>${esc(state.resource.label)}</strong><span>${esc(reference)}</span></div>
         <button class="gpi-preview-close" type="button" data-gpi-preview-close aria-label="${tr('Close preview', '关闭预览')}" title="${tr('Close preview', '关闭预览')}">${icon('close', 15)}</button>
       </header>
+      ${provenance}
       ${tabs}
       <div class="gpi-preview-body">${body}</div>`;
   }

@@ -193,8 +193,12 @@ def test_project_workspace_file_and_preview_routes_are_bounded(monkeypatch) -> N
     assert "Sandboxed preview" in preview.text
     assert preview.headers["cache-control"] == "no-store"
     assert preview.headers["x-content-type-options"] == "nosniff"
-    assert "default-src 'none'" in preview.headers["content-security-policy"]
-    assert "connect-src 'none'" in preview.headers["content-security-policy"]
+    policy = preview.headers["content-security-policy"]
+    assert policy.startswith("sandbox allow-scripts;")
+    assert "default-src 'none'" in policy
+    assert "connect-src 'none'" in policy
+    assert "frame-ancestors 'self'" in policy
+    assert preview.headers["referrer-policy"] == "no-referrer"
 
     assert (
         client.get(
