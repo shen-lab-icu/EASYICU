@@ -3,6 +3,7 @@
 ## Scope and baseline
 
 - Review baseline: `fix/pi-workspace-review-20260809@d963809398742a075aad76850bfb482728b679d1`.
+- Implementation commit: `c004696efe0f6716925d829661ef9248406634ef`.
 - Task ID: `PI-WORKSPACE-FINAL-REVIEW-CLOSURE`.
 - Active module: Web / Guided Pi Workspace.
 - Phase: final boundary closure before Workspace freeze.
@@ -65,5 +66,6 @@
   existing external-model disclosure and PHI/credential prohibition. A future
   import manifest may improve origin tracking, but no incomplete manifest was
   added in this closure.
-- Remote release evidence must bind the pushed closure commit. The exact SHA,
-  scoped security run, full CI state, and PR URL are recorded after push.
+- Push checks for the implementation SHA are running as scoped security run
+  `31296758756` and repository CI `31296758750`. A PR-head run is still required
+  before release because this evidence note will advance the branch once more.
