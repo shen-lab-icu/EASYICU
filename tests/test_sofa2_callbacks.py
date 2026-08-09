@@ -1,3 +1,4 @@
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -24,6 +25,19 @@ def test_sofa2_resp_uses_fractional_fio2_for_safi_fallback():
     )
 
     assert score.tolist() == [3, 2]
+
+
+@pytest.mark.clinical_conformance
+@pytest.mark.parametrize("scorer", [sofa2_resp, standalone_sofa2_resp])
+def test_sofa2_resp_unknown_persistence_is_not_treated_as_transient(scorer):
+    unknown = scorer(pd.Series([180.0]))
+    explicitly_transient = scorer(
+        pd.Series([180.0]),
+        oxygenation_sustained_1h=pd.Series([False]),
+    )
+
+    assert unknown.tolist() == [2]
+    assert explicitly_transient.tolist() == [0]
 
 
 def test_sofa2_cns_uses_motor_response_when_gcs_missing():
@@ -260,3 +274,71 @@ def test_sofa2_production_callbacks_cover_pre_sedation_and_aggregate_completenes
 
     assert aggregate.data["sofa2"].tolist() == [12]
     assert aggregate.data["sofa2_n_components"].tolist() == [6]
+
+
+@pytest.mark.clinical_conformance
+def test_sofa2_production_aggregate_keeps_observation_count_separate_from_zero_imputation():
+    complete = {
+        name: _component_table(name, [0.0])
+        for name in (
+            "sofa2_resp",
+            "sofa2_coag",
+            "sofa2_liver",
+            "sofa2_cardio",
+            "sofa2_cns",
+            "sofa2_renal",
+        )
+    }
+    five = dict(complete)
+    five.pop("sofa2_renal")
+    none_observed = {
+        name: _component_table(name, [np.nan]) for name in complete
+    }
+
+    assert _callback_sofa2_score(
+        complete, _component_context("sofa2")
+    ).data["sofa2_n_components"].tolist() == [6]
+    assert _callback_sofa2_score(
+        five, _component_context("sofa2")
+    ).data["sofa2_n_components"].tolist() == [5]
+    all_missing = _callback_sofa2_score(
+        none_observed, _component_context("sofa2")
+    ).data
+    assert all_missing["sofa2_n_components"].tolist() == [0]
+    assert all_missing["sofa2"].tolist() == [0]
+
+
+@pytest.mark.clinical_conformance
+def test_sofa2_production_aggregate_carries_last_component_beyond_24_hours():
+    components = {
+        "sofa2_liver": ICUTable(
+            pd.DataFrame(
+                {"stay_id": [1], "charttime": [0.0], "sofa2_liver": [3.0]}
+            ),
+            id_columns=["stay_id"],
+            index_column="charttime",
+            value_column="sofa2_liver",
+        )
+    }
+    for name in (
+        "sofa2_resp",
+        "sofa2_coag",
+        "sofa2_cardio",
+        "sofa2_cns",
+        "sofa2_renal",
+    ):
+        components[name] = ICUTable(
+            pd.DataFrame({"stay_id": [1], "charttime": [25.0], name: [0.0]}),
+            id_columns=["stay_id"],
+            index_column="charttime",
+            value_column=name,
+        )
+
+    result = _callback_sofa2_score(
+        components,
+        _component_context("sofa2", keep_components=True),
+    ).data.set_index("charttime")
+
+    assert result.loc[25.0, "sofa2_liver"] == 3
+    assert result.loc[25.0, "sofa2"] == 3
+    assert result.loc[25.0, "sofa2_n_components"] == 6

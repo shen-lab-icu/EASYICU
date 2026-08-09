@@ -8,6 +8,6 @@ _Generated from the shipped dictionaries, data-source registry, clinical contrac
 | SOFA-2 overlay entries | 21 |
 | Unique merged dictionary concepts | 264 |
 | Supported public ICU databases | 6: `eicu`, `mimic`, `miiv`, `hirid`, `aumc`, `sic` |
-| Clinical definition contracts | 5 |
+| Clinical definition contracts | 10 |
 | Scientific capabilities | 8 |
 | Capabilities with an explicit reportable validator owner | 2 |

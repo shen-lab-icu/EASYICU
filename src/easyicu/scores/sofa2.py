@@ -123,8 +123,9 @@ def sofa2_resp(
         ecmo_indication: String - 'respiratory' or 'cardiovascular'
         support_unavailable_or_ceiling: Boolean - advanced support was unavailable
             or precluded by a documented ceiling of treatment (Table 2 footnote h)
-        oxygenation_sustained_1h: Boolean - oxygenation threshold persisted for
-            at least 1 hour. Unknown is fail-closed for ratio-based scores 3-4.
+        oxygenation_sustained_1h: Optional Boolean persistence assessment.
+            Explicit False excludes a documented transient episode shorter than
+            1 hour. Missing/unknown does not suppress an otherwise valid ratio.
         
     Returns:
         Series of respiratory SOFA-2 scores (0-4)
@@ -147,12 +148,17 @@ def sofa2_resp(
         if support_unavailable_or_ceiling is not None
         else pd.Series(False, index=idx)
     )
-    sustained = (
-        _is_true(oxygenation_sustained_1h)
-        if oxygenation_sustained_1h is not None
-        else pd.Series(False, index=idx)
-    )
-    ratio_eligible = sustained
+    # Table 2 footnote f excludes a *known* transient oxygenation change (for
+    # example, a brief post-suction deterioration); it does not require every
+    # valid P/F or S/F observation to carry a separate persistence proof. Keep
+    # unknown distinct from explicit False so normal production inputs remain
+    # scoreable while a documented <1 h episode can still be excluded.
+    if oxygenation_sustained_1h is None:
+        ratio_eligible = pd.Series(True, index=idx)
+    else:
+        persistence = pd.Series(oxygenation_sustained_1h, index=idx)
+        explicitly_transient = persistence.notna() & ~_is_true(persistence)
+        ratio_eligible = ~explicitly_transient
     severe_ratio_eligible = ratio_eligible & (support | support_exception)
     
     # Initialize score

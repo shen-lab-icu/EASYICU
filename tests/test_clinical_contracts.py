@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
 
@@ -11,6 +12,8 @@ from easyicu.clinical_contracts import (
     render_clinical_conformance_matrix_markdown,
     validate_clinical_contracts,
 )
+from easyicu.config import DataSourceConfig
+from easyicu.concept import ConceptResolver, ConceptSource
 from easyicu.concept.callbacks import (
     ConceptCallbackContext,
     _callback_sofa2_score,
@@ -61,6 +64,42 @@ def test_sofa2_aggregate_cannot_outrank_or_omit_a_component_contract(tmp_path: P
     assert "sofa2_aggregate_2025:status_exceeds_weakest_dependency" in findings
     assert "sofa2_aggregate_2025:component_dependencies_incomplete" in findings
     assert "sofa2_aggregate_2025:dictionary_status_mismatch:sofa2" in findings
+
+
+@pytest.mark.clinical_conformance
+def test_sofa2_contract_rejects_fixture_input_without_runtime_owner(tmp_path: Path) -> None:
+    registry_path = ROOT / "src/easyicu/data/clinical-contracts.json"
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    del registry["sofa2_resp_2025"]["runtime_inputs"]["pafi"]
+    mutated = tmp_path / "clinical-contracts.json"
+    mutated.write_text(json.dumps(registry), encoding="utf-8")
+
+    findings = validate_clinical_contracts(
+        load_dictionary(include_sofa2=True),
+        repo_root=ROOT,
+        contracts_path=mutated,
+    )
+
+    assert "sofa2_resp_2025:runtime_inputs_mismatch:sofa2_resp" in findings
+    assert "sofa2_resp_2025:golden_input_unowned:pafi" in findings
+
+
+@pytest.mark.clinical_conformance
+def test_sofa2_aggregate_rejects_component_without_runtime_owner(tmp_path: Path) -> None:
+    registry_path = ROOT / "src/easyicu/data/clinical-contracts.json"
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    del registry["sofa2_aggregate_2025"]["runtime_inputs"]["sofa2_resp"]
+    mutated = tmp_path / "clinical-contracts.json"
+    mutated.write_text(json.dumps(registry), encoding="utf-8")
+
+    findings = validate_clinical_contracts(
+        load_dictionary(include_sofa2=True),
+        repo_root=ROOT,
+        contracts_path=mutated,
+    )
+
+    assert "sofa2_aggregate_2025:runtime_inputs_mismatch:sofa2" in findings
+    assert "sofa2_aggregate_2025:golden_input_unowned:sofa2_resp" in findings
 
 
 @pytest.mark.clinical_conformance
@@ -137,6 +176,82 @@ def test_sofa2_component_golden_vectors_execute_direct_and_production_paths(
 
     assert direct.tolist() == fixture["expected"]
     assert production.data[concept_name].tolist() == fixture["expected"]
+
+
+@pytest.mark.clinical_conformance
+def test_shipped_sofa2_resp_resolver_graph_scores_unknown_persistence() -> None:
+    """Exercise shipped dictionary -> resolver -> adapter -> scorer.
+
+    The fixture data source replaces only the physical database read; the
+    recursive graph and callback binding come from the packaged dictionary.
+    """
+
+    dictionary = copy.deepcopy(load_dictionary(include_sofa2=True))
+    dictionary["pafi"].sources["fixture"] = [
+        ConceptSource(
+            table="events",
+            value_var="pafi",
+            index_var="charttime",
+        )
+    ]
+
+    class FixtureDataSource:
+        base_path = None
+        config = DataSourceConfig(
+            name="fixture",
+            tables={
+                "events": {
+                    "defaults": {
+                        "id_var": "stay_id",
+                        "index_var": "charttime",
+                        "val_var": "pafi",
+                    }
+                }
+            },
+        )
+
+        def load_table(self, table_name, columns=None, filters=None, verbose=False):
+            del table_name, filters, verbose
+            frame = pd.DataFrame(
+                {"stay_id": [1], "charttime": [0.0], "pafi": [180.0]}
+            )
+            if columns:
+                keep = list(
+                    dict.fromkeys(
+                        [
+                            "stay_id",
+                            "charttime",
+                            *(column for column in columns if column in frame.columns),
+                        ]
+                    )
+                )
+                frame = frame[keep]
+            return ICUTable(
+                frame,
+                id_columns=["stay_id"],
+                index_column="charttime",
+                value_column="pafi",
+            )
+
+    loaded = ConceptResolver(dictionary).load_concepts(
+        ["sofa2_resp"],
+        FixtureDataSource(),
+        merge=False,
+        interval=pd.Timedelta(hours=1),
+        r_compatible=False,
+        verbose=False,
+        concept_workers=1,
+    )
+
+    assert dictionary["sofa2_resp"].sub_concepts == [
+        "pafi",
+        "spo2",
+        "fio2",
+        "adv_resp",
+        "ecmo",
+        "ecmo_indication",
+    ]
+    assert loaded["sofa2_resp"].data["sofa2_resp"].tolist() == [2]
 
 
 @pytest.mark.clinical_conformance

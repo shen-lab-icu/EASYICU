@@ -51,7 +51,9 @@
     "reviewer": "EasyICU software conformance review; independent clinician pending",
     "last_reviewed_at": "2026-08-09",
     "reference_implementation": "easyicu.scores.sofa2.sofa2_score",
-    "production_executor": "easyicu.concept.callbacks._callback_sofa2_score",
+    "production_executor": "easyicu.concept.ConceptResolver.load_concepts",
+    "production_callback": "easyicu.concept.callbacks._callback_sofa2_score",
+    "runtime_inputs": {"sofa2_resp": "concept:sofa2_resp", "sofa2_coag": "concept:sofa2_coag", "sofa2_liver": "concept:sofa2_liver", "sofa2_cardio": "concept:sofa2_cardio", "sofa2_cns": "concept:sofa2_cns", "sofa2_renal": "concept:sofa2_renal"},
     "depends_on_contracts": ["sofa2_resp_2025", "sofa2_coag_2025", "sofa2_liver_2025", "sofa2_cardio_2025", "sofa2_cns_2025", "sofa2_renal_2025"],
     "ascertainment_limitations": ["aggregate authority inherits the weakest component contract and database ascertainment level"],
     "database_conformance": {"mimic": "mapping_only", "miiv": "mapping_only", "eicu": "mapping_only", "aumc": "mapping_only", "hirid": "mapping_only", "sic": "mapping_only"}
@@ -67,13 +69,15 @@
     "requires_explicit_opt_in": false,
     "golden_vector": "tests/clinical_specs/sofa2_resp_2025.json",
     "test_vector_version": "v2",
-    "validation_status": "automated_direct_and_production_adapter_golden; independent_clinical_review_pending",
+    "validation_status": "automated_direct_adapter_and_resolver_golden; independent_clinical_review_pending",
     "validated_against": ["SOFA-2 Table 2 respiratory thresholds and footnotes f/h/i"],
     "reviewer": "EasyICU software conformance review; independent clinician pending",
     "last_reviewed_at": "2026-08-09",
     "reference_implementation": "easyicu.scores.sofa2.sofa2_resp",
-    "production_executor": "easyicu.concept.callbacks._callback_sofa_component",
-    "ascertainment_limitations": ["database mappings do not yet provide treatment-ceiling/unavailable-support or explicit >=1h persistence signals; all ratio-based scores fail closed without persistence, and scores 3/4 also require support or a documented exception"],
+    "production_executor": "easyicu.concept.ConceptResolver.load_concepts",
+    "production_callback": "easyicu.concept.callbacks._callback_sofa_component",
+    "runtime_inputs": {"pafi": "concept:pafi", "spo2": "concept:spo2", "fio2": "concept:fio2", "adv_resp": "concept:adv_resp", "ecmo": "concept:ecmo", "ecmo_indication": "concept:ecmo_indication"},
+    "ascertainment_limitations": ["database mappings do not yet provide treatment-ceiling/unavailable-support or an explicit transient-episode signal; unknown persistence does not suppress a valid ratio, while a documented <1h transient is excluded and scores 3/4 still require support or a documented exception"],
     "database_conformance": {"mimic": "mapping_only", "miiv": "mapping_only", "eicu": "mapping_only", "aumc": "mapping_only", "hirid": "mapping_only", "sic": "mapping_only"}
   },
   "sofa2_coag_2025": {
@@ -92,7 +96,9 @@
     "reviewer": "EasyICU software conformance review; independent clinician pending",
     "last_reviewed_at": "2026-08-09",
     "reference_implementation": "easyicu.scores.sofa2.sofa2_coag",
-    "production_executor": "easyicu.concept.callbacks._callback_sofa_component",
+    "production_executor": "easyicu.concept.ConceptResolver.load_concepts",
+    "production_callback": "easyicu.concept.callbacks._callback_sofa_component",
+    "runtime_inputs": {"plt": "concept:plt"},
     "database_conformance": {"mimic": "mapping_only", "miiv": "mapping_only", "eicu": "mapping_only", "aumc": "mapping_only", "hirid": "mapping_only", "sic": "mapping_only"}
   },
   "sofa2_liver_2025": {
@@ -111,7 +117,9 @@
     "reviewer": "EasyICU software conformance review; independent clinician pending",
     "last_reviewed_at": "2026-08-09",
     "reference_implementation": "easyicu.scores.sofa2.sofa2_liver",
-    "production_executor": "easyicu.concept.callbacks._callback_sofa_component",
+    "production_executor": "easyicu.concept.ConceptResolver.load_concepts",
+    "production_callback": "easyicu.concept.callbacks._callback_sofa_component",
+    "runtime_inputs": {"bili": "concept:bili"},
     "database_conformance": {"mimic": "mapping_only", "miiv": "mapping_only", "eicu": "mapping_only", "aumc": "mapping_only", "hirid": "mapping_only", "sic": "mapping_only"}
   },
   "sofa2_cardio_2025": {
@@ -130,7 +138,10 @@
     "reviewer": "EasyICU software conformance review; independent clinician pending",
     "last_reviewed_at": "2026-08-09",
     "reference_implementation": "easyicu.scores.sofa2.sofa2_cardio",
-    "production_executor": "easyicu.concept.callbacks._callback_sofa_component",
+    "production_executor": "easyicu.concept.ConceptResolver.load_concepts",
+    "production_callback": "easyicu.concept.callbacks._callback_sofa_component",
+    "runtime_inputs": {"map": "concept:map", "norepi60": "concept:norepi60", "epi60": "concept:epi60", "dopa60": "concept:dopa60", "dobu60": "concept:dobu60", "other_vaso": "concept:other_vaso", "mech_circ_support": "concept:mech_circ_support", "ecmo": "concept:ecmo", "ecmo_indication": "concept:ecmo_indication"},
+    "ascertainment_limitations": ["norepinephrine, epinephrine, dopamine, and dobutamine use duration-aware 60-minute concepts; other_vaso mappings do not yet prove continuous intravenous infusion for >=1h in every database, and treatment-ceiling/unavailable-vasopressor state is not mapped"],
     "database_conformance": {"mimic": "mapping_only", "miiv": "mapping_only", "eicu": "mapping_only", "aumc": "mapping_only", "hirid": "mapping_only", "sic": "mapping_only"}
   },
   "sofa2_cns_2025": {
@@ -149,7 +160,9 @@
     "reviewer": "EasyICU software conformance review; independent clinician pending",
     "last_reviewed_at": "2026-08-09",
     "reference_implementation": "easyicu.scores.sofa2.sofa2_cns",
-    "production_executor": "easyicu.concept.callbacks._callback_sofa_component",
+    "production_executor": "easyicu.concept.ConceptResolver.load_concepts",
+    "production_callback": "easyicu.concept.callbacks._callback_sofa_component",
+    "runtime_inputs": {"gcs": "concept:gcs", "delirium_tx": "concept:delirium_tx", "delirium_positive": "concept:delirium_positive", "motor_response": "concept:motor_response", "sedated_gcs": "concept:sedated_gcs"},
     "ascertainment_limitations": ["pre-sedation GCS has explicit source mappings only where the database records it; unknown pre-sedation GCS is scored 0 when sedation status is supplied"],
     "database_conformance": {"mimic": "mapping_only", "miiv": "mapping_only", "eicu": "mapping_only", "aumc": "mapping_only", "hirid": "mapping_only", "sic": "mapping_only"}
   },
@@ -169,7 +182,9 @@
     "reviewer": "EasyICU software conformance review; independent clinician pending",
     "last_reviewed_at": "2026-08-09",
     "reference_implementation": "easyicu.scores.sofa2.sofa2_renal",
-    "production_executor": "easyicu.concept.callbacks._callback_sofa_component",
+    "production_executor": "easyicu.concept.ConceptResolver.load_concepts",
+    "production_callback": "easyicu.concept.callbacks._callback_sofa_component",
+    "runtime_inputs": {"crea": "concept:crea", "rrt": "concept:rrt", "uo_6h": "concept:uo_6h", "uo_12h": "concept:uo_12h", "uo_24h": "concept:uo_24h", "potassium": "concept:potassium", "ph": "concept:ph", "bicarb": "concept:bicarb"},
     "ascertainment_limitations": ["most database mappings expose active treatment evidence but not a reliable permanent-termination or non-renal-only indication signal; off-day/chronic scoring requires explicit rrt_episode_active input"],
     "database_conformance": {"mimic": "mapping_only", "miiv": "mapping_only", "eicu": "mapping_only", "aumc": "mapping_only", "hirid": "mapping_only", "sic": "mapping_only"}
   },
