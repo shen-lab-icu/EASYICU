@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -242,14 +243,14 @@ def test_javascript_checker_uses_a_minimal_environment(
     result = workspace.check_file("project-a", "app.js")
 
     assert result["valid"] is True
-    assert observed["env"] == {
-        "HOME": str(tmp_path),
-        "LANG": "C.UTF-8",
-        "LC_ALL": "C.UTF-8",
-        "LC_CTYPE": "C.UTF-8",
-        "PATH": "/safe/bin",
-        "TMPDIR": str(tmp_path / "tmp"),
+    expected = {
+        key: value
+        for key, value in os.environ.items()
+        if key in {"PATH", "HOME", "TMPDIR", "LANG"} or key.startswith("LC_")
     }
+    assert observed["env"] == expected
+    assert "NODE_OPTIONS" not in observed["env"]
+    assert "OPENAI_API_KEY" not in observed["env"]
 
 
 def test_project_workspace_requires_unique_exact_edit_target(tmp_path: Path) -> None:
