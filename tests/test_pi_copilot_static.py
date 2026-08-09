@@ -22,8 +22,8 @@ def _read(relative: str) -> str:
 def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     index = _read("index.html")
     assert "css/guided-pi.css?v=20260809-workspace-security1" in index
-    assert "css/guided-pi-preview.css?v=20260809-workspace-security1" in index
-    assert "js/screens-guided-pi-preview.js?v=20260809-workspace-security1" in index
+    assert "css/guided-pi-preview.css?v=20260809-workspace-final1" in index
+    assert "js/screens-guided-pi-preview.js?v=20260809-workspace-final1" in index
     assert "js/screens-guided-pi.js?v=20260809-workspace-security1" in index
     assert "js/api.js?v=20260808-pi-research-flow1" in index
     assert index.index("css/guided.css") < index.index("css/guided-pi.css")
@@ -207,6 +207,9 @@ def test_workspace_preview_hard_codes_unvalidated_authority_and_iframe_sandbox()
     assert "scientific evidence" in preview
     assert 'sandbox="allow-scripts"' in preview
     assert 'referrerpolicy="no-referrer"' in preview
+    assert "EasyICU run artifact · Analysis-only" in preview
+    assert "Human sign-off required" in preview
+    assert "state.governance" in preview
 
 
 def test_workspace_sidecar_requires_digest_for_edit_and_teaches_safe_egress() -> None:
@@ -214,8 +217,19 @@ def test_workspace_sidecar_requires_digest_for_edit_and_teaches_safe_egress() ->
     skill = (
         NODE_APP / "src" / "skills" / "web-prototype" / "SKILL.md"
     ).read_text(encoding="utf-8")
-    assert sidecar.count("expected_sha256") >= 2
-    assert "Read the current file first" in skill
+    assert sidecar.count("expected_sha256") >= 1
+    assert "Create a new bounded artifact. Existing files must be changed" in sidecar
+    assert "To change an existing file, read it first" in skill
     assert "expected_sha256" in skill
     assert "may be sent to the\nconfigured Pi model service" in skill
     assert "PHI" in skill
+
+
+def test_workspace_security_workflow_covers_sidecar_and_browser_helper_dependencies() -> None:
+    workflow = (
+        STATIC.parents[3] / ".github" / "workflows" / "pi_workspace_security_ci.yml"
+    ).read_text(encoding="utf-8")
+    assert '"tools/qa_native_fastapi_patient_drilldown.py"' in workflow
+    assert "tests/test_pi_copilot_install.py" in workflow
+    for sidecar in ("main.mjs", "event-projection.mjs", "shell-budget.mjs"):
+        assert f"node --check src/easyicu/webserver/pi_copilot/node_app/src/{sidecar}" in workflow

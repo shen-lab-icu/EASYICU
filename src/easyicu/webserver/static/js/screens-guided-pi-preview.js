@@ -10,6 +10,7 @@
     resource: null,
     artifact: null,
     payload: null,
+    governance: null,
     mode: 'code',
     loading: false,
     error: '',
@@ -75,6 +76,27 @@
     if (aside) aside.classList.toggle('gpi-preview-open', !!open);
     if (main) main.classList.toggle('gpi-preview-open', !!open);
   }
+  function researchProvenance() {
+    const governance = state.governance || {};
+    if (!state.governance) {
+      return `<div class="gpi-preview-provenance is-research" role="note"><strong>${esc(tr('EasyICU run artifact · Governance pending', 'EasyICU 运行产物 · 治理状态待确认'))}</strong><span>${esc(tr('Loading Host gate status…', '正在加载 Host 运行闸状态…'))}</span></div>`;
+    }
+    const ceiling = governance.claim_ceiling;
+    const title = ceiling === 'reportable'
+      ? tr('EasyICU run artifact · Reportable', 'EasyICU 运行产物 · 可报告')
+      : ceiling === 'analysis_only'
+        ? tr('EasyICU run artifact · Analysis-only', 'EasyICU 运行产物 · 仅供分析')
+        : tr('EasyICU run artifact · Governance pending', 'EasyICU 运行产物 · 治理状态待确认');
+    const signoff = governance.human_signoff;
+    const detail = signoff === 'required'
+      ? tr('Human sign-off required', '需要人工签署')
+      : signoff === 'signed'
+        ? tr('Human sign-off recorded; claim ceiling remains Host-controlled.', '已记录人工签署；结论上限仍由 Host 控制。')
+        : signoff === 'stale'
+          ? tr('Sign-off is stale; do not use for claims.', '签署已失效；不得用于结论。')
+          : tr('Current run gate does not permit sign-off.', '当前运行闸不允许签署。');
+    return `<div class="gpi-preview-provenance is-research" role="note"><strong>${esc(title)}</strong><span>${esc(detail)}</span></div>`;
+  }
   function render() {
     if (!state.host || !state.resource) return;
     setAsideOpen(true);
@@ -108,7 +130,7 @@
     const reference = isResearchArtifact()
       ? `${state.resource.run_id} · ${state.resource.artifact}`
       : state.resource.file;
-    const provenance = isResearchArtifact() ? '' : `
+    const provenance = isResearchArtifact() ? researchProvenance() : `
       <div class="gpi-preview-provenance" role="note">
         <strong>${tr('Workspace artifact · Unvalidated', '工作区产物 · 未验证')}</strong>
         <span>${tr('Not scientific evidence; unsupported for clinical or manuscript claims.', '不是科学证据；不支持临床或论文结论。')}</span>
@@ -142,6 +164,7 @@
       if (ticket !== state.request) return;
       state.artifact = payload && payload.artifact ? payload.artifact : null;
       state.payload = isResearchArtifact() && payload ? (payload.payload || {}) : null;
+      state.governance = isResearchArtifact() && payload ? (payload.governance || null) : null;
     } catch (error) {
       if (ticket !== state.request) return;
       state.error = String(error && (error.message || error.code) || error);
@@ -157,6 +180,7 @@
     state.projectId = project;
     state.artifact = null;
     state.payload = null;
+    state.governance = null;
     state.error = '';
     state.mode = safe.kind === 'research_artifact' ? 'structured' : (safe.kind === 'webpage' ? 'web' : 'code');
     render();
@@ -164,7 +188,7 @@
   }
   function close() {
     state.request += 1;
-    state.resource = null; state.artifact = null; state.payload = null; state.error = ''; state.loading = false;
+    state.resource = null; state.artifact = null; state.payload = null; state.governance = null; state.error = ''; state.loading = false;
     setAsideOpen(false);
     if (state.host) state.host.replaceChildren();
   }

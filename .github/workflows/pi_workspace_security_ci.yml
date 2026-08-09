@@ -10,6 +10,7 @@ on:
       - "src/easyicu/webserver/static/index.html"
       - "tests/test_pi_copilot_*.py"
       - "tools/qa_pi_workspace_preview_security.py"
+      - "tools/qa_native_fastapi_patient_drilldown.py"
       - ".github/workflows/pi_workspace_security_ci.yml"
   pull_request:
     paths:
@@ -20,6 +21,7 @@ on:
       - "src/easyicu/webserver/static/index.html"
       - "tests/test_pi_copilot_*.py"
       - "tools/qa_pi_workspace_preview_security.py"
+      - "tools/qa_native_fastapi_patient_drilldown.py"
       - ".github/workflows/pi_workspace_security_ci.yml"
 
 permissions:
@@ -52,7 +54,14 @@ jobs:
             tests/test_pi_copilot_contract.py \
             tests/test_pi_copilot_static.py \
             tests/test_pi_copilot_gateway.py \
-            tests/test_pi_copilot_provider_config.py
+            tests/test_pi_copilot_provider_config.py \
+            tests/test_pi_copilot_install.py
+
+      - name: Parse-check Pi sidecar owners
+        run: |
+          node --check src/easyicu/webserver/pi_copilot/node_app/src/main.mjs
+          node --check src/easyicu/webserver/pi_copilot/node_app/src/event-projection.mjs
+          node --check src/easyicu/webserver/pi_copilot/node_app/src/shell-budget.mjs
 
       - name: Prove hostile preview origin isolation in Chromium
         run: python tools/qa_pi_workspace_preview_security.py

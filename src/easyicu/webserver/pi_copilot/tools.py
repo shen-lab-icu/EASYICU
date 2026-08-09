@@ -1193,7 +1193,7 @@ def _write_project_file(
 ) -> Dict[str, Any]:
     _require_args(
         params,
-        allowed=("file", "content", "expected_sha256"),
+        allowed=("file", "content"),
         required=("file", "content"),
     )
     workspace, blocked = _workspace_access(context, require_write=True)
@@ -1204,13 +1204,12 @@ def _write_project_file(
         context.session.project_id,
         params["file"],
         params["content"],
-        expected_sha256=params.get("expected_sha256"),
     )
     return _workspace_result(
         context,
         status="ok",
         code="pi_workspace_file_written",
-        summary=f"{'Created' if payload['created'] else 'Updated'} {payload['file']}.",
+        summary=f"Created {payload['file']}.",
         details={**payload, "resource": _workspace_resource(payload)},
     )
 

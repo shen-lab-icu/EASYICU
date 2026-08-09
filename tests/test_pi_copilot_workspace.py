@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -121,48 +122,69 @@ def test_project_workspace_rejects_projects_directory_symlink(tmp_path: Path) ->
     assert list(outside.iterdir()) == []
 
 
-def test_project_workspace_requires_current_digest_for_replacement_and_edit(
+def test_project_workspace_rejects_workspace_root_symlink(tmp_path: Path) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "private.md").write_text("private", encoding="utf-8")
+    workspace_root = tmp_path / "workspace"
+    workspace_root.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(PiCopilotError) as raised:
+        ProjectWorkspace(workspace_root)
+
+    assert raised.value.code == "pi_workspace_base_root_symlink_blocked"
+    assert (outside / "private.md").read_text(encoding="utf-8") == "private"
+    assert not (outside / "projects").exists()
+
+
+def test_project_workspace_write_is_create_only_and_edit_requires_current_digest(
     tmp_path: Path,
 ) -> None:
     workspace = ProjectWorkspace(tmp_path / "workspace")
     created = workspace.write_file("project-a", "notes.md", "first")
 
-    with pytest.raises(PiCopilotError) as missing_write:
+    with pytest.raises(PiCopilotError) as replace_blocked:
         workspace.write_file("project-a", "notes.md", "second")
-    assert missing_write.value.code == "pi_workspace_expected_sha256_required"
-
-    replaced = workspace.write_file(
-        "project-a",
-        "notes.md",
-        "second",
-        expected_sha256=created["sha256"],
-    )
-    with pytest.raises(PiCopilotError) as stale_write:
-        workspace.write_file(
-            "project-a",
-            "notes.md",
-            "third",
-            expected_sha256=created["sha256"],
-        )
-    assert stale_write.value.code == "pi_workspace_file_changed"
+    assert replace_blocked.value.code == "pi_workspace_write_create_only"
+    assert workspace.read_file("project-a", "notes.md")["text"] == "first"
 
     with pytest.raises(PiCopilotError) as missing_edit:
         workspace.edit_file(
-            "project-a", "notes.md", old_text="second", new_text="third"
+            "project-a", "notes.md", old_text="first", new_text="second"
         )
     assert missing_edit.value.code == "pi_workspace_expected_sha256_required"
 
     edited = workspace.edit_file(
         "project-a",
         "notes.md",
-        old_text="second",
-        new_text="third",
-        expected_sha256=replaced["sha256"],
+        old_text="first",
+        new_text="second",
+        expected_sha256=created["sha256"],
     )
-    assert edited["sha256"] != replaced["sha256"]
+    assert edited["sha256"] != created["sha256"]
 
 
-def test_project_workspace_compare_and_swap_allows_only_one_concurrent_writer(
+def test_truncated_read_digest_cannot_authorize_whole_file_replacement(
+    tmp_path: Path,
+) -> None:
+    workspace = ProjectWorkspace(tmp_path / "workspace")
+    original = "A" * 100_000
+    created = workspace.write_file("project-a", "bundle.js", original)
+    read = workspace.read_file("project-a", "bundle.js")
+
+    assert read["truncated"] is True
+    assert len(read["text"]) == 24_000
+    assert read["sha256"] == created["sha256"]
+    with pytest.raises(PiCopilotError) as blocked:
+        workspace.write_file("project-a", "bundle.js", read["text"])
+
+    assert blocked.value.code == "pi_workspace_write_create_only"
+    assert (workspace.project_root("project-a") / "bundle.js").read_text(
+        encoding="utf-8"
+    ) == original
+
+
+def test_project_workspace_compare_and_swap_allows_only_one_concurrent_editor(
     tmp_path: Path,
 ) -> None:
     root = tmp_path / "workspace"
@@ -173,10 +195,11 @@ def test_project_workspace_compare_and_swap_allows_only_one_concurrent_writer(
         workspace = ProjectWorkspace(root)
         barrier.wait(timeout=5)
         try:
-            workspace.write_file(
+            workspace.edit_file(
                 "project-a",
                 "notes.md",
-                content,
+                old_text="base",
+                new_text=content,
                 expected_sha256=created["sha256"],
             )
         except PiCopilotError as exc:
@@ -187,6 +210,46 @@ def test_project_workspace_compare_and_swap_allows_only_one_concurrent_writer(
         outcomes = sorted(pool.map(replace, ("writer-a", "writer-b")))
 
     assert outcomes == ["pi_workspace_file_changed", "written"]
+
+
+def test_javascript_checker_uses_a_minimal_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = ProjectWorkspace(tmp_path / "workspace")
+    workspace.write_file("project-a", "app.js", "const ready = true;\n")
+    observed: dict[str, object] = {}
+    monkeypatch.setenv("PATH", "/safe/bin")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("TMPDIR", str(tmp_path / "tmp"))
+    monkeypatch.setenv("LANG", "C.UTF-8")
+    monkeypatch.setenv("LC_ALL", "C.UTF-8")
+    monkeypatch.setenv("NODE_OPTIONS", "--require=/private/inject.js")
+    monkeypatch.setenv("OPENAI_API_KEY", "must-not-reach-node")
+    monkeypatch.setattr(
+        "easyicu.webserver.pi_copilot.workspace.shutil.which",
+        lambda name: "/safe/bin/node" if name == "node" else None,
+    )
+
+    def fake_run(*args, **kwargs):
+        observed.update(kwargs)
+        return subprocess.CompletedProcess(args[0], 0, "", "")
+
+    monkeypatch.setattr(
+        "easyicu.webserver.pi_copilot.workspace.subprocess.run", fake_run
+    )
+
+    result = workspace.check_file("project-a", "app.js")
+
+    assert result["valid"] is True
+    assert observed["env"] == {
+        "HOME": str(tmp_path),
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "LC_CTYPE": "C.UTF-8",
+        "PATH": "/safe/bin",
+        "TMPDIR": str(tmp_path / "tmp"),
+    }
 
 
 def test_project_workspace_requires_unique_exact_edit_target(tmp_path: Path) -> None:

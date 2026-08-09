@@ -1556,6 +1556,20 @@ def test_project_artifact_preview_resolves_authority_and_scrubs_host_paths(
             "privacy_scan": {"passed": True},
         },
     )
+    monkeypatch.setattr(
+        service_module.agent_runs,
+        "read_run_review",
+        lambda project_dir: {
+            "ok": True,
+            "gate": {"status": "analysis_only"},
+            "readiness": {
+                "status": "awaiting_human_signoff",
+                "signed": False,
+                "signoff_stale": False,
+                "reportable": False,
+            },
+        },
+    )
 
     payload = service.get_research_artifact(
         project_id="project-a",
@@ -1565,6 +1579,14 @@ def test_project_artifact_preview_resolves_authority_and_scrubs_host_paths(
     encoded = json.dumps(payload)
     assert payload["payload"]["source"] == {"database": "mimiciv"}
     assert payload["payload"]["figures"][0]["relative_path"] == "figures/roc.svg"
+    assert payload["governance"] == {
+        "authority_class": "easyicu_run_artifact",
+        "gate_status": "analysis_only",
+        "readiness_status": "awaiting_human_signoff",
+        "human_signoff": "required",
+        "reportable": False,
+        "claim_ceiling": "analysis_only",
+    }
     assert "project_dir" not in encoded
     assert "/private/" not in encoded
 
