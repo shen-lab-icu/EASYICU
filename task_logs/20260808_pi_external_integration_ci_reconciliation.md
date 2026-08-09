@@ -79,3 +79,21 @@ This checkpoint validates code and offline contracts only. It does not advance
 Canonical9 beyond 4/9, authorize a paper result, run M3, read a production cohort,
 or call the configured local/provider model. Those actions remain separate,
 explicitly authorized stages after exact-SHA CI and independent review.
+
+## Local service handoff
+
+- The stale browser tab had no live listener on port 8765. A new background
+  server was started from the clean integration worktree at documentation head
+  `00026c823a798c1acc567092381e7757c8440fad`; its production-code parent remains
+  the CI-accepted `25edc214742e856b570b2c1e09dd135da57396b3`.
+- The pinned Pi 0.84.1 runtime revision
+  `0.84.1-1d13000d610d-install2` was installed under the private user runtime,
+  not into the Git worktree. The install resolved 238 packages with zero known
+  vulnerabilities.
+- `GET /api/catalog`, the native HTML shell, Guided Pi JavaScript, and the Pi
+  preview owner all returned HTTP 200. Public Pi status reported `ready`, no
+  blockers, research/workspace modes, verified `gpt-5.6-luna` availability,
+  credential storage `private_local_file_0600`, and no returned secrets.
+- Browser automation policy did not permit an automated localhost tab reload;
+  the operator must refresh the already-open tab once. No model message or tool
+  action was sent during this service handoff.
