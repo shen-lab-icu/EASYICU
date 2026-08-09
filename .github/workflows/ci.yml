@@ -122,7 +122,7 @@ jobs:
           from importlib.resources import files
           root = files("easyicu.research_agent") / "runner_image"
           names = sorted(p.name for p in root.iterdir())
-          for required in ("Dockerfile", "requirements.lock", "README.md"):
+          for required in ("Dockerfile", "requirements.lock", "base-image.lock", "README.md"):
               assert required in names, f"{required} missing from the wheel: {names}"
           print("runner_image ships:", ", ".join(names))
           PY

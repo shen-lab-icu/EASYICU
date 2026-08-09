@@ -8,7 +8,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Version](https://img.shields.io/badge/version-1.0.0-green.svg)](https://github.com/shen-lab-icu/easyicu)
 
-EasyICU 是一个面向重症监护室（ICU）数据分析的 Python 工具包。它统一接入 **6 个主流公开 ICU 数据库**，支持 **200+ 种标准化临床概念**的自动提取（Web 端目录共 **224 个** —— 204 个字典概念加上 20 个专用概念：17 个 KDIGO AKI 分期与可判定性输出、2 个循环衰竭指标和 Sepsis-3 SOFA-1 诊断，全部都能通过同一个 `load_concepts(...)` 调用获取），并提供 **Web 可视化界面**，帮助用户完成队列定义、特征审阅、可视化分析与数据导出。
+EasyICU 是一个面向重症监护室（ICU）数据分析的 Python 工具包。它统一接入支持的公开 ICU 数据库，支持数百种标准化临床概念的自动提取，并提供 **Web 可视化界面**，帮助用户完成队列定义、特征审阅、可视化分析与数据导出。当前精确数量由已发布 registry 自动生成，见[目录摘要](docs/catalog_summary.md)，不再在说明文字里手工复制。
 
 ## 为什么是 EasyICU
 

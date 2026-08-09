@@ -98,7 +98,9 @@ class ScientificCapability:
     # ``analysis_only`` is an honest boundary: an agent may execute the
     # declared analysis, but EasyICU has no registered deterministic validator
     # for the scientific identification claim and therefore cannot promote it.
-    scientific_validation: Literal["reportable", "analysis_only"] = "reportable"
+    scientific_validation: Literal["reportable", "analysis_only"] = "analysis_only"
+    scientific_validator_owner: Optional[str] = None
+    scientific_validator_contract: Optional[str] = None
 
 
 # Backward-compatible public name.  New code should use ScientificCapability:
@@ -213,6 +215,9 @@ CAPABILITY_REGISTRY: Tuple[ScientificCapability, ...] = (
             "time-origin binding",
             "proportional-hazards diagnostic when Cox is declared",
         ),
+        scientific_validation="reportable",
+        scientific_validator_owner="execution.runners.survival_primary_executor",
+        scientific_validator_contract="SurvivalPrimaryResultReceipt",
     ),
     ScientificCapability(
         family="causal_emulation",
@@ -295,6 +300,9 @@ CAPABILITY_REGISTRY: Tuple[ScientificCapability, ...] = (
             "primary model contract",
             "effect/interval reconciliation",
         ),
+        scientific_validation="reportable",
+        scientific_validator_owner="execution.runners.adjusted_association_executor",
+        scientific_validator_contract="AssociationExecutionVerdict",
     ),
     ScientificCapability(
         family="association",
@@ -1120,7 +1128,12 @@ def assess_scientific_capability(
                 "required by this capability."
             ),
         )
-    if capability.scientific_validation != "reportable":
+    validator_registered = bool(
+        capability.scientific_validation == "reportable"
+        and capability.scientific_validator_owner
+        and capability.scientific_validator_contract
+    )
+    if not validator_registered:
         return ScientificCapabilityAssessment(
             capability_id=capability.capability_id,
             analysis_type=canonical,
@@ -1224,8 +1237,8 @@ def render_capability_matrix_markdown() -> str:
         "scientific validator for a publication claim. `analysis_only` is an "
         "explicit fail-closed boundary, not an error the Agent may write around.",
         "",
-        "| Capability | Result contract | Required diagnostics | Claim ceiling |",
-        "| --- | --- | --- | --- |",
+        "| Capability | Result contract | Validator owner | Required diagnostics | Claim ceiling |",
+        "| --- | --- | --- | --- | --- |",
     ]
     for c in CAPABILITY_REGISTRY:
         status = (
@@ -1234,8 +1247,13 @@ def render_capability_matrix_markdown() -> str:
             else "analysis_only ⚠️"
         )
         diagnostics = "; ".join(c.required_diagnostics) or "—"
+        validator = (
+            f"`{c.scientific_validator_owner}` / `{c.scientific_validator_contract}`"
+            if c.scientific_validator_owner and c.scientific_validator_contract
+            else "—"
+        )
         lines.append(
-            f"| `{c.capability_id}` | {c.result_contract or '—'} | "
+            f"| `{c.capability_id}` | {c.result_contract or '—'} | {validator} | "
             f"{diagnostics} | {status} |"
         )
     lines += [
@@ -1272,4 +1290,4 @@ def render_capability_matrix_markdown() -> str:
 
 
 if __name__ == "__main__":  # pragma: no cover - manual regen
-    print(render_capability_matrix_markdown())
+    print(render_capability_matrix_markdown(), end="")

@@ -18,7 +18,10 @@ loaded.
 |---|---|---|
 | `concept_name` → callbacks per data source | `hr` → `{miiv: {…}, eicu: {…}, …}` | Per-database extraction rules |
 
-**198 concepts in `concept-dict.json`** (verified count, as of 2026-06).
+Exact base, overlay, merged, database, clinical-contract, and capability counts
+are generated from the shipped registries in
+[`docs/catalog_summary.md`](../../../docs/catalog_summary.md). Do not maintain a
+second hand-written count here.
 This is the number of *entries in this file*; the web-side catalog reports
 a larger loadable total (see the root `README.md`) because it also exposes
 derived/special concepts — KDIGO AKI staging, circulatory-failure

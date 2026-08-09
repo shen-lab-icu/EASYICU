@@ -21,6 +21,15 @@
   function esc(value) {
     return String(value == null ? '' : value).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
   }
+  function escAttr(value) {
+    return String(value == null ? '' : value).replace(/[&<>"']/g, c => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    }[c]));
+  }
+  function boundedPngDataUrl(value) {
+    const source = String(value || '');
+    return /^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(source) ? source : '';
+  }
   function bi(value) {
     return Array.isArray(value) ? t(value[0], value[1]) : esc(value);
   }
@@ -409,13 +418,15 @@
   }
   function figureGallery(payload) {
     const figs = payload && Array.isArray(payload.figures) ? payload.figures : [];
-    const visible = figs.filter(row => row && (row.data_url || row.image_data_url));
+    const visible = figs
+      .map(row => ({ row, source: boundedPngDataUrl(row && (row.data_url || row.image_data_url)) }))
+      .filter(item => item.row && item.source);
     if (!visible.length) return '';
     return `
       <div class="ag-figure-gallery">
-        ${visible.map(row => `
+        ${visible.map(({ row, source }) => `
           <figure>
-            <img src="${esc(row.data_url || row.image_data_url)}" alt="${esc(row.label || row.relative_path || 'figure')}" />
+            <img src="${escAttr(source)}" alt="${escAttr(row.label || row.relative_path || 'figure')}" />
             <figcaption><strong>${esc(row.label || 'figure')}</strong><span class="mono">${esc(row.relative_path || row.name || '')}</span></figcaption>
           </figure>`).join('')}
       </div>`;

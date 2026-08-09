@@ -1,8 +1,10 @@
 import pandas as pd
+import pytest
 
 from easyicu.callbacks import sofa2_cns, sofa2_resp
 from easyicu.concept.callbacks import ConceptCallbackContext, _callback_sofa_component
 from easyicu.scores.sofa2 import sofa2_cardio as standalone_sofa2_cardio
+from easyicu.scores.sofa2 import sofa2_cns as standalone_sofa2_cns
 from easyicu.scores.sofa2 import sofa2_resp as standalone_sofa2_resp
 from easyicu.table import ICUTable
 
@@ -25,6 +27,19 @@ def test_sofa2_cns_uses_motor_response_when_gcs_missing():
     )
 
     assert score.tolist() == [0, 1, 2, 3, 4, 4]
+
+
+@pytest.mark.clinical_conformance
+@pytest.mark.parametrize("scorer", [sofa2_cns, standalone_sofa2_cns])
+def test_sofa2_brain_score_one_requires_gcs_13_14_or_delirium_treatment(scorer):
+    """SOFA-2 Table 2 does not score a positive CAM assessment by itself."""
+    score = scorer(
+        pd.Series([15, 15, 14]),
+        delirium_tx=pd.Series([False, True, False]),
+        delirium_positive=pd.Series([True, False, False]),
+    )
+
+    assert score.tolist() == [0, 1, 1]
 
 
 def test_standalone_sofa2_cardio_mechanical_support_is_not_downgraded():

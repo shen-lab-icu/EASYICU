@@ -25,18 +25,11 @@
 # * `PYTHONHASHSEED=0`            — best-effort reproducibility for
 #                                    set/dict ordering in artefacts.
 
-# `python:3.11-slim` is a moving tag: the same Dockerfile builds a different
-# environment as the tag is republished, which defeats the point of a
-# reproducible analysis sandbox. BASE_IMAGE exists so a run that must be
-# reproducible pins the digest explicitly:
-#
-#   digest=$(docker buildx imagetools inspect python:3.11-slim \
-#              --format '{{.Manifest.Digest}}')
-#   docker build --build-arg BASE_IMAGE=python:3.11-slim@${digest} ...
-#
-# and records that digest next to requirements.lock. The tag default is kept so
-# a plain `docker build` still works; it is NOT a reproducible build.
-ARG BASE_IMAGE=python:3.11-slim
+# Release builds default to the multi-platform digest recorded in
+# base-image.lock. Updating the base is an explicit reviewed change; callers may
+# still override BASE_IMAGE for a local experiment, but that changes execution
+# identity and is recorded by DockerRunner.
+ARG BASE_IMAGE=python:3.11-slim@sha256:90744cff8f32887f075c47d747a173ff333e9e98801667af93c357fa9f5e28ff
 FROM ${BASE_IMAGE}
 
 # Official PyPI remains the reproducible public default. Builders on a slow
@@ -49,6 +42,7 @@ ARG DEBIAN_SECURITY_MIRROR=http://deb.debian.org/debian-security
 LABEL org.opencontainers.image.title="easyicu-research-agent runner"
 LABEL org.opencontainers.image.description="Sandbox image for the EasyICU research-agent code runner (T3.1)."
 LABEL org.opencontainers.image.source="https://github.com/shen-lab-icu/EASYICU"
+LABEL org.opencontainers.image.base.digest="sha256:90744cff8f32887f075c47d747a173ff333e9e98801667af93c357fa9f5e28ff"
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \

@@ -1,0 +1,7 @@
+{
+  "source": "Sepsis-3, PMID:26903338",
+  "suspected_infection_time": 0,
+  "sofa_times": [-1, 0],
+  "sofa_values": [0, 2],
+  "expected_event_time": 0
+}

@@ -441,9 +441,8 @@ def sofa2_cns(
     │   4    │ 3-5          │ Extension/no response/myoclonus      │
     └────────┴──────────────┴──────────────────────────────────────┘
     
-    NEW in SOFA-2: Delirium treatment/assessment rule
+    NEW in SOFA-2: Delirium treatment rule
     - If receiving delirium treatment drugs → score 1pt even if GCS=15
-    - If CAM-ICU positive → score 1pt even if GCS=15
     - Delirium drugs (PADIS Guidelines):
       * Haloperidol, quetiapine, olanzapine, risperidone
       * Dexmedetomidine (if used for delirium)
@@ -461,7 +460,8 @@ def sofa2_cns(
     Args:
         gcs: Glasgow Coma Scale (3-15)
         delirium_tx: Boolean - receiving delirium treatment
-        delirium_positive: Boolean - positive CAM-ICU or delirium assessment
+        delirium_positive: Positive CAM-ICU metadata retained for sensitivity
+            analyses; it does not score without delirium treatment
         motor_response: Motor response score when GCS cannot be fully assessed
                        (6=localizing, 5=withdrawal, 4=flexion, 3=extension, 2=no response)
 
@@ -469,7 +469,7 @@ def sofa2_cns(
         Series of brain/CNS SOFA-2 scores (0-4)
 
     Notes:
-    - Delirium treatment OR positive assessment overrides GCS=15 to minimum 1pt
+    - Delirium treatment overrides GCS=15 to minimum 1pt
     - Motor alternatives allow scoring in intubated/non-verbal patients
     - When GCS 3 domains cannot be assessed, use best motor scale domain score
     """
@@ -505,13 +505,6 @@ def sofa2_cns(
     if delirium_tx is not None:
         dtx = _is_true(delirium_tx)
         mask = (g == 15) & dtx
-        score[mask] = np.maximum(score[mask], 1)
-
-    # SOFA-2 NEW: Positive delirium assessment rule
-    # If CAM-ICU positive and GCS==15, upgrade to 1pt
-    if delirium_positive is not None:
-        dp = _is_true(delirium_positive)
-        mask = (g == 15) & dp
         score[mask] = np.maximum(score[mask], 1)
 
     return score

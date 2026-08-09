@@ -363,7 +363,7 @@ def _calc_aki_stage_creat(
     mask_3_fold = creat >= (creat_low_7day * 3.0)
     # For creat ≥ 4.0, require acute increase (≥0.3 in 48h or ≥1.5x baseline)
     mask_3_abs = (creat >= 4.0) & (
-        (creat_low_48hr <= 3.7) |  # Can have 0.3 increase to reach 4.0
+        (creat >= creat_low_48hr + 0.3) |
         (creat >= creat_low_7day * 1.5)  # Or 1.5x baseline
     )
     stage[mask_3_fold | mask_3_abs] = 3

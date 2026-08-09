@@ -1610,6 +1610,12 @@ def test_project_artifact_preview_resolves_authority_and_scrubs_host_paths(
             "payload": {
                 "status": "ready",
                 "source": {"path": "/private/export", "database": "mimiciv"},
+                "future_paths": {
+                    "artifact_path": "/private/future.json",
+                    "output_dir": "/private/output",
+                    "cache_file": "/private/cache.bin",
+                    "cwd": "/private/work",
+                },
                 "figures": [{"relative_path": "figures/roc.svg"}],
             },
             "privacy_scan": {"passed": True},
@@ -1637,9 +1643,11 @@ def test_project_artifact_preview_resolves_authority_and_scrubs_host_paths(
     )
     encoded = json.dumps(payload)
     assert payload["payload"]["source"] == {"database": "mimiciv"}
+    assert payload["payload"]["future_paths"] == {}
     assert payload["payload"]["figures"][0]["relative_path"] == "figures/roc.svg"
     assert payload["governance"] == {
         "authority_class": "easyicu_run_artifact",
+        "artifact_integrity": "unsigned",
         "gate_status": "analysis_only",
         "readiness_status": "awaiting_human_signoff",
         "human_signoff": "required",

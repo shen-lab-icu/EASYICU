@@ -1,0 +1,4 @@
+image=python:3.11-slim
+digest=sha256:90744cff8f32887f075c47d747a173ff333e9e98801667af93c357fa9f5e28ff
+resolved_at=2026-08-09
+source_revision=docker-library/python@4d216ad3beb5b697c4049071c82fc375acb8abad

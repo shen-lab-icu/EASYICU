@@ -140,7 +140,8 @@ _PHRASE_TO_CONCEPT: Tuple[Tuple[str, str], ...] = (
     (r"\bgcs\b|glasgow|昏迷评分", "gcs"),
     (r"\brass\b|镇静评分", "rass"),
     (r"delirium|谵妄", "gcs"),
-    (r"sepsis-?3|脓毒症|sepsis", "sep3_sofa2"),
+    (r"sofa-?2.{0,20}(?:sepsis|脓毒症)|(?:sepsis|脓毒症).{0,20}sofa-?2", "sep3_sofa2"),
+    (r"sepsis-?3|脓毒症|sepsis", "sep3"),
     (r"suspected infection|疑似感染", "susp_inf"),
     (r"circulatory failure|循环衰竭|休克", "circ_failure"),
     (r"\bbmi\b|体重指数", "bmi"),
@@ -191,7 +192,7 @@ _COUNT_CONCEPTS = frozenset({"icu_free_days_28", "vent_free_days_28"})
 # serving as the outcome — "AKI stage vs LoS" has an AKI outcome, not an AKI
 # cohort.
 _POPULATION_PATTERNS: Tuple[Tuple[str, str, frozenset], ...] = (
-    (r"sepsis-?3|脓毒症|septic", "Sepsis-3 patients", frozenset({"sep3_sofa2", "susp_inf"})),
+    (r"sepsis-?3|脓毒症|septic", "Sepsis-3 patients", frozenset({"sep3", "susp_inf"})),
     (r"\baki\b|acute kidney|急性肾损伤|kdigo", "Patients with AKI", frozenset({"aki", "aki_stage", "rrt"})),
     (r"ventilated|mechanical ventilation|机械通气", "Mechanically ventilated patients", frozenset({"vent_ind", "vent_free_days_28"})),
     (r"\bards\b", "Patients with ARDS", frozenset()),
@@ -245,7 +246,7 @@ _CONCEPT_FAMILIES: Tuple[frozenset, ...] = (
     frozenset({"death", "mort_28d", "mort_90d", "mort_365d"}),
     frozenset({"los_icu", "los_hosp"}),
     frozenset({"vent_ind", "vent_free_days_28", "peep", "tidal_vol"}),
-    frozenset({"sep3_sofa2", "susp_inf"}),
+    frozenset({"sep3", "sep3_sofa2", "susp_inf"}),
 )
 
 

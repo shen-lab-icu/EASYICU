@@ -95,6 +95,20 @@ def test_registry_figure_renderers_exist_in_family_renderers():
         )
 
 
+def test_only_typed_host_validated_primary_capabilities_default_to_reportable():
+    reportable = {
+        capability.capability_id
+        for capability in cr.CAPABILITY_REGISTRY
+        if capability.scientific_validation == "reportable"
+    }
+
+    assert reportable == {"survival_time_to_event_v1", "association_adjusted_v1"}
+    for capability in cr.CAPABILITY_REGISTRY:
+        if capability.capability_id in reportable:
+            assert capability.scientific_validator_owner
+            assert capability.scientific_validator_contract
+
+
 # --- auxiliary runners are importable --------------------------------------
 
 

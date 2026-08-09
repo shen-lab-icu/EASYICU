@@ -130,13 +130,40 @@ class ProjectWorkspace:
         self.declared_base_dir = declared
         self.base_dir = declared.resolve()
 
+    @staticmethod
+    def _ensure_directory(
+        path: Path,
+        *,
+        code: str,
+        message: str,
+        parents: bool = False,
+    ) -> None:
+        """Create an expected workspace directory with an owner-stable error."""
+
+        try:
+            path.mkdir(parents=parents, exist_ok=True, mode=0o700)
+        except OSError as exc:
+            raise PiCopilotError(code, message, details={"path_name": path.name}) from exc
+        if not path.is_dir():
+            raise PiCopilotError(code, message, details={"path_name": path.name})
+
     def _ensure_base_root(self) -> None:
         if self.declared_base_dir.is_symlink():
             raise PiCopilotError(
                 "pi_workspace_base_root_symlink_blocked",
                 "The Pi workspace root must not be a symbolic link.",
             )
-        self.declared_base_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if self.declared_base_dir.resolve(strict=False) != self.base_dir:
+            raise PiCopilotError(
+                "pi_workspace_base_root_changed",
+                "The Pi workspace root changed after this workspace was opened.",
+            )
+        self._ensure_directory(
+            self.declared_base_dir,
+            code="pi_workspace_base_root_not_directory",
+            message="The Pi workspace root is not an accessible directory.",
+            parents=True,
+        )
         if self.declared_base_dir.is_symlink():
             raise PiCopilotError(
                 "pi_workspace_base_root_symlink_blocked",
@@ -161,7 +188,11 @@ class ProjectWorkspace:
                 "pi_workspace_projects_root_symlink_blocked",
                 "The Pi projects directory must not be a symbolic link.",
             )
-        projects_root.mkdir(exist_ok=True, mode=0o700)
+        self._ensure_directory(
+            projects_root,
+            code="pi_workspace_projects_root_not_directory",
+            message="The Pi projects path is not an accessible directory.",
+        )
         if projects_root.is_symlink():
             raise PiCopilotError(
                 "pi_workspace_projects_root_symlink_blocked",
@@ -182,7 +213,11 @@ class ProjectWorkspace:
                 "pi_workspace_project_root_symlink_blocked",
                 "The Pi project root must not be a symbolic link.",
             )
-        root.mkdir(exist_ok=True, mode=0o700)
+        self._ensure_directory(
+            root,
+            code="pi_workspace_project_root_not_directory",
+            message="The Pi project path is not an accessible directory.",
+        )
         if root.is_symlink():
             raise PiCopilotError(
                 "pi_workspace_project_root_symlink_blocked",
@@ -225,7 +260,12 @@ class ProjectWorkspace:
                     "pi_workspace_path_escape",
                     "Project files must stay inside the isolated Pi workspace.",
                 ) from exc
-            candidate.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            self._ensure_directory(
+                candidate.parent,
+                code="pi_workspace_parent_not_directory",
+                message="The Pi project file parent is not an accessible directory.",
+                parents=True,
+            )
         try:
             candidate.parent.resolve().relative_to(root)
         except ValueError as exc:
@@ -288,42 +328,30 @@ class ProjectWorkspace:
         start_line: int = 1,
         end_line: Optional[int] = None,
     ) -> Dict[str, Any]:
-        candidate, relative = self._candidate(project_id, relative_file)
-        if not candidate.is_file():
-            raise PiCopilotError(
-                "pi_workspace_file_not_found",
-                "The requested Pi project file does not exist.",
-                status_code=404,
-                details={"file": relative},
+        with self._project_lock(project_id):
+            candidate, relative, text, raw = self._read_complete_file(
+                project_id, relative_file
             )
-        size = candidate.stat().st_size
-        if size > MAX_FILE_BYTES:
-            raise PiCopilotError(
-                "pi_workspace_file_too_large",
-                "The requested Pi project file exceeds the preview limit.",
-                details={"file": relative, "max_bytes": MAX_FILE_BYTES},
-            )
-        text = self._read_text(candidate, relative)
-        lines = text.splitlines()
-        first = max(1, int(start_line or 1))
-        last = min(len(lines), int(end_line or min(len(lines), first + 399)))
-        if last < first:
-            last = first
-        selected = "\n".join(lines[first - 1 : last])
-        truncated = len(selected) > MAX_READ_CHARS
-        selected = selected[:MAX_READ_CHARS]
-        return {
-            "file": relative,
-            "media_type": self._media_type(candidate),
-            "size": size,
-            "sha256": hashlib.sha256(candidate.read_bytes()).hexdigest(),
-            "start_line": first,
-            "end_line": last,
-            "total_lines": len(lines),
-            "text": selected,
-            "truncated": truncated or last < len(lines),
-            **_authority_metadata(),
-        }
+            lines = text.splitlines()
+            first = max(1, int(start_line or 1))
+            last = min(len(lines), int(end_line or min(len(lines), first + 399)))
+            if last < first:
+                last = first
+            selected = "\n".join(lines[first - 1 : last])
+            truncated = len(selected) > MAX_READ_CHARS
+            selected = selected[:MAX_READ_CHARS]
+            return {
+                "file": relative,
+                "media_type": self._media_type(candidate),
+                "size": len(raw),
+                "sha256": hashlib.sha256(raw).hexdigest(),
+                "start_line": first,
+                "end_line": last,
+                "total_lines": len(lines),
+                "text": selected,
+                "truncated": truncated or last < len(lines),
+                **_authority_metadata(),
+            }
 
     @staticmethod
     def _read_text(candidate: Path, relative: str) -> str:
@@ -340,7 +368,7 @@ class ProjectWorkspace:
         self,
         project_id: str,
         relative_file: Any,
-    ) -> tuple[Path, str, str]:
+    ) -> tuple[Path, str, str, bytes]:
         candidate, relative = self._candidate(project_id, relative_file)
         if not candidate.is_file():
             raise PiCopilotError(
@@ -349,14 +377,22 @@ class ProjectWorkspace:
                 status_code=404,
                 details={"file": relative},
             )
-        size = candidate.stat().st_size
-        if size > MAX_FILE_BYTES:
+        raw = candidate.read_bytes()
+        if len(raw) > MAX_FILE_BYTES:
             raise PiCopilotError(
                 "pi_workspace_file_too_large",
                 "The requested Pi project file exceeds the bounded file limit.",
                 details={"file": relative, "max_bytes": MAX_FILE_BYTES},
             )
-        return candidate, relative, self._read_text(candidate, relative)
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise PiCopilotError(
+                "pi_workspace_file_not_text",
+                "The requested Pi project file is not valid UTF-8 text.",
+                details={"file": relative},
+            ) from exc
+        return candidate, relative, text, raw
 
     def _project_size_without(self, project_id: str, target: Path) -> int:
         root = self.project_root(project_id)
@@ -467,11 +503,11 @@ class ProjectWorkspace:
         expected_sha256: Any = None,
     ) -> Dict[str, Any]:
         with self._project_lock(project_id):
-            candidate, relative, source = self._read_complete_file(
+            candidate, relative, source, raw = self._read_complete_file(
                 project_id, relative_file
             )
             supplied_digest = self._expected_sha256(expected_sha256)
-            current_digest = hashlib.sha256(candidate.read_bytes()).hexdigest()
+            current_digest = hashlib.sha256(raw).hexdigest()
             if supplied_digest is None:
                 raise PiCopilotError(
                     "pi_workspace_expected_sha256_required",
@@ -529,7 +565,10 @@ class ProjectWorkspace:
             }
 
     def check_file(self, project_id: str, relative_file: Any) -> Dict[str, Any]:
-        candidate, relative, text = self._read_complete_file(project_id, relative_file)
+        with self._project_lock(project_id):
+            candidate, relative, text, _raw = self._read_complete_file(
+                project_id, relative_file
+            )
         suffix = Path(relative).suffix.lower()
         try:
             if suffix in {".html", ".htm"}:
@@ -586,7 +625,10 @@ class ProjectWorkspace:
         }
 
     def preview_file(self, project_id: str, relative_file: Any) -> Dict[str, Any]:
-        candidate, relative, text = self._read_complete_file(project_id, relative_file)
+        with self._project_lock(project_id):
+            candidate, relative, text, raw = self._read_complete_file(
+                project_id, relative_file
+            )
         if Path(relative).suffix.lower() not in PREVIEW_SUFFIXES:
             raise PiCopilotError(
                 "pi_workspace_preview_type_unsupported",
@@ -596,8 +638,8 @@ class ProjectWorkspace:
         return {
             "file": relative,
             "media_type": self._media_type(candidate),
-            "size": candidate.stat().st_size,
-            "sha256": hashlib.sha256(candidate.read_bytes()).hexdigest(),
+            "size": len(raw),
+            "sha256": hashlib.sha256(raw).hexdigest(),
             "text": text,
             "truncated": False,
             **_authority_metadata(),
