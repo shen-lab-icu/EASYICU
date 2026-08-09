@@ -43,7 +43,12 @@ import pandas as pd
 import pytest
 
 from easyicu.concept import ConceptSource, _apply_callback
-from easyicu.concept.callbacks import CALLBACK_REGISTRY
+from easyicu.concept.callbacks import (
+    CALLBACK_REGISTRY,
+    ConceptCallbackContext,
+    _callback_blood_cell_ratio,
+)
+from easyicu.table import ICUTable
 
 
 # ---------------------------------------------------------------------------
@@ -286,6 +291,32 @@ def test_blood_cell_ratio_without_wbc_fails_closed_instead_of_returning_numerato
 
     assert result["lymph"].isna().all()
     assert result["lymph_assessment_reason"].tolist() == ["missing_wbc_resolver"]
+
+
+def test_registry_blood_cell_ratio_also_fails_closed_when_wbc_load_fails(monkeypatch):
+    def fail_load(*args, **kwargs):
+        raise RuntimeError("wbc unavailable")
+
+    monkeypatch.setattr("easyicu.api.load_concepts", fail_load)
+    table = ICUTable(
+        pd.DataFrame({"stay_id": [1], "charttime": [0.0], "lymph": [2.0]}),
+        id_columns=["stay_id"],
+        index_column="charttime",
+        value_column="lymph",
+    )
+    context = ConceptCallbackContext(
+        concept_name="lymph",
+        target=None,
+        interval=None,
+        resolver=None,
+        data_source=None,
+        patient_ids=None,
+    )
+
+    result = _callback_blood_cell_ratio({"lymph": table}, context).data
+
+    assert result["lymph"].isna().all()
+    assert result["lymph_assessment_reason"].tolist() == ["wbc_load_failed"]
 
 
 # ---------------------------------------------------------------------------

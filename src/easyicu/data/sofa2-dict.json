@@ -48,7 +48,7 @@
    "ecmo",
    "ecmo_indication"
   ],
-  "description": "SOFA-2 respiratory component; every ratio-based score requires explicit >=1h persistence, while 3/4 additionally requires advanced support or documented support-unavailable/treatment-ceiling evidence; any ECMO auto-4",
+  "description": "SOFA-2 respiratory component; valid P/F or S/F observations use the published thresholds unless explicitly documented as a transient <1h episode; scores 3/4 additionally require advanced support or documented support-unavailable/treatment-ceiling evidence; any ECMO auto-4",
   "clinical_status": "source_bound_golden",
   "canonical_definition": true,
   "requires_explicit_opt_in": false,

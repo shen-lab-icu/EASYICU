@@ -44,6 +44,9 @@ from easyicu.research_agent.reporting.readiness import (
     _step_id_referenced_in_finding,
     _successful_step_ids,
 )
+from easyicu.research_agent.planning.capability_registry import (
+    ScientificCapabilityAssessment,
+)
 from easyicu.research_agent.schema import (
     AnalysisPlan,
     AnalysisStep,
@@ -97,6 +100,22 @@ def _coder_failure(step_id: str, msg: str = "coder boom") -> ValidationFinding:
         validator="coder",
         severity="error",
         message=f"Coder agent failed for step {step_id}: {msg}",
+    )
+
+
+def _reportable_capability_assessment(**_kwargs: Any) -> ScientificCapabilityAssessment:
+    """Keep supersession tests focused on finding lifecycle, not claim policy."""
+
+    return ScientificCapabilityAssessment(
+        capability_id="test_reportable_capability",
+        analysis_type="test",
+        question_present=True,
+        question_coordinates_resolved=True,
+        input_contract_resolved=True,
+        runtime_data_available=None,
+        execution_backend_available=None,
+        scientific_validator_available=True,
+        claim_ceiling="reportable",
     )
 
 
@@ -196,11 +215,17 @@ def test_multiple_findings_for_same_succeeded_step_all_superseded() -> None:
     assert len(superseded) == 3
 
 
-def test_gate_treats_superseded_step_finding_as_no_error(tmp_path: Path) -> None:
+def test_gate_treats_superseded_step_finding_as_no_error(
+    tmp_path: Path, monkeypatch
+) -> None:
     """End-to-end: the analysis_validated gate ignores superseded findings.
 
     This is the regression test for the env-retry → AO problem.
     """
+    monkeypatch.setattr(
+        "easyicu.research_agent.reporting.readiness.assess_scientific_capability",
+        _reportable_capability_assessment,
+    )
     manuscript = tmp_path / "manuscript_scaffold_bound.md"
     manuscript.write_text("Bound manuscript content here.\n", encoding="utf-8")
     per_step_records: List[Dict[str, Any]] = [
@@ -233,10 +258,16 @@ def test_gate_treats_superseded_step_finding_as_no_error(tmp_path: Path) -> None
     assert len(gates["superseded_errors"]) == 2
 
 
-def test_gate_keeps_real_failure_when_step_did_not_succeed(tmp_path: Path) -> None:
+def test_gate_keeps_real_failure_when_step_did_not_succeed(
+    tmp_path: Path, monkeypatch
+) -> None:
     """Strict default preserved: a real failure that wasn't resolved
     still fails the gate. The supersession rule does NOT silently
     forgive unresolved errors."""
+    monkeypatch.setattr(
+        "easyicu.research_agent.reporting.readiness.assess_scientific_capability",
+        _reportable_capability_assessment,
+    )
     manuscript = tmp_path / "manuscript_scaffold_bound.md"
     manuscript.write_text("Bound manuscript content here.\n", encoding="utf-8")
     per_step_records: List[Dict[str, Any]] = [

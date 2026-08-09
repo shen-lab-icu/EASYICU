@@ -55,6 +55,8 @@ class ClinicalConceptContract:
     last_reviewed_at: str
     reference_implementation: Optional[str]
     production_executor: Optional[str]
+    production_callback: Optional[str]
+    runtime_inputs: Mapping[str, str]
     reference_commit: Optional[str]
     depends_on_contracts: tuple[str, ...]
     ascertainment_limitations: tuple[str, ...]
@@ -90,6 +92,15 @@ class ClinicalConceptContract:
                 if payload.get("production_executor")
                 else None
             ),
+            production_callback=(
+                str(payload["production_callback"])
+                if payload.get("production_callback")
+                else None
+            ),
+            runtime_inputs={
+                str(key): str(value)
+                for key, value in (payload.get("runtime_inputs") or {}).items()
+            },
             reference_commit=(
                 str(payload["reference_commit"])
                 if payload.get("reference_commit")
@@ -185,17 +196,73 @@ def validate_clinical_contracts(
         if contract is None:
             findings.append(f"{contract_id}:contract_missing")
             continue
-        if contract.production_executor != "easyicu.concept.callbacks._callback_sofa_component":
+        if contract.production_executor != "easyicu.concept.ConceptResolver.load_concepts":
             findings.append(f"{contract_id}:production_executor_unbound")
+        if contract.production_callback != "easyicu.concept.callbacks._callback_sofa_component":
+            findings.append(f"{contract_id}:production_callback_unbound")
         definition = dictionary.get(concept_id)
-        if definition is not None and definition.clinical_status != contract.status:
-            findings.append(f"{contract_id}:dictionary_status_mismatch:{concept_id}")
+        if definition is not None:
+            if definition.clinical_status != contract.status:
+                findings.append(f"{contract_id}:dictionary_status_mismatch:{concept_id}")
+            declared_inputs = set(contract.runtime_inputs)
+            dictionary_inputs = set(definition.sub_concepts)
+            if declared_inputs != dictionary_inputs:
+                findings.append(f"{contract_id}:runtime_inputs_mismatch:{concept_id}")
+            for input_name, owner in contract.runtime_inputs.items():
+                if owner != f"concept:{input_name}":
+                    findings.append(
+                        f"{contract_id}:runtime_input_owner_invalid:{input_name}"
+                    )
+                    continue
+                input_definition = dictionary.get(input_name)
+                if input_definition is None or not (
+                    input_definition.sources
+                    or input_definition.callback
+                    or input_definition.sub_concepts
+                ):
+                    findings.append(
+                        f"{contract_id}:runtime_input_unresolvable:{input_name}"
+                    )
+
+            fixture_path = repo_root / contract.golden_vector
+            if fixture_path.is_file():
+                fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+                fixture_inputs = set((fixture.get("inputs") or {}).keys())
+                for input_name in fixture_inputs - declared_inputs:
+                    findings.append(
+                        f"{contract_id}:golden_input_unowned:{input_name}"
+                    )
     if aggregate is not None:
-        if aggregate.production_executor != "easyicu.concept.callbacks._callback_sofa2_score":
+        if aggregate.production_executor != "easyicu.concept.ConceptResolver.load_concepts":
             findings.append("sofa2_aggregate_2025:production_executor_unbound")
+        if aggregate.production_callback != "easyicu.concept.callbacks._callback_sofa2_score":
+            findings.append("sofa2_aggregate_2025:production_callback_unbound")
         definition = dictionary.get("sofa2")
-        if definition is not None and definition.clinical_status != aggregate.status:
-            findings.append("sofa2_aggregate_2025:dictionary_status_mismatch:sofa2")
+        if definition is not None:
+            if definition.clinical_status != aggregate.status:
+                findings.append("sofa2_aggregate_2025:dictionary_status_mismatch:sofa2")
+            declared_inputs = set(aggregate.runtime_inputs)
+            dictionary_inputs = set(definition.sub_concepts)
+            if declared_inputs != dictionary_inputs:
+                findings.append("sofa2_aggregate_2025:runtime_inputs_mismatch:sofa2")
+            for input_name, owner in aggregate.runtime_inputs.items():
+                if owner != f"concept:{input_name}":
+                    findings.append(
+                        f"sofa2_aggregate_2025:runtime_input_owner_invalid:{input_name}"
+                    )
+                    continue
+                if dictionary.get(input_name) is None:
+                    findings.append(
+                        f"sofa2_aggregate_2025:runtime_input_unresolvable:{input_name}"
+                    )
+            fixture_path = repo_root / aggregate.golden_vector
+            if fixture_path.is_file():
+                fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+                fixture_inputs = set((fixture.get("components") or {}).keys())
+                for input_name in fixture_inputs - declared_inputs:
+                    findings.append(
+                        f"sofa2_aggregate_2025:golden_input_unowned:{input_name}"
+                    )
 
     for concept_id, definition in dictionary.items():
         if definition.clinical_status and not definition.clinical_contract_id:
@@ -230,9 +297,17 @@ def render_clinical_conformance_matrix_markdown() -> str:
             contract.status,
             contract.validation_status,
             f"`{contract.golden_vector}`",
-            f"`{contract.production_executor}`" if contract.production_executor else "not bound",
+            " → ".join(
+                f"`{item}`"
+                for item in (contract.production_executor, contract.production_callback)
+                if item
+            ) or "not bound",
             "; ".join(
                 [
+                    *(
+                        f"runtime `{name}` owned by `{owner}`"
+                        for name, owner in contract.runtime_inputs.items()
+                    ),
                     *(f"depends on `{item}`" for item in contract.depends_on_contracts),
                     *contract.ascertainment_limitations,
                 ]

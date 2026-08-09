@@ -402,12 +402,12 @@ def _compose_fill_limits(
     expand_forward: bool = False,
 ) -> Optional[pd.DataFrame]:
     """Build fill_gaps limits matching ricu's collapse(x) behavior.
-    
+
     Returns the observed data range (min/max per ID) without expansion.
     This matches R ricu's collapse() function which simply computes:
     - start = min(index_var) per ID
     - end = max(index_var) per ID
-    
+
     Args:
         expand_forward: Deprecated, kept for compatibility. Should always be False.
                        R ricu's collapse() does NOT expand the time range.
@@ -1831,7 +1831,7 @@ def _callback_blood_cell_ratio(
         return _empty_icutbl(ctx)
     
     input_table = list(tables.values())[0]
-    data = input_table.df.copy()
+    data = input_table.data.copy()
     
     if data.empty:
         return input_table
@@ -1843,6 +1843,8 @@ def _callback_blood_cell_ratio(
     # Ensure numeric
     if value_column in data.columns:
         data[value_column] = pd.to_numeric(data[value_column], errors='coerce')
+    assessment_column = f"{ctx.concept_name}_assessment_reason"
+    data[assessment_column] = "missing_wbc_measurement"
     
     # Try to load WBC concept for ratio calculation
     try:
@@ -1911,28 +1913,32 @@ def _callback_blood_cell_ratio(
                     if 'wbc' in merged.columns:
                         valid_wbc = merged['wbc'].notna() & (merged['wbc'] > 0)
                         merged.loc[valid_wbc, value_column] = 100 * merged.loc[valid_wbc, value_column] / merged.loc[valid_wbc, 'wbc']
+                        merged.loc[valid_wbc, assessment_column] = "ratio_computed"
+                        merged.loc[~valid_wbc, value_column] = np.nan
+                        merged.loc[~valid_wbc, assessment_column] = "missing_wbc_measurement"
                         merged = merged.drop(columns=['wbc', '_time_numeric', '_wbc_time'], errors='ignore')
                         data = merged
             else:
-                # Fallback: merge only on patient ID (use latest WBC per patient)
-                id_col = id_columns[0]
-                wbc_latest = wbc_df.sort_values(wbc_time_col if wbc_time_col else id_col).groupby(id_col).last().reset_index()[[id_col, 'wbc']]
-                merged = pd.merge(data, wbc_latest, on=id_col, how='left')
-                
-                if 'wbc' in merged.columns:
-                    valid_wbc = merged['wbc'].notna() & (merged['wbc'] > 0)
-                    merged.loc[valid_wbc, value_column] = 100 * merged.loc[valid_wbc, value_column] / merged.loc[valid_wbc, 'wbc']
-                    merged = merged.drop(columns=['wbc'], errors='ignore')
-                    data = merged
+                # A patient-level "latest WBC" is not a valid time-aligned
+                # denominator. Preserve the row for audit, but fail closed.
+                data[value_column] = np.nan
+                data[assessment_column] = "missing_wbc_time_alignment"
                     
     except Exception as e:
-        # If WBC loading fails, just pass through the data as-is
         import logging
-        logging.debug(f"blood_cell_ratio: WBC loading failed: {e}, using passthrough")
-    
-    output_cols = list(id_columns) + ([index_column] if index_column else []) + [value_column]
+        logging.debug(f"blood_cell_ratio: WBC loading failed: {e}; failing closed")
+        data[value_column] = np.nan
+        data[assessment_column] = "wbc_load_failed"
+
+    # Never return an absolute numerator under a percentage concept. Retaining
+    # the structured reason keeps the unavailable value attributable.
+    data.loc[data[assessment_column] != "ratio_computed", value_column] = np.nan
+    output_cols = list(id_columns) + ([index_column] if index_column else []) + [
+        value_column,
+        assessment_column,
+    ]
     output_cols = [c for c in output_cols if c in data.columns]
-    result = data[output_cols].dropna(subset=[value_column]).copy()
+    result = data[output_cols].copy()
     
     return _as_icutbl(result, id_columns=id_columns, index_column=index_column, value_column=value_column)
 
@@ -3064,10 +3070,12 @@ def _callback_sofa2_score(
     # SOFA-2 components (note the sofa2_ prefix)
     required = ["sofa2_resp", "sofa2_coag", "sofa2_liver", "sofa2_cardio", "sofa2_cns", "sofa2_renal"]
     
-    # Ensure all components exist
+    # Keep structural absence distinct from the standard missing-as-normal score
+    # rule. The latter is applied only when summing; completeness must continue
+    # to report a genuinely unavailable component as unobserved.
     for name in required:
         if name not in data:
-            data[name] = 0
+            data[name] = np.nan
     
     # Fill gaps and apply sliding window (same logic as SOFA-1)
     if index_column and index_column in data.columns:
@@ -3099,6 +3107,20 @@ def _callback_sofa2_score(
                     method="none",
                 )
                 # 🚀 fill_gaps fast path returns sorted data, skip redundant sort
+
+        # SOFA-2 longitudinal bedside rule: day 1 missing values contribute the
+        # normal score (handled by skipna below); after an observation exists,
+        # carry it forward when the domain is not measured again. Applying LOCF
+        # before the 24 h worst-value window keeps the two temporal rules
+        # separate instead of allowing a value to disappear at hour 24.
+        if id_cols_to_group:
+            data[required] = data.groupby(
+                id_cols_to_group,
+                sort=False,
+                dropna=False,
+            )[required].ffill()
+        else:
+            data[required] = data[required].ffill()
         
         # Apply sliding window to each component
         agg_dict = {}
