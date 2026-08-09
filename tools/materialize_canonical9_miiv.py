@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Materialize the exact Canonical9 MIMIC-IV inputs to an external volume.
+"""Materialize Canonical9 MIMIC-IV inputs to an external volume.
 
 The tool opens the verified native-v2 export once, reuses its immutable file
-snapshots across all nine sequential cases, and writes every case directly to
-its final external directory.  It makes no Provider, Docker, or network calls.
+snapshots across the selected sequential cases, and writes every case directly
+to its final external directory. By default all nine cases are selected; a
+development canary may select one or more exact task ids. It makes no Provider,
+Docker, or network calls.
 """
 
 from __future__ import annotations
@@ -13,38 +15,51 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import sys
 import tempfile
 from typing import Any, Mapping
 import uuid
 
-from benchmarks.figure2_canonical9.evaluator.suite import (
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+for _entry in (_REPO_ROOT, _REPO_ROOT / "src"):
+    if str(_entry) not in sys.path:
+        sys.path.insert(0, str(_entry))
+
+from benchmarks.figure2_canonical9.evaluator.suite import (  # noqa: E402
     easyicu_evaluation_protocol_suite,
 )
-from benchmarks.figure2_canonical9.identity_bridge_contract import (
+from benchmarks.figure2_canonical9.identity_bridge_contract import (  # noqa: E402
     assess_identity_bridge_contract,
     load_identity_bridge_contract,
 )
-from benchmarks.figure2_canonical9.materialization_plan import (
+from benchmarks.figure2_canonical9.materialization_plan import (  # noqa: E402
     CANONICAL9_MIMIC_IV_PLAN,
+    Canonical9MaterializationSpec,
     validate_canonical9_mimic_iv_plan,
 )
-from easyicu.research_agent.cohort.materializer import materialize_to_parquet
-from easyicu.research_agent.intake.export_package import (
+from benchmarks.figure2_canonical9.task_scope import (  # noqa: E402
+    canonical_task_scope,
+)
+from easyicu.research_agent.cohort.materializer import (  # noqa: E402
+    materialize_to_parquet,
+)
+from easyicu.research_agent.intake.export_package import (  # noqa: E402
     open_export_package,
     require_column_metadata,
     resolve_exported_concept,
     verify_export_package,
 )
-from easyicu.research_agent.intake.materialized_metadata import (
+from easyicu.research_agent.intake.materialized_metadata import (  # noqa: E402
     load_verified_materialized_cohort_authority,
     prepare_real_directory,
 )
-from easyicu.research_agent.intake.materialized_trajectory import (
+from easyicu.research_agent.intake.materialized_trajectory import (  # noqa: E402
     load_verified_materialized_trajectory_authority,
 )
 
-_RECEIPT_SCHEMA = "easyicu.canonical9_miiv_materialization/1"
+_RECEIPT_SCHEMA = "easyicu.canonical9_miiv_materialization/2"
 _JSONL_SCHEMA = "easyicu.canonical9_ehrflowbench_jsonl/1"
+_DEVELOPMENT_BINDING_SCHEMA = "easyicu.canonical9_development_binding_receipt/1"
 
 
 def _canonical_json_bytes(value: object, *, newline: bool = True) -> bytes:
@@ -56,6 +71,19 @@ def _canonical_json_bytes(value: object, *, newline: bool = True) -> bytes:
         allow_nan=False,
     ).encode("utf-8")
     return raw + (b"\n" if newline else b"")
+
+
+def _build_development_binding_receipt(
+    *, jsonl_path: Path, jsonl_raw: bytes
+) -> dict[str, object]:
+    """Bind a materialized JSONL to the launcher's non-paper authority lane."""
+
+    return {
+        "schema_version": _DEVELOPMENT_BINDING_SCHEMA,
+        "paper_authority": False,
+        "output_jsonl": str(jsonl_path.resolve()),
+        "output_sha256": hashlib.sha256(jsonl_raw).hexdigest(),
+    }
 
 
 def _atomic_write(path: Path, raw: bytes) -> None:
@@ -185,6 +213,49 @@ def _load_bridge(
     }, contract_sha256
 
 
+def _panel_grid(spec: Canonical9MaterializationSpec):
+    """Compile the task's declared grid, or None when it declares none.
+
+    The horizon is the task's own trajectory window rather than a second
+    declaration, so a grid can never describe hours the long table does not
+    contain.
+    """
+
+    if not spec.emit_trajectory or spec.trajectory_panel_width_hours is None:
+        return None
+    if spec.trajectory_window is None:
+        raise ValueError(
+            f"{spec.task_id}: a fixed-window panel needs a trajectory window to "
+            "take its horizon from"
+        )
+    from easyicu.research_agent.trajectory.panel import FixedWindowGrid
+
+    start_hours, end_hours = spec.trajectory_window
+    if float(start_hours) != 0.0:
+        raise ValueError(
+            f"{spec.task_id}: the panel grid starts at the trajectory anchor, so "
+            f"a window starting at {start_hours} h cannot be gridded"
+        )
+    return FixedWindowGrid(
+        width_hours=float(spec.trajectory_panel_width_hours),
+        horizon_hours=float(end_hours),
+        aggregate=spec.trajectory_panel_aggregate,  # type: ignore[arg-type]
+    )
+
+
+def _select_materialization_specs(
+    task_ids: object,
+) -> tuple[Canonical9MaterializationSpec, ...]:
+    selected = set(
+        canonical_task_scope(
+            task_ids if isinstance(task_ids, (list, tuple)) else None
+        )
+    )
+    return tuple(
+        spec for spec in CANONICAL9_MIMIC_IV_PLAN if spec.task_id in selected
+    )
+
+
 def _build_jsonl_row(
     *,
     task: object,
@@ -196,6 +267,22 @@ def _build_jsonl_row(
     trajectory_verified: object | None,
 ) -> dict[str, object]:
     authority_ref = cohort_verified.reference
+    expected_outputs = list(
+        dict.fromkeys(
+            [
+                *task.expected_outputs,
+                *getattr(spec, "additional_expected_outputs", ()),
+            ]
+        )
+    )
+    semantic_guardrails = list(
+        dict.fromkeys(
+            [
+                *task.semantic_guardrails,
+                *getattr(spec, "additional_semantic_guardrails", ()),
+            ]
+        )
+    )
     row: dict[str, object] = {
         "schema_version": _JSONL_SCHEMA,
         "key": task.task_id,
@@ -208,15 +295,17 @@ def _build_jsonl_row(
         "kind": task.kind,
         "difficulty": task.difficulty,
         "category": task.category,
-        "expected_outputs": list(task.expected_outputs),
-        "semantic_guardrails": list(task.semantic_guardrails),
+        "expected_outputs": expected_outputs,
+        "semantic_guardrails": semantic_guardrails,
         "evaluation_notes": list(task.evaluation_notes),
         "target_databases": list(task.target_databases),
         "gold_answer_status": task.gold_answer_status,
         "benchmark_family": "easyicu_figure2_canonical9",
         "evidence_basis": "native_typed_mimic_iv_materialization",
         "claim_scope": "owner_authorized_development_until_final_freeze",
-        "protocol_version": "easyicu_evaluation_protocol_suite/v2",
+        "protocol_version": (
+            spec.task_protocol_version or "easyicu_evaluation_protocol_suite/v2"
+        ),
         "rubric_version": "easyicu.figure2_paper_rubric/20260719-v3",
         "cohort_path": str(cohort_path),
         "cohort_authority_required": True,
@@ -232,6 +321,14 @@ def _build_jsonl_row(
         "candidate_variables": list(spec.feature_concepts),
         "notes": spec.notes,
     }
+    if task.task_id == "e1_sepsis3_prevalence_mortality":
+        from benchmarks.figure2_canonical9.e1_scientific_acceptance import (
+            e1_scientific_acceptance_contract,
+        )
+
+        row["scientific_acceptance_contract"] = (
+            e1_scientific_acceptance_contract()
+        )
     if trajectory_path is not None and trajectory_verified is not None:
         trajectory_ref = trajectory_verified.reference
         row.update(
@@ -248,6 +345,7 @@ def _build_jsonl_row(
 def materialize(args: argparse.Namespace) -> Path:
     validate_canonical9_mimic_iv_plan()
     _require_external_temp()
+    selected_specs = _select_materialization_specs(getattr(args, "task_id", None))
     export_root = args.export_root.expanduser().resolve(strict=True)
     output_root = _require_external_output(
         args.output_root,
@@ -272,7 +370,7 @@ def materialize(args: argparse.Namespace) -> Path:
             raise ValueError("development-sealed exports cannot become paper inputs")
         requested = {
             concept
-            for spec in CANONICAL9_MIMIC_IV_PLAN
+            for spec in selected_specs
             for concept in (
                 *spec.feature_concepts,
                 *spec.static_concepts,
@@ -288,7 +386,7 @@ def materialize(args: argparse.Namespace) -> Path:
         if missing:
             raise ValueError(f"typed export is missing concepts: {missing}")
 
-        for index, spec in enumerate(CANONICAL9_MIMIC_IV_PLAN, start=1):
+        for index, spec in enumerate(selected_specs, start=1):
             task = task_by_id[spec.task_id]
             case_dir = prepare_real_directory(
                 output_root / spec.task_id,
@@ -296,14 +394,21 @@ def materialize(args: argparse.Namespace) -> Path:
             )
             cohort_candidate = case_dir / "cohort.parquet"
             if args.resume_existing and cohort_candidate.is_file():
-                print(f"[{index}/9] verifying existing {spec.task_id}", flush=True)
+                print(
+                    f"[{index}/{len(selected_specs)}] verifying existing "
+                    f"{spec.task_id}",
+                    flush=True,
+                )
                 cohort_path = cohort_candidate.resolve(strict=True)
             else:
                 if any(case_dir.iterdir()):
                     raise RuntimeError(
                         f"{spec.task_id}: incomplete case directory is not empty"
                     )
-                print(f"[{index}/9] materializing {spec.task_id}", flush=True)
+                print(
+                    f"[{index}/{len(selected_specs)}] materializing {spec.task_id}",
+                    flush=True,
+                )
                 identity_options: dict[str, object] = {}
                 if spec.identity_mode == "patient_grouped_stay":
                     identity_options = {
@@ -320,6 +425,7 @@ def materialize(args: argparse.Namespace) -> Path:
                     emit_trajectory=spec.emit_trajectory,
                     trajectory_concepts=spec.trajectory_concepts or None,
                     trajectory_window=spec.trajectory_window,
+                    trajectory_panel_grid=_panel_grid(spec),
                     source_package=package,
                     feature_concepts=spec.feature_concepts,
                     database="miiv",
@@ -391,10 +497,28 @@ def materialize(args: argparse.Namespace) -> Path:
     jsonl_path = output_root / "canonical9_miiv.jsonl"
     jsonl_raw = b"".join(_canonical_json_bytes(row, newline=True) for row in rows)
     _atomic_write(jsonl_path, jsonl_raw)
+    development_binding_path = output_root / "development_binding_receipt.json"
+    development_binding_raw = _canonical_json_bytes(
+        _build_development_binding_receipt(
+            jsonl_path=jsonl_path,
+            jsonl_raw=jsonl_raw,
+        )
+    )
+    _atomic_write(development_binding_path, development_binding_raw)
     receipt = {
         "schema_version": _RECEIPT_SCHEMA,
         "paper_authority": False,
-        "status": "materialized_awaiting_scientific_identity_and_operator_freeze",
+        "scope": (
+            "full_canonical9"
+            if len(selected_specs) == len(CANONICAL9_MIMIC_IV_PLAN)
+            else "development_subset"
+        ),
+        "selected_task_ids": [spec.task_id for spec in selected_specs],
+        "status": (
+            "materialized_awaiting_scientific_identity_and_operator_freeze"
+            if len(selected_specs) == len(CANONICAL9_MIMIC_IV_PLAN)
+            else "development_subset_not_paper_authority"
+        ),
         "export_root": str(export_root),
         "export_manifest_sha256": export_manifest_sha256,
         "export_authority_sha256": export_authority_sha256,
@@ -402,6 +526,10 @@ def materialize(args: argparse.Namespace) -> Path:
         "identity_mapping_sha256": bridge["mapping_sha256"],
         "ehrflowbench_jsonl_path": str(jsonl_path),
         "ehrflowbench_jsonl_sha256": hashlib.sha256(jsonl_raw).hexdigest(),
+        "development_binding_receipt_path": str(development_binding_path),
+        "development_binding_receipt_sha256": hashlib.sha256(
+            development_binding_raw
+        ).hexdigest(),
         "cases": cases,
     }
     _atomic_write(
@@ -417,6 +545,15 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument("--identity-bridge-contract", type=Path, required=True)
     parser.add_argument("--identity-mapping", type=Path, required=True)
+    parser.add_argument(
+        "--task-id",
+        action="append",
+        default=[],
+        help=(
+            "Exact Canonical9 task id to materialize; repeat for multiple tasks. "
+            "Omit to materialize all nine."
+        ),
+    )
     parser.add_argument(
         "--resume-existing",
         action="store_true",

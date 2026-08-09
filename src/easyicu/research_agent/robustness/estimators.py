@@ -11,7 +11,7 @@ import math
 from dataclasses import dataclass
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence, Tuple
 
 from ..cohort.schema import CohortDefinition, build_cohort
 from ..methods.missing import apply_missing_strategy
@@ -30,6 +30,26 @@ EstimatorKind = Literal["logistic", "linear", "cox", "glm_poisson"]
 
 
 @dataclass(frozen=True)
+class EstimatorTerm:
+    """One fitted coefficient, reported on the same scale as the result.
+
+    ``term`` is the design-matrix column; ``source_variable`` is the cohort
+    column it came from, which differs for a treatment-coded contrast
+    (``sex=Male`` came from ``sex``).  A reader of a coefficient table needs the
+    second to check the adjustment set against the plan, and only the fit knows
+    the mapping -- reconstructing it from the column name downstream would be a
+    parse of a convention this module owns.
+    """
+
+    term: str
+    source_variable: str
+    estimate: Optional[float]
+    ci_low: Optional[float]
+    ci_high: Optional[float]
+    se: Optional[float]
+
+
+@dataclass(frozen=True)
 class EstimatorResult:
     point_estimate: Optional[float]
     ci_low: Optional[float]
@@ -38,6 +58,181 @@ class EstimatorResult:
     n: int
     converged: bool
     notes: str = ""
+    #: Every fitted coefficient, intercept included, in design order.
+    #:
+    #: The host's primary-model contract requires a term-level coefficient
+    #: table, and this fit is the only place that has one.  Leaving each caller
+    #: to obtain it meant either a second fit -- two estimates that can disagree
+    #: for no scientific reason -- or no table at all, which is what the
+    #: adjusted-association owner shipped: a step that computed the study's
+    #: primary estimate correctly and was then failed for not showing its terms.
+    terms: Tuple["EstimatorTerm", ...] = ()
+    #: Events among the rows this fit actually used, or ``None``.
+    #:
+    #: ``n`` is the complete-case count, so its numerator has to come from the
+    #: same rows.  A caller counting events on its own frame counts them on the
+    #: rows this fit dropped as well, and reports the analysis set's
+    #: denominator with the whole cohort's numerator -- which is exactly what
+    #: the adjusted-association owner did: n=515 with event_n=102 where the 515
+    #: analysed rows held 78 events, a 31% overstatement of the event rate that
+    #: went into the model contract, the estimates table and the summary alike.
+    #:
+    #: ``None`` means there is no such count to report: a continuous outcome
+    #: has no events, and a fit that did not converge has no analysed row set.
+    n_events: Optional[int] = None
+
+    #: Whether the logistic fit shows (quasi-)separation, or None when the
+    #: estimator is not one this can be asked of.  The host's model contract
+    #: requires a boolean and its validator refuses a missing one, so the answer
+    #: has to be computed rather than assumed -- see ``_logistic_separation``.
+    #:
+    #: Declared LAST on purpose: every existing construction passes ``terms``
+    #: and ``n_events`` positionally, so inserting a field ahead of them
+    #: silently rebinds those arguments.
+    separation_detected: Optional[bool] = None
+
+
+class _UncodeableDesign(Exception):
+    """A declared predictor cannot be coded without leaving the design.
+
+    Private to this module: it exists so the refusal reaches the caller as a
+    non-converged result instead of as a note nobody reads on a frame that then
+    raises `could not convert string to float` three lines later.
+    """
+
+
+def _encode_categorical_predictors(
+    x_df: Any, *, pd: Any
+) -> Tuple[Any, str, Dict[str, List[str]]]:
+    """Return the design with non-numeric predictors treatment-coded.
+
+    The design matrix is built here, so encoding belongs here: casting the
+    frame straight to float is what made a real run's primary adjusted
+    association die with ``could not convert string to float: 'Male'`` after
+    the host had claimed the step, on a plan whose adjustment set was exactly
+    the one it declared.  Doing it in one caller would leave the robustness
+    replay -- which fits the same models through this same function so that a
+    disagreement between them is a real disagreement -- with the old failure.
+
+    The reference level is the first observed level in sorted order, not
+    whatever order the rows happened to arrive in, and the retained columns are
+    named ``column=level`` so the contrast a coefficient reports is readable
+    rather than positional.
+
+    A predictor with one observed level is refused rather than encoded.  It
+    yields no contrast column at all, so it would leave the design without ever
+    reaching the rank guard that refuses to drop declared predictors -- that
+    guard can only see columns that exist.  Measured on the first draft of this
+    function: a constant column produced a converged fit whose adjustment set
+    was silently one predictor shorter than the plan declared.
+    """
+
+    categorical = [
+        column
+        for column in x_df.columns
+        if not pd.api.types.is_numeric_dtype(x_df[column])
+        and not pd.api.types.is_bool_dtype(x_df[column])
+    ]
+    if not categorical:
+        return x_df, "", {}
+
+    degenerate = sorted(
+        column
+        for column in categorical
+        if len({str(value) for value in x_df[column].tolist()}) < 2
+    )
+    if degenerate:
+        raise _UncodeableDesign(
+            "declared predictor(s) hold one observed level and cannot be "
+            "coded without dropping them from the declared adjustment set: "
+            + ", ".join(degenerate)
+        )
+
+    encoded: Dict[str, List[str]] = {}
+    frame = x_df
+    for column in categorical:
+        levels = sorted({str(value) for value in frame[column].tolist()})
+        reference = levels[0]
+        retained = [level for level in levels if level != reference]
+        names = [f"{column}={level}" for level in retained]
+        indicators = pd.DataFrame(
+            {
+                f"{column}={level}": (frame[column].astype(str) == level).astype(float)
+                for level in retained
+            },
+            index=frame.index,
+        )
+        frame = pd.concat([frame.drop(columns=[column]), indicators], axis=1)
+        encoded[column] = names
+
+    note = "; ".join(
+        f"{column} treatment-coded against "
+        f"{sorted({str(value) for value in x_df[column].tolist()})[0]!r}"
+        for column in categorical
+        if x_df[column].tolist()
+    )
+    return frame, note, encoded
+
+
+def _fitted_terms(
+    result: Any,
+    *,
+    design_columns: Sequence[str],
+    encoded_map: Dict[str, List[str]],
+    source_by_design_column: Optional[Mapping[str, str]],
+    exponentiate: bool,
+) -> Tuple[EstimatorTerm, ...]:
+    """Read every coefficient off the fit that produced the point estimate.
+
+    ``exponentiate`` follows the reported point estimate: a logistic fit reports
+    odds ratios, so its terms do too.  ``se`` stays on the fitted (log) scale,
+    which is the same convention ``EstimatorResult.se`` already uses -- a
+    standard error is not a ratio and exponentiating it would produce a number
+    with no interpretation.
+    """
+
+    import numpy as np  # type: ignore
+
+    source_of: Dict[str, str] = {}
+    for original, names in encoded_map.items():
+        for name in names:
+            source_of[name] = original
+    source_of.update(
+        {
+            str(column): str(source)
+            for column, source in (source_by_design_column or {}).items()
+        }
+    )
+
+    def _scaled(value: Optional[float]) -> Optional[float]:
+        if value is None or not exponentiate:
+            return value
+        scaled = float(np.exp(value))
+        return scaled if math.isfinite(scaled) else None
+
+    terms: List[EstimatorTerm] = []
+    for column in design_columns:
+        name = str(column)
+        try:
+            raw = _float_or_none(result.params[name])
+        except Exception:
+            continue
+        low, high = _conf_interval_for(result, name)
+        try:
+            se = _float_or_none(result.bse[name])
+        except Exception:
+            se = None
+        terms.append(
+            EstimatorTerm(
+                term=name,
+                source_variable=source_of.get(name, name),
+                estimate=_scaled(raw),
+                ci_low=_scaled(low),
+                ci_high=_scaled(high),
+                se=se,
+            )
+        )
+    return tuple(terms)
 
 
 def _robust_design(x_const: Any, *, keep: Sequence[str]) -> Tuple[Any, List[str]]:
@@ -83,9 +278,30 @@ def _robust_design(x_const: Any, *, keep: Sequence[str]) -> Tuple[Any, List[str]
 
 
 def fit_estimator(
-    *, cohort: Any, X: Any, y: Any, kind: EstimatorKind | str
+    *,
+    cohort: Any,
+    X: Any,
+    y: Any,
+    kind: EstimatorKind | str,
+    term: Optional[str] = None,
+    source_by_design_column: Optional[Mapping[str, str]] = None,
 ) -> EstimatorResult:
-    """Fit a supported estimator and capture failures as non-converged results."""
+    """Fit a supported estimator and capture failures as non-converged results.
+
+    ``term`` names the predictor whose coefficient is reported.  Without it the
+    first non-constant column is used, which is the historical behaviour and is
+    kept so existing callers are unchanged -- but it makes column order part of
+    the contract, enforced only by a comment in the one caller that knew.  A
+    second caller that adjusts for covariates has no way to discover that rule
+    except by reading this function, and would silently report a covariate's
+    effect as the exposure's.  Naming the term removes the obligation instead
+    of documenting it again.
+
+    A ``term`` that is not a predictor in the design fails closed rather than
+    falling back to the positional guess: being asked for a coefficient that
+    does not exist means the caller and the design disagree, and answering with
+    a different column's number would hide that.
+    """
 
     cohort_note = _cohort_trace_note(cohort)
     try:
@@ -140,6 +356,33 @@ def fit_estimator(
         )
     x_df = combined.drop(columns=["__y__"])
     y_series = combined["__y__"]
+    try:
+        x_df, encoding_note, encoded_map = _encode_categorical_predictors(x_df, pd=pd)
+    except _UncodeableDesign as exc:
+        return EstimatorResult(
+            None, None, None, None, n, False, _join_notes(str(exc), cohort_note)
+        )
+    if term is not None and term in encoded_map:
+        # Do not quietly answer for one of its contrasts.  A caller asking for
+        # "sex" after sex became sex=Male is asking for something the design
+        # does not contain, and picking a contrast for them is the same
+        # positional guessing that `term` exists to remove.  Name the columns
+        # it became so the caller can ask for the exact contrast it means.
+        return EstimatorResult(
+            None,
+            None,
+            None,
+            None,
+            n,
+            False,
+            _join_notes(
+                f"requested term {term!r} is categorical and was encoded as "
+                + ", ".join(encoded_map[term])
+                + "; name the exact contrast to report",
+                cohort_note,
+            ),
+        )
+    cohort_note = _join_notes(cohort_note, encoding_note)
     if x_df.shape[1] == 0:
         return EstimatorResult(
             None,
@@ -163,11 +406,11 @@ def fit_estimator(
             ),
         )
 
+    n_events: Optional[int] = None
     if kind == "logistic":
         numeric_y = pd.to_numeric(y_series, errors="coerce")
         is_binary = bool(
-            not numeric_y.isna().any()
-            and numeric_y.isin((0.0, 1.0)).all()
+            not numeric_y.isna().any() and numeric_y.isin((0.0, 1.0)).all()
         )
         if not is_binary:
             return EstimatorResult(
@@ -185,10 +428,30 @@ def fit_estimator(
                 ),
             )
         y_series = numeric_y
+        # Counted here and nowhere else: ``combined.dropna()`` above already
+        # removed every incomplete row, so this is the numerator that belongs
+        # to ``n``.  The caller's frame still holds the dropped rows.
+        n_events = int((y_series == 1.0).sum())
 
     try:
         x_const = sm.add_constant(x_df.astype(float), has_constant="add")
-        coefficient_name = next(col for col in x_const.columns if col != "const")
+        if term is None:
+            coefficient_name = next(col for col in x_const.columns if col != "const")
+        elif term in x_const.columns and term != "const":
+            coefficient_name = term
+        else:
+            return EstimatorResult(
+                None,
+                None,
+                None,
+                None,
+                n,
+                False,
+                _join_notes(
+                    f"requested term {term!r} is not a predictor in the design",
+                    cohort_note,
+                ),
+            )
         _, dropped = _robust_design(x_const, keep=["const", coefficient_name])
         if dropped:
             return EstimatorResult(
@@ -211,7 +474,22 @@ def fit_estimator(
             ci_low, ci_high = _conf_interval_for(result, coefficient_name)
             se = _float_or_none(result.bse[coefficient_name])
             converged = bool(math.isfinite(coef))
-            return EstimatorResult(coef, ci_low, ci_high, se, n, converged, fit_note)
+            return EstimatorResult(
+                coef,
+                ci_low,
+                ci_high,
+                se,
+                n,
+                converged,
+                fit_note,
+                _fitted_terms(
+                    result,
+                    design_columns=list(x_const.columns),
+                    encoded_map=encoded_map,
+                    source_by_design_column=source_by_design_column,
+                    exponentiate=False,
+                ),
+            )
 
         if len(set(y_series.astype(int).tolist())) < 2:
             return EstimatorResult(
@@ -223,9 +501,8 @@ def fit_estimator(
                 False,
                 _join_notes("binary outcome has fewer than two classes", cohort_note),
             )
-        result = sm.Logit(y_series.astype(float), x_const).fit(
-            disp=False, maxiter=100
-        )
+        result = sm.Logit(y_series.astype(float), x_const).fit(disp=False, maxiter=100)
+        separated, separation_note = _logistic_separation(result)
         coef = float(result.params[coefficient_name])
         ci_low, ci_high = _conf_interval_for(result, coefficient_name)
         se = _float_or_none(result.bse[coefficient_name])
@@ -236,6 +513,9 @@ def fit_estimator(
         if not math.isfinite(coef):
             raise ValueError("non-finite logistic coefficient")
         if not converged:
+            # Carrying the verdict here too: complete separation is the reason a
+            # logistic fit most often fails to converge, and "did not converge"
+            # sends a reader looking at the optimiser instead of at the design.
             return EstimatorResult(
                 None,
                 None,
@@ -243,9 +523,30 @@ def fit_estimator(
                 None,
                 n,
                 False,
-                _join_notes("logistic fit did not converge", fit_note),
+                _join_notes(
+                    _join_notes("logistic fit did not converge", fit_note),
+                    separation_note,
+                ),
+                separation_detected=separated,
             )
-        return EstimatorResult(point, low, high, se, n, True, fit_note)
+        return EstimatorResult(
+            point,
+            low,
+            high,
+            se,
+            n,
+            True,
+            _join_notes(fit_note, separation_note),
+            _fitted_terms(
+                result,
+                design_columns=list(x_const.columns),
+                encoded_map=encoded_map,
+                source_by_design_column=source_by_design_column,
+                exponentiate=True,
+            ),
+            n_events=n_events,
+            separation_detected=separated,
+        )
     except Exception as exc:
         return EstimatorResult(
             None,
@@ -656,8 +957,8 @@ def _fit_one_row(
         missing_strategy = _missing_strategy_for(spec, default_missing)
         # Adjust for the primary model's covariates (when supplied and present)
         # so the variant reports the exposure's *adjusted* effect on the same
-        # footing as the primary — fit_estimator reports the first non-const
-        # column, so the exposure must lead the design matrix.
+        # footing as the primary.  The exposure is named to ``fit_estimator``
+        # below rather than positioned first and trusted to stay there.
         missing_covariates = [
             column
             for column in covariates
@@ -670,9 +971,7 @@ def _fit_one_row(
                 + ", ".join(missing_covariates)
             )
         present_covariates = [
-            column
-            for column in covariates
-            if column not in (exposure, outcome_column)
+            column for column in covariates if column not in (exposure, outcome_column)
         ]
         needed = [exposure, outcome_column, *present_covariates]
         missing_columns = [
@@ -686,6 +985,7 @@ def _fit_one_row(
             X=model_df[[exposure, *present_covariates]],
             y=model_df[outcome_column],
             kind=kind,
+            term=exposure,
         )
         notes = result.notes
         if present_covariates:
@@ -1044,6 +1344,65 @@ def _name_tokens(value: str) -> List[str]:
 
 def _normalise_token(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", str(value).lower())
+
+
+#: The textbook separation diagnostic, and the only constant here: under
+#: (quasi-)separation some fitted probabilities are numerically 0 or 1.  This is
+#: a floating-point tolerance, not a judgement about effect size.
+#:
+#: TWO OTHER SIGNALS WERE TRIED AND REMOVED, both for reachability rather than
+#: taste.  A log-odds magnitude bound could not work: a genuine near-
+#: deterministic association (100 vs 100 with one counterexample each way)
+#: reaches 9.65 against a corpus maximum of 4.82, so any bound wide enough to
+#: spare real effects was too wide to catch anything.  statsmodels'
+#: PerfectSeparationWarning was then wired in and measured across 200
+#: constructed designs: it never once fired without this check also firing, so
+#: it was a second spelling of the same rule and no test could prove it live.
+_CERTAIN_PROBABILITY_TOLERANCE = 1e-6
+
+
+def _logistic_separation(result: Any) -> Tuple[bool, str]:
+    """Whether this logistic fit is (quasi-)separated, actually checked.
+
+    The contract field used to be written ``False`` unconditionally, justified
+    by "a separated design cannot satisfy both a finite estimate and a finite
+    interval".  That is not true.  Quasi-separation routinely returns finite
+    numbers -- an enormous coefficient, an interval spanning many orders of
+    magnitude, and a convergence flag that says converged.  The renderer beside
+    this already has a test for exactly that state, so one layer knew it
+    existed while the producer asserted it could not.
+
+    The primary signal is the textbook one and needs no threshold beyond
+    floating point: under separation some fitted probabilities are numerically
+    0 or 1.  The coefficient bound is a second net, anchored on what this
+    project's own fits actually produce.
+
+    Returns the verdict and, when separated, a note naming which signal fired,
+    so a reader is not left to infer it.
+    """
+
+    import numpy as np  # type: ignore
+
+    signals: list[str] = []
+    try:
+        probabilities = np.asarray(result.predict(), dtype=float)
+    except Exception:  # noqa: BLE001 - an estimator without predict() is not asked
+        probabilities = np.asarray([], dtype=float)
+    if probabilities.size:
+        certain = int(
+            np.count_nonzero(
+                (probabilities <= _CERTAIN_PROBABILITY_TOLERANCE)
+                | (probabilities >= 1.0 - _CERTAIN_PROBABILITY_TOLERANCE)
+            )
+        )
+        if certain:
+            signals.append(
+                f"{certain} of {probabilities.size} fitted probabilities are "
+                "numerically 0 or 1"
+            )
+    if not signals:
+        return False, ""
+    return True, "separation suspected: " + "; ".join(signals)
 
 
 def _conf_interval_for(

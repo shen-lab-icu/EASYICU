@@ -11,10 +11,17 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from easyicu.research_agent.plan_utils import _primary_model_leakage_findings
+from easyicu.research_agent.schema import AnalysisStep
 
 
 def _step(step_id="06_primary_association"):
-    return SimpleNamespace(step_id=step_id)
+    return AnalysisStep(
+        step_id=step_id,
+        intent="Estimate the adjusted association.",
+        planned_analysis_role="primary",
+        method="logistic_regression",
+        expected_outputs=["table:adjusted_association_estimates"],
+    )
 
 
 def _ctx(*, outcome="death_icu", exposure="sepsis3"):
@@ -97,5 +104,29 @@ def test_no_outcome_declared_no_self_leakage_error(tmp_path: Path):
 def test_no_coefficient_table_is_silent(tmp_path: Path):
     assert (
         _primary_model_leakage_findings(step=_step(), context=_ctx(), out_dir=tmp_path)
+        == []
+    )
+
+
+def test_descriptive_outcome_table_is_not_a_model_leakage_target(
+    tmp_path: Path,
+):
+    """Regression for E1 r25: a descriptive outcome row is not a predictor."""
+
+    _write_coef_table(tmp_path, ["sep3_sofa2_max", "death"])
+    step = AnalysisStep(
+        step_id="04_prevalence_mortality",
+        intent="Report prevalence and absolute mortality.",
+        planned_analysis_role="auxiliary",
+        method="descriptive",
+        expected_outputs=["table:absolute_risk_context"],
+    )
+
+    assert (
+        _primary_model_leakage_findings(
+            step=step,
+            context=_ctx(outcome="death", exposure="sep3_sofa2_max"),
+            out_dir=tmp_path,
+        )
         == []
     )

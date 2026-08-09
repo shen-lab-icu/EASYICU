@@ -2212,7 +2212,18 @@ def _callback_bmi(
 ) -> ICUTable:
     merged, id_columns, _ = _merge_tables(tables, ctx=ctx, how="inner")
     if merged.empty:
-        return _as_icutbl(merged, id_columns=id_columns, index_column=None, value_column="bmi")
+        # ``_merge_tables`` guarantees the component columns (weight/height),
+        # not the derived output column.  ICUTable validates its value column
+        # even for an empty frame, so materialise the public BMI schema before
+        # returning structural non-availability.
+        empty = merged[id_columns].copy()
+        empty["bmi"] = pd.Series(dtype="float64")
+        return _as_icutbl(
+            empty,
+            id_columns=id_columns,
+            index_column=None,
+            value_column="bmi",
+        )
 
     weight = merged["weight"]
     height = merged["height"]
@@ -4832,8 +4843,56 @@ def _callback_urine24(
     id_cols = list(urine_tbl.id_columns) if urine_tbl.id_columns else []
     
     if urine_col not in df.columns:
-        df[urine_col] = 0.0
-    df[urine_col] = pd.to_numeric(df[urine_col], errors="coerce").fillna(0.0)
+        df[urine_col] = np.nan
+    df[urine_col] = pd.to_numeric(df[urine_col], errors="coerce")
+
+    # HiRID variable 10020000 is a directly recorded mL/h rate, not a voided
+    # volume event.  The generic ricu-compatible path below expands sparse
+    # timestamps to an hourly grid and fills the gaps with zero.  Applying that
+    # path to a rate source turns ordinary charting gaps into anuria and can
+    # spuriously assign renal-SOFA 3/4.  Use the same observed-clock-time
+    # integration already used by HiRID's uo_6h/12h/24h and KDIGO callbacks,
+    # then convert the mean mL/h rate to its 24-hour-equivalent volume.
+    source_name = getattr(
+        getattr(ctx.data_source, "config", None),
+        "name",
+        "",
+    )
+    if source_name == "hirid":
+        from ..callbacks import _urine_rate_window_avg_multi
+
+        if not id_cols or not time_col:
+            cols = id_cols + ([time_col] if time_col else []) + ["urine24"]
+            return _as_icutbl(
+                pd.DataFrame(columns=cols),
+                id_columns=id_cols,
+                index_column=time_col,
+                value_column="urine24",
+            )
+
+        rate = df[id_cols + [time_col, urine_col]].rename(
+            columns={urine_col: "urine"}
+        )
+        unit_weight = rate[id_cols].drop_duplicates().assign(weight=1.0)
+        result_df = _urine_rate_window_avg_multi(
+            rate,
+            unit_weight,
+            windows=[(24, 12)],
+            interval=interval,
+        )["uo_24h"].rename(columns={"uo_24h": "urine24"})
+        result_df["urine24"] = (
+            pd.to_numeric(result_df["urine24"], errors="coerce") * 24.0
+        )
+        return _as_icutbl(
+            result_df[id_cols + [time_col, "urine24"]],
+            id_columns=id_cols,
+            index_column=time_col,
+            value_column="urine24",
+        )
+
+    # Event-volume sources use the ricu-compatible dense hourly grid below;
+    # an absent event in one populated grid hour represents zero output.
+    df[urine_col] = df[urine_col].fillna(0.0)
     
     is_numeric_time = pd.api.types.is_numeric_dtype(df[time_col])
     interval_hours = interval.total_seconds() / 3600.0
@@ -5467,6 +5526,60 @@ def _callback_vaso60(
         )
 
     id_columns, index_column, _ = _assert_shared_schema({rate_name: rate_tbl, dur_name: dur_tbl})
+
+    def _reload_component_with_identifiers(
+        name: str,
+        table: ICUTable,
+    ) -> ICUTable:
+        """Recover a cache-corrupted component without crossing patient rows.
+
+        Nested SOFA loads can encounter a stale aggregate-cache entry whose
+        identifier metadata is intact even though the physical ID column was
+        projected away.  Joining that frame to duration windows would either
+        fail with an opaque ``KeyError`` or, worse, require a cross-patient
+        fallback.  Bypass the concept cache once and require the reloaded
+        component to satisfy its declared identifier contract.
+        """
+
+        missing = [column for column in id_columns if column not in table.data.columns]
+        if not missing:
+            return table
+        if ctx is None or ctx.resolver is None or ctx.data_source is None:
+            raise ValueError(
+                f"vaso60 component '{name}' is missing identifier columns {missing}"
+            )
+
+        loaded = ctx.resolver.load_concepts(
+            [name],
+            ctx.data_source,
+            merge=False,
+            aggregate=False,
+            patient_ids=ctx.patient_ids,
+            verbose=False,
+            interval=ctx.interval,
+            align_to_admission=True,
+            r_compatible=False,
+            concept_workers=1,
+            _skip_concept_cache=True,
+            _allow_missing_concept=True,
+        )
+        refreshed = loaded.get(name) if isinstance(loaded, dict) else loaded
+        if not isinstance(refreshed, ICUTable):
+            raise ValueError(
+                f"vaso60 component '{name}' could not be reloaded with identifiers"
+            )
+        still_missing = [
+            column for column in id_columns if column not in refreshed.data.columns
+        ]
+        if still_missing:
+            raise ValueError(
+                f"vaso60 component '{name}' is missing identifier columns "
+                f"{still_missing} after an uncached reload"
+            )
+        return refreshed
+
+    rate_tbl = _reload_component_with_identifiers(rate_name, rate_tbl)
+    dur_tbl = _reload_component_with_identifiers(dur_name, dur_tbl)
     if index_column is None:
         raise ValueError("vaso60 requires time-indexed component tables.")
 
@@ -6034,8 +6147,12 @@ def _callback_susp_inf(
         infection_tbl = tables["infection_icd"]
         abx_tbl = tables["abx"]
         
-        # 转换ID列
-        id_columns, index_column, converted_tables = _assert_shared_schema(
+        # 转换 ID 列。infection_icd 只负责“定人”，疑似感染的
+        # 时间轴必须明确来自 ABX。不能使用 _assert_shared_schema 返回的
+        # “第一个组件 index”：当 infection_icd 先于 abx 传入时，
+        # ABX 小时值会被错标为 diagnosisoffset，并在后续多概念合并
+        # 中被当作 stay-level 字段，最终丢失时间。
+        id_columns, _, converted_tables = _assert_shared_schema(
             {"infection_icd": infection_tbl, "abx": abx_tbl},
             ctx=ctx,
             convert_ids=True
@@ -6044,24 +6161,21 @@ def _callback_susp_inf(
         infection_data = converted_tables["infection_icd"].data.copy()
         abx_data = converted_tables["abx"].data.copy()
         
-        if index_column is None:
-            raise ValueError("susp_inf requires time-indexed component tables")
-        
-        # 统一时间列名
+        # ABX “定时”：以抗生素概念自己的 index metadata 为
+        # 唯一时间权威。eICU 在入院对齐后这一列是 canonical
+        # charttime；保留 metadata 也使显式 icd_abx 调用不依赖字典顺序。
         abx_idx = converted_tables["abx"].index_column
-        if abx_idx and abx_idx != index_column and abx_idx in abx_data.columns:
-            abx_data = abx_data.rename(columns={abx_idx: index_column})
-        
-        infection_idx = converted_tables["infection_icd"].index_column
-        if infection_idx and infection_idx != index_column and infection_idx in infection_data.columns:
-            infection_data = infection_data.rename(columns={infection_idx: index_column})
+        if not abx_idx or abx_idx not in abx_data.columns:
+            raise ValueError(
+                "susp_inf icd_abx requires a time-indexed antibiotic component"
+            )
         
         # ICD感染诊断"定人" - 获取有感染诊断的患者列表
         id_col_list = list(id_columns)
         infection_patients = infection_data[id_col_list].drop_duplicates()
         
         # 抗生素"定时" - 获取使用抗生素的时间点
-        abx_events = abx_data[id_col_list + [index_column]].drop_duplicates()
+        abx_events = abx_data[id_col_list + [abx_idx]].drop_duplicates()
         
         # 合并: 有感染诊断的患者 + 使用抗生素的时间点
         # 这意味着: 患者必须有感染诊断，抗生素使用时间即为疑似感染时间
@@ -6073,7 +6187,12 @@ def _callback_susp_inf(
             f"{len(result)} suspected infection events"
         )
         
-        return _as_icutbl(result, id_columns=id_columns, index_column=index_column, value_column="susp_inf")
+        return _as_icutbl(
+            result,
+            id_columns=id_columns,
+            index_column=abx_idx,
+            value_column="susp_inf",
+        )
     
     # ===== 原有策略: and/or/abx/samp =====
     # 需要 abx 和 samp 两个概念
@@ -6114,6 +6233,15 @@ def _callback_susp_inf(
     abx_min_count = _callback_int(kwargs.get("abx_min_count"), 1)
     positive_cultures = _callback_bool(kwargs.get("positive_cultures"), False)
     keep_components = _callback_bool(kwargs.get("keep_components"), False)
+
+    if positive_cultures:
+        raise ValueError(
+            "positive_cultures=True requires event-level culture-result timing, "
+            "which the harmonized `samp` concept intentionally does not encode; "
+            "use the separate admission-level `culture_positive` endpoint for "
+            "stratification, or provide an explicitly time-indexed positive-"
+            "culture component"
+        )
 
     result = susp_inf_detector(
         abx=abx_data,
@@ -6505,7 +6633,20 @@ def _callback_rrt_criteria(
                     weight_df = weight_df.rename(columns={cols[0]: "weight"})
             
             # ⚡ PERF: Compute all 3 UO windows in a single merge+sort+groupby
-            uo_results = uo_all_windows(urine_df, weight_df, interval=ctx.interval)
+            source_is_rate = (
+                getattr(
+                    getattr(ctx.data_source, "config", None),
+                    "name",
+                    "",
+                )
+                == "hirid"
+            )
+            uo_results = uo_all_windows(
+                urine_df,
+                weight_df,
+                interval=ctx.interval,
+                source_is_rate=source_is_rate,
+            )
             for uo_name in missing_uo:
                 if uo_name in uo_results:
                     tables[uo_name] = _as_icutbl(uo_results[uo_name], id_columns=urine_tbl.id_columns, index_column=urine_tbl.index_column, value_column=uo_name)
@@ -6574,6 +6715,39 @@ def _callback_rrt_criteria(
     
     # Meets RRT criteria = base injury + crisis - NOT on RRT
     meets_criteria = base_injury & crisis & (~rrt_active)
+
+    # ``_merge_tables(..., how="outer")`` can retain an admission-level
+    # dependency row without an event time.  Comparisons against its missing
+    # measurements evaluate to False, which previously published one synthetic
+    # ``rrt_criteria=False`` row at charttime=NULL.  A time-dependent criterion
+    # cannot be asserted at an unknown time: discard negative merge artifacts
+    # and fail loudly if a future path ever computes a positive untimed event.
+    if index_column and index_column in data.columns:
+        missing_time = data[index_column].isna()
+        positive_missing_time = missing_time & meets_criteria
+        if bool(positive_missing_time.any()):
+            sample_ids = (
+                data.loc[positive_missing_time, id_columns]
+                .drop_duplicates()
+                .head(5)
+                .to_dict(orient="records")
+            )
+            raise ValueError(
+                "rrt_criteria produced positive rows without an event time; "
+                f"sample identifiers={sample_ids}"
+            )
+        data = data.loc[~missing_time].copy()
+        meets_criteria = meets_criteria.loc[~missing_time]
+    elif bool(meets_criteria.any()):
+        raise ValueError("rrt_criteria produced positive rows without a time axis")
+    else:
+        cols = id_columns + ["rrt_criteria"]
+        return _as_icutbl(
+            pd.DataFrame(columns=cols),
+            id_columns=id_columns,
+            index_column=None,
+            value_column="rrt_criteria",
+        )
     
     data["rrt_criteria"] = meets_criteria
     cols = id_columns + ([index_column] if index_column else []) + ["rrt_criteria"]
@@ -6675,12 +6849,21 @@ def _callback_uo_window(
     
     # Call the actual callback function from callbacks.py
     min_hours = max(1, window_hours // 2)
+    source_is_rate = (
+        getattr(
+            getattr(ctx.data_source, "config", None),
+            "name",
+            "",
+        )
+        == "hirid"
+    )
     result_df = _urine_window_avg(
         urine=urine_tbl.data,
         weight=weight_tbl.data if weight_tbl else pd.DataFrame(),
         window_hours=window_hours,
         min_hours=min_hours,
-        interval=ctx.interval or pd.Timedelta(hours=1)
+        interval=ctx.interval or pd.Timedelta(hours=1),
+        source_is_rate=source_is_rate,
     )
     
     if result_df.empty:
@@ -7053,6 +7236,15 @@ def _callback_kdigo_aki(
         rrt_df=rrt_df,
         id_col=id_col,
         time_col=time_col,
+        urine_source_is_rate=(
+            getattr(
+                getattr(ctx.data_source, "config", None),
+                "name",
+                "",
+            )
+            == "hirid"
+        ),
+        interval=ctx.interval or pd.Timedelta(hours=1),
     )
     
     if result.empty:
@@ -7192,7 +7384,21 @@ def _callback_kdigo_uo(
             time_col = col
             break
     
-    result = kdigo_uo(urine_df, weight_df, id_col=id_col, time_col=time_col)
+    result = kdigo_uo(
+        urine_df,
+        weight_df,
+        id_col=id_col,
+        time_col=time_col,
+        source_is_rate=(
+            getattr(
+                getattr(ctx.data_source, "config", None),
+                "name",
+                "",
+            )
+            == "hirid"
+        ),
+        interval=ctx.interval or pd.Timedelta(hours=1),
+    )
     
     return ICUTable(
         data=result,
@@ -7527,7 +7733,12 @@ def _callback_fluid_balance_cumulative(
     tables: Dict[str, "ICUTable"],
     ctx: "ConceptCallbackContext",
 ) -> "ICUTable":
-    """Cumulative fluid balance = running sum of hourly fluid_balance per stay."""
+    """Cumulative fluid balance since ICU admission (hour zero).
+
+    Native exports may retain observations up to 24 hours before admission.
+    Those rows can remain useful point measurements, but they must not become a
+    hidden offset in a variable described as cumulative *since admission*.
+    """
     fb_tbl = tables.get("fluid_balance")
     if fb_tbl is None or fb_tbl.data.empty:
         return _as_icutbl(
@@ -7558,7 +7769,13 @@ def _callback_fluid_balance_cumulative(
         if non_meta:
             val_col = non_meta[0]
 
-    df[val_col] = pd.to_numeric(df[val_col], errors="coerce").fillna(0)
+    df[time_col] = pd.to_numeric(df[time_col], errors="coerce")
+    df[val_col] = pd.to_numeric(df[val_col], errors="coerce")
+    df = df.loc[
+        df[time_col].notna()
+        & df[val_col].notna()
+        & df[time_col].ge(0)
+    ].copy()
     df = df.sort_values([id_col, time_col])
     df["fluid_balance_cumulative"] = df.groupby(id_col)[val_col].cumsum()
     result = df[[id_col, time_col, "fluid_balance_cumulative"]].copy()

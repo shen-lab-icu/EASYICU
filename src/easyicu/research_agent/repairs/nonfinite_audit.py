@@ -3,9 +3,18 @@
 from __future__ import annotations
 
 import ast
+import re
 from collections.abc import Sequence
 
 from ..schema import ValidationFinding
+
+
+_ORDERED_DOMAIN_RUNTIME_ERROR = re.compile(
+    r"Invalid [^\r\n:]+ ordered-domain values:\s*"
+    r"nonfinite=(?P<nonfinite>\d+),\s*"
+    r"noninteger=(?P<noninteger>\d+),\s*"
+    r"out_of_domain=(?P<out_of_domain>\d+)",
+)
 
 
 def _import_alias(tree: ast.Module, module: str) -> str | None:
@@ -96,6 +105,142 @@ def _declares_nonfinite_output(tree: ast.Module, mask_name: str) -> bool:
         ):
             return True
     return False
+
+
+def _raise_reports_ordered_nonfinite_count(
+    tree: ast.Module,
+    count_name: str,
+) -> bool:
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Raise) or node.exc is None:
+            continue
+        joined_strings = [
+            candidate
+            for candidate in ast.walk(node.exc)
+            if isinstance(candidate, ast.JoinedStr)
+        ]
+        for joined in joined_strings:
+            literal_text = "".join(
+                str(value.value)
+                for value in joined.values
+                if isinstance(value, ast.Constant) and isinstance(value.value, str)
+            )
+            formatted_names = {
+                candidate.value.id
+                for candidate in joined.values
+                if isinstance(candidate, ast.FormattedValue)
+                and isinstance(candidate.value, ast.Name)
+            }
+            if (
+                "ordered-domain values:" in literal_text
+                and "nonfinite=" in literal_text
+                and count_name in formatted_names
+            ):
+                return True
+    return False
+
+
+def patch_nonfinite_missing_mask_conflation(code: str, run_log: str) -> str:
+    """Keep source-missing values out of an ordered-domain non-finite count.
+
+    ``NaN`` represents source missingness in the analysis frame. Generated code
+    can accidentally turn every missing value into a non-finite violation by
+    evaluating ``~np.isfinite(values.fillna(np.nan))``. This repair activates
+    only for the script's exact ordered-domain runtime error and one AST-proven
+    count reported by that same error. It adds the missing observed-value mask;
+    no rows, domains, thresholds, or measured values are changed.
+    """
+
+    error = _ORDERED_DOMAIN_RUNTIME_ERROR.search(str(run_log or ""))
+    if error is None or int(error.group("nonfinite")) <= 0:
+        return code
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+    numpy_alias = _import_alias(tree, "numpy")
+    if numpy_alias is None:
+        return code
+
+    candidates: list[tuple[ast.UnaryOp, ast.Name]] = []
+    for assignment in ast.walk(tree):
+        if not (
+            isinstance(assignment, ast.Assign)
+            and len(assignment.targets) == 1
+            and isinstance(assignment.targets[0], ast.Name)
+            and _raise_reports_ordered_nonfinite_count(
+                tree,
+                assignment.targets[0].id,
+            )
+            and isinstance(assignment.value, ast.Call)
+            and isinstance(assignment.value.func, ast.Name)
+            and assignment.value.func.id == "int"
+            and len(assignment.value.args) == 1
+        ):
+            continue
+        sum_call = assignment.value.args[0]
+        if not (
+            isinstance(sum_call, ast.Call)
+            and isinstance(sum_call.func, ast.Attribute)
+            and sum_call.func.attr == "sum"
+            and isinstance(sum_call.func.value, ast.UnaryOp)
+            and isinstance(sum_call.func.value.op, ast.Invert)
+            and isinstance(sum_call.func.value.operand, ast.Call)
+        ):
+            continue
+        inverted = sum_call.func.value
+        finite_call = inverted.operand
+        if not (
+            isinstance(finite_call.func, ast.Attribute)
+            and isinstance(finite_call.func.value, ast.Name)
+            and finite_call.func.value.id == numpy_alias
+            and finite_call.func.attr == "isfinite"
+            and len(finite_call.args) == 1
+            and isinstance(finite_call.args[0], ast.Call)
+            and isinstance(finite_call.args[0].func, ast.Attribute)
+            and finite_call.args[0].func.attr == "fillna"
+            and isinstance(finite_call.args[0].func.value, ast.Name)
+            and len(finite_call.args[0].args) == 1
+            and isinstance(finite_call.args[0].args[0], ast.Attribute)
+            and isinstance(finite_call.args[0].args[0].value, ast.Name)
+            and finite_call.args[0].args[0].value.id == numpy_alias
+            and finite_call.args[0].args[0].attr == "nan"
+        ):
+            continue
+        candidates.append((inverted, finite_call.args[0].func.value))
+    if len(candidates) != 1:
+        return code
+
+    inverted, values = candidates[0]
+    if inverted.end_lineno is None or inverted.end_col_offset is None:
+        return code
+    values_text = ast.get_source_segment(code, values)
+    if not values_text:
+        return code
+    lines = code.splitlines(keepends=True)
+    line_starts: list[int] = []
+    offset = 0
+    for line in lines:
+        line_starts.append(offset)
+        offset += len(line)
+
+    def _absolute_offset(lineno: int, utf8_col: int) -> int:
+        line = lines[lineno - 1]
+        char_col = len(line.encode("utf-8")[:utf8_col].decode("utf-8"))
+        return line_starts[lineno - 1] + char_col
+
+    start = _absolute_offset(inverted.lineno, inverted.col_offset)
+    end = _absolute_offset(inverted.end_lineno, inverted.end_col_offset)
+    replacement = (
+        f"({values_text}.notna() & "
+        f"~{numpy_alias}.isfinite({values_text}))"
+    )
+    repaired = code[:start] + replacement + code[end:]
+    try:
+        ast.parse(repaired)
+    except SyntaxError:
+        return code
+    return repaired
 
 
 def patch_strict_numeric_nonfinite_audit_conflict(
@@ -597,6 +742,7 @@ def patch_strict_numeric_helper_nonfinite_guard(
 
 
 __all__ = [
+    "patch_nonfinite_missing_mask_conflation",
     "patch_nonfinite_audit_host_strict_boundary",
     "patch_strict_numeric_nonfinite_audit_conflict",
     "patch_strict_numeric_helper_nonfinite_guard",

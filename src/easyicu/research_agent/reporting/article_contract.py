@@ -275,6 +275,7 @@ def render_article_analysis_contract_for_prompt(
 
     required = [req for req in contract.requirements if req.required]
     recommended = [req for req in contract.requirements if not req.required]
+    headline_roles = set(contract.planner_owned_result_roles)
     lines = [
         "ARTICLE ANALYSIS CONTRACT:",
         f"- analysis_family: {contract.analysis_family}",
@@ -287,7 +288,8 @@ def render_article_analysis_contract_for_prompt(
         lines.append(
             "  - "
             f"{req.module_id} (role={req.role}; tier={req.tier}; "
-            f"typed_example=table:{req.module_id}; "
+            + ("headline_owned=true; " if req.role in headline_roles else "")
+            + f"typed_example=table:{req.module_id}; "
             f"acceptable={', '.join(req.acceptable_outputs[:4])})"
         )
     if recommended:
@@ -309,6 +311,49 @@ def render_article_analysis_contract_for_prompt(
         "put its typed_example (or an equally explicit typed product using an "
         "acceptable term) in expected_outputs. Intent-only prose does not count."
     )
+    # The rule above is true for ordinary roles and INCOMPLETE for the
+    # headline-owned ones, which roles_covered_by_plan credits only from steps
+    # on the primary lineage. Measured 2026-07-30 on a recorded
+    # survival-analysis failure: the scientifically natural survival plan
+    # -- Cox model as the single primary step, Kaplan-Meier curve as its own
+    # secondary display step reading the analysis cohort -- covers
+    # survival_effect and misses temporal_absolute_risk, because the display
+    # step is off the lineage. The plan schema permits at most one primary step
+    # and refuses a primary step whose products are all rendering, so a Planner
+    # obeying the published rule literally has no way to satisfy the role. Five
+    # attempts, three distinct violations, nothing executed. Six of fifteen
+    # families declare a headline-owned role whose natural output is a display,
+    # so this is not one family's quirk.
+    if headline_roles & set(contract.required_roles):
+        lines.append(
+            "- rule: a role marked headline_owned=true is credited only when the "
+            "declaring step is on the primary lineage -- either the single "
+            "planned_analysis_role='primary' step itself, or a "
+            "secondary/auxiliary step whose inputs include a typed product that "
+            "only a lineage step produces. A plan may declare at most one primary "
+            "step, and that step must itself declare a non-rendering scientific "
+            "result product, so a display for a headline_owned role belongs in "
+            "the primary step's expected_outputs beside that result, or in a step "
+            "that consumes the primary step's typed output. A step reading only "
+            "the cohort does not join the lineage."
+        )
+    # This contract was compiled for source_analysis_type, which the host
+    # inferred from the research context. A plan that declares a different
+    # analysis_type is judged against *that* family's contract, whose required
+    # roles are not listed above. Measured on 2026-07-29: a Planner shown the
+    # survival contract declared association_study -- the better label for a
+    # binary in-hospital-mortality outcome -- and was then judged on
+    # primary_estimand and robustness, which it had never seen, while the
+    # survival roles it had been shown stopped applying. Five attempts produced
+    # five different violations and nothing executed. Re-declaring may well be
+    # right; doing it unknowingly is what costs the run.
+    lines.append(
+        f"- rule: this contract is compiled for analysis_type="
+        f"{contract.source_analysis_type}. Declaring a different analysis_type "
+        "REPLACES it with that family's contract, whose required roles are not "
+        "listed here. Either keep this analysis_type, or declare the family you "
+        "intend and cover its roles -- do not re-declare casually."
+    )
     return "\n".join(lines)
 
 
@@ -329,6 +374,37 @@ def _has_scientific_result_product(products: Set[tuple[str, str]]) -> bool:
     return any(
         kind not in {"figure", "log", "report", "code", "test"}
         for kind, _product in products
+    )
+
+
+def empty_primary_lineage_reason(plan: AnalysisPlan) -> Optional[str]:
+    """Why no step is on the primary lineage, in the plan's own terms, or None.
+
+    ``_declared_primary_lineage_step_ids`` returns the empty set for three
+    structural reasons, and while it does, a headline-owned role cannot be
+    credited *anywhere* -- declaring its product in any step changes nothing.
+    The host reported only the symptom ("missing role X") and advised declaring
+    the product in the primary step, which the Planner may already have done.
+    canary5 spent 2 of its 5 attempts there.
+
+    Only ONE of its three reasons is reachable here, which is why this is four
+    lines rather than three branches.  ``AnalysisPlan`` already refuses the
+    other two outright -- more than one primary step, and a primary step whose
+    outputs are all displays -- so a plan holding either never reaches the
+    article contract at all.  Both were written and deleted after construction
+    showed the plan cannot be built; canary5's "four primary steps" rejection
+    was a *different* attempt from its missing-role ones.
+
+    What remains is a plan with NO primary step, which ``AnalysisPlan`` permits
+    and which silently makes every headline role uncreditable.
+    """
+
+    if any(step.planned_analysis_role == "primary" for step in plan.steps):
+        return None
+    return (
+        "no step declares planned_analysis_role='primary', so the primary "
+        "lineage is empty and no headline-owned role can be credited in any "
+        "step, wherever its product is declared"
     )
 
 
@@ -370,6 +446,44 @@ def _declared_primary_lineage_step_ids(plan: AnalysisPlan) -> Set[str]:
                     changed = True
                     break
     return allowed
+
+
+#: Roles for which the SCHEMA, not this contract, fixes the product name.
+#:
+#: ``AnalysisStep`` refuses a step carrying a ``table_one_spec`` unless its
+#: expected outputs include ``table:table_one`` -- there is exactly one way to
+#: declare a Table 1, and it is not the contract's display id.  Every playbook
+#: family names this role's module ``baseline_table`` or ``descriptive_table``,
+#: so a remediation hint built from the module id alone names the one product
+#: the schema will reject, while ``table:table_one`` -- which ``_ROLE_ALIASES``
+#: already credits for this role -- is never mentioned.
+#:
+#: MEASURED on a survival-analysis fixture, 2026-08-03: five planner attempts,
+#: five distinct rejections, two of them this loop -- ``missing required article
+#: contract role(s): baseline_context ... 'table:baseline_table'`` followed by
+#: ``table_one_spec requires expected output 'table:table_one'``.  The task has
+#: never produced a plan.
+#:
+#: This is a schema law with one entry, not a name allowlist: the accompanying
+#: test derives the check from ``AnalysisStep`` itself and fails if a hinted
+#: product stops being legally emittable, so a future law cannot drift from it.
+SCHEMA_MANDATED_ROLE_PRODUCTS: Dict[str, str] = {
+    "baseline_context": "table:table_one",
+}
+
+
+def hinted_typed_products(role: str, module_ids: Sequence[str]) -> List[str]:
+    """The typed products to offer the Planner for an unmet role.
+
+    Returns the schema-mandated product where one exists, because a hint the
+    schema refuses is worse than no hint: it costs an attempt and returns the
+    Planner to the same wall.
+    """
+
+    mandated = SCHEMA_MANDATED_ROLE_PRODUCTS.get(role)
+    if mandated is not None:
+        return [mandated]
+    return [f"table:{module_id}" for module_id in module_ids]
 
 
 def _plan_outputs_match_requirement(
@@ -1095,6 +1209,7 @@ __all__ = [
     "ArticleDisplayRequirement",
     "augment_plan_for_article_contract",
     "build_article_analysis_contract",
+    "empty_primary_lineage_reason",
     "render_article_analysis_contract_for_prompt",
     "roles_covered_by_artifacts",
     "roles_covered_by_plan",

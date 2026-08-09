@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import ipaddress
+import json
 import os
 from pathlib import Path
 import signal
@@ -18,13 +19,26 @@ DEFAULT_PORT = 8765
 
 
 def _runtime_dir() -> Path:
+    """Per-user runtime directory for the PID and log files.
+
+    Prefers $XDG_RUNTIME_DIR (already per-user and 0700). The /tmp fallback is
+    namespaced by UID so two users on a shared host cannot collide in — or
+    overwrite each other's — easyicu_webserver.pid.
+    """
+
     override = os.environ.get("EASYICU_RUNTIME_DIR")
-    runtime_dir = (
-        Path(override).expanduser()
-        if override
-        else Path(tempfile.gettempdir()) / "easyicu"
-    )
+    if override:
+        runtime_dir = Path(override).expanduser()
+    else:
+        xdg = os.environ.get("XDG_RUNTIME_DIR")
+        base = Path(xdg).expanduser() if xdg else Path(tempfile.gettempdir())
+        suffix = f"easyicu-{os.getuid()}" if hasattr(os, "getuid") else "easyicu"
+        runtime_dir = base / suffix
     runtime_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        runtime_dir.chmod(0o700)
+    except OSError:
+        pass
     return runtime_dir
 
 
@@ -80,6 +94,83 @@ def _runtime_env() -> dict[str, str]:
     env.setdefault("PYTHONIOENCODING", "utf-8")
     env.setdefault("EASYICU_VERBOSE", "0")
     return env
+
+
+def _process_create_time(pid: int) -> float | None:
+    """Return the process start time, used to tell a recycled PID apart."""
+
+    try:
+        import psutil
+    except ImportError:
+        return None
+    try:
+        return float(psutil.Process(pid).create_time())
+    except Exception:
+        return None
+
+
+def _write_pid_record(pid_path: Path, pid: int, port: int) -> None:
+    """Write the PID plus enough identity to validate it later, atomically."""
+
+    record = {
+        "pid": pid,
+        "port": port,
+        "create_time": _process_create_time(pid),
+        "cmdline_marker": "easyicu.webserver.app:app",
+    }
+    tmp_path = pid_path.with_name(pid_path.name + f".{os.getpid()}.tmp")
+    tmp_path.write_text(json.dumps(record), encoding="utf-8")
+    os.replace(tmp_path, pid_path)
+
+
+def _read_pid_record(pid_path: Path) -> dict:
+    """Read the PID record, tolerating the legacy bare-integer format."""
+
+    try:
+        raw = pid_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return {}
+    if not raw:
+        return {}
+    try:
+        record = json.loads(raw)
+    except ValueError:
+        record = raw
+    if isinstance(record, dict):
+        return record
+    # Legacy format: the file held a bare PID integer. Keep reading it — the
+    # identity check still verifies the cmdline, it just has no start time.
+    try:
+        return {"pid": int(record)}
+    except (TypeError, ValueError):
+        return {}
+
+
+def _pid_matches_record(pid: int, record: dict) -> bool:
+    """True when the live process really is the server this record describes."""
+
+    try:
+        import psutil
+    except ImportError:
+        # Without psutil we cannot verify identity. Signalling an unverified
+        # PID risks killing an unrelated process, so decline instead — the
+        # port-based sweep below still stops a real server.
+        return False
+    try:
+        proc = psutil.Process(pid)
+        cmdline = " ".join(proc.cmdline() or [])
+        live_create_time = float(proc.create_time())
+    except Exception:
+        return False
+
+    if not _is_easyicu_webserver_cmdline(cmdline):
+        return False
+    recorded_create_time = record.get("create_time")
+    if recorded_create_time is not None:
+        # Sub-second tolerance: psutil rounds differently across platforms.
+        if abs(live_create_time - float(recorded_create_time)) > 1.0:
+            return False
+    return True
 
 
 def _is_easyicu_webserver_cmdline(cmdline: str) -> bool:
@@ -175,7 +266,7 @@ def run_app(
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
             )
-        pid_path.write_text(str(process.pid), encoding="utf-8")
+        _write_pid_record(pid_path, process.pid, port)
         print(f"Started EasyICU native WebApp in the background (PID: {process.pid})")
         print(f"Log file: {log_path}")
         return 0
@@ -190,17 +281,25 @@ def stop_app(port: int = DEFAULT_PORT) -> int:
     stopped = False
     pid_path = _pid_file()
     if pid_path.exists():
-        try:
-            pid = int(pid_path.read_text(encoding="utf-8").strip())
-        except ValueError:
-            pid = 0
+        record = _read_pid_record(pid_path)
+        pid = int(record.get("pid") or 0)
         if pid:
-            try:
-                os.kill(pid, signal.SIGTERM)
-                print(f"Stopped EasyICU native WebApp (PID: {pid})")
-                stopped = True
-            except ProcessLookupError:
-                print(f"PID file points to a missing process: {pid}.")
+            # A bare PID is not proof of identity: PIDs are recycled, and a
+            # stale file plus a recycled PID means SIGTERM lands on whatever
+            # unrelated process now holds that number. Verify the process is
+            # actually our uvicorn before signalling it.
+            if _pid_matches_record(pid, record):
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                    print(f"Stopped EasyICU native WebApp (PID: {pid})")
+                    stopped = True
+                except ProcessLookupError:
+                    print(f"PID file points to a missing process: {pid}.")
+            else:
+                print(
+                    f"Ignoring stale PID file: process {pid} is not this "
+                    "EasyICU WebApp. Not signalling it."
+                )
         pid_path.unlink(missing_ok=True)
 
     pids = _find_easyicu_webserver_processes_on_port(port)

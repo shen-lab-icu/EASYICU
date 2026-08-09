@@ -87,11 +87,15 @@
      breadcrumb so a destination has ONE name across the sidebar, header, and
      home entries (no sidebar-vs-title drift). Copilot is a separate, parallel
      system that completes the same flow conversationally. */
+  /* Extraction produces the export the other three read. Listed as four peers,
+     a new user clicks Patient Review first and meets an empty state; the order
+     of operations was only discoverable by tripping over it. `role` renders
+     that dependency in the nav instead. */
   const CLASSIC = [
-    { id: 'extraction', label: ['Data Extraction', '数据抽取'], sub: ['choose cohort + modules', '选择队列 + 模块'], ico: 'extract' },
-    { id: 'patient', label: ['Patient Review', '患者审阅'], sub: ['tables · trends · patients', '表格 · 趋势 · 患者'], ico: 'patient' },
-    { id: 'cohort', label: ['Cohort Statistics', '队列统计'], sub: ['groups + coverage', '分组 + 覆盖率'], ico: 'cohort' },
-    { id: 'crossdb', label: ['Cross-DB Benchmark', '跨库基准'], sub: ['multi-database checks', '多数据库检查'], ico: 'benchmark' },
+    { id: 'extraction', label: ['Data Extraction', '数据抽取'], sub: ['choose cohort + modules', '选择队列 + 模块'], ico: 'extract', role: 'produces' },
+    { id: 'patient', label: ['Patient Review', '患者审阅'], sub: ['tables · trends · patients', '表格 · 趋势 · 患者'], ico: 'patient', role: 'reads' },
+    { id: 'cohort', label: ['Cohort Statistics', '队列统计'], sub: ['groups + coverage', '分组 + 覆盖率'], ico: 'cohort', role: 'reads' },
+    { id: 'crossdb', label: ['Cross-database comparison', '跨库对比'], sub: ['coverage + distributions', '覆盖率 + 分布'], ico: 'benchmark', role: 'reads' },
   ];
   let classicOpen = true;
 
@@ -109,11 +113,11 @@
     'Idea Mining': ['Idea Mining', '想法挖掘'],
     'Data Workspace': ['Data Workspace', '数据工作台'],
     /* One destination, one name: these zh labels must match the sidebar CLASSIC
-       labels and each screen's own page title. Sidebar-vs-crumb drift (患者明细 /
-       跨库对比) made the same screen read as three different places. */
+       labels and each screen's own page title. Retired aliases include 患者明细
+       and 跨库基准. */
     'Patient Review': ['Patient Review', '患者审阅'],
     'Cohort Statistics': ['Cohort Statistics', '队列统计'],
-    'Cross-DB Benchmark': ['Cross-DB Benchmark', '跨库基准'],
+    'Cross-database comparison': ['Cross-database comparison', '跨库对比'],
     Settings: ['Settings', '设置'],
     'Workspace States': ['Workspace States', '工作区状态'],
   };
@@ -122,6 +126,11 @@
     if (!scr) return '';
     return typeof scr.actionHtml === 'function' ? scr.actionHtml() : (scr.actionHtml || '');
   };
+  const displayedDataMode = () => (
+    window.getDataMode
+      ? window.getDataMode()
+      : (window.EU_DATA === 'real' ? 'real' : 'demo')
+  );
 
   function syncShellAccessibility(root, fullScreen) {
     if (fullScreen && root.firstElementChild) {
@@ -133,7 +142,7 @@
       if (current) control.setAttribute('aria-current', 'page');
       else control.removeAttribute('aria-current');
     });
-    const dataMode = window.EU_DATA === 'real' ? 'real' : 'demo';
+    const dataMode = displayedDataMode();
     root.querySelectorAll('[data-datamode], [data-hd]').forEach((control) => {
       const value = control.dataset.datamode || control.dataset.hd;
       control.setAttribute('aria-pressed', String(value === dataMode));
@@ -147,10 +156,34 @@
   function screenOf(id) { return window.SCREENS[id]; }
   function sectionOf(id) { return screenOf(id).section; }
 
+  /* The three nav sections are the product's main line (plan -> data -> draft),
+     but they rendered as static categories, so nothing told the user how far
+     they had got or what was still missing. study-progress.js derives the
+     state from the active study context and exposes a small snapshot; the
+     shell renders that and never reads the context store itself (a layering
+     rule locked by test_route_handoffs_..._has_its_own_owner). */
+  function stageChip(stageId, progress) {
+    const state = (progress.byId || {})[stageId] || 'todo';
+    const label = {
+      done: t('done', '已完成'),
+      active: t('in progress', '进行中'),
+      todo: t('not started', '未开始'),
+    }[state];
+    const stale = state === 'done' && progress.stale;
+    const shown = stale ? t('out of date', '已过期') : label;
+    return `<span class="stage-chip ${stale ? 'stale' : state}" title="${shown}">${state === 'done' && !stale ? icon('check', 10) : ''}${shown}</span>`;
+  }
+
+  function navSection(stageId, labelEn, labelZh, progress) {
+    return `<div class="sec-label nav-sec stage-sec"><span>${t(labelEn, labelZh)}</span>${progress.started ? stageChip(stageId, progress) : ''}</div>`;
+  }
+
   function sidebar() {
     const scr = screenOf(route);
     const classicActive = CLASSIC.some(c => c.id === route);
     const wsOpen = classicOpen || classicActive;
+    const progress = (window.EU_STUDY_PROGRESS && window.EU_STUDY_PROGRESS.snapshot())
+      || { started: false, stale: false, planOnly: false, stages: [], byId: {} };
 
     const rail = scr.rail ? scr.rail() : '';
 
@@ -161,7 +194,7 @@
         <span><span class="name">EasyICU</span><span class="tag">${t('ICU Research Workspace', 'ICU 研究工作台')}</span></span>
       </button>
       <nav class="shell-nav" aria-label="${t('Primary navigation', '主导航')}">
-      <div class="sec-label nav-sec">${t('Discovery & Plan', '发现与计划')}</div>
+      ${navSection('discovery', 'Discovery & Plan', '发现与计划', progress)}
       <button type="button" class="cp-entry ${route === 'guided' ? 'on' : ''}" data-nav="guided">
         <span class="cp-ico">${icon('spark', 16)}</span>
         <span class="cp-body"><span class="cp-t">${t('Guided Copilot', '研究引导')}</span><span class="cp-d">${window.EU_HASWORK ? t('continue the current workflow by chat', '用对话继续当前流程') : t('plan a study by conversation', '用对话规划研究')}</span></span>
@@ -172,8 +205,13 @@
         <span class="cp-body"><span class="cp-t">${t('Idea Mining', '想法挖掘')}</span><span class="cp-d">${t('paper, PDF, or topic → feasible plan', '文章、PDF 或主题 → 可行计划')}</span></span>
         <span class="cp-go">${icon('arrow', 14)}</span>
       </button>
-      <div class="shared-note"><span class="ico">${icon('target', 11)}</span><span>${t('Paper or topic? Start with Idea Mining. Clear question? Start Guided Copilot. Already have data? Start with Extract Data.', '有文章或主题，从想法挖掘开始；有明确问题，从研究引导开始；已有数据，从数据抽取开始。')}</span></div>
-      <div class="sec-label nav-sec">${t('Data & Review', '数据与审阅')}</div>
+      <!-- The two entries above and the Data Workspace below are the SAME
+           pipeline with different skins; first-time users read them as three
+           separate products and do not know a half-finished conversation can
+           be continued on the classic pages (it can — study-context.js carries
+           the handoff both ways). Say so where the choice is made. -->
+      <div class="shared-note"><span class="ico">${icon('target', 11)}</span><span>${t('Paper or topic? Start with Idea Mining. Clear question? Start Guided Copilot. Already have data? Start with Extract Data. All three feed one pipeline — you can switch between conversation and the classic pages at any point without losing the study.', '有文章或主题，从想法挖掘开始；有明确问题，从研究引导开始；已有数据，从数据抽取开始。三者进入同一条流水线 —— 对话与经典页面之间随时可以互相切换，研究不会丢。')}</span></div>
+      ${navSection('data', 'Data & Review', '数据与审阅', progress)}
       <div class="wsnav">
         <button type="button" class="wsgroup-head ${wsOpen ? 'open' : ''} ${classicActive ? 'active' : ''}" data-ws-toggle aria-expanded="${wsOpen}" aria-controls="data-workspace-links">
           <span class="wsg-ico">${icon('grid', 15)}</span>
@@ -182,19 +220,22 @@
         </button>
         ${wsOpen ? `
         <div class="wsg-children" id="data-workspace-links">
-          ${CLASSIC.map(c => `
-            <button type="button" class="wsitem ${route === c.id ? 'active' : ''}" data-nav="${c.id}">
+          ${CLASSIC.map((c, i) => `
+            ${c.role === 'reads' && CLASSIC[i - 1] && CLASSIC[i - 1].role === 'produces'
+              ? `<div class="wsg-step">${t('then, from that export', '然后，基于该导出')}</div>` : ''}
+            <button type="button" class="wsitem ${route === c.id ? 'active' : ''} ws-${c.role}" data-nav="${c.id}">
               <span class="ico">${icon(c.ico, 15)}</span>
               <span class="wsi-copy"><span class="wsi-t">${L(c.label)}</span><span class="wsi-sub">${L(c.sub)}</span></span>
             </button>`).join('')}
         </div>` : ''}
       </div>
-      <div class="sec-label nav-sec">${t('Analysis & Evidence', '分析与证据')}</div>
+      ${navSection('analysis', 'Analysis & Evidence', '分析与证据', progress)}
       <button type="button" class="cp-entry agent-entry ${route === 'agent' ? 'on' : ''}" data-nav="agent">
         <span class="cp-ico">${icon('agent', 16)}</span>
         <span class="cp-body"><span class="cp-t">${t('Agent Projects', '研究项目')}</span><span class="cp-d">${t('confirmed plan → evidence-checked draft', '确认计划 → 证据核验草稿')}</span></span>
         <span class="cp-go">${icon('arrow', 14)}</span>
       </button>
+      ${progress.planOnly ? `<div class="shared-note plan-only"><span class="ico">${icon('shield', 11)}</span><span>${t('Cross-DB comparison is plan-only: it can shape an analysis plan, but a reviewed cohort is still required before a draft.', '跨库对比仅用于制定计划：它可以塑造分析方案，但出草稿前仍需要一个已审阅的队列。')}</span></div>` : ''}
       <div class="sec-label" style="margin:16px 0 6px;">${t('Reference', '参考')}</div>
       <div class="nav" style="padding-top:0;">
         <button type="button" class="nav-item ${route === 'tutorial' ? 'active' : ''}" data-nav="tutorial"><span class="ico">${icon('help', 17)}</span>${t('Get Started', '快速上手')}</button>
@@ -216,6 +257,12 @@
 
   function topbar() {
     const scr = screenOf(route);
+    const dataMode = displayedDataMode();
+    const demoMode = dataMode === 'demo';
+    const officialDemo = demoMode
+      && window.EU_DATA_MODE_CONTEXT
+      && window.EU_DATA_MODE_CONTEXT.kind === 'official_demo';
+    const consequential = !!window.EU_HASWORK;
     const crumbs = (scr.crumbs || []).map((c, i, arr) => {
       const label = crumbLabel(c);
       if (i === arr.length - 1) return `<span class="cur" aria-current="page">${label}</span>`;
@@ -230,9 +277,14 @@
       <div class="crumbs">${crumbs}</div>
       <div class="spacer"></div>
       ${scr.status || ''}
-      <div class="mode-seg ${window.EU_DATA !== 'real' ? 'demo-active' : ''}" role="group" aria-label="Data mode" title="${window.EU_DATA !== 'real' ? t('Demo mode: every number on screen is a seeded example, not your data. Switch to Real to load a local export.', '演示模式：屏幕上的所有数字都是种子示例，不是你的数据。切换到真实模式可加载本地导出。') : t('Real mode: screens compute from your local EasyICU export. Nothing is uploaded.', '真实模式：各页面从你本地的 EasyICU 导出计算，不上传任何数据。')}">
-        <button type="button" class="${window.EU_DATA !== 'real' ? 'on' : ''}" data-datamode="demo" aria-pressed="${window.EU_DATA !== 'real'}">${icon('flask', 12)} ${window.EU_DATA !== 'real' ? t('Demo data', '演示数据') : t('Demo', '演示')}</button>
-        <button type="button" class="${window.EU_DATA === 'real' ? 'on' : ''}" data-datamode="real" aria-pressed="${window.EU_DATA === 'real'}">${icon('db', 12)} ${t('Real', '真实')}</button>
+      <!-- This control sits between "Page guide" and the EN/中 toggle, but it
+           is not a display preference: flipping it swaps the data source,
+           marks every downstream cohort/extraction/review stale and cancels a
+           running Cross-DB scan. Once there IS downstream work, give it the
+           weight of a destructive action so it stops reading like EN/中. -->
+      <div class="mode-seg ${demoMode ? 'demo-active' : ''} ${consequential ? 'consequential' : ''}" role="group" aria-label="Data mode" title="${consequential ? t('Switching the data source will mark your current cohort, extraction and review as out of date.', '切换数据源会把当前的队列、抽取与审阅标记为过期。') : (demoMode ? t('Demo mode uses official public deidentified demo datasets or clearly labelled seeded examples. It is never your local data; switch to Real to load a local export.', '演示模式使用官方公开去标识 Demo 数据集，或明确标注的种子示例；都不是你的本地数据。切换到真实模式可加载本地导出。') : t('Real mode: screens compute from your local EasyICU export. Nothing is uploaded.', '真实模式：各页面从你本地的 EasyICU 导出计算，不上传任何数据。'))}">
+        <button type="button" class="${demoMode ? 'on' : ''}" data-datamode="demo" aria-pressed="${demoMode}">${icon('flask', 12)} ${officialDemo ? t('Official demo', '官方演示') : (demoMode ? t('Demo data', '演示数据') : t('Demo', '演示'))}</button>
+        <button type="button" class="${!demoMode ? 'on' : ''}" data-datamode="real" aria-pressed="${!demoMode}">${icon('db', 12)} ${t('Real', '真实')}</button>
       </div>
       <div class="lang-seg" role="group" aria-label="Language">
         <button type="button" class="${window.EU_LANG !== 'zh' ? 'on' : ''}" data-lang="en" aria-pressed="${window.EU_LANG !== 'zh'}">EN</button>

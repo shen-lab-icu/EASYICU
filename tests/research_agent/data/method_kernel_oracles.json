@@ -1,0 +1,60 @@
+{
+  "_provenance": {
+    "evalue_reference_scope": "RR formula only (EValue::evalues.RR)",
+    "generator": "tools/generate_method_kernel_oracles.py",
+    "not_covered": [
+      "methods.rmst",
+      "methods.decision_curve"
+    ],
+    "ph_global_excluded_because": "ours is Bonferroni min(1, k*min_p); cox.zph's is the joint Grambsch-Therneau chi-square on k df -- different statistics",
+    "ph_reference_scope": "per-covariate alpha=0.05 decision; deliberately violated covariate chi-square within 5% between lifelines and R cox.zph",
+    "ph_scenarios": {
+      "exposure_nonph": "piecewise exposure HR 4.0 early and 0.25 late",
+      "nuisance_nonph": "piecewise nuisance HR 4.0 early and 0.25 late",
+      "proportional": "constant exposure and nuisance log-hazard ratios"
+    },
+    "r_packages": [
+      "survival",
+      "pROC",
+      "EValue"
+    ]
+  },
+  "auc_a": 0.7847535636087,
+  "auc_b": 0.6483757093704,
+  "delong_p": 0.001486361183374,
+  "delong_z": 3.177333284631,
+  "evalue_lower": 5.044994432064,
+  "evalue_point": 7.26303434416,
+  "ph_scenarios": {
+    "exposure_nonph": {
+      "exposure": {
+        "chisq": 150.69624500412,
+        "p": 1.221179251826e-34
+      },
+      "nuisance": {
+        "chisq": 0.06126154848619,
+        "p": 0.8045130087382
+      }
+    },
+    "nuisance_nonph": {
+      "exposure": {
+        "chisq": 1.213102228274,
+        "p": 0.2707186026771
+      },
+      "nuisance": {
+        "chisq": 194.244386463716,
+        "p": 3.766391733448e-44
+      }
+    },
+    "proportional": {
+      "exposure": {
+        "chisq": 0.9713485001674,
+        "p": 0.3243440969919
+      },
+      "nuisance": {
+        "chisq": 0.9987913564369,
+        "p": 0.3176031410662
+      }
+    }
+  }
+}

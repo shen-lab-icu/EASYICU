@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, List, Mapping, MutableMapping, Optional, Sequence
 
+from ..authority.plausibility import FlagOnlyPlausibilityScope
 from ..audits.patterns import AnalysisPatternAuditor
 from ..audits.validators import (
     ConceptUsageAuditor,
@@ -39,6 +40,7 @@ from ..authority.run_input import canonical_sha256
 from ..schema import AnalysisStep, ResearchContext
 from ..authority.step_attempt import StepAttemptState
 from ..authority.step_runtime import read_concept_audit_findings
+from .concept_reaudit import DETERMINISTIC_CONCEPT_REAUDIT_BUDGET_ISSUE_CODE
 from .step_worker_state import StepWorkerProgress
 
 _RETRYABLE_FINAL_AUDIT_ISSUE_CODE = "llm_concept_audit_provider_failure"
@@ -88,14 +90,32 @@ def _retryable_final_audit_provider_failure(
     never authorize another paid final-audit call.
     """
 
-    return bool(findings) and all(
-        finding.validator == "llm_concept_auditor"
-        and finding.severity == "error"
-        and str((finding.detail or {}).get("issue_code") or "")
-        == _RETRYABLE_FINAL_AUDIT_ISSUE_CODE
-        and str((finding.detail or {}).get("step_id") or "") == step_id
-        for finding in findings
-    )
+    def _is_retryable(finding: ValidationFinding) -> bool:
+        detail = finding.detail or {}
+        issue_code = str(detail.get("issue_code") or "")
+        finding_step_id = str(detail.get("step_id") or "")
+        if finding.severity != "error" or finding_step_id != step_id:
+            return False
+        if finding.validator == "llm_concept_auditor":
+            return issue_code == _RETRYABLE_FINAL_AUDIT_ISSUE_CODE
+        if (
+            finding.validator != "provider_call_budget"
+            or issue_code
+            != DETERMINISTIC_CONCEPT_REAUDIT_BUDGET_ISSUE_CODE
+            or detail.get("category") != "concept_audit"
+        ):
+            return False
+        used = detail.get("used")
+        limit = detail.get("limit")
+        return (
+            not isinstance(used, bool)
+            and isinstance(used, int)
+            and not isinstance(limit, bool)
+            and isinstance(limit, int)
+            and used >= limit
+        )
+
+    return bool(findings) and all(_is_retryable(finding) for finding in findings)
 
 
 def _final_audit_continuation_allowed(
@@ -275,10 +295,23 @@ class ConceptAuditAuthority:
     context: ResearchContext
     step: AnalysisStep
     resolved_input_bindings: Mapping[str, Any]
+    plausibility_scope: FlagOnlyPlausibilityScope
     environment_sha256: str
     auditor_implementation_sha256: str
     auditor_identity: Callable[[], str]
     enable_llm_audit: bool
+    # The study's declared endpoint, from the locked plan. Part of the step's
+    # scientific identity: without it the auditor judged the script against its
+    # own reading of the research question and blocked steps for contradicting a
+    # "planner-required" censoring column that appears in no plan.
+    study_endpoint: Optional[Mapping[str, Any]] = None
+    # The locked plan's other steps (id, role, method). Without it this auditor
+    # made whole-plan judgements from a step-local view and faulted the wrong
+    # step for a requirement the plan assigned elsewhere.
+    plan_step_roster: Optional[Sequence[Mapping[str, Any]]] = None
+
+    def __post_init__(self) -> None:
+        self.plausibility_scope.require_step(self.step.step_id)
 
 
 @dataclass(slots=True)
@@ -304,6 +337,7 @@ class ConceptAuditRuntime:
         [Sequence[ValidationFinding]], List[dict[str, Any]]
     ]
     store_quarantined_draft: Callable[..., Any]
+    authorize_deterministic_reaudit: Callable[..., bool]
 
 
 @dataclass(slots=True)
@@ -342,6 +376,7 @@ class ConceptAuditCoordinator:
             usage_auditor=runtime.usage_auditor,
             pattern_auditor=runtime.pattern_auditor,
             resolved_input_bindings=authority.resolved_input_bindings,
+            plausibility_scope=authority.plausibility_scope,
         )
         deterministic_errors = [
             finding
@@ -525,6 +560,8 @@ class ConceptAuditCoordinator:
                         context=authority.context,
                         script_text=script_text,
                         step=step,
+                        study_endpoint=authority.study_endpoint,
+                        plan_step_roster=authority.plan_step_roster,
                     )
                     audit_key = runtime.cache.key(
                         context=authority.context,
@@ -533,7 +570,14 @@ class ConceptAuditCoordinator:
                         audit_prompt=audit_prompt,
                         environment_sha256=authority.environment_sha256,
                         auditor_identity=authority.auditor_identity(),
-                        authority_bindings=authority.resolved_input_bindings,
+                        authority_bindings={
+                            "resolved_input_bindings": (
+                                authority.resolved_input_bindings
+                            ),
+                            "flag_only_plausibility_scope": (
+                                authority.plausibility_scope.to_dict()
+                            ),
+                        },
                         validator_implementation_sha256=(
                             authority.auditor_implementation_sha256
                         ),
@@ -544,6 +588,15 @@ class ConceptAuditCoordinator:
                     )
                     self.tokens_by_digest[audited_code_digest] = audit_key
                     cached_findings = runtime.cache.get(audit_key)
+                    if (
+                        cached_findings is None
+                        and not runtime.provider_budget.can_consume("concept_audit")
+                        and runtime.authorize_deterministic_reaudit(
+                            token=audit_key,
+                            code_sha256=audited_code_digest,
+                        )
+                    ):
+                        runtime.sync_provider_budget()
                     reservation_status = runtime.provider_budget.reservation_status(
                         "concept_audit",
                         token=audit_key,
@@ -597,6 +650,8 @@ class ConceptAuditCoordinator:
                             script_text=script_text,
                             step=step,
                             provider_budget=runtime.provider_budget,
+                            study_endpoint=authority.study_endpoint,
+                            plan_step_roster=authority.plan_step_roster,
                         )
                         runtime.sync_provider_budget()
                         runtime.cache.put(audit_key, llm_findings)

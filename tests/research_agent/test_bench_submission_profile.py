@@ -13,6 +13,7 @@ sys.path.insert(0, str(TOOLS_DIR))
 try:
     from run_research_agent_bench import (  # type: ignore[import-not-found]
         _benchmark_pipeline_options,
+        _bind_benchmark_cost_price_table,
         _default_submission_profile_ref,
         _enforce_development_resume_repair_budget,
         _enforce_mock_aware_provider,
@@ -185,6 +186,68 @@ def test_benchmark_options_keep_execution_timeouts_independent() -> None:
 
     assert options["timeout_seconds"] == 29.0
     assert options["standard_executor_timeout_seconds"] == 2_345.0
+
+
+def test_benchmark_options_default_to_pipeline_execution_timeouts() -> None:
+    options = _benchmark_pipeline_options(
+        max_total_steps=None,
+        disable_replanning=False,
+        max_code_repair_attempts=None,
+    )
+
+    assert options["timeout_seconds"] == 900.0
+    assert options["standard_executor_timeout_seconds"] == 3_600.0
+
+
+def test_benchmark_cost_prices_bind_to_selected_real_model() -> None:
+    options = _benchmark_pipeline_options(
+        max_total_steps=None,
+        disable_replanning=False,
+        max_code_repair_attempts=None,
+        provider_input_cost_usd_per_million_tokens=10.0,
+        provider_output_cost_usd_per_million_tokens=30.0,
+    )
+
+    bound = _bind_benchmark_cost_price_table(
+        options,
+        provider="openai",
+        model="gpt-5.6-luna",
+    )
+
+    assert "cost_price_table" not in options
+    assert bound["cost_price_table"] == {"gpt-5.6-luna": (10.0, 30.0)}
+
+
+def test_benchmark_cost_prices_leave_mock_unpriced() -> None:
+    options = _benchmark_pipeline_options(
+        max_total_steps=None,
+        disable_replanning=False,
+        max_code_repair_attempts=None,
+    )
+
+    bound = _bind_benchmark_cost_price_table(
+        options,
+        provider="mock",
+        model="mock",
+    )
+
+    assert "cost_price_table" not in bound
+
+
+def test_benchmark_cost_prices_fail_closed_on_conflicting_table() -> None:
+    options = _benchmark_pipeline_options(
+        max_total_steps=None,
+        disable_replanning=False,
+        max_code_repair_attempts=None,
+    )
+    options["cost_price_table"] = {"gpt-5.6-luna": (1.0, 2.0)}
+
+    with pytest.raises(ValueError, match="conflict"):
+        _bind_benchmark_cost_price_table(
+            options,
+            provider="openai",
+            model="gpt-5.6-luna",
+        )
 
 
 def test_benchmark_options_disable_cross_run_memory_by_default() -> None:

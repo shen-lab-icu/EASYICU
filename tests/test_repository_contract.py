@@ -57,15 +57,31 @@ def test_native_webserver_static_assets_are_packaged() -> None:
     package_data = pyproject["tool"]["setuptools"]["package-data"]
     assert package_data["easyicu.webserver"] == [
         "static/index.html",
+        "static/THIRD_PARTY_NOTICES.md",
         "static/css/*.css",
         "static/js/*.js",
+        "static/vendor/echarts/*",
+        "pi_copilot/node_app/package.json",
+        "pi_copilot/node_app/package-lock.json",
+        "pi_copilot/node_app/README.md",
+        "pi_copilot/node_app/THIRD_PARTY_NOTICES.md",
+        "pi_copilot/node_app/src/main.mjs",
+        "pi_copilot/node_app/src/event-projection.mjs",
+        "pi_copilot/node_app/src/shell-budget.mjs",
+        "pi_copilot/node_app/src/skills/web-prototype/SKILL.md",
     ]
     assert "recursive-include src/easyicu/webserver/static *.html *.css *.js" in manifest
+    assert "recursive-include src/easyicu/webserver/static/vendor *" in manifest
 
     required_assets = [
         "src/easyicu/webserver/static/index.html",
         "src/easyicu/webserver/static/js/app.js",
+        "src/easyicu/webserver/static/js/screens-viz-demo-drilldown.js",
+        "src/easyicu/webserver/static/js/screens-viz-patient-features.js",
         "src/easyicu/webserver/static/css/app.css",
+        "src/easyicu/webserver/static/vendor/echarts/echarts.common.min.js",
+        "src/easyicu/webserver/static/vendor/echarts/LICENSE",
+        "src/easyicu/webserver/static/vendor/echarts/NOTICE",
     ]
     missing = [path for path in required_assets if not (REPO_ROOT / path).exists()]
     assert not missing, f"Native FastAPI static assets are missing from source tree: {missing}"

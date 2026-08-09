@@ -26,6 +26,9 @@ if TYPE_CHECKING:  # pragma: no cover
     import pandas as pd
 
 __all__ = [
+    "ICU_TIME_FALLBACK_LIMIT_HOURS",
+    "ICU_TIME_POST_DISCHARGE_HOURS",
+    "ICU_TIME_PRE_ADMISSION_HOURS",
     "MINUTES_PER_HOUR",
     "minutes_to_hours",
     "minutes_to_hours_series",
@@ -33,6 +36,12 @@ __all__ = [
 
 #: 单一来源的转换因子。任何分钟→小时换算都应使用它，禁止再写裸 ``/ 60.0``。
 MINUTES_PER_HOUR: float = 60.0
+#: Longitudinal ICU exports retain one day of pre-admission context.
+ICU_TIME_PRE_ADMISSION_HOURS: float = 24.0
+#: Longitudinal ICU exports retain one day after recorded ICU discharge.
+ICU_TIME_POST_DISCHARGE_HOURS: float = 24.0
+#: Fail-safe bound for sources/stays without a usable ICU length of stay.
+ICU_TIME_FALLBACK_LIMIT_HOURS: float = 366.0 * 24.0
 
 
 def minutes_to_hours(value: float) -> float:

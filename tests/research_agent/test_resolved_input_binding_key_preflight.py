@@ -206,3 +206,73 @@ binding_input_key = config.get("input_key")
 """
 
     assert _findings(unrelated, ra) == []
+
+
+def test_local_binding_summary_shadow_does_not_inherit_typed_binding_origin(ra) -> None:
+    script = """
+manifest = {
+    "planner_declared_inputs": ["table:upstream"],
+    "inputs": {
+        "table:upstream": {
+            "relative_path": "evidence/upstream.csv",
+            "sha256": "abc",
+            "product_contract": {"columns": ["x"]},
+            "identity_row": {"input_key": "table:upstream"},
+        }
+    },
+}
+typed_bindings = manifest.get("inputs", {})
+summaries = []
+for expected_key in manifest.get("planner_declared_inputs", []):
+    binding = typed_bindings[expected_key]
+    summaries.append({"input_key": expected_key})
+for binding in summaries:
+    observed_key = binding["input_key"]
+"""
+
+    assert _findings(script, ra) == []
+
+    namespace: dict[str, object] = {}
+    exec(script, namespace)
+    assert namespace["observed_key"] == "table:upstream"
+
+
+def test_only_accesses_before_local_binding_shadow_are_repaired(ra) -> None:
+    script = _DIRECT_SCRIPT + """
+summaries = [{"input_key": "local:summary"}]
+for binding in summaries:
+    local_key = binding["input_key"]
+"""
+
+    findings = _findings(script, ra)
+
+    assert len(findings) == 1
+    assert len(findings[0].detail["access_occurrences"]) == 1
+    repaired, names = deterministic_concept_audit_repair(
+        script,
+        [findings[0].message],
+        repair_reasons=[repair_reason_for_finding(findings[0])],
+        repair_findings=findings,
+    )
+
+    assert names == ["resolved_input_identity_key_v1"]
+    assert 'binding["identity_row"]["input_key"]' in repaired
+    assert 'local_key = binding["input_key"]' in repaired
+    namespace: dict[str, object] = {}
+    exec(repaired, namespace)
+    assert namespace["binding_input_key"] == "table:upstream"
+    assert namespace["local_key"] == "local:summary"
+
+
+def test_loop_else_keeps_fail_closed_typed_binding_provenance(ra) -> None:
+    script = _DIRECT_SCRIPT + """
+for binding in []:
+    pass
+else:
+    fallback_key = binding["input_key"]
+"""
+
+    findings = _findings(script, ra)
+
+    assert len(findings) == 1
+    assert len(findings[0].detail["access_occurrences"]) == 2

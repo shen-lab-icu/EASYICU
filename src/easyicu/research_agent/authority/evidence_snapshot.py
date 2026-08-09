@@ -15,11 +15,15 @@ cycles.
 from __future__ import annotations
 
 from dataclasses import dataclass
-import hashlib
 import json
 from pathlib import Path
 import re
 from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
+
+from ..canonical_json import (
+    canonical_json_bytes as _shared_canonical_json_bytes,
+    sha256_bytes as _sha256_bytes,
+)
 
 EVIDENCE_AUTHORITY_SCHEMA_VERSION = "easyicu.evidence_authority/1"
 EVIDENCE_AUTHORITY_MARKER_SCHEMA_VERSION = "easyicu.evidence_authority_marker/1"
@@ -67,21 +71,11 @@ def _reject_json_constant(value: str) -> None:
 
 def _canonical_json_bytes(value: object) -> bytes:
     try:
-        return json.dumps(
-            value,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-            allow_nan=False,
-        ).encode("utf-8")
+        return _shared_canonical_json_bytes(value)
     except (TypeError, ValueError) as exc:
         raise EvidenceAuthorityIntegrityError(
             f"evidence authority contains non-canonical JSON: {exc}"
         ) from exc
-
-
-def _sha256_bytes(payload: bytes) -> str:
-    return hashlib.sha256(payload).hexdigest()
 
 
 def _regular_file_bytes(path: Path, *, label: str) -> bytes:

@@ -29,7 +29,13 @@ def _item(kind: str):
     )
 
 
-def _run_and_capture(monkeypatch, tmp_path, kind: str):
+def _run_and_capture(
+    monkeypatch,
+    tmp_path,
+    kind: str,
+    *,
+    scientific_contract: dict[str, object] | None = None,
+):
     import easyicu.research_agent as rapkg
     import tools.run_research_agent_bench as bench
 
@@ -47,8 +53,10 @@ def _run_and_capture(monkeypatch, tmp_path, kind: str):
     # Avoid the heavy scorecard read; we only care about construction kwargs.
     monkeypatch.setattr(bench, "_score_arm", lambda **k: {})
 
+    item = _item(kind)
+    item.scientific_acceptance_contract = scientific_contract
     bench._run_one_arm(
-        item=_item(kind),
+        item=item,
         cohort=SimpleNamespace(columns=["age", "death", "hr_first"]),
         workdir=tmp_path,
         disable_icu_context=True,
@@ -71,6 +79,17 @@ def test_clustering_kind_forces_internal_phenotype_checklist(monkeypatch, tmp_pa
 def test_association_kind_forces_strobe(monkeypatch, tmp_path):
     captured = _run_and_capture(monkeypatch, tmp_path, "descriptive_association")
     assert captured.get("reporting_checklist_names") == ["strobe"]
+
+
+def test_scientific_contract_binds_primary_cohort_mode(monkeypatch, tmp_path):
+    captured = _run_and_capture(
+        monkeypatch,
+        tmp_path,
+        "descriptive_association",
+        scientific_contract={"primary_cohort_selection_mode": "all_input_rows"},
+    )
+
+    assert captured["required_primary_cohort_selection_mode"] == "all_input_rows"
 
 
 def test_explicit_pipeline_option_overrides_kind_default(monkeypatch, tmp_path):
@@ -110,7 +129,9 @@ def test_external_execution_uses_database_and_operational_exposure_not_scoring_k
     item.primary_predictor = "concept_level_scoring_key"
     item.operational_exposure = "materialized_exposure_column"
     item.gold_answer = {"numeric_targets": {"hidden_metric": {"lower": 0.0}}}
-    item.semantic_guardrails = ["Evaluator-only audit key."]
+    item.notes = "Use the audited first-24-hour materialization."
+    item.expected_outputs = ["table:adjusted_association"]
+    item.semantic_guardrails = ["Preserve the declared temporal window."]
 
     import easyicu.research_agent as rapkg
     import tools.run_research_agent_bench as bench
@@ -145,6 +166,14 @@ def test_external_execution_uses_database_and_operational_exposure_not_scoring_k
     assert item.primary_predictor == "concept_level_scoring_key"
     assert "gold_answer" not in captured["run"]
     assert "semantic_guardrails" not in captured["run"]
+    preferences = captured["run"]["user_preferences"]
+    assert "Use the audited first-24-hour materialization." in preferences[
+        "data_constraints"
+    ]
+    assert "table:adjusted_association" in preferences["must_have_outputs"]
+    assert "Preserve the declared temporal window." in preferences[
+        "evaluation_focus"
+    ]
     assert captured["run"]["question"] == "Build a model."
 
 

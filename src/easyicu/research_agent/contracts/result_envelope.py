@@ -9,7 +9,6 @@ period the envelope is diagnostic-only and cannot grant paper authority.
 from __future__ import annotations
 
 import csv
-import hashlib
 import io
 import json
 import math
@@ -19,7 +18,9 @@ import os
 import re
 import tempfile
 from dataclasses import dataclass, field
+from decimal import Decimal, InvalidOperation
 from pathlib import Path, PurePosixPath
+from types import MappingProxyType
 from typing import Any, Literal, Mapping, Sequence, Union
 
 from pydantic import (
@@ -32,6 +33,10 @@ from pydantic import (
     StrictStr,
 )
 
+from ..canonical_json import (
+    canonical_json_bytes,
+    sha256_bytes as _sha256_bytes,
+)
 from .fraction_scale import is_scale_descriptor_field
 
 JsonScalar = Union[StrictBool, StrictInt, StrictFloat, StrictStr, None]
@@ -77,6 +82,190 @@ _HIGH_KEYS = ("ci_high", "ci_95_high", "ci_upper", "upper")
 _P_VALUE_KEYS = ("p_value", "p")
 _NUMERATOR_KEYS = ("numerator", "positive_n", "event_n", "count")
 _DENOMINATOR_KEYS = ("denominator", "denominator_n", "n_total", "total_n")
+#: The reader for a registered ``statistic:<name>`` product, as data.
+#:
+#: A statistic file is refused unless it parses to a JSON object, and its
+#: fields are recovered by trying these aliases in order.  Generated code has
+#: to write a shape it was never shown otherwise: a real run wrote a
+#: one-element list of exactly the right object and was refused with
+#: ``invalid_statistic_shape`` after producing every other output correctly.
+#: The Coder directive renders this mapping rather than describing it, so a
+#: new alias here reaches the model instead of drifting away from it.
+STATISTIC_PAYLOAD_KEY_ALIASES: Mapping[str, tuple[str, ...]] = MappingProxyType(
+    {
+        "point estimate": _VALUE_KEYS,
+        "interval lower bound": _LOW_KEYS,
+        "interval upper bound": _HIGH_KEYS,
+        "p value": _P_VALUE_KEYS,
+        "numerator": _NUMERATOR_KEYS,
+        "denominator": _DENOMINATOR_KEYS,
+    }
+)
+
+#: Where a model step's summary names its term-level coefficient companion.
+#:
+#: The exact-replay path for robustness variants needs the fitted coefficients,
+#: not just the reported effect, and it finds them by this key.  It used to
+#: read ``diagnostic_companions.coefficients`` alone and fall back to a fixed
+#: ``coefficients.csv`` -- a filename no producer has ever written.  Measured
+#: over every recorded run: 334 step summaries, of which 23 carry
+#: ``model_contracts``; ``coefficient_table`` appears 10 times (the
+#: deterministic owner writes it), ``coefficient_file`` 3 times (a Coder-written
+#: summary), ``diagnostic_companions`` once, and ``coefficients.csv`` exists
+#: zero times.  So the reader resolved 1 of 23, and the replay path it guards
+#: was unreachable in every other run.
+#:
+#: Order is preference, not permission: a summary declaring more than one is
+#: read by the first, and any of them being unreadable is a refusal rather
+#: than a fall-through to the next.
+MODEL_SUMMARY_COEFFICIENT_TABLE_KEYS: tuple[str, ...] = (
+    "diagnostic_companions.coefficients",
+    "coefficient_table",
+    "coefficient_file",
+)
+
+
+def model_summary_coefficient_filename(summary: Mapping[str, Any]) -> str | None:
+    """Return the coefficient companion filename a model summary declares.
+
+    ``None`` means *this summary does not name one*, which is a refusal: the
+    caller must not guess a filename, because a guessed name that happens to
+    exist would bind the replay to a table nobody declared.
+    """
+
+    if not isinstance(summary, Mapping):
+        return None
+    for key in MODEL_SUMMARY_COEFFICIENT_TABLE_KEYS:
+        declared: Any = summary
+        for part in key.split("."):
+            if declared is None:
+                break
+            if not isinstance(declared, Mapping):
+                # The summary *has* this path and it is not navigable, which
+                # is a broken declaration.  Moving on to the next spelling
+                # would answer with a different table than the one it tried
+                # to name, and the substitution would be invisible.
+                return None
+            declared = declared.get(part)
+        if declared is None:
+            continue
+        if not isinstance(declared, str):
+            return None
+        filename = declared.strip()
+        if (
+            not filename
+            or PurePosixPath(filename).name != filename
+            or not filename.lower().endswith(".csv")
+        ):
+            return None
+        return filename
+    return None
+
+
+#: Where a model summary states the analysis its primary estimate came from.
+#:
+#: The complete-case equivalence proof needs the exposure, the outcome and the
+#: adjustment set, because a model fitted on one adjustment set and a
+#: complete-case restriction taken over a different one are different analyses.
+#: It read ``summary["analysis_definition"]`` and nothing else.
+#:
+#: Measured over every recorded run: 358 step summaries, 27 carry
+#: ``model_contracts``, 12 of those state exposure + outcome + covariates, and
+#: exactly **one** writes ``analysis_definition`` -- a one-off Coder summary. A
+#: repository-wide search for the name returns the reader and a single test
+#: fixture, both added in the same commit. The host published a contract only
+#: its own test could satisfy, so the proof was unreachable in production from
+#: the day it was written.
+#:
+#: The deterministic primary owner states the same three facts as flat keys, so
+#: they are published here rather than a second nested spelling being demanded
+#: of it. Order is preference, not permission.
+MODEL_SUMMARY_ANALYSIS_DEFINITION_KEY = "analysis_definition"
+MODEL_SUMMARY_EXPOSURE_KEYS: tuple[str, ...] = ("exposure", "exposure_source")
+MODEL_SUMMARY_OUTCOME_KEYS: tuple[str, ...] = ("outcome",)
+MODEL_SUMMARY_COVARIATE_KEYS: tuple[str, ...] = ("covariates", "adjustment_covariates")
+
+
+def _clean_name(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    name = value.strip()
+    return name or None
+
+
+def _clean_covariates(value: Any) -> list[str] | None:
+    if not isinstance(value, list):
+        return None
+    cleaned: list[str] = []
+    for item in value:
+        name = _clean_name(item)
+        if name is None:
+            return None
+        cleaned.append(name)
+    return cleaned
+
+
+def _first_declared(source: Mapping[str, Any], keys: Sequence[str]) -> tuple[bool, Any]:
+    for key in keys:
+        if key in source:
+            return True, source[key]
+    return False, None
+
+
+def model_summary_analysis_definition(
+    summary: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """Return the exposure/outcome/covariates a model summary states, or ``None``.
+
+    ``None`` means *this summary does not state its analysis*, which is a
+    refusal. The caller must not reconstruct the adjustment set from anywhere
+    else: a proof taken over a different set than the model used is a different
+    analysis reported under the same label, and no downstream check can see it.
+
+    An empty covariate list is a real answer -- an unadjusted primary model
+    states exactly that -- so it is returned rather than treated as absent.
+    """
+
+    if not isinstance(summary, Mapping):
+        return None
+
+    nested = summary.get(MODEL_SUMMARY_ANALYSIS_DEFINITION_KEY)
+    if nested is not None:
+        if not isinstance(nested, Mapping):
+            return None
+        source: Mapping[str, Any] = nested
+    else:
+        source = summary
+
+    has_exposure, raw_exposure = _first_declared(source, MODEL_SUMMARY_EXPOSURE_KEYS)
+    has_outcome, raw_outcome = _first_declared(source, MODEL_SUMMARY_OUTCOME_KEYS)
+    if not has_exposure or not has_outcome:
+        return None
+    exposure = _clean_name(raw_exposure)
+    outcome = _clean_name(raw_outcome)
+    if exposure is None or outcome is None:
+        return None
+
+    # Two spellings of the adjustment set that disagree is the one case where
+    # answering at all would be worse than refusing: whichever is picked, the
+    # summary itself says the other is also true, and the proof would silently
+    # be taken over a set the model may not have used.
+    declared: list[list[str]] = []
+    for key in MODEL_SUMMARY_COVARIATE_KEYS:
+        if key not in source:
+            continue
+        covariates = _clean_covariates(source[key])
+        if covariates is None:
+            return None
+        declared.append(covariates)
+    if not declared:
+        return None
+    if any(entry != declared[0] for entry in declared[1:]):
+        return None
+
+    return {"exposure": exposure, "outcome": outcome, "covariates": list(declared[0])}
+
+
 _MAX_SCALARS = 5_000
 _MAX_DEPTH = 12
 _MAX_TABLE_BYTES = 16 * 1024 * 1024
@@ -335,21 +524,9 @@ def rebuild_observed_scalar_tree(
     return root
 
 
-def _sha256_bytes(payload: bytes) -> str:
-    return hashlib.sha256(payload).hexdigest()
-
-
 def _canonical_json_bytes(payload: Any) -> bytes:
-    return (
-        json.dumps(
-            payload,
-            ensure_ascii=False,
-            allow_nan=False,
-            separators=(",", ":"),
-            sort_keys=True,
-        )
-        + "\n"
-    ).encode("utf-8")
+    # The result-envelope wire contract intentionally includes one final LF.
+    return canonical_json_bytes(payload, trailing_newline=True)
 
 
 def _model_content_sha256(envelope: StepResultEnvelope) -> str:
@@ -423,6 +600,32 @@ def _path_field(field_path: str) -> bool:
     return bool(tokens & {"file", "files", "path", "paths"})
 
 
+def _container_relative_scalar_path(
+    rendered: str,
+    *,
+    container_output_roots: Sequence[str],
+) -> str | None:
+    """Return a safe relative form for an exact container output path."""
+
+    absolute = PurePosixPath(rendered)
+    if not absolute.is_absolute():
+        return None
+    for raw_root in container_output_roots:
+        root = PurePosixPath(raw_root)
+        if not root.is_absolute():
+            continue
+        try:
+            relative = absolute.relative_to(root)
+        except ValueError:
+            continue
+        if not relative.parts or any(
+            part in {"", ".", ".."} for part in relative.parts
+        ):
+            continue
+        return relative.as_posix()
+    return None
+
+
 def _coerce_scalar(
     value: Any,
     *,
@@ -430,6 +633,7 @@ def _coerce_scalar(
     source: Literal["step_summary", "statistic_artifact"],
     product_id: str | None,
     authorized_path_refs: Mapping[str, str],
+    container_output_roots: Sequence[str],
     receipts: list[NormalizationReceipt],
     issues: list[NormalizationIssue],
 ) -> JsonScalar | object:
@@ -476,7 +680,35 @@ def _coerce_scalar(
     elif isinstance(value, Path):
         if value.is_absolute():
             bound_ref = authorized_path_refs.get(value.as_posix())
-            if bound_ref is None:
+            container_relative = _container_relative_scalar_path(
+                value.as_posix(),
+                container_output_roots=container_output_roots,
+            )
+            if bound_ref is not None:
+                normalized = bound_ref
+                path_was_authorized = True
+                receipts.append(
+                    NormalizationReceipt(
+                        operation="authorized_path_to_evidence_ref",
+                        field_path=field_path,
+                        before_type=_type_label(value),
+                        after_type="evidence.ref",
+                        product_id=product_id,
+                    )
+                )
+            elif container_relative is not None:
+                normalized = container_relative
+                path_was_authorized = True
+                receipts.append(
+                    NormalizationReceipt(
+                        operation="container_path_to_relative",
+                        field_path=field_path,
+                        before_type="container.absolute_path",
+                        after_type="host.relative_path",
+                        product_id=product_id,
+                    )
+                )
+            else:
                 issues.append(
                     NormalizationIssue(
                         severity="error",
@@ -487,17 +719,6 @@ def _coerce_scalar(
                     )
                 )
                 return _OMIT
-            normalized = bound_ref
-            path_was_authorized = True
-            receipts.append(
-                NormalizationReceipt(
-                    operation="authorized_path_to_evidence_ref",
-                    field_path=field_path,
-                    before_type=_type_label(value),
-                    after_type="evidence.ref",
-                    product_id=product_id,
-                )
-            )
         else:
             normalized = value.as_posix()
             receipts.append(
@@ -557,7 +778,35 @@ def _coerce_scalar(
     if isinstance(normalized, str):
         if _path_field(field_path) and normalized.startswith(("/", "\\")):
             bound_ref = authorized_path_refs.get(normalized)
-            if bound_ref is None:
+            container_relative = _container_relative_scalar_path(
+                normalized,
+                container_output_roots=container_output_roots,
+            )
+            if bound_ref is not None:
+                normalized = bound_ref
+                path_was_authorized = True
+                receipts.append(
+                    NormalizationReceipt(
+                        operation="authorized_path_to_evidence_ref",
+                        field_path=field_path,
+                        before_type="path.string",
+                        after_type="evidence.ref",
+                        product_id=product_id,
+                    )
+                )
+            elif container_relative is not None:
+                normalized = container_relative
+                path_was_authorized = True
+                receipts.append(
+                    NormalizationReceipt(
+                        operation="container_path_to_relative",
+                        field_path=field_path,
+                        before_type="container.absolute_path",
+                        after_type="host.relative_path",
+                        product_id=product_id,
+                    )
+                )
+            else:
                 issues.append(
                     NormalizationIssue(
                         severity="error",
@@ -568,17 +817,6 @@ def _coerce_scalar(
                     )
                 )
                 return _OMIT
-            normalized = bound_ref
-            path_was_authorized = True
-            receipts.append(
-                NormalizationReceipt(
-                    operation="authorized_path_to_evidence_ref",
-                    field_path=field_path,
-                    before_type="path.string",
-                    after_type="evidence.ref",
-                    product_id=product_id,
-                )
-            )
         if not path_was_authorized and (
             len(normalized) > 128 or not _safe_string_field(field_path)
         ):
@@ -604,6 +842,7 @@ def _flatten_scalars(
     source: Literal["step_summary", "statistic_artifact"],
     product_id: str | None,
     authorized_path_refs: Mapping[str, str],
+    container_output_roots: Sequence[str],
     receipts: list[NormalizationReceipt],
     issues: list[NormalizationIssue],
     prefix: str = "",
@@ -643,6 +882,7 @@ def _flatten_scalars(
                     source=source,
                     product_id=product_id,
                     authorized_path_refs=authorized_path_refs,
+                    container_output_roots=container_output_roots,
                     receipts=receipts,
                     issues=issues,
                     prefix=child_path,
@@ -671,6 +911,7 @@ def _flatten_scalars(
                     source=source,
                     product_id=product_id,
                     authorized_path_refs=authorized_path_refs,
+                    container_output_roots=container_output_roots,
                     receipts=receipts,
                     issues=issues,
                     prefix=child_path,
@@ -686,6 +927,7 @@ def _flatten_scalars(
         source=source,
         product_id=product_id,
         authorized_path_refs=authorized_path_refs,
+        container_output_roots=container_output_roots,
         receipts=receipts,
         issues=issues,
     )
@@ -829,11 +1071,30 @@ def _first_finite_number(
     field_name: str,
     issues: list[NormalizationIssue],
 ) -> int | float | None:
+    declared_not_estimated = payload.get("estimated") is False
     values: list[int | float] = []
     for key in keys:
         if key not in payload:
             continue
         value = payload.get(key)
+        if value is None and declared_not_estimated:
+            # A statistic that says, in the same document, that it was NOT
+            # estimated is making a declaration, not emitting a malformed
+            # number. Absent-vs-null already means two different things to the
+            # figure layer -- "not bound" vs "bound and not estimated" -- and it
+            # requires the key to be present to tell them apart, so the producer
+            # cannot satisfy both readers by omitting it.
+            #
+            # MEASURED 2026-08-02: 25 of 64 recorded complete_case_n sidecars
+            # carry a null, across four different tasks, and every one of them
+            # blocked its step here. The commonest cause is a locked robustness
+            # grid with no complete_case specification -- there is no such N to
+            # report, and inventing one would be worse than saying so.
+            #
+            # Deliberately narrow: only an EXPLICIT ``estimated: false`` earns
+            # this. A bare null with no declaration is still a malformed numeric
+            # field and still fails, because that one really is a producer bug.
+            continue
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             issues.append(
                 NormalizationIssue(
@@ -954,6 +1215,7 @@ def _parse_statistic(
         source="statistic_artifact",
         product_id=product_id,
         authorized_path_refs={},
+        container_output_roots=(),
         receipts=receipts,
         issues=issues,
     )
@@ -1035,14 +1297,23 @@ def _safe_csv_rows(
     raw: bytes,
     *,
     product_id: str,
+    profile_required: bool,
     issues: list[NormalizationIssue],
 ) -> tuple[tuple[str, ...], list[dict[str, str]]] | None:
     if len(raw) > _MAX_TABLE_BYTES:
         issues.append(
             NormalizationIssue(
-                severity="error",
+                severity="error" if profile_required else "warning",
                 code="registered_table_too_large",
-                message="A registered table exceeded the canonical byte limit.",
+                message=(
+                    "A registered result table exceeded the canonical byte limit."
+                    if profile_required
+                    else (
+                        "An opaque data artifact exceeded the canonical table "
+                        "profiling byte limit; its digest-bound artifact reference "
+                        "was retained without expanding row-level content."
+                    )
+                ),
                 product_id=product_id,
             )
         )
@@ -1101,9 +1372,17 @@ def _safe_csv_rows(
     if len(body) > _MAX_TABLE_ROWS:
         issues.append(
             NormalizationIssue(
-                severity="error",
+                severity="error" if profile_required else "warning",
                 code="registered_table_row_limit_exceeded",
-                message="A registered table exceeded the canonical row limit.",
+                message=(
+                    "A registered result table exceeded the canonical row limit."
+                    if profile_required
+                    else (
+                        "An opaque data artifact exceeded the canonical table "
+                        "profiling row limit; its digest-bound artifact reference "
+                        "was retained without expanding row-level content."
+                    )
+                ),
                 product_id=product_id,
             )
         )
@@ -1242,7 +1521,12 @@ def _table_semantic_roles(
         and "schema_version" in columns
         and all(
             not row.get("schema_version")
-            or row["schema_version"].strip() == "easyicu.table_one_result/1"
+            or row["schema_version"].strip()
+            in {
+                "easyicu.table_one_result/1",
+                "easyicu.table_one_result/2",
+                "easyicu.table_one_result/3",
+            }
             for row in rows
         )
     ):
@@ -1365,6 +1649,34 @@ def _normalized_fraction(
     return first
 
 
+def _reported_fraction_rounding_tolerance(
+    row: Mapping[str, str],
+    *,
+    fraction_keys: Sequence[str],
+    percent_keys: Sequence[str],
+) -> float:
+    """Return half of the coarsest reported unit on the fraction scale."""
+
+    tolerance = 1e-12
+    for keys, scale in ((fraction_keys, Decimal(1)), (percent_keys, Decimal(100))):
+        for key in keys:
+            raw = str(row.get(key) or "").strip()
+            if not raw:
+                continue
+            try:
+                value = Decimal(raw)
+            except InvalidOperation:
+                continue
+            if not value.is_finite():
+                continue
+            quantum = Decimal(1).scaleb(value.as_tuple().exponent)
+            tolerance = max(
+                tolerance,
+                float(abs(quantum) / (Decimal(2) * scale)),
+            )
+    return tolerance
+
+
 def _compile_registered_table(
     *,
     artifact: StepArtifactRef,
@@ -1373,7 +1685,12 @@ def _compile_registered_table(
     issues: list[NormalizationIssue],
 ) -> _CompiledRegisteredOutputs:
     compiled = _CompiledRegisteredOutputs()
-    parsed = _safe_csv_rows(raw, product_id=artifact.product_id, issues=issues)
+    parsed = _safe_csv_rows(
+        raw,
+        product_id=artifact.product_id,
+        profile_required=artifact.kind == "table",
+        issues=issues,
+    )
     if parsed is None:
         return compiled
     header, rows = parsed
@@ -1472,16 +1789,16 @@ def _compile_registered_table(
                 issues=issues,
             )
             if variable is not None and missing_n is not None:
-                denominator_n = None
-                for key in ("n_full", "n_total", "cohort_n", "denominator_n"):
-                    denominator_n = _csv_count(
+                explicit_full_n = None
+                for key in ("n_full", "n_total", "cohort_n"):
+                    explicit_full_n = _csv_count(
                         row,
                         key,
                         product_id=artifact.product_id,
                         row_index=row_index,
                         issues=issues,
                     )
-                    if denominator_n is not None:
+                    if explicit_full_n is not None:
                         break
                 nonmissing_n = None
                 for key in ("n_nonmissing", "nonmissing_n"):
@@ -1494,6 +1811,66 @@ def _compile_registered_table(
                     )
                     if nonmissing_n is not None:
                         break
+                partition_full_n = (
+                    nonmissing_n + missing_n if nonmissing_n is not None else None
+                )
+                # A cohort splits into observed, missing, and *not applicable*.
+                # Reading only the first two asserts that the value is
+                # semantically applicable to every subject, which is false for
+                # any conditional quantity. ``MissingnessProfile`` already types
+                # this: ``not_applicable_n`` is "rows where absence is expected
+                # under the typed semantics", defaulting to 0 -- so a row that
+                # does not declare one is unaffected.
+                #
+                # Measured 2026-07-29: a real E1 step was failed for the
+                # ``death_time`` row of its own audit -- n_total=1000,
+                # n_nonmissing=102, missing_n=0, not_applicable_n=898. The row
+                # was right: 102 patients died, so only they have a death time,
+                # and calling the other 898 "missing" would claim 89.8 % of
+                # death times were absent when those patients simply did not
+                # die. Under the full partition it reconciles exactly:
+                # 102 + 0 + 898 = 1000.
+                not_applicable_n = _csv_count(
+                    row,
+                    "not_applicable_n",
+                    product_id=artifact.product_id,
+                    row_index=row_index,
+                    issues=issues,
+                )
+                if (
+                    explicit_full_n is not None
+                    and partition_full_n is not None
+                    and explicit_full_n != partition_full_n + (not_applicable_n or 0)
+                ):
+                    issues.append(
+                        NormalizationIssue(
+                            severity="error",
+                            code="inconsistent_registered_missingness_partition",
+                            message=(
+                                "Explicit full denominator disagreed with the "
+                                "non-missing plus missing plus not-applicable "
+                                "partition."
+                            ),
+                            field_path=f"row[{row_index}]",
+                            product_id=artifact.product_id,
+                        )
+                    )
+                denominator_n = (
+                    explicit_full_n if explicit_full_n is not None else partition_full_n
+                )
+                if denominator_n is None:
+                    # ``denominator_n`` is intentionally last: descriptive rows
+                    # often use it for the non-missing summary denominator while
+                    # reporting missingness against the full cohort.  An explicit
+                    # full-cohort field or the complete nonmissing/missing
+                    # partition is therefore stronger authority.
+                    denominator_n = _csv_count(
+                        row,
+                        "denominator_n",
+                        product_id=artifact.product_id,
+                        row_index=row_index,
+                        issues=issues,
+                    )
                 missing_fraction = _normalized_fraction(
                     row,
                     fraction_keys=("fraction_missing",),
@@ -1512,7 +1889,11 @@ def _compile_registered_table(
                         missing_n / denominator_n,
                         missing_fraction,
                         rel_tol=1e-8,
-                        abs_tol=1e-12,
+                        abs_tol=_reported_fraction_rounding_tolerance(
+                            row,
+                            fraction_keys=("fraction_missing",),
+                            percent_keys=("missing_pct", "missing_percent"),
+                        ),
                     )
                 ):
                     issues.append(
@@ -1995,6 +2376,7 @@ def normalize_step_result_shadow(
         source="step_summary",
         product_id=None,
         authorized_path_refs=authorized_path_refs,
+        container_output_roots=container_output_roots,
         receipts=receipts,
         issues=issues,
     )
@@ -2224,6 +2606,11 @@ __all__ = [
     "CanonicalScalar",
     "CanonicalStatistic",
     "CanonicalTableProfile",
+    "MODEL_SUMMARY_ANALYSIS_DEFINITION_KEY",
+    "MODEL_SUMMARY_COEFFICIENT_TABLE_KEYS",
+    "MODEL_SUMMARY_COVARIATE_KEYS",
+    "MODEL_SUMMARY_EXPOSURE_KEYS",
+    "MODEL_SUMMARY_OUTCOME_KEYS",
     "NormalizationIssue",
     "NormalizationReceipt",
     "StepArtifactRef",
@@ -2231,8 +2618,11 @@ __all__ = [
     "StepMissingVariableResult",
     "StepModelDiagnostic",
     "StepPopulationResult",
+    "STATISTIC_PAYLOAD_KEY_ALIASES",
     "StepResultEnvelope",
     "StepVariableBindings",
+    "model_summary_analysis_definition",
+    "model_summary_coefficient_filename",
     "normalize_step_result_shadow",
     "rebind_step_result_status",
     "rebuild_observed_scalar_tree",

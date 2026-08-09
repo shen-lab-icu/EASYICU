@@ -16,6 +16,11 @@ from .evaluator.paper_rubric_v3 import (
     default_figure2_paper_rubric_path,
 )
 from .evaluator.suite import easyicu_evaluation_protocol_suite
+from .e1_scientific_acceptance import (
+    display_label_instruction,
+    measurement_products_instruction,
+    sensitivity_output_instruction,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,8 +36,20 @@ class Canonical9MaterializationSpec:
     emit_trajectory: bool = False
     trajectory_concepts: tuple[str, ...] = ()
     trajectory_window: Optional[tuple[float, float]] = None
+    #: Width (hours) of the uniform grid the cohort's ``<family>_h<start>_<end>``
+    #: columns are summarized onto, and how each window is reduced.  ``None``
+    #: emits no such columns, which is every task but the trajectory one.
+    #:
+    #: This is a CASE decision and belongs here rather than in the engine: the
+    #: engine's ``FixedWindowGrid`` chooses no family, width, horizon or
+    #: aggregate, and its parser only requires that the grid be uniform.
+    trajectory_panel_width_hours: Optional[float] = None
+    trajectory_panel_aggregate: str = "max"
     identity_mode: str = "stay"
     positive_only_event_concepts: tuple[str, ...] = ()
+    additional_expected_outputs: tuple[str, ...] = ()
+    additional_semantic_guardrails: tuple[str, ...] = ()
+    task_protocol_version: Optional[str] = None
     notes: Optional[str] = None
 
 
@@ -71,11 +88,70 @@ CANONICAL9_MIMIC_IV_PLAN: tuple[Canonical9MaterializationSpec, ...] = (
         static_concepts=_STATIC_CORE,
         exposure_concept="sepsis3",
         operational_exposure="sep3_sofa2_max",
-        positive_only_event_concepts=("sep3_sofa2",),
+        positive_only_event_concepts=("susp_inf", "sep3_sofa2"),
+        additional_expected_outputs=(
+            "missingness and event-timing audit",
+            (
+                "adjusted association with timing, repeated-stay, and "
+                "functional-form sensitivity table and figure"
+            ),
+            sensitivity_output_instruction(),
+            measurement_products_instruction(),
+        ),
+        additional_semantic_guardrails=(
+            (
+                "Use ICU stays as the analysis unit. Do not call a stay count a "
+                "patient count when no patient identifier is available."
+            ),
+            (
+                "Treat an absent susp_inf row as no recorded suspected-infection "
+                "event, and a missing death_time for a survivor as not applicable "
+                "rather than ordinary measurement missingness."
+            ),
+            (
+                "Audit death_time against ICU admission, report and exclude "
+                "negative event times from timing-based analyses, and do not hide "
+                "deaths inside the first-24-hour exposure-classification window."
+            ),
+            (
+                "Keep full-cohort prevalence and absolute mortality descriptive. "
+                "For the adjusted association, report a prespecified 24-hour "
+                "landmark sensitivity among stays alive at the landmark and label "
+                "the estimand as observational rather than causal."
+            ),
+            (
+                "Because patient identity is unavailable, report a sensitivity "
+                "restricted to non-readmission ICU stays instead of claiming "
+                "patient-clustered inference."
+            ),
+            (
+                "Report standardized mean differences in Table 1 and include a "
+                "sensitivity allowing flexible age and Charlson functional form; "
+                "do not rely on large-sample P values or linearity alone."
+            ),
+            (
+                "Use clinical display labels such as Sepsis-3 absent/present, "
+                "never Category 0/1."
+            ),
+            (
+                "Set AnalysisPlan.cohort.selection_mode to all_input_rows with "
+                "empty inclusion and exclusion predicates for the primary E1 "
+                "population; completeness, timing, and readmission restrictions "
+                "belong only in explicit sensitivity estimands."
+            ),
+            display_label_instruction(),
+        ),
+        task_protocol_version=(
+            "easyicu_evaluation_protocol_suite/v2+"
+            "e1_scientific_closure/20260728-v1"
+        ),
         notes=(
             "Use the typed sep3_sofa2 concept as the Sepsis-3 criterion and "
-            "susp_inf as its suspected-infection component. Report the exact "
-            "operational denominator; never substitute an ICD-only proxy."
+            "susp_inf as its positive-only suspected-infection event component. "
+            "Report the exact operational denominator; never substitute an "
+            "ICD-only proxy. The primary prevalence denominator remains all "
+            "eligible ICU stays; timing and repeated-stay restrictions are "
+            "explicit sensitivity estimands, not silent cohort replacements."
         ),
     ),
     Canonical9MaterializationSpec(
@@ -256,6 +332,22 @@ CANONICAL9_MIMIC_IV_PLAN: tuple[Canonical9MaterializationSpec, ...] = (
         emit_trajectory=True,
         trajectory_concepts=("sofa2", *_SOFA2_COMPONENTS, "lact"),
         trajectory_window=(0.0, 72.0),
+        # THE COMMON TIME GRID THE NOTE BELOW ASKS FOR, MADE EXECUTABLE.
+        #
+        # 12 h over 0-72 gives six points per family. Uniform, as the note
+        # requires. Six is enough to separate the shapes a phenotyping study is
+        # for -- rising, falling, flat, late deterioration -- while staying a
+        # sub-daily resolution the data actually supports: MEASURED on the
+        # sealed long table, sofa2 total is present in 100.0 / 97.7 / 92.8 /
+        # 87.7 / 82.1 / 76.7 % of stays across the six windows, and 97.7 % of
+        # stays have at least two. The decline is discharge and death, not
+        # measurement failure -- exactly the length-biased sampling this task's
+        # guardrails name, and the reason missing windows are left missing.
+        #
+        # Change this line to change the study's time resolution; nothing in the
+        # engine hard-codes it.
+        trajectory_panel_width_hours=12.0,
+        trajectory_panel_aggregate="max",
         notes=(
             "Build fixed-anchor ICU-hour trajectories over hours 0-72 from the "
             "typed long table. Use a common time grid, make missingness explicit, "

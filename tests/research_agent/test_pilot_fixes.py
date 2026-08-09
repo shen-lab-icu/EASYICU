@@ -147,7 +147,13 @@ def test_pipeline_max_total_steps_default(ra, tmp_path: Path):
         llm=ra.MockLLMClient(),
     )
     assert pipeline._max_total_steps > 0
-    assert pipeline._max_total_steps == 12  # documented default in pipeline_config
+    # Documented default in pipeline_config. Raised 12 -> 16 on 2026-07-25: 12
+    # was sized for an association task and bound in normal operation on the
+    # four-product families (prediction / survival / causal / trajectory), where
+    # truncation silently drops planned steps while the run still completes and
+    # scores. 16 is still far below the 30 the 20260515 pilot runaway reached,
+    # so the guard this cap exists for is intact.
+    assert pipeline._max_total_steps == 16
 
 
 def test_pipeline_max_total_steps_can_be_disabled(ra, tmp_path: Path):

@@ -1,6 +1,7 @@
-"""The phenotype stability panel reports the OVERALL silhouette, so a per-cluster
-metrics table must be averaged, not read at row 0 (false-pass audit #14: taking
-the first cluster's silhouette overstates overall cluster quality).
+"""The phenotype stability panel accepts only a declared overall silhouette.
+
+Per-cluster, k-sweep, fold, or resample values are not an overall score; an
+unweighted average would manufacture a scientific result.
 """
 
 from __future__ import annotations
@@ -29,22 +30,21 @@ def _register_metrics(tmp_path: Path, df: pd.DataFrame) -> EvidenceStore:
     return ev
 
 
-def test_per_cluster_silhouette_is_averaged(tmp_path: Path):
+def test_per_cluster_silhouette_is_not_misreported_as_overall(tmp_path: Path):
     ev = _register_metrics(
         tmp_path, pd.DataFrame({"cluster": [0, 1, 2], "silhouette": [0.62, 0.31, 0.28]})
     )
-    v = _silhouette_value(ev, tmp_path)
-    assert v is not None
-    assert abs(v - 0.403) < 0.01  # mean, not the first cluster's 0.62
+    _, value = _silhouette_value(ev, tmp_path)
+    assert value is None
 
 
 def test_single_overall_silhouette_is_returned_as_is(tmp_path: Path):
     ev = _register_metrics(tmp_path, pd.DataFrame({"silhouette_score": [0.41]}))
-    v = _silhouette_value(ev, tmp_path)
-    assert v is not None and abs(v - 0.41) < 1e-9
+    _, value = _silhouette_value(ev, tmp_path)
+    assert value is not None and abs(value - 0.41) < 1e-9
 
 
-def test_long_form_silhouette_rows_are_averaged(tmp_path: Path):
+def test_long_form_multiple_silhouette_rows_are_not_averaged(tmp_path: Path):
     ev = _register_metrics(
         tmp_path,
         pd.DataFrame(
@@ -54,5 +54,14 @@ def test_long_form_silhouette_rows_are_averaged(tmp_path: Path):
             }
         ),
     )
-    v = _silhouette_value(ev, tmp_path)
-    assert v is not None and abs(v - 0.4) < 1e-9
+    _, value = _silhouette_value(ev, tmp_path)
+    assert value is None
+
+
+def test_empty_numeric_silhouette_returns_the_declared_tuple_shape(tmp_path: Path):
+    ev = _register_metrics(tmp_path, pd.DataFrame({"silhouette_score": ["n/a"]}))
+
+    record, value = _silhouette_value(ev, tmp_path)
+
+    assert record is not None
+    assert value is None

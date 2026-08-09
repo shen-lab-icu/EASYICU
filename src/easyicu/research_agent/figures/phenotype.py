@@ -32,6 +32,7 @@ from .base import (
 _PROFILE_NAMES = [
     "cluster_characteristics",
     "cluster_profiles",
+    "phenotype_profiles",
     "cluster_centroids",
     "phenotype_characteristics",
     "cluster_summary",
@@ -41,6 +42,7 @@ _METRIC_NAMES = [
     "cluster_metrics",
     "silhouette",
     "stability_metrics",
+    "cluster_stability",
     "cluster_validation",
 ]
 _SIZE_CANDIDATES = ["n", "size", "count", "n_stays", "cluster_size", "n_patients"]
@@ -101,39 +103,55 @@ def _feature_columns(
     return features
 
 
-def _silhouette_value(evidence: EvidenceStore, run_dir: Path) -> Optional[float]:
-    _, frame = load_table(evidence, run_dir, _METRIC_NAMES)
+def _silhouette_value(
+    evidence: EvidenceStore,
+    run_dir: Path,
+) -> Tuple[Optional[EvidenceRecord], Optional[float]]:
+    record, frame = load_table(evidence, run_dir, _METRIC_NAMES)
     if frame is None:
-        return None
+        return record, None
     col = resolve_column(
         frame,
         ["mean_silhouette", "overall_silhouette", "silhouette_score", "silhouette"],
     )
     if col is None:
         metric_col = resolve_column(frame, ["metric", "name"])
-        value_col = resolve_column(frame, ["value", "score"])
+        value_col = resolve_column(frame, ["value", "score", "estimate"])
         if metric_col and value_col:
             vals: List[float] = []
             for _, row in frame.iterrows():
-                if "silhouette" in str(row[metric_col]).lower():
+                metric_name = str(row[metric_col]).strip().lower().replace("_", " ")
+                if metric_name in {
+                    "silhouette",
+                    "mean silhouette",
+                    "overall silhouette",
+                    "silhouette score",
+                }:
                     try:
                         vals.append(float(row[value_col]))
                     except (TypeError, ValueError):
                         continue
-            if vals:
-                return sum(vals) / len(vals)
-        return None
+            # A generic long-form metric has no proof that multiple values are
+            # interchangeable overall scores (they may be clusters, k values,
+            # folds, or resamples).  The figure can annotate exactly one
+            # declared overall score, never manufacture one by averaging.
+            if len(vals) == 1:
+                return record, vals[0]
+        return record, None
     try:
         series = pd.to_numeric(frame[col], errors="coerce").dropna()
         if series.empty:
-            return None
-        # A per-cluster metrics table has one silhouette row per cluster; the
-        # panel annotation reports the OVERALL silhouette, so average the rows
-        # rather than take the first cluster's value (which would misstate
-        # overall cluster quality).
-        return float(series.mean()) if len(series) > 1 else float(series.iloc[0])
+            return record, None
+        # Even a column named ``silhouette`` is ambiguous when it contains more
+        # than one value.  Per-cluster values do not yield the global silhouette
+        # by an unweighted mean; only a single value (or exact duplicates of it)
+        # is an auditable overall metric for this panel.
+        unique = series.drop_duplicates()
+        if len(unique) != 1:
+            return record, None
+        return record, float(unique.iloc[0])
     except (IndexError, ValueError):
-        return None
+        return record, None
 
 
 _SIZE_STRICT_NAMES = (
@@ -355,25 +373,38 @@ def render_phenotype_figure(
     # C -- cluster sizes + silhouette annotation (stability)
     if size_series is not None:
         sizes = np.array(
-            [float(size_series.get(str(lbl), 0.0)) for lbl in cluster_labels]
+            [float(size_series.get(str(lbl), np.nan)) for lbl in cluster_labels]
         )
     elif size_col is not None:
         sizes = (
-            pd.to_numeric(profiles[size_col], errors="coerce").fillna(0.0).to_numpy()
+            pd.to_numeric(profiles[size_col], errors="coerce").to_numpy()
         )
     else:
-        sizes = np.ones(len(cluster_labels))
-    ax_stab.bar(
-        range(len(cluster_labels)),
-        sizes,
-        color=[colors[i % len(colors)] for i in range(len(cluster_labels))],
-        width=0.62,
+        sizes = np.array([], dtype=float)
+    has_complete_sizes = len(sizes) == len(cluster_labels) and bool(
+        np.isfinite(sizes).all() and (sizes > 0).all()
     )
+    if has_complete_sizes:
+        ax_stab.bar(
+            range(len(cluster_labels)),
+            sizes,
+            color=[colors[i % len(colors)] for i in range(len(cluster_labels))],
+            width=0.62,
+        )
+    else:
+        ax_stab.text(
+            0.02,
+            0.55,
+            "Cluster sizes unavailable",
+            transform=ax_stab.transAxes,
+            fontsize=6.0,
+            color=palette.get("neutral", "#8F8F8F"),
+        )
     ax_stab.set_xticks(
         range(len(cluster_labels)), [f"C{lbl}" for lbl in cluster_labels], fontsize=6.0
     )
-    ax_stab.set_ylabel("Cluster size (n)" if size_col else "Clusters")
-    silhouette = _silhouette_value(evidence, run_dir)
+    ax_stab.set_ylabel("Cluster size (n)")
+    stability_record, silhouette = _silhouette_value(evidence, run_dir)
     title = "Cluster stability"
     if silhouette is not None:
         ax_stab.text(
@@ -387,14 +418,37 @@ def render_phenotype_figure(
     ax_stab.set_title(title, loc="left", pad=4)
     add_panel_label(ax_stab, "C", x=-0.3)
 
+    if has_complete_sizes and silhouette is not None:
+        stability_claim = (
+            "Cluster sizes and the qualified overall silhouette value are shown "
+            "as descriptive clustering diagnostics."
+        )
+    elif has_complete_sizes:
+        stability_claim = (
+            "Cluster sizes are shown; no qualified overall silhouette value was "
+            "available from the registered stability evidence."
+        )
+    elif silhouette is not None:
+        stability_claim = (
+            "The qualified overall silhouette value is shown; cluster sizes were "
+            "unavailable from the registered profile evidence."
+        )
+    else:
+        stability_claim = (
+            "Neither cluster sizes nor a qualified overall silhouette value were "
+            "available from the registered clustering evidence."
+        )
     core_claim = (
-        "Unsupervised phenotypes are shown as a standardised cluster-profile "
-        "heatmap, centroid parallel coordinates, and cluster sizes with a "
-        "stability annotation, rendered from registered clustering evidence."
+        "Unsupervised phenotypes are shown as standardised cluster profiles and "
+        "descriptive clustering diagnostics, rendered from registered evidence."
     )
 
     def _ids(rec: Optional[EvidenceRecord]) -> List[str]:
         return [rec.evidence_id] if rec is not None else []
+
+    profile_and_stability_ids = list(
+        dict.fromkeys([*_ids(record), *_ids(stability_record)])
+    )
 
     panels = [
         {
@@ -420,13 +474,46 @@ def render_phenotype_figure(
             "title": "Cluster stability",
             "role": "stability",
             "chart_type": "stability_grid",
-            "claim": "Cluster sizes and the silhouette score guard against arbitrary cluster cuts.",
-            "evidence_ids": _ids(record),
+            "claim": stability_claim,
+            "evidence_ids": profile_and_stability_ids,
             "review_risk": "A low silhouette or a tiny cluster warns that the partition may be unstable.",
         },
     ]
 
-    source_frames: Dict[str, pd.DataFrame] = {"cluster_profiles": profiles}
+    # These are the final analytical frames consumed by the renderer, rather
+    # than a copy of the parent table presented as though it alone explained the
+    # plot.  The profile frame preserves both the raw centroid and the exact
+    # standardised value drawn in panels A/B; the stability frame carries the
+    # exact bar heights and qualified overall silhouette annotation in panel C.
+    raw_profile_values = profiles[[cluster_col, *features]].melt(
+        id_vars=[cluster_col],
+        var_name="feature",
+        value_name="centroid_value",
+    )
+    standardised_profile_values = z.copy()
+    standardised_profile_values.insert(0, cluster_col, cluster_labels)
+    standardised_profile_values = standardised_profile_values.melt(
+        id_vars=[cluster_col],
+        var_name="feature",
+        value_name="standardised_value",
+    )
+    profile_plot_data = raw_profile_values.merge(
+        standardised_profile_values,
+        on=[cluster_col, "feature"],
+        how="inner",
+        validate="one_to_one",
+    )
+    stability_plot_data = pd.DataFrame(
+        {
+            cluster_col: cluster_labels,
+            "cluster_size": sizes if has_complete_sizes else [None] * len(cluster_labels),
+            "overall_silhouette": [silhouette] * len(cluster_labels),
+        }
+    )
+    source_frames: Dict[str, pd.DataFrame] = {
+        "phenotype_profile_plot_data": profile_plot_data,
+        "phenotype_stability_plot_data": stability_plot_data,
+    }
 
     return RenderedFigure(
         fig=fig,
@@ -434,6 +521,6 @@ def render_phenotype_figure(
         core_claim=core_claim,
         generation_mode="phenotype_publication_figure",
         panels=panels,
-        source_evidence_ids=_ids(record),
+        source_evidence_ids=profile_and_stability_ids,
         source_frames=source_frames,
     )

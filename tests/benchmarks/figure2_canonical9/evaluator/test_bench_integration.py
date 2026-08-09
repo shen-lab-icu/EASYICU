@@ -40,8 +40,17 @@ _LEGACY_ARM_SCORE_KEYS = {
     "n_errors",
     "n_historical_errors",
     "gate_status",
+    "execution_complete",
+    "step_scientific_requirements_complete",
+    "required_step_count",
+    "completed_step_count",
+    "failed_step_ids",
+    "missing_step_ids",
     "manuscript_ready",
     "publication_ready",
+    "publication_artifacts_ready",
+    "execution_paper_eligible",
+    "paper_authorized",
     "writer_attempts",
     "superseded_error_count",
     "evidence_count",
@@ -61,6 +70,58 @@ _FIGURE2_VALIDITY_BINDINGS = {
     "h2_vasopressor_causal": ("vasopressor", "death"),
     "h3_trajectory_clustering": (None, "death"),
 }
+
+
+def test_parquet_cohort_shape_reads_footer_without_dataframe_materialization(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import pandas as pd
+
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame(
+        {"stay_id": [11, 12, 13], "lactate": [1.2, 2.3, 3.4]}
+    ).to_parquet(cohort_path, index=False)
+    monkeypatch.setattr(
+        pd,
+        "read_parquet",
+        lambda *_args, **_kwargs: pytest.fail("full parquet load is forbidden"),
+    )
+
+    assert bench._cohort_shape_without_materialization(cohort_path) == (
+        3,
+        ["stay_id", "lactate"],
+    )
+
+
+def test_csv_cohort_shape_uses_header_and_single_column_chunks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import pandas as pd
+
+    cohort_path = tmp_path / "cohort.csv"
+    cohort_path.write_text(
+        "stay_id,lactate,death\n11,1.2,0\n12,2.3,1\n13,3.4,0\n",
+        encoding="utf-8",
+    )
+    original_read_csv = pd.read_csv
+    calls: list[dict[str, Any]] = []
+
+    def recording_read_csv(*args: Any, **kwargs: Any) -> Any:
+        calls.append(dict(kwargs))
+        return original_read_csv(*args, **kwargs)
+
+    monkeypatch.setattr(pd, "read_csv", recording_read_csv)
+
+    assert bench._cohort_shape_without_materialization(cohort_path) == (
+        3,
+        ["stay_id", "lactate", "death"],
+    )
+    assert calls == [
+        {"sep": ",", "nrows": 0},
+        {"sep": ",", "usecols": [0], "chunksize": 100_000},
+    ]
 
 
 def _current_identity(
@@ -108,6 +169,12 @@ def _item(task_id: str) -> SimpleNamespace:
         expected_step_substrings=[],
         expected_artifact_substrings=[],
     )
+
+
+def test_legacy_blank_predictor_is_explicit_null_operational_exposure() -> None:
+    item = SimpleNamespace(operational_exposure=None, primary_predictor="")
+
+    assert bench._operational_exposure_for_item(item) is None
 
 
 def test_benchmark_reuse_identity_binds_data_seed_and_input_values() -> None:
@@ -725,6 +792,11 @@ def test_ehrflow_reuse_rescores_completed_figure2_run_without_provider_call(
             "findings": [],
             "readiness": {
                 "execution_complete": True,
+                "step_scientific_requirements_complete": True,
+                "required_step_count": 1,
+                "completed_step_count": 1,
+                "failed_steps": [],
+                "missing_steps": [],
                 "numeric_error_count": 0,
                 "evidence_error_count": 0,
                 "analysis_error_count": 0,
@@ -847,6 +919,7 @@ def test_aborted_manifest_is_not_reused_and_arm_runs(
         model: str,
         request_timeout: float,
         reasoning_effort_profile: str,
+        **_kwargs: Any,
     ) -> object:
         assert request_timeout == 180.0
         assert reasoning_effort_profile == "provider_default"
@@ -1100,6 +1173,12 @@ def test_explicit_paper_acceptance_fails_only_after_results_are_written(
                 "arm": "aware",
                 "run_id": run_dir.name,
                 "workdir": str(run_dir),
+                "execution_complete": True,
+                "step_scientific_requirements_complete": True,
+                "required_step_count": 1,
+                "completed_step_count": 1,
+                "failed_step_ids": [],
+                "missing_step_ids": [],
                 "figure2_evaluation_attempt": attempt.model_dump(mode="json"),
             },
         }
@@ -1143,3 +1222,103 @@ def test_explicit_paper_acceptance_fails_only_after_results_are_written(
         (enforced_root / "figure2_paper_acceptance.json").read_text(encoding="utf-8")
     )
     assert enforced_gate["status"] == "invalid"
+
+
+def test_formal_safety_chain_issues_receipt_then_rescores(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from benchmarks.figure2_canonical9.evaluator import safety_runner
+
+    task_id = FIGURE2_TASK_IDS[0]
+    run_dir = tmp_path / "run_formal"
+    run_dir.mkdir()
+    missing = _invalid_attempt(
+        task_id=task_id,
+        run_id=run_dir.name,
+        reason="SAFETY_ADJUDICATION_MISSING",
+        detail="fixture receipt missing",
+    ).model_dump(mode="json")
+    score = {
+        "item_key": task_id,
+        "aware": {
+            "workdir": str(run_dir),
+            "figure2_evaluation_attempt": missing,
+        },
+    }
+    calls: list[tuple[Path, str]] = []
+
+    class Transport:
+        def __init__(self, *, api_key: str, timeout_seconds: float) -> None:
+            assert api_key == "fixture-secret"
+            assert timeout_seconds == 45.0
+
+    def issue(run_dir: Path, *, task_id: str, transport: object) -> object:
+        assert isinstance(transport, Transport)
+        calls.append((run_dir, task_id))
+        return object()
+
+    monkeypatch.setattr(
+        safety_runner,
+        "LocalOpenAICompatibleSafetyTransport",
+        Transport,
+    )
+    monkeypatch.setattr(safety_runner, "ensure_figure2_safety_receipt", issue)
+    monkeypatch.setattr(
+        bench,
+        "_figure2_evaluation_attempt",
+        lambda **_kwargs: {
+            "status": "valid",
+            "task_id": task_id,
+            "run_id": run_dir.name,
+        },
+    )
+
+    bench._ensure_formal_figure2_safety_and_rescore(
+        score=score,
+        item=SimpleNamespace(key=task_id),
+        provider_environment={"OPENAI_API_KEY": "fixture-secret"},
+        request_timeout=45.0,
+    )
+
+    assert calls == [(run_dir, task_id)]
+    assert score["aware"]["figure2_evaluation_attempt"]["status"] == "valid"
+    assert "figure2_safety_adjudication_error" not in score["aware"]
+
+
+def test_formal_safety_chain_missing_key_stays_invalid_with_diagnostic(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    task_id = FIGURE2_TASK_IDS[0]
+    run_dir = tmp_path / "run_missing_key"
+    run_dir.mkdir()
+    missing = _invalid_attempt(
+        task_id=task_id,
+        run_id=run_dir.name,
+        reason="SAFETY_ADJUDICATION_MISSING",
+        detail="fixture receipt missing",
+    ).model_dump(mode="json")
+    score = {
+        "item_key": task_id,
+        "aware": {
+            "workdir": str(run_dir),
+            "figure2_evaluation_attempt": missing,
+        },
+    }
+    monkeypatch.setattr(
+        bench,
+        "_figure2_evaluation_attempt",
+        lambda **_kwargs: missing,
+    )
+
+    bench._ensure_formal_figure2_safety_and_rescore(
+        score=score,
+        item=SimpleNamespace(key=task_id),
+        provider_environment={},
+        request_timeout=45.0,
+    )
+
+    diagnostic = score["aware"]["figure2_safety_adjudication_error"]
+    assert diagnostic["code"] == "SAFETY_TRANSPORT_CONFIG_INVALID"
+    assert score["aware"]["figure2_evaluation_attempt"]["status"] == "invalid"

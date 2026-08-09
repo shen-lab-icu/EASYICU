@@ -191,8 +191,8 @@
       chips: [[bi('Re-run statistics', '重新运行统计'), '@cohortrun', 'act'], [bi('Explain SOFA reclassification', '解释 SOFA 重分类'), '@say:sofa'], [bi('What’s the comparison?', '当前比较是什么？'), '@say:contrast']],
     },
     crossdb: {
-      label: bi('Cross-DB Benchmark', '跨库基准'),
-      hi: bi(`Cross-DB Benchmark applies one cohort definition across ICU databases. I can load it or explain where databases diverge.`, `跨库比较会把同一个队列定义应用到多个 ICU 数据库。我可以加载比较，或解释哪些数据库差异最大。`),
+      label: bi('Cross-database comparison', '跨库对比'),
+      hi: bi(`Cross-database comparison checks coverage and aggregate distributions across ICU databases. I can load it or explain where databases diverge.`, `跨库对比会检查多个 ICU 数据库之间的覆盖率和聚合分布。我可以加载结果，或解释哪些数据库差异最大。`),
       chips: [[bi('Load the benchmark', '加载跨库比较'), '@loadcross', 'act'], [bi('Which databases overlap?', '哪些数据库有重叠？'), '@say:overlap'], [bi('Open Guided Copilot', '打开研究引导'), '@guided', 'act']],
     },
     agent: {

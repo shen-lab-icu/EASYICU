@@ -41,6 +41,7 @@ from easyicu.research_agent.contracts.result_envelope import (
     verify_step_result_envelope,
     write_shadow_step_result_envelope,
 )
+from easyicu.research_agent.contracts import result_envelope as result_envelope_module
 from easyicu.research_agent.schema import AnalysisStep
 
 
@@ -368,6 +369,76 @@ def test_shadow_envelope_rejects_hostile_paths_and_accepts_explicit_container_ro
     )
 
 
+def test_shadow_envelope_normalizes_container_paths_in_summary_scalars(
+    tmp_path: Path,
+) -> None:
+    figure = tmp_path / "measurement_availability.png"
+    source_data = tmp_path / "measurement_availability_source_data.csv"
+    figure.write_bytes(b"png")
+    source_data.write_text(
+        "variable,observed_finite_percentage\nlact_n,100.0\n",
+        encoding="utf-8",
+    )
+    summary = {
+        "status": "completed",
+        "availability_percentages": {"lact_n": 100.0},
+        "figure_files": [f"/easyicu-step-output/{figure.name}"],
+        "source_data_files": [f"/easyicu-step-output/{source_data.name}"],
+        "output_files": {
+            "figure:measurement_availability": (
+                f"/easyicu-step-output/{figure.name}"
+            ),
+            "table:measurement_availability_source_data": (
+                f"/easyicu-step-output/{source_data.name}"
+            ),
+        },
+    }
+    step = AnalysisStep(
+        step_id="03_missingness_figure",
+        intent="Render measurement availability.",
+    )
+
+    envelope = normalize_step_result_shadow(
+        step_id=step.step_id,
+        step_summary=summary,
+        output_dir=tmp_path,
+        status="ok",
+        container_output_roots=("/easyicu-step-output",),
+    )
+    findings = StepSummaryFractionEnvelopeDualReader().audit(
+        step=step,
+        step_summary=summary,
+        envelope=envelope,
+        current_status="ok",
+    )
+
+    assert "absolute_unbound_path" not in _issue_codes(envelope)
+    assert findings == []
+    observed = {
+        scalar.field_path: scalar.value for scalar in envelope.observed_scalars
+    }
+    assert observed["figure_files[0]"] == figure.name
+    assert observed["source_data_files[0]"] == source_data.name
+    assert sum(
+        receipt.operation == "container_path_to_relative"
+        for receipt in envelope.normalization_receipts
+    ) == 4
+
+
+def test_shadow_envelope_rejects_summary_path_outside_container_root(
+    tmp_path: Path,
+) -> None:
+    envelope = normalize_step_result_shadow(
+        step_id="hostile_summary_path",
+        step_summary={"figure_files": ["/etc/passwd"]},
+        output_dir=tmp_path,
+        container_output_roots=("/easyicu-step-output",),
+    )
+
+    assert "absolute_unbound_path" in _issue_codes(envelope)
+    assert envelope.observed_scalars == ()
+
+
 def test_shadow_envelope_fails_closed_on_conflicting_or_nonstandard_statistic_json(
     tmp_path: Path,
 ) -> None:
@@ -649,7 +720,7 @@ def test_archived_replay_uses_current_ledger_and_verified_input_authority(
     assert "absolute_unbound_path" in _issue_codes(rejected_envelope)
 
 
-def test_sealed_envelope_wires_only_the_final_fraction_consumer() -> None:
+def test_sealed_envelope_wires_only_the_final_validation_consumer() -> None:
     repo_root = Path(__file__).resolve().parents[2]
     pipeline_source = (repo_root / "src/easyicu/research_agent/pipeline.py").read_text(
         encoding="utf-8"
@@ -662,13 +733,18 @@ def test_sealed_envelope_wires_only_the_final_fraction_consumer() -> None:
     phase_source = (
         repo_root / "src/easyicu/research_agent/execution/phase.py"
     ).read_text(encoding="utf-8")
-    assert phase_source.count("compile_sealed_step_result_shadow(") == 1
-    assert phase_source.count("StepSummaryFractionEnvelopeDualReader()") == 1
-    assert phase_source.count("final_fraction_envelope_validator=") == 1
+    final_validation_source = (
+        repo_root / "src/easyicu/research_agent/execution/final_validation.py"
+    ).read_text(encoding="utf-8")
+    assert "compile_sealed_step_result_shadow(" not in phase_source
+    assert final_validation_source.count("compile_sealed_step_result_shadow(") == 1
+    assert final_validation_source.count("StepSummaryFractionEnvelopeDualReader()") == 1
+    assert final_validation_source.count("final_fraction_envelope_validator=") == 1
     # M8-B1 lands the envelope-authoritative RegisteredOutputEnvelopeConsumer as
     # a pure, fully-tested unit; the live final-gate wiring is the separate B2
     # slice.  Until B2, the consumer must NOT appear in the phase orchestration.
     assert "RegisteredOutputEnvelopeConsumer" not in phase_source
+    assert "RegisteredOutputEnvelopeConsumer" not in final_validation_source
 
 
 def test_registered_tables_compile_typed_population_missingness_and_estimate(
@@ -747,6 +823,163 @@ def test_registered_tables_compile_typed_population_missingness_and_estimate(
     ]
 
 
+def test_registered_missingness_prefers_complete_partition_over_summary_denominator(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "summary.csv").write_text(
+        "variable,role,denominator_n,n_nonmissing,missing_n,missing_pct\n"
+        "los_icu,adjustment,94442,94442,14,0.014822\n",
+        encoding="utf-8",
+    )
+
+    envelope = normalize_step_result_shadow(
+        step_id="mixed-denominator-semantics",
+        step_summary={"output_files": {"table:summary": "summary.csv"}},
+        output_dir=tmp_path,
+    )
+
+    assert envelope.missing_data is not None
+    missing = envelope.missing_data.variables[0]
+    assert missing.denominator_n == 94456
+    assert missing.nonmissing_n == 94442
+    assert missing.missing_n == 14
+    assert not [
+        issue for issue in envelope.normalization_issues if issue.severity == "error"
+    ]
+
+
+def test_registered_missingness_rejects_explicit_full_partition_disagreement(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "summary.csv").write_text(
+        "variable,n_full,n_nonmissing,missing_n,missing_pct\nlos_icu,100,90,9,9.0\n",
+        encoding="utf-8",
+    )
+
+    envelope = normalize_step_result_shadow(
+        step_id="invalid-missingness-partition",
+        step_summary={"output_files": {"table:summary": "summary.csv"}},
+        output_dir=tmp_path,
+    )
+
+    assert "inconsistent_registered_missingness_partition" in _issue_codes(envelope)
+
+
+@pytest.mark.parametrize(
+    ("limit_name", "limit_value", "payload", "issue_code"),
+    (
+        (
+            "_MAX_TABLE_BYTES",
+            7,
+            "value\n1\n",
+            "registered_table_too_large",
+        ),
+        (
+            "_MAX_TABLE_ROWS",
+            1,
+            "value\n1\n2\n",
+            "registered_table_row_limit_exceeded",
+        ),
+    ),
+)
+def test_opaque_data_artifact_profile_overflow_does_not_block_fraction_shadow(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    limit_name: str,
+    limit_value: int,
+    payload: str,
+    issue_code: str,
+) -> None:
+    monkeypatch.setattr(result_envelope_module, limit_name, limit_value)
+    artifact_path = tmp_path / "analysis_cohort.csv"
+    artifact_path.write_text(payload, encoding="utf-8")
+    summary = {
+        "observed_fraction": {"retained": 1.0},
+        "output_files": {"artifact:analysis_cohort": artifact_path.name},
+    }
+    step = AnalysisStep(step_id="01_cohort", intent="Bind the analysis cohort.")
+
+    envelope = normalize_step_result_shadow(
+        step_id=step.step_id,
+        step_summary=summary,
+        output_dir=tmp_path,
+        status="ok",
+    )
+    issues = [
+        issue for issue in envelope.normalization_issues if issue.code == issue_code
+    ]
+    findings = StepSummaryFractionEnvelopeDualReader().audit(
+        step=step,
+        step_summary=summary,
+        envelope=envelope,
+        current_status="ok",
+    )
+
+    assert len(issues) == 1
+    assert issues[0].severity == "warning"
+    assert [artifact.product_id for artifact in envelope.artifacts] == [
+        "artifact:analysis_cohort"
+    ]
+    assert envelope.tables == ()
+    assert findings == []
+
+
+@pytest.mark.parametrize(
+    ("limit_name", "limit_value", "payload", "issue_code"),
+    (
+        (
+            "_MAX_TABLE_BYTES",
+            7,
+            "value\n1\n",
+            "registered_table_too_large",
+        ),
+        (
+            "_MAX_TABLE_ROWS",
+            1,
+            "value\n1\n2\n",
+            "registered_table_row_limit_exceeded",
+        ),
+    ),
+)
+def test_result_table_profile_overflow_remains_fail_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    limit_name: str,
+    limit_value: int,
+    payload: str,
+    issue_code: str,
+) -> None:
+    monkeypatch.setattr(result_envelope_module, limit_name, limit_value)
+    table_path = tmp_path / "primary_result.csv"
+    table_path.write_text(payload, encoding="utf-8")
+    summary = {
+        "observed_fraction": {"retained": 1.0},
+        "output_files": {"table:primary_result": table_path.name},
+    }
+    step = AnalysisStep(step_id="05_result", intent="Report the primary result.")
+
+    envelope = normalize_step_result_shadow(
+        step_id=step.step_id,
+        step_summary=summary,
+        output_dir=tmp_path,
+        status="ok",
+    )
+    issues = [
+        issue for issue in envelope.normalization_issues if issue.code == issue_code
+    ]
+    findings = StepSummaryFractionEnvelopeDualReader().audit(
+        step=step,
+        step_summary=summary,
+        envelope=envelope,
+        current_status="ok",
+    )
+
+    assert len(issues) == 1
+    assert issues[0].severity == "error"
+    assert len(findings) == 1
+    assert findings[0].detail["mismatch_codes"] == ["normalization_error"]
+
+
 def test_registered_model_contract_is_typed_without_free_text(
     tmp_path: Path,
 ) -> None:
@@ -794,7 +1027,7 @@ def test_registered_table_parser_fails_closed_on_header_numeric_and_fraction_con
         encoding="utf-8",
     )
     (tmp_path / "conflict.csv").write_text(
-        "variable,missing_n,n_full,fraction_missing,missing_pct\n" "x,1,10,0.1,50\n",
+        "variable,missing_n,n_full,fraction_missing,missing_pct\nx,1,10,0.1,50\n",
         encoding="utf-8",
     )
     (tmp_path / "nonfinite.csv").write_text(

@@ -4,7 +4,13 @@
    the chosen look survives reloads. Hidden entirely when Tweaks is off. */
 (function () {
   const KEY = 'easyicu_tweaks_v1';
-  const DEFAULTS = { accent: 'teal', tone: 'warm', radius: 'default', density: 'comfortable', home: 'prompt' };
+  // Appearance tokens only. `density` deliberately does NOT live here: it is a
+  // persisted user setting owned by i18n.js::applyDisplayDom, which reads
+  // /api/settings. Both files used to write body[data-density] — this one
+  // synchronously at DOMContentLoaded, the other when the settings fetch
+  // resolved — so the winner was decided by network latency, and the Tweaks
+  // density control was a dead lever that reverted on every reload.
+  const DEFAULTS = { accent: 'teal', tone: 'warm', radius: 'default', home: 'prompt' };
 
   const ACCENT_H = { teal: 205, blue: 245, green: 150, violet: 290 };
   const TONES = {
@@ -45,8 +51,6 @@
     r.setProperty('--r-2', rad[1]);
     r.setProperty('--r-3', rad[2]);
     r.setProperty('--r-4', rad[3]);
-
-    document.body.dataset.density = values.density;
 
     // home layout is read by the entry screen from localStorage
     try { localStorage.setItem('easyicu_home', values.home); } catch (e) {}
@@ -98,10 +102,6 @@
         <div class="tw-sec">
           <div class="tw-lbl">Corner radius</div>
           ${seg('radius', [['sharp', 'Sharp'], ['default', 'Default'], ['rounded', 'Rounded']])}
-        </div>
-        <div class="tw-sec">
-          <div class="tw-lbl">Density</div>
-          ${seg('density', [['comfortable', 'Comfortable'], ['compact', 'Compact']])}
         </div>
         <div class="tw-sec">
           <div class="tw-lbl">Home layout</div>

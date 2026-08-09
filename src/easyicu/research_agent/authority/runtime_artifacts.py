@@ -18,6 +18,9 @@ from ..architecture import SystemLayer
 from ..schema import AnalysisPlan, ResearchContext, ValidationFinding
 
 
+STEP_ATTEMPT_HISTORY_REF_SCHEMA = "easyicu.step_attempt_history_ref/1"
+
+
 def _record_field(record: Any, name: str) -> Any:
     if isinstance(record, Mapping):
         return record.get(name)
@@ -395,7 +398,7 @@ def load_run_artifact_authority(
     else:
         authority_path, authority_payload = newest_path, newest_payload
     if "per_step_records" in authority_payload:
-        return authority_payload
+        return _hydrate_step_attempt_history(root, authority_payload)
 
     # A single valid pre-ledger manifest is a genuine legacy run.  When an
     # older modern ledger also exists, however, the newest ledger-less object
@@ -410,6 +413,103 @@ def load_run_artifact_authority(
                 f"{older_path.name}."
             )
     return None
+
+
+def encode_step_attempt_history_jsonl(
+    records: Sequence[Mapping[str, Any]],
+) -> str:
+    """Encode full append-only attempt snapshots once, outside the manifest."""
+
+    lines: List[str] = []
+    for record in records:
+        if not isinstance(record, Mapping) or not str(record.get("step_id") or ""):
+            raise ValueError("step attempt history records require a step_id")
+        lines.append(
+            json.dumps(
+                dict(record),
+                sort_keys=True,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                default=str,
+            )
+        )
+    return "\n".join(lines) + ("\n" if lines else "")
+
+
+def _hydrate_step_attempt_history(
+    run_dir: Path,
+    payload: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """Restore a finalized external history reference or fail closed."""
+
+    result = dict(payload)
+    reference = result.get("step_attempt_history_ref")
+    if reference is None:
+        return result
+    inline = result.get("step_attempt_history")
+    if inline not in (None, []):
+        raise RunArtifactAuthorityError(
+            "Run checkpoint declares both inline and external step attempt history."
+        )
+    if (
+        not isinstance(reference, Mapping)
+        or reference.get("schema_version") != STEP_ATTEMPT_HISTORY_REF_SCHEMA
+    ):
+        raise RunArtifactAuthorityError(
+            "Run checkpoint step attempt history reference is malformed."
+        )
+    evidence_id = str(reference.get("evidence_id") or "")
+    relative_path = str(reference.get("relative_path") or "")
+    sha256 = str(reference.get("sha256") or "")
+    try:
+        expected_count = int(reference.get("record_count"))
+    except (TypeError, ValueError) as exc:
+        raise RunArtifactAuthorityError(
+            "Run checkpoint step attempt history count is malformed."
+        ) from exc
+    if not evidence_id or expected_count < 0:
+        raise RunArtifactAuthorityError(
+            "Run checkpoint step attempt history reference is incomplete."
+        )
+    evidence_records = result.get("evidence")
+    matches = [
+        record
+        for record in (
+            evidence_records if isinstance(evidence_records, list) else []
+        )
+        if isinstance(record, Mapping)
+        and str(record.get("evidence_id") or "") == evidence_id
+        and str(record.get("relative_path") or "") == relative_path
+        and str(record.get("sha256") or "") == sha256
+    ]
+    if len(matches) != 1:
+        raise RunArtifactAuthorityError(
+            "Run checkpoint step attempt history is not bound to one evidence record."
+        )
+    history_path = verified_run_evidence_path(run_dir, matches[0])
+    if history_path is None:
+        raise RunArtifactAuthorityError(
+            "Run checkpoint step attempt history evidence failed digest verification."
+        )
+    records: List[Dict[str, Any]] = []
+    try:
+        for line in history_path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            record = json.loads(line)
+            if not isinstance(record, dict) or not str(record.get("step_id") or ""):
+                raise ValueError("history line is not a step record")
+            records.append(record)
+    except (OSError, TypeError, ValueError) as exc:
+        raise RunArtifactAuthorityError(
+            "Run checkpoint step attempt history evidence is unreadable."
+        ) from exc
+    if len(records) != expected_count:
+        raise RunArtifactAuthorityError(
+            "Run checkpoint step attempt history count does not match its reference."
+        )
+    result["step_attempt_history"] = records
+    return result
 
 
 def current_run_evidence_records(

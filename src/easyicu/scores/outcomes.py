@@ -28,6 +28,8 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
+from easyicu.outcome_availability import FOLLOWUP_OUTCOME_DATABASES
+
 from .comorbidity import _lower_cols
 
 
@@ -59,16 +61,6 @@ def _raw_table(database: str, data_path: object, table: str) -> pd.DataFrame:
     raise FileNotFoundError(f"{table}.parquet not found under {root}")
 
 
-# DBs with post-discharge death follow-up usable for fixed-horizon mortality.
-_FOLLOWUP_DATABASES = {
-    "miiv",
-    "miiv_demo",
-    "mimic",
-    "mimic_demo",
-    "sic",
-    "sic_demo",
-    "aumc",
-}
 _HORIZONS = {"mort_28d": 28, "mort_90d": 90, "mort_365d": 365}
 
 
@@ -201,7 +193,7 @@ def load_outcomes(
         # endpoint, which MIMIC cannot support (its mech_vent concept is
         # too fragmented: median ~0.02 vent-days/stay).
         return _eicu_vent_free_days(database, data_path, patient_values, verbose)
-    if db not in _FOLLOWUP_DATABASES:
+    if db not in FOLLOWUP_OUTCOME_DATABASES:
         if verbose:
             print(
                 f"[outcomes] {database}: no post-discharge death follow-up — "

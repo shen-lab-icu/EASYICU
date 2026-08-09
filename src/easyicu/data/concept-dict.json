@@ -422,16 +422,6 @@
   "omopid": 1507835,
   "category": "medications",
   "sources": {
-   "aumc": [
-    {
-     "ids": 12467,
-     "table": "drugitems",
-     "sub_var": "itemid",
-     "rate_uom": "doserateunit",
-     "stop_var": "stop",
-     "callback": "aumc_rate_units(0.53)"
-    }
-   ],
    "eicu": [
     {
      "regex": "^vasopressin.*\\(.+/.+\\)$",
@@ -3727,15 +3717,21 @@
    "dobu_rate",
    "dobu_dur"
   ],
-  "description": "dobutamine administration for min 1h",
+  "description": "dobutamine rate during administrations lasting at least 1h",
   "category": "medications",
+  "unit": [
+   "mcg/kg/min",
+   "mcgkgmin"
+  ],
   "interval": "00:01:00",
   "callback": "vaso60",
   "class_name": "rec_cncpt"
  },
  "dobu_dur": {
-  "description": "dobutamine duration",
+  "description": "dobutamine continuous-infusion episode duration in hours; MIMIC MetaVision uses status-filtered explicit intervals merged across <=5-minute gaps and clipped to ICU outtime; MIMIC CareVue uses positive-rate points, explicit stop/zero-rate boundaries, and <=5-hour gaps to report an inferred rate-set span (not exact pump-on time) with singleton duration unknown; AUMC uses explicit continuous intervals and eICU singleton duration is unknown",
   "category": "medications",
+  "unit": "hours",
+  "min": 0,
   "aggregate": "max",
   "sources": {
    "aumc": [
@@ -3744,7 +3740,13 @@
      "table": "drugitems",
      "sub_var": "itemid",
      "stop_var": "stop",
-     "grp_var": "orderid",
+     "extra_vars": [
+      "iscontinuous",
+      "action"
+     ],
+     "continuous_var": "iscontinuous",
+     "action_var": "action",
+     "merge_gap_minutes": 5,
      "callback": "aumc_dur"
     }
    ],
@@ -3782,6 +3784,18 @@
      "sub_var": "itemid",
      "stop_var": "endtime",
      "grp_var": "linkorderid",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled",
+      "Flushed",
+      "Bolus"
+     ],
+     "merge_gap_minutes": 5,
      "callback": "mimic_dur_inmv"
     }
    ],
@@ -3793,7 +3807,13 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "grp_var": "linkorderid",
+     "extra_vars": [
+      "stopped",
+      "rate"
+     ],
+     "boundary_var": "stopped",
+     "rate_var": "rate",
+     "merge_gap_hours": 5,
      "callback": "mimic_dur_incv"
     },
     {
@@ -3802,6 +3822,20 @@
      "sub_var": "itemid",
      "stop_var": "endtime",
      "grp_var": "linkorderid",
+     "extra_vars": [
+      "statusdescription",
+      "cancelreason"
+     ],
+     "status_var": "statusdescription",
+     "cancel_var": "cancelreason",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled",
+      "Flushed",
+      "Bolus"
+     ],
+     "merge_gap_minutes": 5,
      "callback": "mimic_dur_inmv"
     }
    ],
@@ -3813,7 +3847,13 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "grp_var": "linkorderid",
+     "extra_vars": [
+      "stopped",
+      "rate"
+     ],
+     "boundary_var": "stopped",
+     "rate_var": "rate",
+     "merge_gap_hours": 5,
      "callback": "mimic_dur_incv"
     },
     {
@@ -3822,6 +3862,20 @@
      "sub_var": "itemid",
      "stop_var": "endtime",
      "grp_var": "linkorderid",
+     "extra_vars": [
+      "statusdescription",
+      "cancelreason"
+     ],
+     "status_var": "statusdescription",
+     "cancel_var": "cancelreason",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled",
+      "Flushed",
+      "Bolus"
+     ],
+     "merge_gap_minutes": 5,
      "callback": "mimic_dur_inmv"
     }
    ],
@@ -3953,15 +4007,21 @@
    "dopa_rate",
    "dopa_dur"
   ],
-  "description": "dopamine administration for min 1h",
-  "category": "outcome",
+  "description": "dopamine rate during administrations lasting at least 1h",
+  "category": "medications",
+  "unit": [
+   "mcg/kg/min",
+   "mcgkgmin"
+  ],
   "interval": "00:01:00",
   "callback": "vaso60",
   "class_name": "rec_cncpt"
  },
  "dopa_dur": {
-  "description": "dopamine duration",
+  "description": "dopamine continuous-infusion episode duration in hours; MIMIC MetaVision uses status-filtered explicit intervals merged across <=5-minute gaps and clipped to ICU outtime; MIMIC CareVue uses positive-rate points, explicit stop/zero-rate boundaries, and <=5-hour gaps to report an inferred rate-set span (not exact pump-on time) with singleton duration unknown; AUMC uses explicit continuous intervals and eICU singleton duration is unknown",
   "category": "medications",
+  "unit": "hours",
+  "min": 0,
   "aggregate": "max",
   "sources": {
    "aumc": [
@@ -3970,7 +4030,13 @@
      "table": "drugitems",
      "sub_var": "itemid",
      "stop_var": "stop",
-     "grp_var": "orderid",
+     "extra_vars": [
+      "iscontinuous",
+      "action"
+     ],
+     "continuous_var": "iscontinuous",
+     "action_var": "action",
+     "merge_gap_minutes": 5,
      "callback": "aumc_dur"
     }
    ],
@@ -3999,6 +4065,18 @@
      "sub_var": "itemid",
      "stop_var": "endtime",
      "grp_var": "linkorderid",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled",
+      "Flushed",
+      "Bolus"
+     ],
+     "merge_gap_minutes": 5,
      "callback": "mimic_dur_inmv"
     }
    ],
@@ -4011,7 +4089,13 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "grp_var": "linkorderid",
+     "extra_vars": [
+      "stopped",
+      "rate"
+     ],
+     "boundary_var": "stopped",
+     "rate_var": "rate",
+     "merge_gap_hours": 5,
      "callback": "mimic_dur_incv"
     },
     {
@@ -4020,6 +4104,20 @@
      "sub_var": "itemid",
      "stop_var": "endtime",
      "grp_var": "linkorderid",
+     "extra_vars": [
+      "statusdescription",
+      "cancelreason"
+     ],
+     "status_var": "statusdescription",
+     "cancel_var": "cancelreason",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled",
+      "Flushed",
+      "Bolus"
+     ],
+     "merge_gap_minutes": 5,
      "callback": "mimic_dur_inmv"
     }
    ],
@@ -4032,7 +4130,13 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "grp_var": "linkorderid",
+     "extra_vars": [
+      "stopped",
+      "rate"
+     ],
+     "boundary_var": "stopped",
+     "rate_var": "rate",
+     "merge_gap_hours": 5,
      "callback": "mimic_dur_incv"
     },
     {
@@ -4041,6 +4145,20 @@
      "sub_var": "itemid",
      "stop_var": "endtime",
      "grp_var": "linkorderid",
+     "extra_vars": [
+      "statusdescription",
+      "cancelreason"
+     ],
+     "status_var": "statusdescription",
+     "cancel_var": "cancelreason",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled",
+      "Flushed",
+      "Bolus"
+     ],
+     "merge_gap_minutes": 5,
      "callback": "mimic_dur_inmv"
     }
    ],
@@ -4548,15 +4666,21 @@
    "epi_rate",
    "epi_dur"
   ],
-  "description": "epinephrine administration for min 1h",
-  "category": "outcome",
+  "description": "epinephrine rate during administrations lasting at least 1h",
+  "category": "medications",
+  "unit": [
+   "mcg/kg/min",
+   "mcgkgmin"
+  ],
   "interval": "00:01:00",
   "callback": "vaso60",
   "class_name": "rec_cncpt"
  },
  "epi_dur": {
-  "description": "epinephrine duration",
+  "description": "epinephrine continuous-infusion episode duration in hours; MIMIC MetaVision uses status-filtered explicit intervals merged across <=5-minute gaps and clipped to ICU outtime; MIMIC CareVue uses positive-rate points, explicit stop/zero-rate boundaries, and <=5-hour gaps to report an inferred rate-set span (not exact pump-on time) with singleton duration unknown; AUMC uses explicit continuous intervals and eICU singleton duration is unknown",
   "category": "medications",
+  "unit": "hours",
+  "min": 0,
   "aggregate": "max",
   "sources": {
    "aumc": [
@@ -4565,7 +4689,13 @@
      "table": "drugitems",
      "sub_var": "itemid",
      "stop_var": "stop",
-     "grp_var": "orderid",
+     "extra_vars": [
+      "iscontinuous",
+      "action"
+     ],
+     "continuous_var": "iscontinuous",
+     "action_var": "action",
+     "merge_gap_minutes": 5,
      "callback": "aumc_dur"
     }
    ],
@@ -4609,6 +4739,18 @@
      "sub_var": "itemid",
      "stop_var": "endtime",
      "grp_var": "linkorderid",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled",
+      "Flushed",
+      "Bolus"
+     ],
+     "merge_gap_minutes": 5,
      "callback": "mimic_dur_inmv"
     }
    ],
@@ -4621,7 +4763,13 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "grp_var": "linkorderid",
+     "extra_vars": [
+      "stopped",
+      "rate"
+     ],
+     "boundary_var": "stopped",
+     "rate_var": "rate",
+     "merge_gap_hours": 5,
      "callback": "mimic_dur_incv"
     },
     {
@@ -4630,6 +4778,20 @@
      "sub_var": "itemid",
      "stop_var": "endtime",
      "grp_var": "linkorderid",
+     "extra_vars": [
+      "statusdescription",
+      "cancelreason"
+     ],
+     "status_var": "statusdescription",
+     "cancel_var": "cancelreason",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled",
+      "Flushed",
+      "Bolus"
+     ],
+     "merge_gap_minutes": 5,
      "callback": "mimic_dur_inmv"
     }
    ],
@@ -4642,7 +4804,13 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "grp_var": "linkorderid",
+     "extra_vars": [
+      "stopped",
+      "rate"
+     ],
+     "boundary_var": "stopped",
+     "rate_var": "rate",
+     "merge_gap_hours": 5,
      "callback": "mimic_dur_incv"
     },
     {
@@ -4651,6 +4819,20 @@
      "sub_var": "itemid",
      "stop_var": "endtime",
      "grp_var": "linkorderid",
+     "extra_vars": [
+      "statusdescription",
+      "cancelreason"
+     ],
+     "status_var": "statusdescription",
+     "cancel_var": "cancelreason",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled",
+      "Flushed",
+      "Bolus"
+     ],
+     "merge_gap_minutes": 5,
      "callback": "mimic_dur_inmv"
     }
    ],
@@ -5715,7 +5897,7 @@
   "unit": "mL",
   "min": -100000,
   "max": 100000,
-  "description": "cumulative fluid balance since admission (running sum of hourly fluid_balance)",
+  "description": "cumulative fluid balance since ICU admission (hour 0); pre-admission fluid rows do not contribute to the baseline",
   "concepts": [
    "fluid_balance"
   ],
@@ -5983,18 +6165,26 @@
  },
  "hba1c": {
   "unit": "%",
+  "min": 2,
+  "max": 25,
   "description": "Hemoglobin A1C",
   "omopid": 4184637,
   "category": "hematology",
   "sources": {
    "aumc": [
     {
-     "ids": [
-      11812,
-      16166
-     ],
+     "ids": 11812,
      "table": "numericitems",
-     "sub_var": "itemid"
+     "sub_var": "itemid",
+     "callback": "convert_unit(binary_op(`*`, 1), '%', 'Geen|%')",
+     "_comment": "AUMC HbA1c reported on the NGSP percentage scale."
+    },
+    {
+     "ids": 16166,
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "callback": "combine_callbacks(convert_unit(binary_op(`*`, 0.09148), '%', 'mmol/mol'), transform_fun(binary_op(`+`, 2.152)))",
+     "_comment": "AUMC IFCC HbA1c (mmol/mol) converted to NGSP percent using NGSP = 0.09148 * IFCC + 2.152."
     }
    ],
    "miiv": [
@@ -7588,10 +7778,6 @@
  "lymph": {
   "unit": [
    "%",
-   "10^9/l",
-   "10^9/L",
-   "G/l",
-   "G/L",
    "Geen"
   ],
   "min": 0,
@@ -7625,15 +7811,6 @@
      "ids": "-lymphs",
      "table": "lab",
      "sub_var": "labname"
-    }
-   ],
-   "hirid": [
-    {
-     "ids": 24000480,
-     "table": "observations",
-     "sub_var": "variableid",
-     "callback": "blood_cell_ratio",
-     "class_name": "hrd_itm"
     }
    ],
    "miiv": [
@@ -8147,8 +8324,9 @@
      "ids": 24000170,
      "table": "observations",
      "sub_var": "variableid",
-     "callback": "convert_unit(binary_op(`*`, 0.16114), '%')",
-     "class_name": "hrd_itm"
+     "callback": "convert_unit(binary_op(`*`, 0.1), 'g/dL')",
+     "class_name": "hrd_itm",
+     "_comment": "2026-07-30 HiRID raw reference declares MCHC in g/L (typical raw values 300-350). Convert g/L to g/dL with factor 0.1. The former 0.16114 factor produced a cross-database median of 49.3 instead of approximately 33 g/dL."
     }
    ],
    "miiv": [
@@ -8411,18 +8589,16 @@
       224310,
       224322,
       227980,
-      228866,
       225979,
       228154,
       228156,
       228151,
       228158,
       228198,
-      229254,
       220128
      ],
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-07-18 fix: MIMIC-III had NO mech_circ_support source (extracted empty) despite chartevents holding IABP/LVAD/RVAD data. Mirrors miiv MetaVision itemids (shared d_items; itemids absent in MIMIC-III drop naturally). Excludes CareVue low-number ambiguous itemids and ECMO (separate concept)."
+     "_comment": "2026-07-26 audit: MIMIC-III MetaVision includes the listed IABP/Impella/Tandem/RVAD items. MIMIC-IV-only 228866 (Plateau Pressure IABP) and 229254 (Flow LVAD) are deliberately excluded because they are absent from the MIMIC-III d_items catalog. Excludes CareVue low-number ambiguous itemids and ECMO (separate concept)."
     }
    ],
    "mimic_demo": [
@@ -8437,18 +8613,16 @@
       224310,
       224322,
       227980,
-      228866,
       225979,
       228154,
       228156,
       228151,
       228158,
       228198,
-      229254,
       220128
      ],
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-07-18 fix: MIMIC-III had NO mech_circ_support source (extracted empty) despite chartevents holding IABP/LVAD/RVAD data. Mirrors miiv MetaVision itemids (shared d_items; itemids absent in MIMIC-III drop naturally). Excludes CareVue low-number ambiguous itemids and ECMO (separate concept)."
+     "_comment": "2026-07-26 audit: MIMIC-III MetaVision includes the listed IABP/Impella/Tandem/RVAD items. MIMIC-IV-only 228866 (Plateau Pressure IABP) and 229254 (Flow LVAD) are deliberately excluded because they are absent from the MIMIC-III d_items catalog. Excludes CareVue low-number ambiguous itemids and ECMO (separate concept)."
     }
    ]
   }
@@ -9549,10 +9723,6 @@
  "neut": {
   "unit": [
    "%",
-   "10^9/l",
-   "10^9/L",
-   "G/l",
-   "G/L",
    "Geen"
   ],
   "min": 0,
@@ -9589,15 +9759,6 @@
      "ids": "-polys",
      "table": "lab",
      "sub_var": "labname"
-    }
-   ],
-   "hirid": [
-    {
-     "ids": 24000550,
-     "table": "observations",
-     "sub_var": "variableid",
-     "class_name": "hrd_itm",
-     "_comment": "2026-07-04 HiRID 24000550 stores absolute neutrophil count (~9), not % despite its '/100 leukocytes' label. Kept as-is because lymph@hirid (24000480) is also absolute (G/l) and HiRID has no lymphocyte-% variable, so nlr@hirid = abs/abs is the correct NLR. Do NOT switch to 24000556 (segmented-only %) — it would break nlr."
     }
    ],
    "miiv": [
@@ -9853,15 +10014,21 @@
    "norepi_rate",
    "norepi_dur"
   ],
-  "description": "norepinephrine administration for min 1h",
-  "category": "outcome",
+  "description": "norepinephrine rate during administrations lasting at least 1h",
+  "category": "medications",
+  "unit": [
+   "mcg/kg/min",
+   "mcgkgmin"
+  ],
   "interval": "00:01:00",
   "callback": "vaso60",
   "class_name": "rec_cncpt"
  },
  "norepi_dur": {
-  "description": "norepinephrine duration",
+  "description": "norepinephrine continuous-infusion episode duration in hours; MIMIC MetaVision uses status-filtered explicit intervals merged across <=5-minute gaps and clipped to ICU outtime; MIMIC CareVue uses positive-rate points, explicit stop/zero-rate boundaries, and <=5-hour gaps to report an inferred rate-set span (not exact pump-on time) with singleton duration unknown; AUMC uses explicit continuous intervals and eICU singleton duration is unknown",
   "category": "medications",
+  "unit": "hours",
+  "min": 0,
   "aggregate": "max",
   "sources": {
    "aumc": [
@@ -9870,7 +10037,13 @@
      "table": "drugitems",
      "sub_var": "itemid",
      "stop_var": "stop",
-     "grp_var": "orderid",
+     "extra_vars": [
+      "iscontinuous",
+      "action"
+     ],
+     "continuous_var": "iscontinuous",
+     "action_var": "action",
+     "merge_gap_minutes": 5,
      "callback": "aumc_dur"
     }
    ],
@@ -9913,6 +10086,18 @@
      "sub_var": "itemid",
      "stop_var": "endtime",
      "grp_var": "linkorderid",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled",
+      "Flushed",
+      "Bolus"
+     ],
+     "merge_gap_minutes": 5,
      "callback": "mimic_dur_inmv"
     }
    ],
@@ -9924,7 +10109,13 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "grp_var": "linkorderid",
+     "extra_vars": [
+      "stopped",
+      "rate"
+     ],
+     "boundary_var": "stopped",
+     "rate_var": "rate",
+     "merge_gap_hours": 5,
      "callback": "mimic_dur_incv"
     },
     {
@@ -9933,6 +10124,20 @@
      "sub_var": "itemid",
      "stop_var": "endtime",
      "grp_var": "linkorderid",
+     "extra_vars": [
+      "statusdescription",
+      "cancelreason"
+     ],
+     "status_var": "statusdescription",
+     "cancel_var": "cancelreason",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled",
+      "Flushed",
+      "Bolus"
+     ],
+     "merge_gap_minutes": 5,
      "callback": "mimic_dur_inmv"
     }
    ],
@@ -9944,7 +10149,13 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "grp_var": "linkorderid",
+     "extra_vars": [
+      "stopped",
+      "rate"
+     ],
+     "boundary_var": "stopped",
+     "rate_var": "rate",
+     "merge_gap_hours": 5,
      "callback": "mimic_dur_incv"
     },
     {
@@ -9953,6 +10164,20 @@
      "sub_var": "itemid",
      "stop_var": "endtime",
      "grp_var": "linkorderid",
+     "extra_vars": [
+      "statusdescription",
+      "cancelreason"
+     ],
+     "status_var": "statusdescription",
+     "cancel_var": "cancelreason",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled",
+      "Flushed",
+      "Bolus"
+     ],
+     "merge_gap_minutes": 5,
      "callback": "mimic_dur_inmv"
     }
    ],
@@ -12689,33 +12914,19 @@
      "_comment": "2026-07-03 semantic coverage review: active CRRT UF/out and Hemofiltration labels only; CRRT flush and CRRT citrate-calcium infusion labels remain excluded."
     }
    ],
-   "aumc": [
-    {
-     "table": "procedureorderitems",
-     "sub_var": "item",
-     "regex": "(CVVH starten|CVVH stoppen|CVVH anti-coagulantia starten|CVVH-citraat Calciumpomp starten|hemofiltrat)",
-     "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-07-03 audit: active AUMC RRT order events only; CVVH lab draws, urine collection, filter changes, reset orders, and generic CVVH orders are excluded."
-    },
-    {
-     "table": "numericitems",
-     "sub_var": "itemid",
-     "ids": [
-      8805,
-      7666,
-      7667,
-      7668,
-      10736,
-      12444,
-      6684,
-      8806,
-      8808,
-      12091
-     ],
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-07-03 audit: synchronized with SOFA-2 AUMC RRT coverage; CVVH pressure/flow/fluid-loss channels indicate active renal replacement therapy."
-    }
+    "aumc": [
+      {
+        "table": "processitems",
+        "sub_var": "itemid",
+        "ids": [
+          12465,
+          16363
+        ],
+        "index_var": "start",
+        "dur_var": "stop",
+        "callback": "transform_fun(set_val(TRUE))",
+        "_comment": "2026-08-06 official AmsterdamUMCdb source audit: processitems stores continuous non-medication processes with explicit start/stop offsets. 12465=CVVH and 16363=Hemodialyse are treatment episodes; dialysis access items 9161/9162/9163 are deliberately excluded. The interval is expanded to active hourly RRT status."
+      }
    ],
    "hirid": [
     {
@@ -12960,7 +13171,7 @@
  "samp": {
   "class_name": "lgl_cncpt",
   "category": "microbiology",
-  "description": "body fluid sampling",
+  "description": "body-fluid specimen collection event; True denotes collection regardless of culture result, while culture positivity is exported separately",
   "omopid": 4133843,
   "sources": {
    "aumc": [
@@ -12996,7 +13207,7 @@
     {
      "table": "microlab",
      "val_var": "organism",
-     "callback": "transform_fun(comp_na(`!=`, 'no growth'))",
+     "callback": "transform_fun(set_val(TRUE))",
      "class_name": "col_itm"
     }
    ],
@@ -13004,7 +13215,7 @@
     {
      "table": "microlab",
      "val_var": "organism",
-     "callback": "transform_fun(comp_na(`!=`, 'no growth'))",
+     "callback": "transform_fun(set_val(TRUE))",
      "class_name": "col_itm"
     }
    ],
@@ -13015,7 +13226,8 @@
      "val_var": "org_itemid",
      "callback": "mimic_sampling",
      "aux_time": "charttime",
-     "class_name": "col_itm"
+     "class_name": "col_itm",
+     "_comment": "org_itemid is used only to load microbiologyevents; missing org_itemid denotes a negative result, not absence of specimen collection"
     }
    ],
    "mimic": [
@@ -13025,7 +13237,8 @@
      "val_var": "org_itemid",
      "callback": "mimic_sampling",
      "aux_time": "charttime",
-     "class_name": "col_itm"
+     "class_name": "col_itm",
+     "_comment": "org_itemid is used only to load microbiologyevents; missing org_itemid denotes a negative result, not absence of specimen collection"
     }
    ],
    "mimic_demo": [
@@ -13033,9 +13246,10 @@
      "table": "microbiologyevents",
      "id_var": "subject_id",
      "val_var": "org_itemid",
-     "callback": "transform_fun(comp_na())",
+     "callback": "mimic_sampling",
      "aux_time": "charttime",
-     "class_name": "col_itm"
+     "class_name": "col_itm",
+     "_comment": "demo and full MIMIC use the same event semantics; negative cultures remain specimen-collection events"
     }
    ]
   }
@@ -13893,12 +14107,15 @@
       "Tidal Volume, Delivered",
       "Vt Spontaneous (mL)"
      ],
-     "_comment": "2026-07-03 semantic coverage review: added delivered/spontaneous observed tidal-volume labels; settings and RSBI-derived labels remain excluded."
+     "callback": "eicu_tidal_volume_mixed_scale",
+     "_comment": "2026-08-03 unit audit: respiratoryCharting has no unit column and these labels mix mL values with L-scale decimals. Normalize per raw row before hourly aggregation using same-stay mL evidence or adult age; preserve explicit paediatric mL and fail closed on ambiguous low values. Settings and RSBI-derived labels remain excluded."
     },
     {
      "ids": "TV",
      "table": "lab",
-     "sub_var": "labname"
+     "sub_var": "labname",
+     "callback": "eicu_tidal_volume_explicit_ml",
+     "_comment": "2026-08-03 reliability-gate fix: lab.TV is an mL tidal-volume channel (median about 500 mL) but contains a sparse implausible low tail. Preserve known paediatric mL values and quarantine positive values below 50 mL for adults or unknown age; never reinterpret this explicitly mL source as litres."
     }
    ],
    "hirid": [
@@ -14055,9 +14272,18 @@
      "ids": [
       "Tidal Volume (set)",
       "Set Vt (Servo,LTV)",
-      "Adult Con Setting Set Vt",
-      "Set Vt (Drager)"
-     ]
+      "Adult Con Setting Set Vt"
+     ],
+     "callback": "eicu_tidal_volume_mixed_scale",
+     "_comment": "2026-08-03 unit audit: non-Drager set labels are predominantly mL but contain unit-ambiguous low values; normalize with same-stay/adult evidence and quarantine unresolved values before aggregation."
+    },
+    {
+     "table": "respiratorycharting",
+     "sub_var": "respchartvaluelabel",
+     "val_var": "respchartvalue",
+     "ids": "Set Vt (Drager)",
+     "callback": "eicu_tidal_volume_drager_l_to_ml",
+     "_comment": "2026-08-03 unit audit: Set Vt (Drager) is predominantly an L-scale interface below 2 (median about 0.473 L), but 26 raw rows >=50 are already mL. Convert only 0<v<=2 x1000, retain >=50, quarantine 2<v<50 and preserve zero before bounds/hourly aggregation."
     }
    ],
    "hirid": [
@@ -14182,7 +14408,7 @@
   "min": 0,
   "max": 10000,
   "aggregate": "sum",
-  "description": "total fluid input per hour — MIIV/MIMIC-III inputevents.amount, AUMC drugitems.fluidin (43-item subset), eICU intakeoutput IV-fluid labels, SIC DataID 2200 FluidPerHour. HiRID pending (needs pharma.fluidamount_calc callback). Per-DB intake capture differs — not perfectly harmonized; see _comment on sic.",
+  "description": "total fluid input volume in each ICU-anchored hour (mL) — MIIV/MIMIC-III interval amounts and AUMC drugitems fluid totals are overlap-allocated with exact volume conservation; eICU uses intakeoutput IV-fluid events and SIC uses native DataID 2200 FluidPerHour. HiRID is unavailable. Per-database intake capture remains source-heterogeneous and requires stratified sensitivity analysis.",
   "category": "output",
   "sources": {
    "miiv": [
@@ -14338,7 +14564,14 @@
      ],
      "table": "inputevents",
      "sub_var": "itemid",
-     "val_var": "amount"
+     "val_var": "amount",
+     "unit_var": "amountuom",
+     "index_var": "starttime",
+     "callback": "distribute_volume_hourly",
+     "end_var": "endtime",
+     "extra_vars": [
+      "endtime"
+     ]
     }
    ],
    "mimic": [
@@ -14479,7 +14712,14 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "val_var": "amount"
+     "val_var": "amount",
+     "unit_var": "amountuom",
+     "index_var": "starttime",
+     "callback": "distribute_volume_hourly",
+     "end_var": "endtime",
+     "extra_vars": [
+      "endtime"
+     ]
     }
    ],
    "mimic_demo": [
@@ -14620,7 +14860,14 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "val_var": "amount"
+     "val_var": "amount",
+     "unit_var": "amountuom",
+     "index_var": "starttime",
+     "callback": "distribute_volume_hourly",
+     "end_var": "endtime",
+     "extra_vars": [
+      "endtime"
+     ]
     }
    ],
    "aumc": [
@@ -14672,7 +14919,15 @@
      ],
      "table": "drugitems",
      "sub_var": "itemid",
-     "val_var": "fluidin"
+     "val_var": "fluidin",
+     "index_var": "start",
+     "callback": "distribute_volume_hourly",
+     "end_var": "stop",
+     "alternate_value_var": "solutionadministered",
+     "extra_vars": [
+      "stop",
+      "solutionadministered"
+     ]
     }
    ],
    "eicu": [
@@ -15378,7 +15633,7 @@
      "sub_var": "variableid",
      "callback": "hirid_urine",
      "class_name": "hrd_itm",
-     "_comment": "2026-07-17 FIX: was 30005110 'Fluid balance' (cumulative NET balance incl. intake/non-urine output — not urine). Corrected to 10020000 'Hourly urine volume' (ml/h rate; official hirid_variable_reference). Callback now integrates rate x interval -> volume."
+     "_comment": "2026-07-30 source contract: 10020000 is directly recorded OUTUrine/h in mL/h (official HiRID reference and benchmark), not a cumulative counter. Publish one hourly-equivalent mL value per bin; derived UO windows apply each recorded rate to its preceding observed chart interval, matching official AKI-EWS backfill semantics, and use exact clock-time overlap. No rate is invented before the first reading or after the last. Descriptive windows require >=50% coverage; KDIGO requires the full 6/12/24h duration. 30005110 remains excluded because it is cumulative total fluid OUT, not urine."
     }
    ],
    "miiv": [
@@ -16739,7 +16994,7 @@
   "max": 50000,
   "description": "D-dimer (blood)",
   "category": "chemistry",
-  "_provenance": "itemids verified against real MIMIC-III/IV d_labitems; eICU labname verified against real lab table. SICdb/AmsterdamUMC pending reference mapping. d_dimer kept MIMIC-only: SIC/AUMC report mg/L (FEU) vs MIMIC ng/mL (DDU) — not unit-comparable.",
+  "_provenance": "MIMIC itemids verified against real MIMIC-III/IV d_labitems. FEU-labelled rows are excluded rather than converted with an invalid universal factor; AUMC/SIC are unavailable until their FEU/DDU assay semantics can be represented explicitly.",
   "sources": {
    "miiv": [
     {
@@ -16749,7 +17004,8 @@
      ],
      "table": "labevents",
      "sub_var": "itemid",
-     "_comment": "2026-07-17: added 51196 (Hematology D-Dimer, ~22.8k rows) - the itemid official mimic-code coagulation.sql actually uses; we had only 50915 (Chemistry). CAVEAT still open: both itemids mix ng/mL (DDU) with 'ng/mL FEU' (~2x) and this concept has no valueuom filter, so the two scales are pooled. FEU/DDU is calibration-dependent - a constant factor would be wrong. Needs a valueuom-aware callback."
+     "callback": "convert_unit(set_val(NA), 'ng/mL', 'FEU')",
+     "_comment": "Both itemids are retained, but valueuom rows containing FEU are set to NA before aggregation. Canonical output is ng/mL DDU only."
     }
    ],
    "mimic": [
@@ -16760,7 +17016,8 @@
      ],
      "table": "labevents",
      "sub_var": "itemid",
-     "_comment": "2026-07-17: added 51196 (Hematology D-Dimer, ~22.8k rows) - the itemid official mimic-code coagulation.sql actually uses; we had only 50915 (Chemistry). CAVEAT still open: both itemids mix ng/mL (DDU) with 'ng/mL FEU' (~2x) and this concept has no valueuom filter, so the two scales are pooled. FEU/DDU is calibration-dependent - a constant factor would be wrong. Needs a valueuom-aware callback."
+     "callback": "convert_unit(set_val(NA), 'ng/mL', 'FEU')",
+     "_comment": "Both itemids are retained, but valueuom rows containing FEU are set to NA before aggregation. Canonical output is ng/mL DDU only."
     }
    ],
    "mimic_demo": [
@@ -16771,17 +17028,8 @@
      ],
      "table": "labevents",
      "sub_var": "itemid",
-     "_comment": "2026-07-17: added 51196 (Hematology D-Dimer, ~22.8k rows) - the itemid official mimic-code coagulation.sql actually uses; we had only 50915 (Chemistry). CAVEAT still open: both itemids mix ng/mL (DDU) with 'ng/mL FEU' (~2x) and this concept has no valueuom filter, so the two scales are pooled. FEU/DDU is calibration-dependent - a constant factor would be wrong. Needs a valueuom-aware callback."
-    }
-   ],
-   "aumc": [
-    {
-     "table": "numericitems",
-     "sub_var": "itemid",
-     "ids": [
-      10393
-     ],
-     "_comment": "2026-07-17 recall: 10393 'D-dimeren (bloed)' (929 rows / 635 adm, median 3.26 mg/L FEU). Concept had no AUMC source. CAVEAT: d_dimer still pools DDU/FEU unresolved across DBs."
+     "callback": "convert_unit(set_val(NA), 'ng/mL', 'FEU')",
+     "_comment": "Both itemids are retained, but valueuom rows containing FEU are set to NA before aggregation. Canonical output is ng/mL DDU only."
     }
    ]
   }
@@ -17136,7 +17384,7 @@
   ],
   "callback": "nlr",
   "class_name": "rec_cncpt",
-  "_comment": " HIRID CAVEAT (verified 2026-07-17, inherited from upstream ricu - NOT introduced here): HiRID's lymph/neut mapping is asymmetric and its data contradicts the official varref. 24000480 'Lymphocytes [#/volume]' is labelled G/l but 62.1% of its 55,229 values are exactly 0 (95.9% <=0.1, p99=0.2) - not a lymphocyte count. 24000550 'Neutrophils/100 leukocytes' is labelled % but only 0.4% of values land in 40-100 (med 9.19; 98.3% <30) - it reads as an absolute count. ricu carries the identical mapping (lymph.hirid with blood_cell_ratio, neut.hirid without), so this is an upstream issue. CONSEQUENCE: this concept is NOT usable on HiRID - _safe_div nulls the 62% zero-denominator rows and the survivors divide by a near-zero. Do not report it for HiRID."
+  "_comment": "HiRID is intentionally unavailable: its candidate lymphocyte and neutrophil variables have contradictory labels, units, and empirical distributions, so no dimensionally reliable ratio can be produced."
  },
  "plr": {
   "unit": [
@@ -17158,7 +17406,7 @@
   ],
   "callback": "plr",
   "class_name": "rec_cncpt",
-  "_comment": "2026-07-17 dimensional fix: PLR = platelets / ABSOLUTE lymphocyte count. `lymph` is a percentage in all 6 DBs, so the absolute count must be reconstructed as lymph% * wbc / 100. The previous plt/lymph% form was off by a patient-dependent factor (~12x) and correlated with WBC. HIRID CAVEAT (verified 2026-07-17, inherited from upstream ricu - NOT introduced here): HiRID's lymph/neut mapping is asymmetric and its data contradicts the official varref. 24000480 'Lymphocytes [#/volume]' is labelled G/l but 62.1% of its 55,229 values are exactly 0 (95.9% <=0.1, p99=0.2) - not a lymphocyte count. 24000550 'Neutrophils/100 leukocytes' is labelled % but only 0.4% of values land in 40-100 (med 9.19; 98.3% <30) - it reads as an absolute count. ricu carries the identical mapping (lymph.hirid with blood_cell_ratio, neut.hirid without), so this is an upstream issue. CONSEQUENCE: this concept is NOT usable on HiRID - _safe_div nulls the 62% zero-denominator rows and the survivors divide by a near-zero. Do not report it for HiRID."
+  "_comment": "PLR = platelets / absolute lymphocyte count; absolute lymphocytes are reconstructed as lymph% * wbc / 100. HiRID is intentionally unavailable because its candidate lymphocyte variable cannot be mapped to a reliable percentage."
  },
  "corrected_calcium": {
   "unit": [

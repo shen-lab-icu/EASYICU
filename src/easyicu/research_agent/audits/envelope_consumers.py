@@ -27,6 +27,7 @@ from .envelope_shadow import (
     canonical_registered_output_table_artifacts,
     compare_fraction_scale_shadow,
     fraction_scale_shadow_blocking_finding,
+    fraction_scale_shadow_observed_findings,
 )
 from .validators import (
     CrossStepRegisteredOutputValidator,
@@ -59,7 +60,29 @@ class StepSummaryFractionEnvelopeDualReader(StepSummaryFractionValidator):
             legacy_findings=retained_legacy,
         )
         if comparison.exact_match:
-            return retained_legacy
+            # The two DECISIONS agree. A canonical normalizer that complained
+            # about the input it was handed is a migration observation, not a
+            # disagreement, and it is recorded rather than allowed to replace a
+            # verdict both views reached.
+            #
+            # MEASURED over every recorded run: 11 distinct steps across 5 of
+            # the 9 tasks died ``contract_failed`` here, and in ALL ELEVEN
+            # ``legacy_findings_sha256 == canonical_findings_sha256`` with zero
+            # findings on both sides. 8 of the 11 never attempted a repair --
+            # correctly, since nothing in the agent's script can reconcile two
+            # host implementations. One of them (m2's feature audit, today) I
+            # verified by hand: both of its count/fraction pairs reconcile to
+            # six decimals, and the canonical normalizer had paired a
+            # stratum-level count with the whole-cohort denominator because it
+            # selects the denominator from a fixed list of column names.
+            return [
+                *retained_legacy,
+                *fraction_scale_shadow_observed_findings(
+                    validator_name=self.name,
+                    step_id=step.step_id,
+                    comparison=comparison,
+                ),
+            ]
         return [
             fraction_scale_shadow_blocking_finding(
                 validator_name=self.name,

@@ -49,12 +49,7 @@ def test_strip_code_fence_handles_leading_prose(ra):
 
 def test_strip_code_fence_python_block(ra):
     helpers = _load_agents_helpers(ra)
-    raw = (
-        "Here you go:\n```python\n"
-        "import pandas as pd\n"
-        "df = pd.read_parquet('x')\n"
-        "```"
-    )
+    raw = "Here you go:\n```python\nimport pandas as pd\ndf = pd.read_parquet('x')\n```"
     out = helpers._strip_code_fence(raw).strip()
     assert out.startswith("import pandas")
 
@@ -205,6 +200,145 @@ def test_planner_uses_enough_completion_budget(ra):
     assert llm.calls[0][1]["max_tokens"] >= 4096
 
 
+def test_planner_retries_primary_cohort_step_with_side_output(ra):
+    """Raw-universe cohort ownership must be repaired before probe execution."""
+
+    schema = ra.schema
+    ctx = schema.ResearchContext(
+        research_question="Describe a closed primary cohort.",
+        cohort=schema.CohortDescriptor(
+            cohort_name="c", database="d", n_patients=1, n_stays=1
+        ),
+        variables=[],
+    )
+    invalid = json.dumps(
+        {
+            "research_question": ctx.research_question,
+            "analysis_type": "descriptive_epidemiology",
+            "steps": [
+                {
+                    "step_id": "01_cohort",
+                    "planned_analysis_role": "auxiliary",
+                    "intent": "Materialize the cohort and report attrition.",
+                    "inputs": [],
+                    "expected_outputs": [
+                        "artifact:analysis_cohort",
+                        "table:cohort_flow",
+                        "table:cohort_summary",
+                    ],
+                    "method": "cohort_definition_and_attrition",
+                }
+            ],
+        }
+    )
+    repaired = json.dumps(
+        {
+            "research_question": ctx.research_question,
+            "analysis_type": "descriptive_epidemiology",
+            "steps": [
+                {
+                    "step_id": "01_cohort",
+                    "planned_analysis_role": "auxiliary",
+                    "intent": "Materialize the cohort and report attrition.",
+                    "inputs": [],
+                    "expected_outputs": [
+                        "artifact:analysis_cohort",
+                        "table:cohort_flow",
+                    ],
+                    "method": "cohort_definition_and_attrition",
+                },
+                {
+                    "step_id": "02_summary",
+                    "planned_analysis_role": "auxiliary",
+                    "intent": "Describe the closed analysis cohort.",
+                    "inputs": ["artifact:analysis_cohort"],
+                    "expected_outputs": ["table:cohort_summary"],
+                    "method": "descriptive",
+                },
+            ],
+        }
+    )
+    llm = ScriptedMockLLMClient([invalid, repaired])
+
+    from easyicu.research_agent.agents.core import PlannerAgent
+
+    plan = PlannerAgent(llm).run(ctx)
+
+    assert len(llm.calls) == 2
+    assert plan.steps[0].expected_outputs == [
+        "artifact:analysis_cohort",
+        "table:cohort_flow",
+    ]
+    assert plan.steps[1].inputs == ["artifact:analysis_cohort"]
+    assert "strict execution boundary" in llm.calls[0][0][-1].content
+    feedback = llm.calls[1][0][-1].content
+    assert "primary-cohort output contract is not executable" in feedback
+    assert "table:cohort_summary" in feedback
+    assert "downstream steps" in feedback
+
+
+def test_planner_retry_projection_keeps_structure_and_bounds_prose() -> None:
+    from easyicu.research_agent.agents.core import (
+        _PLANNER_RETRY_PROJECTION_BYTE_LIMIT,
+        _planner_retry_response_projection,
+    )
+
+    raw = json.dumps(
+        {
+            "analysis_type": "association",
+            "rationale": "long prose " * 5_000,
+            "steps": [
+                {
+                    "step_id": "01_primary",
+                    "planned_analysis_role": "primary",
+                    "intent": "long intent " * 2_000,
+                    "inputs": ["exposure_max", "death"],
+                    "expected_outputs": ["table:adjusted_association_estimates"],
+                    "method": "adjusted_association_models",
+                    "model_requirements": [
+                        {
+                            "requirement_id": "primary",
+                            "outcome": "death",
+                            "exposure_source": "exposure_max",
+                        }
+                    ],
+                }
+            ],
+            "robustness_specs": [
+                {
+                    "spec_id": "complete_case",
+                    "axis": "missing",
+                    "missing_override": {"strategy": "complete_case"},
+                }
+            ],
+            "evalue_conversion_spec": {
+                "baseline_risk_evidence_id": "outcome_rate",
+                "baseline_risk_column": "event_rate",
+                "population_column": "population",
+                "baseline_population": "unexposed",
+            },
+            "subgroup_analysis_spec": {
+                "predictor": "exposure_max",
+                "outcome": "death",
+                "subgroup_columns": ["sex"],
+                "multiplicity_family_id": "secondary:subgroups",
+            },
+        }
+    )
+
+    projected = _planner_retry_response_projection(raw)
+    payload = json.loads(projected)
+
+    assert len(projected.encode("utf-8")) <= _PLANNER_RETRY_PROJECTION_BYTE_LIMIT
+    assert payload["steps"][0]["inputs"] == ["exposure_max", "death"]
+    assert payload["steps"][0]["model_requirements"][0]["outcome"] == "death"
+    assert payload["robustness_specs"][0]["spec_id"] == "complete_case"
+    assert payload["evalue_conversion_spec"]["baseline_population"] == "unexposed"
+    assert payload["subgroup_analysis_spec"]["subgroup_columns"] == ["sex"]
+    assert "rationale" not in payload
+    assert "intent" not in payload["steps"][0]
+
+
 def test_planner_retries_dictionary_concept_absent_from_sealed_typed_input(
     tmp_path,
 ):
@@ -277,6 +411,9 @@ def test_planner_retries_non_column_step_and_model_references(tmp_path) -> None:
             f'"outcome":"{outcome}","outcome_type":"binary",'
             '"method_family":"logistic_regression",'
             f'"exposure_source":"{exposure}",'
+            f'"covariates":[],"model_terms":[{{"name":"{exposure}",'
+            '"role":"exposure","coding":"continuous",'
+            '"transform":"identity"}],'
             '"analysis_role":"primary","analysis_set":"complete_case",'
             '"required_for_step_success":true}]}]}'
         )
@@ -483,8 +620,24 @@ def test_typed_binding_gate_rejects_identity_coordinate_as_raw_step_input(
         robustness_specs=[],
     )
 
-    with pytest.raises(CohortSchemaError, match="raw name 'stay_id'"):
+    with pytest.raises(CohortSchemaError, match="raw name 'stay_id'") as caught:
         validate_plan_typed_bindings_against_context(plan=plan, context=context)
+
+    message = str(caught.value)
+    assert "reserved for host navigation" in message
+    assert "reserved navigation coordinates=['stay_id']" in message
+    assert (
+        "'stay_id'"
+        not in message.split("executable cohort columns=", 1)[1].split(
+            "; reserved navigation coordinates=", 1
+        )[0]
+    )
+
+    from easyicu.research_agent.agents.core import PlannerAgent
+
+    prompt = PlannerAgent.request_messages(context)[1].content
+    assert "HOST NAVIGATION COORDINATES" in prompt
+    assert "not executable analysis fields" in prompt
 
 
 def test_planner_retries_robustness_window_absent_from_sealed_input(tmp_path) -> None:
@@ -512,6 +665,15 @@ def test_planner_retries_robustness_window_absent_from_sealed_input(tmp_path) ->
                 "outcome_type": "binary",
                 "method_family": "logistic_regression",
                 "exposure_source": "lact_max",
+                "covariates": [],
+                "model_terms": [
+                    {
+                        "name": "lact_max",
+                        "role": "exposure",
+                        "coding": "continuous",
+                        "transform": "identity",
+                    }
+                ],
                 "analysis_role": "primary",
                 "analysis_set": "complete_case",
                 "required_for_step_success": True,
@@ -629,6 +791,9 @@ def test_planner_retries_primary_cohort_that_erases_its_closed_comparison(
             '"outcome":"death","outcome_type":"binary",'
             '"method_family":"logistic_regression",'
             '"exposure_source":"lact_max",'
+            '"covariates":[],"model_terms":[{'
+            '"name":"lact_max","role":"exposure",'
+            '"coding":"continuous","transform":"identity"}],'
             '"analysis_role":"primary","analysis_set":"source_aware",'
             '"required_for_step_success":true}]}]}'
         )

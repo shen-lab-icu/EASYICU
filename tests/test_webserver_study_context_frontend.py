@@ -118,8 +118,16 @@ def test_route_handoffs_have_sources_and_viz_mapping_has_its_own_owner() -> None
     assert "registerSource(" not in extraction
     assert "window.EU_EXTRACTION_CONTEXT" in extraction_owner
     assert "window.EU_STUDY_CONTEXT.registerSource('extraction'" in extraction_owner
-    for route in ("patient", "cohort", "crossdb"):
+    # crossdb moved out of screens-viz.js into its own owner files; its handoff
+    # marker moved with it. Assert per-owner rather than in the shell file, or
+    # the test drifts into demanding a layering violation.
+    for route in ("patient", "cohort"):
         assert f'data-study-source="{route}" data-study-target="agent"' in viz
+    assert (
+        'data-study-source="crossdb" data-study-target="agent"'
+        in _read("js/screens-viz-crossdb-results.js")
+    )
+    for route in ("patient", "cohort", "crossdb"):
         assert route in viz_owner
     assert "window.EU_VIZ_CONTEXT" in viz
     assert "registerSource(" not in viz
@@ -178,7 +186,13 @@ def test_crossdb_handoff_is_plan_only_and_non_crossdb_routes_clear_the_flag() ->
     extraction_owner = _read("js/screens-extraction-study-context.js")
     guided_owner = _read("js/screens-guided-study-context.js")
     agent_owner = _read("js/screens-agent-study-context.js")
-    assert "Create cross-DB analysis plan" in viz
+    # The plan-only handoff button lives with the crossdb results owner. It had
+    # silently degraded to a bare data-nav during the owner split, so nothing
+    # ever set crossdb_plan_only and the Agent-side gate below was unreachable.
+    crossdb_results = _read("js/screens-viz-crossdb-results.js")
+    assert "Create cross-DB analysis plan" in crossdb_results
+    assert 'data-study-handoff data-study-source="crossdb"' in crossdb_results
+    assert 'data-nav="agent"' not in crossdb_results
     assert "crossdb_plan_only" in viz_owner
     assert "confirmations.crossdb_plan_only = route === 'crossdb'" in viz_owner
     assert "ROUTE_CONFIRMATION_FIELDS.forEach(key => delete confirmations[key])" in viz_owner
@@ -192,9 +206,11 @@ def test_nonfatal_agent_submission_warnings_are_visible_in_both_surfaces() -> No
     guided = _read("js/screens-guided.js")
     agent = _read("js/screens-agent.js")
     owner = _read("js/screens-agent-study-context.js")
-    assert "context_sync_warning" in owner
     assert "audit_warning" in owner
-    assert "StudyContext recovery pointer did not synchronize" in owner
+    # A run whose active-job reservation failed is now refused outright, so
+    # there is deliberately no "the pointer did not sync but it runs anyway"
+    # warning left for this screen to render.
+    assert "context_sync_warning" not in owner
     assert "submissionWarning(r)" in agent
     assert "warningNote(agRun.warning)" in agent
     assert "submissionWarning(r)" in guided

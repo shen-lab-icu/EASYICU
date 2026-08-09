@@ -31,11 +31,18 @@ Public API
 ----------
 ``ResearchAgentPipeline`` is the single end-to-end entry point::
 
-    from easyicu.research_agent import ResearchAgentPipeline, MockLLMClient
+    from easyicu.research_agent import (
+        MockLLMClient,
+        PipelineConfig,
+        PipelineServices,
+        ResearchAgentPipeline,
+    )
 
     pipeline = ResearchAgentPipeline(
-        workdir="./research_output",
-        llm=MockLLMClient(),  # tests/demo only; use a real client for research runs
+        config=PipelineConfig(workdir="./research_output"),
+        services=PipelineServices(
+            llm=MockLLMClient(),  # tests/demo only; use a real client for research runs
+        ),
     )
     result = pipeline.run(
         question="Is admission SOFA score associated with ICU mortality?",
@@ -62,6 +69,7 @@ __all__ = [
     # Schemas
     "ResearchContext",
     "ConceptDescriptor",
+    "EndpointSpec",
     "FixedWindowTrajectoryMetadata",
     "ClusterSelectionCandidate",
     "ClusterSelectionManifest",
@@ -273,6 +281,7 @@ __all__ = [
     "apply_publication_style",
     "save_publication_figure",
     "audit_publication_exports",
+    "audit_publication_exports_json",
     "EvidenceStore",
     "EvidenceEnforcementMode",
     "EvidenceEnforcementError",
@@ -393,11 +402,6 @@ __all__ = [
     "build_notebook",
     "build_requirements_lockfile",
     "write_notebook",
-    # Survival analysis (O19)
-    "CoxCoefficient",
-    "CoxFitResult",
-    "fit_cox_model",
-    "fit_fine_gray_subdistribution",
     # Missing data (O25)
     "MICEImputationResult",
     "TippingPointResult",
@@ -429,6 +433,8 @@ __all__ = [
     "build_execution_replay",
     # Pipeline
     "ResearchAgentPipeline",
+    "PipelineConfig",
+    "PipelineServices",
     "SubmissionProfile",
     "NPJ_DM_2026_05",
     "NPJ_DM_2026_06",
@@ -449,62 +455,6 @@ __all__ = [
     "prompt_pack_files",
 ]
 
-# Schemas are dependency-free, safe to import eagerly.
-from .schema import (
-    ResearchContext,
-    ConceptDescriptor,
-    FixedWindowTrajectoryMetadata,
-    ClusterSelectionCandidate,
-    ClusterSelectionManifest,
-    CohortDescriptor,
-    TimeWindow,
-    TemporalConstraint,
-    PlannedAnalysisRole,
-    AnalysisStep,
-    AnalysisPlan,
-    EvidenceRef,
-    ConceptRef,
-    ClinicalSemanticsResolution,
-    DataExtractionRequest,
-    DataExtractionResult,
-    StatisticalAnalysisRequest,
-    StatisticalAnalysisResult,
-    VisualizationRequest,
-    VisualizationResult,
-    ManuscriptDraftPacket,
-    HypothesisBlueprint,
-    CritiqueReport,
-    ReflectionMemoryEntry,
-    AgentRuntimeState,
-    EvidenceRecord,
-    AnalysisManifest,
-    PipelineResult,
-    CostRecord,
-    PaperClaimRecord,
-    PaperProfile,
-    PaperReplicationSpec,
-    PaperResultLedger,
-    ReplicationDeviationItem,
-    ReplicationDeviationReport,
-    ProbeSummary,
-    StepRecord,
-)
-from .icu_rules import (
-    COMPOSITE_EXPOSURE_CONSTITUENTS,
-    ICU_RULES,
-    ConceptMethodologyProfile,
-    VariableKind,
-    composite_constituents,
-    concept_methodology_profile,
-    concept_methodology_tag,
-    detect_outcome_as_predictor,
-    detect_overadjustment,
-    is_derived_exposure,
-    outcome_leakage_caution,
-    overadjustment_caution,
-    treatment_mediator_caution,
-)
-
 
 def __getattr__(name: str):
     """Lazy import of heavier components.
@@ -513,6 +463,67 @@ def __getattr__(name: str):
     the module installed does not pull in pandas-heavy code paths or
     optional LLM SDKs unless the user actually uses them.
     """
+    if name in {
+        "ResearchContext",
+        "ConceptDescriptor",
+        "EndpointSpec",
+        "FixedWindowTrajectoryMetadata",
+        "ClusterSelectionCandidate",
+        "ClusterSelectionManifest",
+        "CohortDescriptor",
+        "TimeWindow",
+        "TemporalConstraint",
+        "PlannedAnalysisRole",
+        "AnalysisStep",
+        "AnalysisPlan",
+        "EvidenceRef",
+        "ConceptRef",
+        "ClinicalSemanticsResolution",
+        "DataExtractionRequest",
+        "DataExtractionResult",
+        "StatisticalAnalysisRequest",
+        "StatisticalAnalysisResult",
+        "VisualizationRequest",
+        "VisualizationResult",
+        "ManuscriptDraftPacket",
+        "HypothesisBlueprint",
+        "CritiqueReport",
+        "ReflectionMemoryEntry",
+        "AgentRuntimeState",
+        "EvidenceRecord",
+        "AnalysisManifest",
+        "PipelineResult",
+        "CostRecord",
+        "PaperClaimRecord",
+        "PaperProfile",
+        "PaperReplicationSpec",
+        "PaperResultLedger",
+        "ReplicationDeviationItem",
+        "ReplicationDeviationReport",
+        "ProbeSummary",
+        "StepRecord",
+    }:
+        from . import schema as _schema
+
+        return getattr(_schema, name)
+    if name in {
+        "COMPOSITE_EXPOSURE_CONSTITUENTS",
+        "ICU_RULES",
+        "ConceptMethodologyProfile",
+        "VariableKind",
+        "composite_constituents",
+        "concept_methodology_profile",
+        "concept_methodology_tag",
+        "detect_outcome_as_predictor",
+        "detect_overadjustment",
+        "is_derived_exposure",
+        "outcome_leakage_caution",
+        "overadjustment_caution",
+        "treatment_mediator_caution",
+    }:
+        from . import icu_rules as _icu_rules
+
+        return getattr(_icu_rules, name)
     if name in {
         "KnowHowCard",
         "KnowHowCitation",
@@ -805,6 +816,7 @@ def __getattr__(name: str):
         "apply_publication_style",
         "save_publication_figure",
         "audit_publication_exports",
+        "audit_publication_exports_json",
     }:
         from .figures import publication as _pubfig
 
@@ -983,15 +995,6 @@ def __getattr__(name: str):
 
         return getattr(_repro_art, name)
     if name in {
-        "CoxCoefficient",
-        "CoxFitResult",
-        "fit_cox_model",
-        "fit_fine_gray_subdistribution",
-    }:
-        from .methods import survival as _surv
-
-        return getattr(_surv, name)
-    if name in {
         "MICEImputationResult",
         "TippingPointResult",
         "mice_impute",
@@ -1043,6 +1046,10 @@ def __getattr__(name: str):
         from .orchestration.config import PipelineConfig
 
         return PipelineConfig
+    if name == "PipelineServices":
+        from .orchestration.services import PipelineServices
+
+        return PipelineServices
     if name in {
         "SubmissionProfile",
         "NPJ_DM_2026_05",

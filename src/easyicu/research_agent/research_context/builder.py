@@ -32,6 +32,7 @@ from ..schema import (
     AggregationRule,
     CohortDescriptor,
     ConceptDescriptor,
+    EndpointSpec,
     MissingnessProfile,
     ResearchContext,
     TimeWindow,
@@ -63,6 +64,9 @@ from .typed import (
     project_research_context_variables,
 )
 from ..concept_availability import normalize_database_name
+from .cohort_granularity import resolve_cohort_granularity
+from .observation_semantics import compile_observation_semantics
+from .representation_semantics import compile_wide_representation_semantics
 from .temporal_semantics import (
     ConceptValidationLayer,
     ICUEpisodeResolver,
@@ -204,6 +208,26 @@ def _compute_missingness_test_metadata(df: pd.DataFrame) -> Dict[str, Any]:
             "note": "insufficient_complete_support",
         }
     panel = numeric[cols[: min(len(cols), 8)]]
+    # Little's test is invariant to an affine rescaling of each variable.
+    # Standardising here prevents a nearly singular or mixed-scale ICU panel
+    # from making the EM covariance iteration overflow.  Columns with no
+    # observed variance carry no information for this screen and are omitted.
+    means = panel.mean(skipna=True)
+    scales = panel.std(skipna=True, ddof=0)
+    stable_columns = [
+        column
+        for column in panel.columns
+        if np.isfinite(means[column])
+        and np.isfinite(scales[column])
+        and float(scales[column]) > np.finfo(float).eps
+    ]
+    panel = (panel[stable_columns] - means[stable_columns]) / scales[stable_columns]
+    if panel.shape[1] < 2:
+        return {
+            "name": "not_run",
+            "p_value": None,
+            "note": "fewer_than_two_nonconstant_incomplete_numeric_variables",
+        }
     complete = panel.dropna()
     if len(complete) < max(10, panel.shape[1] + 2):
         return {
@@ -216,7 +240,20 @@ def _compute_missingness_test_metadata(df: pd.DataFrame) -> Dict[str, Any]:
     except Exception:
         return {"name": "not_run", "p_value": None, "note": "scipy_unavailable"}
 
-    mu, cov = _estimate_mvn_with_em(panel.to_numpy(dtype=float))
+    try:
+        mu, cov = _estimate_mvn_with_em(panel.to_numpy(dtype=float))
+    except (FloatingPointError, np.linalg.LinAlgError, ValueError):
+        return {
+            "name": "not_run",
+            "p_value": None,
+            "note": "numerically_unstable_mcar_screen",
+        }
+    if not np.isfinite(mu).all() or not np.isfinite(cov).all():
+        return {
+            "name": "not_run",
+            "p_value": None,
+            "note": "nonfinite_mcar_estimate",
+        }
 
     pattern_df = panel.isna().astype(int)
     patterns = pattern_df.astype(str).agg("".join, axis=1)
@@ -287,35 +324,41 @@ def _estimate_mvn_with_em(
     for _ in range(max_iter):
         expected_sum = np.zeros(p, dtype=float)
         second_sum = np.zeros((p, p), dtype=float)
-        for obs, mis, rows in pattern_groups:
-            group_n = len(rows)
-            if len(mis) == 0:
-                expected = rows.astype(float, copy=False)
-                expected_sum += expected.sum(axis=0)
-                second_sum += expected.T @ expected
-            elif len(obs) == 0:
-                expected_sum += group_n * mu
-                second_sum += group_n * (cov + np.outer(mu, mu))
-            else:
-                sigma_oo = cov[np.ix_(obs, obs)] + np.eye(len(obs)) * 1e-8
-                sigma_mo = cov[np.ix_(mis, obs)]
-                sigma_om = cov[np.ix_(obs, mis)]
-                sigma_mm = cov[np.ix_(mis, mis)]
-                inv_oo = np.linalg.pinv(sigma_oo)
-                conditional_weights = sigma_mo @ inv_oo
-                cond_cov = sigma_mm - conditional_weights @ sigma_om
+        with np.errstate(over="raise", invalid="raise", divide="raise"):
+            for obs, mis, rows in pattern_groups:
+                group_n = len(rows)
+                if len(mis) == 0:
+                    expected = rows.astype(float, copy=False)
+                    expected_sum += expected.sum(axis=0)
+                    second_sum += expected.T @ expected
+                elif len(obs) == 0:
+                    expected_sum += group_n * mu
+                    second_sum += group_n * (cov + np.outer(mu, mu))
+                else:
+                    sigma_oo = cov[np.ix_(obs, obs)] + np.eye(len(obs)) * 1e-8
+                    sigma_mo = cov[np.ix_(mis, obs)]
+                    sigma_om = cov[np.ix_(obs, mis)]
+                    sigma_mm = cov[np.ix_(mis, mis)]
+                    inv_oo = np.linalg.pinv(sigma_oo)
+                    conditional_weights = sigma_mo @ inv_oo
+                    cond_cov = sigma_mm - conditional_weights @ sigma_om
 
-                expected = rows.copy().astype(float)
-                expected[:, mis] = (
-                    mu[mis] + (rows[:, obs] - mu[obs]) @ conditional_weights.T
-                )
-                expected_sum += expected.sum(axis=0)
-                second_sum += expected.T @ expected
-                second_sum[np.ix_(mis, mis)] += group_n * cond_cov
+                    expected = rows.copy().astype(float)
+                    expected[:, mis] = (
+                        mu[mis] + (rows[:, obs] - mu[obs]) @ conditional_weights.T
+                    )
+                    expected_sum += expected.sum(axis=0)
+                    second_sum += expected.T @ expected
+                    second_sum[np.ix_(mis, mis)] += group_n * cond_cov
 
-        mu_new = expected_sum / n
-        cov_new = second_sum / n - np.outer(mu_new, mu_new)
+            mu_new = expected_sum / n
+            cov_new = second_sum / n - np.outer(mu_new, mu_new)
         cov_new = (cov_new + cov_new.T) / 2.0
+        eigenvalues, eigenvectors = np.linalg.eigh(cov_new)
+        covariance_floor = 1e-8
+        cov_new = (eigenvectors * np.maximum(eigenvalues, covariance_floor)) @ (
+            eigenvectors.T
+        )
         cov_new += np.eye(p) * 1e-6
 
         if np.max(np.abs(mu_new - mu)) < tol and np.max(np.abs(cov_new - cov)) < tol:
@@ -435,6 +478,7 @@ def build_research_context(
     inclusion_criteria: Optional[Sequence[str]] = None,
     exclusion_criteria: Optional[Sequence[str]] = None,
     target_outcome: Optional[str] = None,
+    endpoint: Optional[EndpointSpec] = None,
     primary_exposure: Optional[str] = None,
     cross_database_validation: Optional[Sequence[str]] = None,
     id_columns: Optional[Sequence[str]] = None,
@@ -545,17 +589,16 @@ def build_research_context(
         cohort_path=cohort_path_str,
     )
 
-    n_patients = (
-        _count_unique(df, episode.id_columns[:1])
-        if episode.id_columns
-        else int(len(df))
+    granularity = resolve_cohort_granularity(
+        frame=df,
+        id_columns=episode.id_columns,
     )
     n_stays = int(len(df))
 
     cohort_desc = CohortDescriptor(
         cohort_name=cohort_name,
         database=database,
-        n_patients=n_patients,
+        n_patients=granularity.n_patients,
         n_stays=n_stays,
         inclusion_criteria=list(inclusion_criteria or []),
         exclusion_criteria=list(exclusion_criteria or []),
@@ -564,6 +607,7 @@ def build_research_context(
         outcome_columns=episode.outcome_columns,
         provenance={
             **episode.provenance,
+            **granularity.provenance(),
             "inclusion_criteria": list(inclusion_criteria or []),
             "exclusion_criteria": list(exclusion_criteria or []),
             **(
@@ -612,6 +656,11 @@ def build_research_context(
             descriptors=descriptors,
             provenance=legacy_materialization_provenance,
         )
+    descriptors = compile_wide_representation_semantics(descriptors)
+    descriptors = compile_observation_semantics(
+        frame=df,
+        descriptors=descriptors,
+    )
 
     prefs_obj = (
         user_preferences
@@ -642,6 +691,12 @@ def build_research_context(
         time_windows=windows,
         temporal_constraints=temporal_constraints,
         target_outcome=target_outcome,
+        # Passed through exactly as declared. This builder knows the column
+        # names, the dtypes and the order they arrived in -- which is precisely
+        # why it must not consult any of them to fill this in. Every one of the
+        # four defects this type exists for came from a layer that had those
+        # signals and used them.
+        endpoint=endpoint,
         primary_exposure=primary_exposure,
         cross_database_validation=list(cross_database_validation or []),
         cohort_parquet=cohort_path,
@@ -830,15 +885,6 @@ def _guess_outcome_columns(df: pd.DataFrame) -> List[str]:
         elif cl.startswith("outcome_"):
             out.append(c)
     return out
-
-
-def _count_unique(df: pd.DataFrame, cols: Sequence[str]) -> int:
-    if not cols:
-        return int(len(df))
-    try:
-        return int(df[list(cols)].drop_duplicates().shape[0])
-    except Exception:
-        return int(len(df))
 
 
 def _infer_outcome_semantics(
@@ -1091,18 +1137,19 @@ def build_naive_research_context(
     ):
         out_cols.append(target_outcome)
 
-    n_patients = _count_unique(df, id_cols[:1]) if id_cols else int(len(df))
+    granularity = resolve_cohort_granularity(frame=df, id_columns=id_cols)
     n_stays = int(len(df))
     cohort_desc = CohortDescriptor(
         cohort_name=cohort_name,
         database=database,
-        n_patients=n_patients,
+        n_patients=granularity.n_patients,
         n_stays=n_stays,
         inclusion_criteria=list(inclusion_criteria or []),
         exclusion_criteria=list(exclusion_criteria or []),
         id_columns=id_cols,
         time_columns=time_cols,
         outcome_columns=out_cols,
+        provenance=granularity.provenance(),
     )
 
     descriptors: List[ConceptDescriptor] = []

@@ -15,7 +15,10 @@ from typing import Any, Dict, List, Tuple
 from easyicu.concept import catalog as concept_catalog
 from easyicu.webserver import dataio
 from easyicu.webserver import sources as source_store
+from easyicu.webserver.patient_drilldown import coverage as _feature_coverage
 from easyicu.webserver.patient_drilldown import eligibility as _eligibility
+from easyicu.webserver import entity_ids as _entity_ids
+from easyicu.webserver.patient_drilldown import feature_detail as _feature_detail
 from easyicu.webserver.patient_drilldown import navigation as _navigation
 
 _eligibility_flow_payload = _eligibility._eligibility_flow_payload
@@ -43,17 +46,7 @@ _SIGNAL_SPECS = (
     ("spo2", "SpO2", "%"),
     ("temp", "Temp", "deg C"),
 )
-_TIME_COLUMNS = (
-    "charttime",
-    "time",
-    "datetime",
-    "timestamp",
-    "starttime",
-    "endtime",
-    "hour",
-    "measuredat_minutes",
-    "observationoffset",
-)
+_TIME_COLUMNS = _feature_coverage.TIME_COLUMNS
 _ID_COLUMNS = {"stay_id", "subject_id", "hadm_id"}
 _DIRECT_IDENTIFIER_COLUMN_KEYS = {
     "stayid",
@@ -250,9 +243,7 @@ def patient_review_entity(body: Dict[str, Any]) -> Dict[str, Any]:
     death_by_entity = dataio._stay_bool(outcome, "death", missing_false=True)
     los_by_entity = dataio._stay_numeric(outcome, "los_icu", "median")
     sofa_by_entity = dataio._stay_numeric(sofa2, "sofa2", "max")
-    sepsis_by_entity = dataio._stay_bool(
-        sepsis, "sep3_sofa2", missing_false=True
-    )
+    sepsis_by_entity = dataio._stay_bool(sepsis, "sep3_sofa2", missing_false=True)
     for entity_id in comparison_ids:
         if outcome is not None and not outcome.empty:
             death_by_entity.setdefault(entity_id, False)
@@ -323,14 +314,10 @@ def patient_review_table_preview(body: Dict[str, Any]) -> Dict[str, Any]:
         module,
     )
     if not previews:
-        raise PatientReviewError(
-            {"error": "unknown_table_module", "module": module}
-        )
+        raise PatientReviewError({"error": "unknown_table_module", "module": module})
     preview = previews[0]
     if preview.get("error_code"):
-        raise PatientReviewError(
-            {"error": preview["error_code"], "module": module}
-        )
+        raise PatientReviewError({"error": preview["error_code"], "module": module})
     return {
         "ok": True,
         "mode": "real",
@@ -346,6 +333,36 @@ def patient_review_table_preview(body: Dict[str, Any]) -> Dict[str, Any]:
             "payload_scope": "one_bounded_pseudonymous_module_table_page",
         },
     }
+
+
+def patient_review_feature(body: Dict[str, Any]) -> Dict[str, Any]:
+    """Return one lazy feature for one verified pseudonymous entity."""
+
+    _source, desc = _resolve_registered_source(body)
+    path = Path(str(desc.get("path") or "")).expanduser()
+    item = _entity_index_item(desc)
+    total_entities = _entity_index_total(desc, item)
+    ordinal = _strict_positive_int(body.get("entity_ordinal"))
+    requested_ref = str(body.get("entity_ref") or "").strip()
+    if ordinal is None or ordinal > total_entities or not requested_ref:
+        raise PatientReviewError({"error": "entity_ref_and_ordinal_required"})
+    rows = _read_entity_index_rows(path, item, offset=ordinal - 1, nrows=1)
+    if not rows:
+        raise PatientReviewError({"error": "unknown_entity_ordinal"})
+    selected_ordinal, entity_id, _row = rows[0]
+    if selected_ordinal != ordinal or _entity_ref(path, entity_id) != requested_ref:
+        raise PatientReviewError({"error": "entity_ref_ordinal_mismatch"})
+    try:
+        return _feature_detail.load_feature_detail(
+            export_path=path,
+            description=desc,
+            entity_id=entity_id,
+            entity_ref=requested_ref,
+            entity_ordinal=selected_ordinal,
+            feature=str(body.get("feature") or ""),
+        )
+    except _feature_detail.FeatureDetailError as exc:
+        raise PatientReviewError(exc.detail) from exc
 
 
 def patient_review_drilldown(body: Dict[str, Any]) -> Dict[str, Any]:
@@ -491,12 +508,21 @@ def patient_review_drilldown(body: Dict[str, Any]) -> Dict[str, Any]:
         randomized=bool(navigation_request["randomized"]),
     )
     eligibility_flow = _eligibility_flow_payload(path, desc, summary)
-    module_profiles = _module_profiles(desc, review_frames, entity_set)
+    feature_coverage = _feature_coverage.build_feature_coverage(path, desc)
+    module_profiles = _feature_coverage.apply_to_module_profiles(
+        _module_profiles(desc, review_frames, entity_set),
+        feature_coverage,
+    )
     time_lanes = _time_lane_payloads(review_frames, selected_id)
     quality_metrics = _quality_metrics_payload(review_frames, entity_set)
     quality = _quality_from_module_profiles(module_profiles)
     data_tables = _data_table_review_payload(
-        path, desc, module_profiles, summary, table_paging
+        path,
+        desc,
+        module_profiles,
+        summary,
+        table_paging,
+        feature_coverage,
     )
     trajectory_review = _trajectory_review_payload(
         time_lanes, selected, entities, quality_metrics, review_frames, path, entity_ids
@@ -540,6 +566,7 @@ def patient_review_drilldown(body: Dict[str, Any]) -> Dict[str, Any]:
         "summary": summary,
         "eligibility_flow": eligibility_flow,
         "module_profiles": module_profiles,
+        "feature_coverage": feature_coverage,
         "entities": entities,
         "entity_navigation": entity_navigation,
         "selected": selected,
@@ -619,22 +646,45 @@ def _read_module_frame(
     if not file_meta:
         return None
     file_name = str(file_meta.get("file") or "")
-    columns = [
-        c for c in _MODULE_COLUMNS[module] if c in (file_meta.get("columns") or [])
-    ]
-    if "stay_id" not in columns:
+    available_columns = [str(column) for column in file_meta.get("columns") or []]
+    entity_column = _entity_ids.resolve_entity_id_column(available_columns)
+    if not entity_column:
         return None
-    return _read_selected_columns(path / file_name, columns, stay_ids=stay_ids)
+    columns = [
+        c
+        for c in _MODULE_COLUMNS[module]
+        if c != "stay_id" and c in available_columns
+    ]
+    columns.insert(0, entity_column)
+    frame = _read_selected_columns(
+        path / file_name,
+        columns,
+        stay_ids=stay_ids,
+        entity_column=entity_column,
+    )
+    return _entity_ids.canonicalize_entity_frame(frame, entity_column)
 
 
 def _fallback_entity_frame(path: Path, desc: Dict[str, Any]) -> Any:
     file_meta = next(
-        (f for f in desc.get("files") or [] if "stay_id" in (f.get("columns") or [])),
+        (
+            f
+            for f in desc.get("files") or []
+            if _entity_ids.resolve_entity_id_column(f.get("columns") or [])
+        ),
         None,
     )
     if not file_meta:
         return None
-    return _read_selected_columns(path / str(file_meta.get("file") or ""), ["stay_id"])
+    entity_column = _entity_ids.resolve_entity_id_column(
+        file_meta.get("columns") or []
+    )
+    frame = _read_selected_columns(
+        path / str(file_meta.get("file") or ""),
+        [str(entity_column)],
+        entity_column=str(entity_column),
+    )
+    return _entity_ids.canonicalize_entity_frame(frame, str(entity_column))
 
 
 def _entity_index_item(desc: Dict[str, Any]) -> Dict[str, Any]:
@@ -644,7 +694,7 @@ def _entity_index_item(desc: Dict[str, Any]) -> Dict[str, Any]:
             row
             for row in desc.get("files") or []
             if row.get("module") == "demographics"
-            and "stay_id" in (row.get("columns") or [])
+            and _entity_ids.resolve_entity_id_column(row.get("columns") or [])
         ),
         None,
     )
@@ -654,9 +704,7 @@ def _entity_index_item(desc: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _entity_index_total(desc: Dict[str, Any], item: Dict[str, Any]) -> int:
-    total = int(
-        (desc.get("summary") or {}).get("stays") or item.get("rows") or 0
-    )
+    total = int((desc.get("summary") or {}).get("stays") or item.get("rows") or 0)
     if total <= 0:
         raise PatientReviewError({"error": "no_entity_denominator"})
     return total
@@ -670,12 +718,13 @@ def _read_entity_index_rows(
     nrows: int,
     include_demographics: bool = False,
 ) -> List[Tuple[int, str, Any]]:
-    columns = ["stay_id"]
+    entity_column = _entity_ids.resolve_entity_id_column(item.get("columns") or [])
+    if not entity_column:
+        raise PatientReviewError({"error": "stable_entity_index_unavailable"})
+    columns = [entity_column]
     if include_demographics:
         columns.extend(
-            column
-            for column in ("age", "sex")
-            if column in (item.get("columns") or [])
+            column for column in ("age", "sex") if column in (item.get("columns") or [])
         )
     try:
         frame = _read_table_preview(
@@ -691,7 +740,7 @@ def _read_entity_index_rows(
     rows: List[Tuple[int, str, Any]] = []
     seen: set[str] = set()
     for position, (_index, row) in enumerate(frame.iterrows(), start=1):
-        entity_id = dataio._norm_id(row.get("stay_id"))
+        entity_id = dataio._norm_id(row.get(entity_column))
         if not entity_id or entity_id in seen:
             raise PatientReviewError({"error": "unstable_entity_index"})
         seen.add(entity_id)
@@ -710,15 +759,19 @@ def _strict_positive_int(value: Any) -> int | None:
 
 
 def _read_selected_columns(
-    path: Path, columns: List[str], stay_ids: set[str] | None = None
+    path: Path,
+    columns: List[str],
+    stay_ids: set[str] | None = None,
+    *,
+    entity_column: str = "stay_id",
 ) -> Any:
     import pandas as pd
 
     suffix = path.suffix.lower()
     if suffix == ".parquet":
         filters = (
-            _stay_id_filters(path, stay_ids)
-            if stay_ids and "stay_id" in columns
+            _entity_id_filters(path, entity_column, stay_ids)
+            if stay_ids and entity_column in columns
             else None
         )
         if filters:
@@ -728,22 +781,22 @@ def _read_selected_columns(
         frame = pd.read_excel(path, usecols=columns)
     else:
         frame = pd.read_csv(path, usecols=columns)
-    if stay_ids and "stay_id" in frame.columns:
+    if stay_ids and entity_column in frame.columns:
         frame = frame.copy()
-        frame["stay_id"] = frame["stay_id"].map(dataio._norm_id)
-        frame = frame[frame["stay_id"].isin(stay_ids)]
+        frame[entity_column] = frame[entity_column].map(dataio._norm_id)
+        frame = frame[frame[entity_column].isin(stay_ids)]
     return frame
 
 
-def _stay_id_filters(
-    path: Path, stay_ids: set[str]
+def _entity_id_filters(
+    path: Path, entity_column: str, stay_ids: set[str]
 ) -> List[Tuple[str, str, List[Any]]] | None:
     values: List[Any]
     try:
         import pyarrow.parquet as pq
         import pyarrow.types as pat
 
-        field = pq.ParquetFile(path).schema_arrow.field("stay_id")
+        field = pq.ParquetFile(path).schema_arrow.field(entity_column)
         if pat.is_integer(field.type):
             values = [int(value) for value in stay_ids if str(value).isdigit()]
         elif pat.is_floating(field.type):
@@ -754,7 +807,7 @@ def _stay_id_filters(
         values = [str(value) for value in stay_ids if str(value)]
     if not values:
         return None
-    return [("stay_id", "in", values)]
+    return [(entity_column, "in", values)]
 
 
 def _is_number_like(value: Any) -> bool:
@@ -801,11 +854,14 @@ def _read_review_frames(
     for item in desc.get("files") or []:
         module = str(item.get("module") or "")
         columns = [str(col) for col in (item.get("columns") or [])]
-        if not module or module not in _READ_MODULES or "stay_id" not in columns:
+        entity_column = _entity_ids.resolve_entity_id_column(columns)
+        if not module or module not in _READ_MODULES or not entity_column:
             continue
         feature_cols = _feature_columns(columns)
         time_cols = [col for col in _TIME_COLUMNS if col in columns]
-        selected_columns = _ordered_unique(["stay_id", *time_cols, *feature_cols])
+        selected_columns = _ordered_unique(
+            [entity_column, *time_cols, *feature_cols]
+        )
         if len(selected_columns) <= 1:
             continue
         try:
@@ -813,15 +869,17 @@ def _read_review_frames(
                 path / str(item.get("file") or ""),
                 selected_columns,
                 stay_ids=entity_set,
+                entity_column=entity_column,
             )
         except Exception:
             continue
         if (
             frame is None
             or getattr(frame, "empty", True)
-            or "stay_id" not in frame.columns
+            or entity_column not in frame.columns
         ):
             continue
+        frame = _entity_ids.canonicalize_entity_frame(frame, entity_column)
         frame = frame.copy()
         frame["stay_id"] = frame["stay_id"].map(dataio._norm_id)
         frame = frame[frame["stay_id"].isin(entity_set)]
@@ -1053,6 +1111,46 @@ def _bounded_signal_indices(point_count: int) -> List[int]:
     return [(index * last) // intervals for index in range(_MAX_SIGNAL_POINTS)]
 
 
+def _time_axis_payload(time_col: str, times: List[Any]) -> Dict[str, str]:
+    """Describe the source time coordinate without inventing ICU-relative units."""
+    lowered = str(time_col or "").strip().lower()
+    numeric = bool(times) and all(
+        isinstance(value, (int, float)) and not isinstance(value, bool)
+        for value in times
+    )
+    if lowered == "hour" or (lowered == "charttime" and numeric):
+        return {
+            "kind": "relative_hours",
+            "label_en": "ICU hour",
+            "label_zh": "ICU 入科后小时",
+            "unit": "hour",
+            "source_column": lowered,
+        }
+    if lowered in {"measuredat_minutes", "observationoffset"}:
+        return {
+            "kind": "relative_minutes",
+            "label_en": "ICU hour",
+            "label_zh": "ICU 入科后小时",
+            "unit": "minute",
+            "source_column": lowered,
+        }
+    if numeric:
+        return {
+            "kind": "recorded_offset",
+            "label_en": "Recorded offset",
+            "label_zh": "源记录偏移",
+            "unit": "",
+            "source_column": lowered,
+        }
+    return {
+        "kind": "datetime",
+        "label_en": "Recorded time",
+        "label_zh": "源记录时间",
+        "unit": "",
+        "source_column": lowered,
+    }
+
+
 def _time_lane_payloads(
     review_frames: List[Dict[str, Any]], entity_id: str
 ) -> List[Dict[str, Any]]:
@@ -1085,6 +1183,7 @@ def _time_lane_payloads(
                     "time_indexed": bool(time_col),
                     "values": values,
                     "times": times,
+                    "time_axis": _time_axis_payload(str(time_col), times),
                     "point_count": point_count,
                     "current": all_values[-1],
                     "min": round(min(all_values), 3),
@@ -1261,18 +1360,30 @@ def _data_table_review_payload(
     module_profiles: List[Dict[str, Any]],
     summary: Dict[str, Any],
     table_paging: Dict[str, Any],
+    feature_coverage: Dict[str, Any],
 ) -> Dict[str, Any]:
     """Mirror the old Data Tables review contract with bounded local previews."""
     module_count = len(
-        [row for row in module_profiles if int(row.get("feature_count") or 0) > 0]
+        [
+            row
+            for row in module_profiles
+            if int(row.get("catalog_feature_count") or row.get("feature_count") or 0)
+            > 0
+        ]
     )
-    feature_count = sum(int(row.get("feature_count") or 0) for row in module_profiles)
+    feature_count = sum(
+        int(row.get("catalog_feature_count") or row.get("feature_count") or 0)
+        for row in module_profiles
+    )
     selected_count = sum(
-        int(row.get("observed_features") or 0) for row in module_profiles
+        int(row.get("export_observed_features") or row.get("observed_features") or 0)
+        for row in module_profiles
     )
     modules = []
     for row in module_profiles:
-        feature_count_row = int(row.get("feature_count") or 0)
+        feature_count_row = int(
+            row.get("catalog_feature_count") or row.get("feature_count") or 0
+        )
         if feature_count_row <= 0:
             continue
         coverage = row.get("coverage_pct")
@@ -1283,7 +1394,11 @@ def _data_table_review_payload(
                 "label_i18n": row.get("label_i18n")
                 or _module_label_i18n(str(row.get("module") or "")),
                 "review_features": feature_count_row,
-                "observed_features": int(row.get("observed_features") or 0),
+                "observed_features": int(
+                    row.get("export_observed_features")
+                    or row.get("observed_features")
+                    or 0
+                ),
                 "rows": int(row.get("rows") or 0),
                 "entities": row.get("entities"),
                 "coverage_pct": coverage,
@@ -1293,8 +1408,16 @@ def _data_table_review_payload(
                     else None
                 ),
                 "shape": "time_indexed" if row.get("time_indexed") else "static",
-                "dynamic_features": int(row.get("dynamic_features") or 0),
-                "static_features": int(row.get("static_features") or 0),
+                "dynamic_features": int(
+                    row.get("trajectory_candidate_features")
+                    or row.get("dynamic_features")
+                    or 0
+                ),
+                "static_features": int(
+                    row.get("export_static_observed_features")
+                    or row.get("static_features")
+                    or 0
+                ),
                 "preview_features": [
                     {
                         "feature": feature,
@@ -1333,12 +1456,17 @@ def _data_table_review_payload(
         and any(row.get("module") == requested_module for row in modules)
         else (modules[0]["module"] if modules else None)
     )
+    coverage_summary = feature_coverage.get("summary") or {}
     return {
         "loaded_summary": {
             "entities": summary.get("entities"),
-            "review_features": feature_count,
-            "observed_features": selected_count,
-            "module_count": module_count,
+            "review_features": int(
+                coverage_summary.get("definitions") or feature_count
+            ),
+            "observed_features": int(
+                coverage_summary.get("observed") or selected_count
+            ),
+            "module_count": int(coverage_summary.get("modules") or module_count),
             "source_count": 1,
         },
         "module_picker": {
@@ -1611,7 +1739,11 @@ def _trajectory_review_payload(
             selected_signals.append(signal)
     selected_signals = selected_signals[:_MAX_REVIEW_SIGNALS]
     comparison_payload = _multi_entity_comparison_payload(
-        review_frames, path, entity_ids[:_MAX_ENTITIES], selected_signals, quality_metrics
+        review_frames,
+        path,
+        entity_ids[:_MAX_ENTITIES],
+        selected_signals,
+        quality_metrics,
     )
     comparison_features = comparison_payload.get("features") or []
     has_multi_traces = bool(comparison_payload.get("traces"))
@@ -1715,6 +1847,7 @@ def _multi_entity_comparison_payload(
                     "module": item.get("module"),
                     "module_label": _module_label(str(item.get("module") or "")),
                     "traces": traces,
+                    "time_axis": traces[0].get("time_axis") or {},
                     "compared_entities": len(traces),
                     "features": aggregate_features[:8],
                     "payload_scope": "bounded_pseudonymous_multi_entity_same_feature_traces",
@@ -1790,6 +1923,7 @@ def _feature_traces_for_entities(
                 "label": f"Entity {ordinal}",
                 "values": values,
                 "times": times,
+                "time_axis": _time_axis_payload(str(time_col), times),
                 "point_count": point_count,
                 "bounded": True,
                 "max_points": _MAX_SIGNAL_POINTS,
@@ -2071,9 +2205,7 @@ def _patient_summary_cards(selected: Dict[str, Any]) -> List[Dict[str, Any]]:
     demo = selected.get("demographics") or {}
     scores = selected.get("scores") or {}
     outcomes = selected.get("outcomes") or {}
-    los_value = _display_value(
-        dataio._num(outcomes.get("icu_los_days")), decimals=1
-    )
+    los_value = _display_value(dataio._num(outcomes.get("icu_los_days")), decimals=1)
     return [
         {
             "label": "Age / sex",
@@ -2484,6 +2616,7 @@ __all__ = [
     "patient_review_drilldown",
     "patient_review_entity",
     "patient_review_entity_page",
+    "patient_review_feature",
     "patient_review_sources",
     "patient_review_table_preview",
 ]

@@ -573,9 +573,19 @@ def test_agent_run_binds_context_and_uses_context_question_fallback(
     assert active["revision"] == result["study_context_revision"]
 
 
-def test_agent_run_reports_post_submit_context_sync_failure_without_false_400(
+def test_agent_run_is_blocked_when_the_context_cannot_record_the_active_job(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """A filesystem failure here is not UI metadata; it unbinds the run.
+
+    This used to return 200 with a warning and let the analysis proceed. But
+    without the active-job reservation the context does not know a run is in
+    flight: a second request can start another against the same revision, the
+    terminal cleanup has no job id to match, and the finished result is not
+    bound to the study it belongs to. For a research workflow that is worse
+    than a failed submission, so the run is refused instead.
+    """
+
     client = TestClient(app)
     export_dir = _write_export(tmp_path / "active")
     source_store.register_source(str(export_dir), active=True, crossdb=True)
@@ -608,12 +618,15 @@ def test_agent_run_reports_post_submit_context_sync_failure_without_false_400(
         },
     )
 
-    assert started.status_code == 200
-    warning = started.json()["context_sync_warning"]
-    assert warning["error"] == "study_context_active_job_sync_failed"
-    assert warning["job_id"] == started.json()["job_id"]
-    snapshot = _wait_for_job(client, started.json()["job_id"])
-    assert snapshot["status"] == "done"
+    assert started.status_code == 500
+    detail = started.json()["detail"]
+    assert detail["error"] == "study_context_active_job_sync_failed"
+    assert detail["reason"] == "OSError"
+    assert detail["job_started"] is False
+    # The submitted runner is released only to refuse; it must not analyse.
+    snapshot = _wait_for_job(client, detail["job_id"])
+    assert snapshot["status"] == "failed"
+    assert "agent_run_start_blocked" in str(snapshot.get("error") or "")
 
 
 def test_agent_run_aborts_before_execution_on_context_revision_conflict(

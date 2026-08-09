@@ -241,9 +241,10 @@ def test_data_quality_article_contract_stays_measurement_only(ra):
     )
 
     assert contract.required_roles == ["data_quality"]
-    assert {
-        requirement.module_id for requirement in contract.requirements
-    } == {"missingness_data_quality", "measurement_process_audit"}
+    assert {requirement.module_id for requirement in contract.requirements} == {
+        "missingness_data_quality",
+        "measurement_process_audit",
+    }
 
 
 def test_article_contract_flags_and_can_augment_narrow_association_plan(ra):
@@ -394,6 +395,11 @@ def test_planner_article_contract_retries_missing_robustness_instead_of_faking_i
         PlannerAgent,
         PlannerArticleContractError,
     )
+    from easyicu.research_agent.providers.mocks import ExternalCaptureMockLLMClient
+    from easyicu.research_agent.reporting.article_contract import (
+        build_article_analysis_contract,
+        render_article_analysis_contract_for_prompt,
+    )
 
     context = _context(
         ra,
@@ -441,6 +447,15 @@ def test_planner_article_contract_retries_missing_robustness_instead_of_faking_i
                         "outcome_type": "binary",
                         "method_family": "binary_logistic_regression",
                         "exposure_source": "x",
+                        "covariates": [],
+                        "model_terms": [
+                            {
+                                "name": "x",
+                                "role": "exposure",
+                                "coding": "continuous",
+                                "transform": "identity",
+                            }
+                        ],
                         "analysis_role": "primary",
                         "analysis_set": "complete_case",
                         "required_for_step_success": True,
@@ -460,6 +475,7 @@ def test_planner_article_contract_retries_missing_robustness_instead_of_faking_i
             context,
             enforce_article_contract=True,
         )
+    missing_robustness_payload = json.loads(json.dumps(payload))
 
     payload["robustness_specs"] = [
         {
@@ -491,6 +507,36 @@ def test_planner_article_contract_retries_missing_robustness_instead_of_faking_i
 
     assert parsed.steps[-1].method == "robustness_sensitivity"
     assert [spec.spec_id for spec in parsed.robustness_specs] == ["alt_missing_median"]
+
+    contract = build_article_analysis_contract(context)
+    rendered_contract = render_article_analysis_contract_for_prompt(contract)
+    capture = ExternalCaptureMockLLMClient(
+        [
+            json.dumps(missing_robustness_payload),
+            json.dumps(payload),
+        ]
+    )
+    recovered = PlannerAgent(capture).run(
+        context,
+        enforce_article_contract=True,
+        planning_contract_context=rendered_contract,
+    )
+
+    assert recovered.steps[-1].method == "robustness_sensitivity"
+    assert len(capture.calls) == 2
+    initial_prompt = "\n".join(message.content for message in capture.calls[0][0])
+    retry_prompt = "\n".join(message.content for message in capture.calls[1][0])
+    assert "HOST-DERIVED PRE-PLAN DESIGN PROFILE" in initial_prompt
+    assert rendered_contract in initial_prompt
+    assert (
+        "required_article_roles: baseline_context, cohort_accounting, "
+        "data_quality, descriptive_result, primary_estimand, robustness"
+        in initial_prompt
+    )
+    assert (
+        "robustness_specs (array; non-empty when the binding contract" in retry_prompt
+    )
+    assert "method='robustness_sensitivity'" in retry_prompt
 
     payload["steps"] = [
         step for step in payload["steps"] if step["step_id"] != "01_cohort"
@@ -1064,6 +1110,7 @@ def test_cross_database_context_adds_transportability_module(ra):
 
 
 def test_analysis_blueprint_combines_prior_art_contract_and_figure_strategy(ra):
+    from easyicu.research_agent.agents.core import PlannerAgent
     from easyicu.research_agent.planning.analysis_blueprint import (
         build_analysis_blueprint,
         render_analysis_blueprint_for_prompt,
@@ -1097,6 +1144,17 @@ def test_analysis_blueprint_combines_prior_art_contract_and_figure_strategy(ra):
     assert "typed_example=table:" in prompt
     assert "Intent-only prose does not count" in prompt
     assert "ARTICLE FIGURE STRATEGY" in prompt
+    outbound_prompt = PlannerAgent.request_messages(
+        context,
+        planning_contract_context=prompt,
+    )[1].content
+    outbound_metrics = PlannerAgent.request_metrics(
+        context,
+        planning_contract_context=prompt,
+    )
+    assert "HOST-DERIVED PRE-PLAN DESIGN PROFILE" in outbound_prompt
+    assert prompt in outbound_prompt
+    assert outbound_metrics["total_bytes"] < outbound_metrics["limit_bytes"]
     dumped = blueprint.model_dump_json()
     assert "E1" not in dumped
     assert "Sepsis" not in dumped

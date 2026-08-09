@@ -154,6 +154,60 @@ def test_disclaimed_causal_does_not_hijack_trajectory_clustering(ra):
     assert ra.infer_analysis_type(_ctx(crobust)).key == "causal_inference"
 
 
+def test_contrastive_causal_disclaimers_do_not_select_the_causal_family(ra):
+    """Disclaiming causality must be at least as easy to say as asserting it.
+
+    A bare "causal" anywhere in the text selects the causal family, so the
+    negation that cancels it has to cover the ordinary ways people write one.
+    It did not: the negation had to be a not/avoid/without word within 40
+    characters, and it was matched case-sensitively while the assertion beside
+    it is case-insensitive -- a fail-open asymmetry.
+
+    Measured, not hypothetical: a real prevalence-and-association run was
+    classified ``causal_emulation`` and handed a seven-role target-trial
+    contract because a methods guardrail told it to "label the estimand as
+    observational rather than causal". The single word that made it causal was
+    the instruction not to be.
+
+    The second half of this test is the half that matters: broadening a
+    negation must not disarm genuine causal work.
+    """
+
+    def _ctx(text):
+        return ra.ResearchContext(
+            research_question=text,
+            cohort=ra.CohortDescriptor(
+                cohort_name="c", database="synthetic", n_patients=10, n_stays=10
+            ),
+            variables=[],
+            target_outcome="death",
+        )
+
+    disclaimed = (
+        "Estimate prevalence of an index condition and its association with "
+        "in-hospital mortality with a visible denominator; label the estimand "
+        "as observational rather than causal.",
+        "Report an associational estimate instead of a causal one.",
+        "Summarise the cohort with a non-causal descriptive audit.",
+        "Describe the exposure-outcome distribution. Do Not draw Causal "
+        "conclusions from it.",
+    )
+    for text in disclaimed:
+        assert ra.infer_analysis_type(_ctx(text)).key != "causal_inference", text
+
+    # Naming a causal method still selects the causal family, disclaimer or
+    # not: that is what stops a broader negation from silently downgrading a
+    # real target-trial emulation.
+    causal = (
+        "Estimate the causal effect of early antibiotics on mortality.",
+        "Emulate a target trial of vasopressor timing.",
+        "Compare two strategies using propensity score weighting, rather than "
+        "a causal diagram, and report covariate balance.",
+    )
+    for text in causal:
+        assert ra.infer_analysis_type(_ctx(text)).key == "causal_inference", text
+
+
 def test_existing_cluster_membership_remains_an_association_exposure(ra):
     from easyicu.research_agent.planning.study_design import infer_study_design_family
 
@@ -217,6 +271,30 @@ def test_gaussian_mixture_phenotype_discovery_is_clustering(ra):
     question = (
         "Discover longitudinal patient phenotypes using a Gaussian mixture "
         "model, select the class count, and report cluster stability."
+    )
+    ctx = ra.ResearchContext(
+        research_question=question,
+        cohort=ra.CohortDescriptor(
+            cohort_name="c", database="synthetic", n_patients=100, n_stays=100
+        ),
+        variables=[],
+        target_outcome="death",
+    )
+
+    assert strong_trajectory_clustering_framing(question)
+    assert ra.infer_analysis_type(ctx).key == "trajectory_clustering"
+    assert infer_study_design_family(ctx) == "phenotyping"
+
+
+def test_imperative_fixed_window_trajectory_question_is_clustering(ra):
+    from easyicu.research_agent.planning.analysis_types import (
+        strong_trajectory_clustering_framing,
+    )
+    from easyicu.research_agent.planning.study_design import infer_study_design_family
+
+    question = (
+        "Cluster fixed-window organ-dysfunction trajectories, freeze cluster "
+        "selection through an independent stability design, and describe outcomes."
     )
     ctx = ra.ResearchContext(
         research_question=question,
@@ -441,9 +519,7 @@ def test_reused_mock_pipeline_refreshes_context_between_prediction_and_clusterin
     assert "04_trajectory_clustering_analysis" in second_step_ids, second_step_ids
 
 
-def test_mock_planner_rejects_protocol_only_survival_plan(
-    ra, tmp_path: Path
-):
+def test_mock_planner_rejects_protocol_only_survival_plan(ra, tmp_path: Path):
     cohort = pd.DataFrame(
         {
             "stay_id": range(1, 81),
@@ -599,6 +675,14 @@ def test_parse_preserves_agent_selected_family_and_rationale(ra):
                             "outcome_type": "binary",
                             "method_family": "logistic_regression",
                             "exposure_source": "exposure",
+                            "model_terms": [
+                                {
+                                    "name": "exposure",
+                                    "role": "exposure",
+                                    "coding": "continuous",
+                                    "transform": "identity",
+                                }
+                            ],
                             "analysis_role": "primary",
                             "analysis_set": "complete_case",
                             "required_for_step_success": True,

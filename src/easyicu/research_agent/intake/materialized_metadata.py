@@ -983,8 +983,7 @@ def _row_identity_canonical_values(
     )
 
 
-def _row_identity_sha256(path: Path, *, identity_column: str) -> str:
-    canonical = _row_identity_canonical_values(path, identity_column=identity_column)
+def _digest_canonical_identity(canonical: tuple[str, ...]) -> str:
     return hashlib.sha256(
         json.dumps(
             canonical,
@@ -992,6 +991,29 @@ def _row_identity_sha256(path: Path, *, identity_column: str) -> str:
             separators=(",", ":"),
         ).encode("utf-8")
     ).hexdigest()
+
+
+def cohort_row_identity_sha256(values: Sequence[object]) -> str:
+    """The published recipe behind every receipt ``row_identity_sha256``.
+
+    The receipt carries this digest so an executing step can prove the frame it
+    loaded is the frame the host authorised.  A digest is only checkable by
+    whoever can reproduce it, so the recipe has to be callable rather than
+    merely described: a step that invents its own canonicalisation computes a
+    different digest and rejects a cohort that is exactly correct.  Generated
+    analysis code is told to call this function for that reason.
+
+    ``values`` are the identity values in stored order; order is part of the
+    digest.
+    """
+
+    return _digest_canonical_identity(_canonical_identity_values(list(values)))
+
+
+def _row_identity_sha256(path: Path, *, identity_column: str) -> str:
+    return _digest_canonical_identity(
+        _row_identity_canonical_values(path, identity_column=identity_column)
+    )
 
 
 def _row_identity_sha256_at(
@@ -1007,16 +1029,11 @@ def _row_identity_sha256_at(
         raise MaterializedMetadataError("cannot read cohort identity column") from exc
     except (OSError, ValueError, pa.ArrowException) as exc:
         raise MaterializedMetadataError("cannot read cohort identity column") from exc
-    canonical = _canonical_identity_values(
-        table.column(identity_column).combine_chunks().to_pylist()
+    return _digest_canonical_identity(
+        _canonical_identity_values(
+            table.column(identity_column).combine_chunks().to_pylist()
+        )
     )
-    return hashlib.sha256(
-        json.dumps(
-            canonical,
-            ensure_ascii=False,
-            separators=(",", ":"),
-        ).encode("utf-8")
-    ).hexdigest()
 
 
 def _descriptor(
@@ -1316,6 +1333,64 @@ class MaterializedColumnMetadataCollector:
                     time_origin="icu_admission",
                     time_unit="h",
                 )
+
+    def add_fixed_window_panel(
+        self,
+        concept: str,
+        *,
+        output_columns: Sequence[str],
+        windows: Sequence[tuple[float, float]],
+        aggregation: str,
+    ) -> None:
+        """Describe one ``<family>_h<start>_<end>`` column per declared window.
+
+        These differ from :meth:`add_timeseries` in exactly one way that matters
+        to a reader: the derivation window is the column's OWN window rather
+        than the whole cohort window, so each column says which slice of the
+        stay it summarizes.  That is what makes a set of them a trajectory
+        instead of four aggregates of the same interval.
+
+        A sealed cohort column with no metadata is refused by ``build_sidecar``,
+        which is why this exists: the panel producer cannot add columns to the
+        cohort without describing them here first.
+        """
+
+        from ..trajectory.panel import fixed_window_column_name
+
+        source = self._source_owner(concept)
+        if source is None:
+            return
+        names = set(output_columns)
+        event_like = source.binding.metadata.role is ConceptColumnRole.EVENT_STATUS
+        if event_like and aggregation == "mean":
+            role = ConceptColumnRole.EVENT_FRACTION
+        elif event_like:
+            role = ConceptColumnRole.EVENT_STATUS
+        else:
+            role = ConceptColumnRole.NUMERIC_AGGREGATE
+        for start_hours, end_hours in windows:
+            column = fixed_window_column_name(concept, start_hours, end_hours)
+            if column not in names:
+                # A window nobody was observed in produces no column, and
+                # describing one that does not exist would fail coverage the
+                # other way round.
+                continue
+            self._add(
+                source,
+                column_name=column,
+                role=role,
+                aggregation=aggregation,
+                derivation_window=DerivationWindow(
+                    origin="icu_admission",
+                    start_hours=float(start_hours),
+                    end_hours=float(end_hours),
+                ),
+                representation_transform=(
+                    f"fixed_window_presence_{aggregation}"
+                    if event_like
+                    else f"fixed_window_numeric_{aggregation}"
+                ),
+            )
 
     def add_outcome(self, concept: str, *, output_columns: Sequence[str]) -> None:
         source = self._source_owner(concept)

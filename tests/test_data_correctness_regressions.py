@@ -9,14 +9,37 @@ import pandas as pd
 import pytest
 
 from easyicu import api
-from easyicu.datasource import load_bucketed_table_aggregated
+from easyicu.api import concepts as concept_api
+from easyicu.api import extraction as extraction_api
+from easyicu.config import load_src_cfg
+from easyicu.datasource import (
+    FilterOp,
+    FilterSpec,
+    ICUDataSource,
+    _resolve_wide_column_batch_size,
+    load_bucketed_table_aggregated,
+    load_wide_table_aggregated,
+)
 from easyicu.io.data_converter import ConversionStatus, DataConverter
+from easyicu.runtime.parallel_config import get_parallel_config
 from easyicu.table import ICUTable
+
+
+def test_align_to_icu_admission_fails_instead_of_returning_input_unchanged():
+    frame = pd.DataFrame(
+        {"stay_id": [1], "charttime": [pd.Timestamp("2026-01-01T00:00:00")]}
+    )
+
+    with pytest.raises(NotImplementedError, match="no longer returns unaligned data"):
+        api.align_to_icu_admission(frame, verbose=False)
+
+    with pytest.raises(NotImplementedError, match="load_concepts"):
+        api.align_to_icu_admission({"hr": frame}, verbose=False)
 
 
 def test_explicit_empty_cohort_returns_all_requested_special_outputs(monkeypatch):
     monkeypatch.setattr(
-        api,
+        concept_api,
         "_get_global_loader",
         lambda **kwargs: pytest.fail("empty cohort must not construct a loader"),
     )
@@ -38,7 +61,7 @@ def test_special_loaders_receive_resolved_source_and_patient_filter(
     resolved_path = tmp_path / "resolved"
     resolved_path.mkdir()
     loader = SimpleNamespace(database="miiv", data_path=resolved_path)
-    monkeypatch.setattr(api, "_get_global_loader", lambda **kwargs: loader)
+    monkeypatch.setattr(concept_api, "_get_global_loader", lambda **kwargs: loader)
 
     calls = {}
 
@@ -116,7 +139,7 @@ def test_batched_load_routes_special_concepts_through_subprocess_with_full_list(
     import easyicu.runtime.memory_manager as mm
 
     loader = SimpleNamespace(database="miiv", data_path=tmp_path)
-    monkeypatch.setattr(api, "_get_global_loader", lambda **kwargs: loader)
+    monkeypatch.setattr(concept_api, "_get_global_loader", lambda **kwargs: loader)
 
     captured = {}
 
@@ -307,6 +330,287 @@ def test_transformed_bounds_are_applied_before_hourly_aggregation(tmp_path):
     }
 
 
+def test_inline_unit_conversion_resolves_configured_column_case_insensitively(
+    tmp_path,
+):
+    """MIMIC-III parquet columns are uppercase while config names are lowercase."""
+    pd.DataFrame(
+        {
+            "patientunitstayid": [1, 1],
+            "labresultoffset": [0, 60],
+            "labname": ["CRP", "CRP"],
+            "value": [30.0, 4.0],
+            "VALUEUOM": ["mg/L", "mg/dL"],
+        }
+    ).to_parquet(tmp_path / "lab.parquet", index=False)
+
+    defaults = SimpleNamespace(
+        index_var="labresultoffset", sub_var="labname", unit_var="valueuom"
+    )
+    config = SimpleNamespace(
+        name="eicu", get_table=lambda name: SimpleNamespace(defaults=defaults)
+    )
+
+    source = SimpleNamespace(
+        config=config,
+        base_path=tmp_path,
+        _resolve_bucket_directory=lambda name: None,
+        _resolve_flat_parquet_directory=lambda name: tmp_path,
+        _get_parquet_columns_for_files=lambda files: {
+            "patientunitstayid",
+            "labresultoffset",
+            "labname",
+            "value",
+            "VALUEUOM",
+        },
+    )
+
+    result = load_bucketed_table_aggregated(
+        source,
+        "lab",
+        "value",
+        ["CRP"],
+        patient_ids=[1],
+        convert_unit_op="*",
+        convert_unit_factor=10,
+        convert_unit_filter="mg/dl",
+    )
+
+    assert result["value"].tolist() == pytest.approx([30.0, 40.0])
+
+
+def test_partitioned_arrow_projection_resolves_mimic_uppercase_columns(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    import pyarrow as pa
+
+    partition = tmp_path / "inputevents_cv"
+    partition.mkdir()
+    pd.DataFrame(
+        {
+            "ICUSTAY_ID": [1, 2, 2],
+            "ITEMID": [10, 10, 11],
+            "VALUENUM": [1.0, 2.0, 3.0],
+        }
+    ).to_parquet(partition / "part-0.parquet", index=False)
+    source = ICUDataSource(
+        load_src_cfg("mimic"),
+        base_path=tmp_path,
+        enable_cache=False,
+    )
+    configured_thread_counts = []
+    monkeypatch.setenv("EASYICU_ARROW_THREADS", "3")
+    monkeypatch.setattr(pa, "cpu_count", lambda: 384)
+    monkeypatch.setattr(
+        pa,
+        "set_cpu_count",
+        lambda value: configured_thread_counts.append(value),
+    )
+
+    frame = source._read_partitioned_data_optimized(
+        partition,
+        columns=["icustay_id", "itemid", "valuenum"],
+        patient_ids_filter=FilterSpec(
+            column="icustay_id",
+            op=FilterOp.IN,
+            value=[2],
+        ),
+        itemid_filter_config=("itemid", {10}),
+    )
+
+    assert list(frame.columns) == ["icustay_id", "itemid", "valuenum"]
+    assert configured_thread_counts == [3]
+    assert frame.to_dict("records") == [
+        {"icustay_id": 2, "itemid": 10, "valuenum": 2.0}
+    ]
+
+
+def test_partitioned_arrow_scan_ignores_invalid_thread_override(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    import pyarrow as pa
+
+    partition = tmp_path / "inputevents_cv"
+    partition.mkdir()
+    pd.DataFrame(
+        {
+            "ICUSTAY_ID": [1],
+            "ITEMID": [10],
+            "VALUENUM": [1.0],
+        }
+    ).to_parquet(partition / "part-0.parquet", index=False)
+    source = ICUDataSource(
+        load_src_cfg("mimic"),
+        base_path=tmp_path,
+        enable_cache=False,
+    )
+    configured_thread_counts = []
+    monkeypatch.setenv("EASYICU_ARROW_THREADS", "not-an-integer")
+    monkeypatch.setattr("os.cpu_count", lambda: 16)
+    monkeypatch.setattr(
+        "easyicu.runtime.parallel_config.get_global_config",
+        lambda: SimpleNamespace(max_workers=4),
+    )
+    monkeypatch.setattr(pa, "cpu_count", lambda: 384)
+    monkeypatch.setattr(
+        pa,
+        "set_cpu_count",
+        lambda value: configured_thread_counts.append(value),
+    )
+
+    frame = source._read_partitioned_data_optimized(
+        partition,
+        columns=["icustay_id", "itemid", "valuenum"],
+    )
+
+    assert configured_thread_counts == [4]
+    assert frame.to_dict("records") == [
+        {"icustay_id": 1, "itemid": 10, "valuenum": 1.0}
+    ]
+
+
+def test_parallel_config_uses_two_worker_safe_default_at_16gb(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("EASYICU_PARALLEL_MAX_WORKERS", raising=False)
+
+    config = get_parallel_config(override_memory_gb=16)
+
+    assert config.max_workers == 2
+    assert get_parallel_config(
+        override_memory_gb=16,
+        override_workers=6,
+    ).max_workers == 6
+
+
+def test_wide_column_batch_size_is_bounded_on_16gb(monkeypatch) -> None:
+    monkeypatch.delenv("EASYICU_WIDE_COLUMN_BATCH_SIZE", raising=False)
+    monkeypatch.setattr(
+        "easyicu.runtime.parallel_config.get_global_config",
+        lambda: SimpleNamespace(total_memory_gb=16),
+    )
+
+    assert _resolve_wide_column_batch_size(6) == 2
+
+    monkeypatch.setenv("EASYICU_WIDE_COLUMN_BATCH_SIZE", "3")
+    assert _resolve_wide_column_batch_size(6) == 3
+
+
+def test_wide_table_column_chunks_reassemble_identical_grid(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    parquet = tmp_path / "vitalperiodic.parquet"
+    pd.DataFrame(
+        {
+            "patientunitstayid": [1, 1, 2],
+            "observationoffset": [0, 30, 60],
+            "a": [1.0, 3.0, 5.0],
+            "b": [2.0, 4.0, 6.0],
+            "c": [10.0, 14.0, 18.0],
+        }
+    ).to_parquet(parquet, index=False)
+    defaults = SimpleNamespace(
+        id_var="patientunitstayid",
+        index_var="observationoffset",
+    )
+    source = SimpleNamespace(
+        config=SimpleNamespace(
+            get_table=lambda name: SimpleNamespace(defaults=defaults),
+        ),
+        _resolve_loader_from_disk=lambda name: parquet,
+    )
+    monkeypatch.setenv("EASYICU_WIDE_COLUMN_BATCH_SIZE", "2")
+
+    result = load_wide_table_aggregated(
+        source,
+        "vitalperiodic",
+        ["a", "b", "c"],
+        patient_ids=[1, 2],
+    ).sort_values(["patientunitstayid", "charttime"]).reset_index(drop=True)
+
+    assert result.columns.tolist() == [
+        "patientunitstayid",
+        "charttime",
+        "a",
+        "b",
+        "c",
+    ]
+    assert result[["a", "b", "c"]].to_dict("records") == [
+        {"a": 2.0, "b": 3.0, "c": 12.0},
+        {"a": 5.0, "b": 6.0, "c": 18.0},
+    ]
+
+
+def test_mimic_hospital_value_transform_carries_unit_through_rolling_cte(
+    tmp_path,
+):
+    """FEU exclusion must still see valueuom after hadm-to-stay assignment."""
+    labevents_dir = tmp_path / "labevents"
+    labevents_dir.mkdir()
+    pd.DataFrame(
+        {
+            "subject_id": [1, 1],
+            "hadm_id": [10, 10],
+            "itemid": [50915, 50915],
+            "charttime": [
+                pd.Timestamp("2026-01-01T00:00:00"),
+                pd.Timestamp("2026-01-01T01:00:00"),
+            ],
+            "valuenum": [100.0, 200.0],
+            "valueuom": ["ng/mL", "ng/mL FEU"],
+        }
+    ).to_parquet(labevents_dir / "part.parquet", index=False)
+    stays = pd.DataFrame(
+        {
+            "icustay_id": [7],
+            "hadm_id": [10],
+            "intime": [pd.Timestamp("2026-01-01T00:00:00")],
+            "outtime": [pd.Timestamp("2026-01-02T00:00:00")],
+        }
+    )
+    stays.to_parquet(tmp_path / "icustays.parquet", index=False)
+
+    defaults = SimpleNamespace(
+        index_var="charttime", sub_var="itemid", unit_var="valueuom"
+    )
+    config = SimpleNamespace(
+        name="mimic", get_table=lambda name: SimpleNamespace(defaults=defaults)
+    )
+
+    def load_table(name, columns=None, filters=None, verbose=False):
+        assert name == "icustays"
+        return SimpleNamespace(dataframe=lambda: stays)
+
+    source = SimpleNamespace(
+        config=config,
+        base_path=tmp_path,
+        load_table=load_table,
+        _resolve_bucket_directory=lambda name: None,
+        _resolve_flat_parquet_directory=lambda name: labevents_dir,
+        _get_parquet_columns_for_files=lambda files: set(
+            pd.read_parquet(files[0]).columns
+        ),
+    )
+    value_transform = (
+        'CASE WHEN regexp_matches(COALESCE(CAST("valueuom" AS VARCHAR), \'\'), '
+        "'(?i)FEU') THEN NULL ELSE TRY_CAST(\"valuenum\" AS DOUBLE) END"
+    )
+
+    result = load_bucketed_table_aggregated(
+        source,
+        "labevents",
+        "valuenum",
+        [50915],
+        patient_ids=[7],
+        value_transform=value_transform,
+    )
+
+    assert result.loc[result["valuenum"].notna(), "valuenum"].tolist() == [100.0]
+
+
 def test_transformed_bounds_retry_unbounded_when_all_values_are_unit_suspect(tmp_path):
     pd.DataFrame(
         {
@@ -458,8 +762,8 @@ def test_untransformed_bounds_keep_empty_non_unit_suspect_batch(tmp_path):
 
 
 def test_sofa2_overlay_bounds_are_included(monkeypatch):
-    monkeypatch.setattr(api, "_CONCEPT_BOUNDS_CACHE", None)
-    assert api._load_concept_bounds_map()["motor_response"] == (1.0, 6.0)
+    monkeypatch.setattr(extraction_api, "_CONCEPT_BOUNDS_CACHE", None)
+    assert extraction_api._load_concept_bounds_map()["motor_response"] == (1.0, 6.0)
 
 
 def test_converter_rejects_partial_shards_after_interrupted_status(tmp_path):

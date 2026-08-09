@@ -35,7 +35,13 @@ def test_planner_accepts_one_task_supported_robustness_axis() -> None:
                 "axis": "missing",
                 "description": "Complete cases only.",
                 "cohort_override": None,
-                "missing_override": {"strategy": "complete_case"},
+                # A complete-case spec names the variables whose completeness
+                # defines the set; without them the run reaches the robustness
+                # step and blocks, so the plan is refused here instead.
+                "missing_override": {
+                    "strategy": "complete_case",
+                    "variables": ["severity", "mortality"],
+                },
                 "outcome_override": None,
             }
         ],
@@ -568,8 +574,11 @@ def test_robustness_lock_resume_rehydrates_only_legacy_timestamp_drift(
     assert repair.metadata["llm_signature"] == "mock"
 
 
-def test_plan_payload_normalizer_drops_extra_robustness_spec_keys(ra) -> None:
+def test_plan_payload_normalizer_retries_extra_robustness_spec_keys(ra) -> None:
     from easyicu.research_agent.agents.core import _normalise_plan_payload
+    from easyicu.research_agent.agents.plan_payload import (
+        PlannerScientificProjectionError,
+    )
     from easyicu.research_agent.robustness.panel import default_robustness_specs
     from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
@@ -579,32 +588,21 @@ def test_plan_payload_normalizer_drops_extra_robustness_spec_keys(ra) -> None:
         payload["missing_handling"] = "listwise deletion"
         specs.append(payload)
 
-    data, dropped = _normalise_plan_payload(
-        {
-            "research_question": "Does severity predict mortality?",
-            "steps": [
-                {
-                    "step_id": "01_model",
-                    "planned_analysis_role": "primary",
-                    "intent": "Fit the primary model.",
-                    "expected_outputs": ["statistic:primary_or"],
-                }
-            ],
-            "robustness_specs": specs,
-        }
-    )
-
-    assert all("missing_handling" not in spec for spec in data["robustness_specs"])
-    assert len(dropped["robustness_specs"]) == len(specs)
-    assert all(
-        item.endswith(":missing_handling") for item in dropped["robustness_specs"]
-    )
-    plan = AnalysisPlan(
-        research_question=data["research_question"],
-        steps=[AnalysisStep(**data["steps"][0])],
-        robustness_specs=data["robustness_specs"],
-    )
-    assert len(plan.robustness_specs) == len(specs)
+    with pytest.raises(PlannerScientificProjectionError, match="missing_handling"):
+        _normalise_plan_payload(
+            {
+                "research_question": "Does severity predict mortality?",
+                "steps": [
+                    {
+                        "step_id": "01_model",
+                        "planned_analysis_role": "primary",
+                        "intent": "Fit the primary model.",
+                        "expected_outputs": ["statistic:primary_or"],
+                    }
+                ],
+                "robustness_specs": specs,
+            }
+        )
 
 
 def test_each_spec_produces_panel_row() -> None:
@@ -899,7 +897,7 @@ def test_robustness_variants_adjust_for_primary_covariates(tmp_path: Path) -> No
     step_dir = tmp_path / "steps" / "03_primary_model"
     (step_dir / "outputs").mkdir(parents=True)
     (step_dir / "analysis.py").write_text(
-        "covariates = ['age']\n" "# formula = 'death ~ lactate + age'\n",
+        "covariates = ['age']\n# formula = 'death ~ lactate + age'\n",
         encoding="utf-8",
     )
 
@@ -1412,3 +1410,199 @@ def test_primary_only_panel_does_not_register_duplicate_range_claims(
     assert "row_primary_point_estimate" not in fields
     assert "range_low" not in fields
     assert "range_high" not in fields
+
+
+def test_a_locked_specification_nobody_estimated_is_named(tmp_path: Path) -> None:
+    """The fresh27 regression: a pre-specified variant left blank read as done.
+
+    The run locked ``alt_missing_complete_case``, no step estimated it, and the
+    panel carried it as ``converged: false`` with an explanatory note.  Every
+    error the run reported was about something else, so the sensitivity
+    analysis looked complete.  A blank variant row is the absence of an
+    analysis, not a small result.
+    """
+
+    from easyicu.research_agent.robustness.panel import (
+        RobustnessPanel,
+        RobustnessPanelRow,
+        unexecuted_locked_spec_ids,
+    )
+
+    def _row(spec_id: str, estimate, converged: bool) -> RobustnessPanelRow:
+        return RobustnessPanelRow(
+            spec_id=spec_id,
+            axis="missing",
+            n=1000 if estimate is not None else 0,
+            point_estimate=estimate,
+            ci_low=None,
+            ci_high=None,
+            se=None,
+            evidence_id="",
+            converged=converged,
+        )
+
+    panel = RobustnessPanel(
+        primary_spec_id="primary",
+        rows=(
+            _row("primary", 1.566, True),
+            _row("alt_missing_complete_case", None, False),
+            _row("alt_estimated", 1.21, True),
+            # Reported a number but did not converge: the estimate is not one
+            # a reader may compare against the primary.
+            _row("alt_not_converged", 1.05, False),
+        ),
+        range_low=None,
+        range_high=None,
+        n_variants=3,
+        locked_at="",
+    )
+
+    assert unexecuted_locked_spec_ids(panel) == [
+        "alt_missing_complete_case",
+        "alt_not_converged",
+    ]
+
+
+def test_a_fully_estimated_panel_reports_no_hole() -> None:
+    """The check must not fire on the run it is meant to let through."""
+
+    from easyicu.research_agent.robustness.panel import (
+        RobustnessPanel,
+        RobustnessPanelRow,
+        unexecuted_locked_spec_ids,
+    )
+
+    rows = tuple(
+        RobustnessPanelRow(
+            spec_id=spec_id,
+            axis="missing",
+            n=1000,
+            point_estimate=estimate,
+            ci_low=None,
+            ci_high=None,
+            se=None,
+            evidence_id="ev",
+            converged=True,
+        )
+        for spec_id, estimate in (("primary", 1.57), ("alt_a", 1.2), ("alt_b", 1.9))
+    )
+    panel = RobustnessPanel(
+        primary_spec_id="primary",
+        rows=rows,
+        range_low=1.2,
+        range_high=1.9,
+        n_variants=2,
+        locked_at="",
+    )
+
+    assert unexecuted_locked_spec_ids(panel) == []
+
+
+def test_the_real_fresh27_panel_is_reported_as_a_hole() -> None:
+    """Lock the exact shape a real run produced, not a hand-built stand-in."""
+
+    from easyicu.research_agent.robustness.panel import (
+        RobustnessPanel,
+        unexecuted_locked_spec_ids,
+    )
+
+    panel = RobustnessPanel.from_dict(
+        {
+            "primary_spec_id": "primary",
+            "rows": [
+                {
+                    "spec_id": "primary",
+                    "axis": "primary",
+                    "n": 1000,
+                    "point_estimate": 1.566375890701969,
+                    "ci_low": 1.024509145582385,
+                    "ci_high": 2.3948379978371683,
+                    "se": None,
+                    "evidence_id": "statistic_step_summary_1b855be0c58eb978",
+                    "converged": True,
+                    "notes": "Primary analysis estimate from step_summary.",
+                },
+                {
+                    "spec_id": "alt_missing_complete_case",
+                    "axis": "missing",
+                    "n": 0,
+                    "point_estimate": None,
+                    "ci_low": None,
+                    "ci_high": None,
+                    "se": None,
+                    "evidence_id": "",
+                    "converged": False,
+                    "notes": (
+                        "No executable variant estimate was emitted for this "
+                        "pre-specified spec."
+                    ),
+                },
+            ],
+            "range_low": 1.024509145582385,
+            "range_high": 2.3948379978371683,
+            "n_variants": 1,
+            "locked_at": "2026-07-29T18:15:05.854349+00:00",
+        }
+    )
+
+    assert unexecuted_locked_spec_ids(panel) == ["alt_missing_complete_case"]
+
+
+def test_the_hole_is_reported_as_an_error_where_the_panel_is_built() -> None:
+    """The predicate is only worth having if the host acts on it.
+
+    Checked structurally rather than by string search: the call must be made
+    and its result must gate an ``error`` finding, not a warning the run can
+    carry to completion.
+    """
+
+    import ast
+    import inspect
+
+    from easyicu.research_agent.execution import phase as phase_module
+
+    tree = ast.parse(inspect.getsource(phase_module))
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "unexecuted_locked_spec_ids"
+    ]
+    assert len(calls) == 1, "exactly one host site should ask this question"
+
+    guarded_errors = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.If):
+            continue
+        if not (
+            isinstance(node.test, ast.Name)
+            and node.test.id == "unexecuted_locked_specs"
+        ):
+            continue
+        for inner in ast.walk(node):
+            if not isinstance(inner, ast.Call):
+                continue
+            if not (
+                isinstance(inner.func, ast.Name)
+                and inner.func.id == "ValidationFinding"
+            ):
+                continue
+            severities = [
+                keyword.value.value
+                for keyword in inner.keywords
+                if keyword.arg == "severity" and isinstance(keyword.value, ast.Constant)
+            ]
+            validators = [
+                keyword.value.value
+                for keyword in inner.keywords
+                if keyword.arg == "validator"
+                and isinstance(keyword.value, ast.Constant)
+            ]
+            guarded_errors.append((validators, severities))
+
+    assert guarded_errors, "the unexecuted specs must raise a finding"
+    assert all(
+        severities == ["error"] and validators == ["robustness_panel"]
+        for validators, severities in guarded_errors
+    ), guarded_errors

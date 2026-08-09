@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Sequence
 
 from .evidence_snapshot import EvidenceAuthorityIntegrityError
-from ..providers.mocks import MockLLMClient, PatternScriptedMockLLMClient
+from ..providers.factory import provider_client_is_offline
 from ..research_context.implementation_identity import metadata_implementation_identity
 from ..providers.prompts import PROMPT_PACK_VERSION, prompt_pack_files
 from .run_input import (
@@ -54,6 +54,12 @@ _NON_COMPLETE_NOTE_TOKENS = (
     "pipeline aborted",
     "aborted:",
     "stopped after",
+)
+_CONTEXTUAL_OFFLINE_CLIENTS = frozenset(
+    {
+        ("easyicu.research_agent.providers.mocks", "MockLLMClient"),
+        ("easyicu.research_agent.providers.mocks", "PatternScriptedMockLLMClient"),
+    }
 )
 
 
@@ -136,7 +142,7 @@ def llm_signature(llm: Any) -> str:
     """
     if llm is None:
         return "unconfigured"
-    if isinstance(llm, MockLLMClient):
+    if _is_contextual_offline_client(llm) and type(llm).__name__ == "MockLLMClient":
         return "mock"
     if isinstance(getattr(llm, "_clients", None), (list, tuple)):
         payload = {
@@ -196,14 +202,24 @@ def iter_mock_clients(llm: Any):
     """
     if llm is None:
         return
-    mock_types = (MockLLMClient, PatternScriptedMockLLMClient)
-    if isinstance(llm, mock_types):
+    if _is_contextual_offline_client(llm):
         yield llm
         return
     if hasattr(llm, "iter_clients"):
         for child in llm.iter_clients():
-            if isinstance(child, mock_types):
+            if _is_contextual_offline_client(child):
                 yield child
+
+
+def _is_contextual_offline_client(client: Any) -> bool:
+    """Identify reviewed context-aware mocks without importing their module."""
+
+    client_type = type(client)
+    return (
+        provider_client_is_offline(client)
+        and (client_type.__module__, client_type.__name__)
+        in _CONTEXTUAL_OFFLINE_CLIENTS
+    )
 
 
 def _read_json_object(path: Path) -> Optional[Dict[str, Any]]:

@@ -12,7 +12,6 @@ METHOD_MODULES = (
     "conformal",
     "decision_curve",
     "delong_auc",
-    "evalue",
     "fairness",
     "missing",
     "missing_data",
@@ -21,16 +20,13 @@ METHOD_MODULES = (
     "ph_schoenfeld",
     "rmst",
     "sensitivity",
-    "survival",
     "temporal_features",
 )
 
+
 def test_statistical_methods_are_owned_by_methods_package() -> None:
     package_root = (
-        Path(__file__).resolve().parents[2]
-        / "src"
-        / "easyicu"
-        / "research_agent"
+        Path(__file__).resolve().parents[2] / "src" / "easyicu" / "research_agent"
     )
     methods_root = package_root / "methods"
 
@@ -42,9 +38,7 @@ def test_statistical_methods_are_owned_by_methods_package() -> None:
 
 @pytest.mark.parametrize("module_name", METHOD_MODULES)
 def test_method_modules_import_from_canonical_package(module_name: str) -> None:
-    module = importlib.import_module(
-        f"easyicu.research_agent.methods.{module_name}"
-    )
+    module = importlib.import_module(f"easyicu.research_agent.methods.{module_name}")
     assert module.__name__.endswith(f"methods.{module_name}")
 
 
@@ -54,7 +48,6 @@ def test_existing_root_convenience_exports_remain_available() -> None:
     for name in (
         "build_multiple_testing_report",
         "compute_e_value",
-        "fit_cox_model",
         "mice_impute",
         "run_subgroup_analysis",
     ):

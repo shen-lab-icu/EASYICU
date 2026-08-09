@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from easyicu.research_agent.audits import validators as validators_module
 from easyicu.research_agent.audits.validators import (
     CrossStepCohortLockValidator,
     CrossStepReconciliationTraceValidator,
@@ -2737,6 +2738,51 @@ def test_llm_concept_auditor_parses_findings(ra):
     assert findings[0].detail["step_id"] == "04_primary"
 
 
+def test_llm_concept_auditor_has_room_for_complete_compact_json(
+    ra,
+    monkeypatch,
+) -> None:
+    seen: dict[str, object] = {}
+
+    def _authorized_complete(
+        client,
+        messages,
+        *,
+        max_tokens: int,
+        temperature: float,
+    ) -> str:
+        seen.update(
+            client=client,
+            messages=messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+        return '{"findings":[]}'
+
+    monkeypatch.setattr(
+        validators_module,
+        "authorized_complete",
+        _authorized_complete,
+    )
+    client = object()
+    context = ra.build_research_context(
+        research_question="Describe the cohort.",
+        cohort=pd.DataFrame({"stay_id": [1, 2]}),
+        cohort_name="c",
+        database="synthetic",
+    )
+
+    findings = ra.LLMConceptAuditor(client).audit(
+        context=context,
+        script_text="print('complete')",
+    )
+
+    assert findings == []
+    assert seen["client"] is client
+    assert seen["max_tokens"] == 2048
+    assert seen["temperature"] == 0.0
+
+
 @pytest.mark.parametrize(
     ("raw", "response_issue"),
     [
@@ -2847,6 +2893,26 @@ def test_llm_concept_auditor_prompt_includes_outcome_semantics(ra):
     assert "Named time windows:" in prompt
 
 
+def test_llm_concept_auditor_distinguishes_cluster_fit_and_sampling_seeds(ra):
+    auditor = ra.LLMConceptAuditor(ra.MockLLMClient())
+    ctx = ra.build_research_context(
+        research_question="Assess stability of an ICU clustering solution.",
+        cohort=pd.DataFrame({"stay_id": [1, 2], "feature_a": [0.1, 0.2]}),
+        cohort_name="c",
+        database="synthetic",
+    )
+    prompt = auditor._prompt(
+        context=ctx,
+        script_text="silhouette_score(matrix[indices], labels[indices])",
+        step=None,
+    )
+
+    assert "distinguish an estimator's fit seed" in prompt
+    assert "silhouette sampling seed" in prompt
+    assert "do not demand a second scaling pass" in prompt
+    assert "explicit threshold-based decision rule" in prompt
+
+
 def _plausibility_range_context(ra, *, binary: bool = False):
     return ra.ResearchContext(
         research_question="Assess a continuous ICU marker.",
@@ -2935,6 +3001,10 @@ def test_llm_concept_auditor_reclassifies_typed_flag_only_range_demand(ra):
     assert findings[0].detail["range_policy_authority"] == (
         "concept_descriptor_flag_only"
     )
+    assert "deterministic gate" in findings[0].detail[
+        "flag_obligation"
+    ]
+    assert findings[0].detail["retain_and_flag_half_satisfied"] == "retain"
 
 
 def test_llm_concept_auditor_reclassifies_scoped_flag_only_range_demand(ra):
@@ -2966,10 +3036,11 @@ def test_llm_concept_auditor_reclassifies_scoped_flag_only_range_demand(ra):
     )
 
     assert len(findings) == 1
-    assert findings[0].severity == "warning"
     assert findings[0].detail["range_policy_authority"] == (
         "concept_descriptor_flag_only"
     )
+    assert findings[0].severity == "warning"
+    assert findings[0].detail["retain_and_flag_half_satisfied"] == "retain"
 
 
 @pytest.mark.parametrize(
@@ -3005,6 +3076,39 @@ def test_flag_only_range_reclassifier_preserves_strict_or_unbound_errors(
     )
 
     assert findings[0].severity == "error"
+
+
+def test_flag_only_llm_reclassifier_does_not_duplicate_deterministic_gate(ra):
+    """The LLM adapter owns retention; the deterministic gate owns flagging."""
+
+    from easyicu.research_agent.audits.validators import (
+        _reclassify_flag_only_plausibility_range_findings,
+    )
+
+    finding = ValidationFinding(
+        validator="llm_concept_auditor",
+        severity="error",
+        message="The candidate value should be excluded.",
+        detail={
+            "issue_code": "plausibility_range_exclusion_required",
+            "variable": "marker",
+            "requested_action": "exclude",
+            "value_class": "finite_outside_plausibility_range",
+        },
+    )
+    result = _reclassify_flag_only_plausibility_range_findings(
+        findings=[finding],
+        context=_plausibility_range_context(ra),
+    )[0]
+
+    assert result.severity == "warning"
+    assert result.detail["retain_and_flag_half_satisfied"] == "retain"
+    assert "deterministic gate" in result.detail[
+        "flag_obligation"
+    ]
+    assert "flag_evidence" not in result.detail
+    # The message remains stable for quarantine replay identity.
+    assert result.message == "The candidate value should be excluded."
 
 
 def test_llm_concept_auditor_checks_summary_source_status_bypasses(ra):
@@ -3084,6 +3188,78 @@ def test_llm_concept_auditor_trusts_exact_step_input_metadata_binding(ra):
     assert (
         "flag it merely because its column name contains first/max/min/mean" in prompt
     )
+
+
+def test_llm_concept_auditor_binds_planner_science_and_derived_concepts(ra):
+    context = ra.ResearchContext(
+        research_question="Estimate one adjusted ICU association.",
+        cohort=ra.CohortDescriptor(
+            cohort_name="c",
+            database="synthetic",
+            n_stays=3,
+            n_patients=3,
+        ),
+        variables=[
+            ra.ConceptDescriptor(
+                name="derived_exposure",
+                dtype="int64",
+                source_concept="derived_exposure",
+                derived_from_concepts=["component_a", "component_b"],
+            ),
+            ra.ConceptDescriptor(
+                name="derived_exposure_measured",
+                dtype="int64",
+                role="meta",
+            ),
+            ra.ConceptDescriptor(name="component_a", dtype="float64"),
+            ra.ConceptDescriptor(name="component_b", dtype="float64"),
+            ra.ConceptDescriptor(name="death", dtype="int64", role="outcome"),
+        ],
+        primary_exposure="derived_exposure",
+        target_outcome="death",
+    )
+    step = ra.AnalysisStep(
+        step_id="adjusted_model",
+        planned_analysis_role="primary",
+        intent="Fit the Planner-owned adjusted model.",
+        inputs=["derived_exposure", "death"],
+        expected_outputs=["table:adjusted_association_estimates"],
+        method="adjusted_association_models",
+        icu_rule_refs=[
+            "Do not use measurement or source-status flags as adjustment covariates."
+        ],
+        model_requirements=[
+            {
+                "requirement_id": "primary_model",
+                "outcome": "death",
+                "outcome_type": "binary",
+                "method_family": "logistic_regression",
+                "exposure_source": "derived_exposure",
+                "analysis_role": "primary",
+                "analysis_set": "source_aware",
+                "required_for_step_success": True,
+            }
+        ],
+    )
+
+    prompt = ra.LLMConceptAuditor(ra.MockLLMClient())._prompt(
+        context=context,
+        script_text=(
+            "X = frame[['derived_exposure', 'derived_exposure_measured']]\n"
+            "model.fit(X, frame['death'])"
+        ),
+        step=step,
+    )
+
+    assert "Planner-declared step contract below is binding scientific authority" in prompt
+    assert '"method":"adjusted_association_models"' in prompt
+    assert '"requirement_id":"primary_model"' in prompt
+    assert "Do not use measurement or source-status flags" in prompt
+    assert '"derived_from_concepts":["component_a","component_b"]' in prompt
+    assert "do not require the generated script to load or filter on each raw component" in prompt
+    assert "not automatic adjustment covariates" in prompt
+    assert "deterministic missing-indicator complement" in prompt
+    assert "`>= 0` retains both zero and one" in prompt
 
 
 def test_llm_concept_auditor_downgrades_finalized_exposure_rederivation_demand(ra):

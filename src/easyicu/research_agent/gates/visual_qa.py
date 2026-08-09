@@ -28,8 +28,19 @@ import xml.etree.ElementTree as ET
 from typing import Any, Dict, Iterable, List, NamedTuple, Optional, Sequence, Set, Tuple
 
 from ..providers.protocol import LLMClient, LLMMessage
-from ..providers.factory import authorized_complete, authorized_complete_with_images
+from ..providers.factory import (
+    authorized_complete,
+    authorized_complete_with_images,
+    provider_transport_destination,
+)
 from ..schema import ValidationFinding
+from .figure_egress import (
+    TRANSPORT_COMPLETED,
+    TRANSPORT_FAILED,
+    FigureEgressError,
+    FigureEgressPolicy,
+    authorize_figure_upload,
+)
 
 
 class _TextBox(NamedTuple):
@@ -625,25 +636,68 @@ class VLMVisualQAAdapter:
         *,
         max_tokens: int = 1024,
         temperature: float = 0.0,
+        egress_policy: Optional[FigureEgressPolicy] = None,
     ) -> None:
         self.llm = llm
         self.max_tokens = int(max_tokens)
         self.temperature = float(temperature)
+        self.egress_policy = egress_policy
+
+    def _close_transport(
+        self, entries: Sequence[Dict[str, str]], outcome: str
+    ) -> None:
+        policy = self.egress_policy
+        if policy is None or not entries:
+            return
+        policy.record_transport_outcome(entries, outcome)
 
     def audit(self, *, figure_paths: Sequence[Path]) -> List[ValidationFinding]:
         paths = [Path(p) for p in figure_paths if Path(p).exists()]
         if not paths:
             return []
         prompt = self._prompt(paths)
-        try:
-            if hasattr(self.llm, "complete_with_images"):
-                raw = authorized_complete_with_images(
-                    self.llm,
-                    prompt=prompt,
-                    image_paths=paths,
-                    max_tokens=self.max_tokens,
-                    temperature=self.temperature,
+        findings: List[ValidationFinding] = []
+        send_images = hasattr(self.llm, "complete_with_images")
+        authorized: List[Dict[str, str]] = []
+        if send_images:
+            # Provider authorization answers "may this client reach that URL".
+            # It does not answer "may these image bytes leave the machine",
+            # which is a different question with a different default.
+            try:
+                authorized = authorize_figure_upload(
+                    paths,
+                    policy=self.egress_policy,
+                    destination=provider_transport_destination(self.llm),
                 )
+            except FigureEgressError as exc:
+                send_images = False
+                findings.append(
+                    ValidationFinding(
+                        validator=self.name,
+                        severity="warning",
+                        message=(
+                            "Figure bytes were not uploaded; visual QA ran on "
+                            f"figure metadata only: {exc}"
+                        ),
+                        detail={"reason": "figure_egress_denied"},
+                    )
+                )
+        try:
+            if send_images:
+                # The gate cleared these bytes; whether they reached the
+                # provider is a separate fact and is recorded as one.
+                try:
+                    raw = authorized_complete_with_images(
+                        self.llm,
+                        prompt=prompt,
+                        image_paths=paths,
+                        max_tokens=self.max_tokens,
+                        temperature=self.temperature,
+                    )
+                except BaseException:
+                    self._close_transport(authorized, TRANSPORT_FAILED)
+                    raise
+                self._close_transport(authorized, TRANSPORT_COMPLETED)
             else:
                 raw = authorized_complete(
                     self.llm,
@@ -661,14 +715,16 @@ class VLMVisualQAAdapter:
                     temperature=self.temperature,
                 )
         except Exception as exc:
-            return [
+            return findings + [
                 ValidationFinding(
                     validator=self.name,
                     severity="warning",
                     message=f"VLM visual QA failed: {exc}",
                 )
             ]
-        return parse_vlm_visual_qa_response(raw, known_paths=paths, validator=self.name)
+        return findings + parse_vlm_visual_qa_response(
+            raw, known_paths=paths, validator=self.name
+        )
 
     def _prompt(self, paths: Sequence[Path]) -> str:
         metadata = [_figure_metadata(p) for p in paths]
@@ -689,8 +745,13 @@ class VLMVisualQAAdapter:
 
 
 def _figure_metadata(path: Path) -> Dict[str, Any]:
+    # ``name`` only. The absolute path names the operator's account, the run
+    # directory and often the study — host layout that the text outbound
+    # projection strips everywhere else, and that a metadata-only degrade path
+    # has no reason to reinstate. The model addresses figures by name, and the
+    # response parser already maps a bare name back to the full path.
     out: Dict[str, Any] = {
-        "path": str(path),
+        "path": path.name,
         "name": path.name,
         "bytes": path.stat().st_size if path.exists() else 0,
     }

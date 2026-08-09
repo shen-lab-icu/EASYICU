@@ -209,30 +209,48 @@ def test_empty_blocked_schedule_executes_nothing() -> None:
     assert state.executed_step_ids == {"00_probe"}
 
 
-def test_sequential_worker_exception_propagates_unchanged() -> None:
+def test_sequential_worker_exception_stops_the_run_without_escaping() -> None:
+    """A raising step ends the run here instead of unwinding past pipeline.run.
+
+    This replaces an earlier test that asserted the exception propagated
+    unchanged. Propagation is what killed fresh16: nothing above this call
+    sealed a manifest, so a real run ended with a bare traceback and a run
+    directory that never named the failing step. See
+    ``test_step_exception_does_not_kill_the_run.py``.
+
+    Both properties the old test protected are kept: a raised step still must
+    not transition, and the exception itself is still surfaced -- now handed to
+    the caller, which owns record shape, rather than thrown past it.
+    """
+
     from easyicu.research_agent.execution.run_coordination import (
         RunCoordinator,
         RunExecutionState,
     )
 
     expected = RuntimeError("step failed")
+    surfaced: list[BaseException] = []
 
     def fail(step: AnalysisStep):
         raise expected
 
-    with pytest.raises(RuntimeError) as raised:
-        RunCoordinator().run_sequential(
-            state=RunExecutionState(
-                remaining_steps=[_step("01")],
-                executed_step_ids=set(),
-            ),
-            execute_step=fail,
-            resolve_transition=lambda step, record, has_remaining: pytest.fail(
-                "failed step must not transition"
-            ),
-            apply_revised_plan=lambda plan, executed: [],
-        )
-    assert raised.value is expected
+    state = RunExecutionState(
+        remaining_steps=[_step("01")],
+        executed_step_ids=set(),
+    )
+    RunCoordinator().run_sequential(
+        state=state,
+        execute_step=fail,
+        resolve_transition=lambda step, record, has_remaining: pytest.fail(
+            "failed step must not transition"
+        ),
+        apply_revised_plan=lambda plan, executed: [],
+        on_step_exception=lambda step, error: surfaced.append(error),
+    )
+
+    assert surfaced == [expected]
+    assert surfaced[0] is expected
+    assert state.stop_reason == "step_raised:01:RuntimeError"
 
 
 def test_parallel_workers_use_supplied_context_submitter_and_report_errors() -> None:

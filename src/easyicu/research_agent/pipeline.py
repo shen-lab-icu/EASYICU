@@ -35,12 +35,16 @@ import asyncio
 import csv
 import io
 import json
+import functools
 import logging
 import math
+import os
+from copy import deepcopy
 import re
 import shutil
 import textwrap
 import threading
+import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
@@ -53,6 +57,7 @@ logger = logging.getLogger(__name__)
 
 from .agents.core import (
     AnalyzerAgent,
+    infer_analysis_type,
     ClinicalSemanticsAgent,
     CoderAgent,
     CriticAgent,
@@ -77,6 +82,7 @@ from .authority.figure_renderer import (
     _sealed_renderer_figure_step_matches_parent,
 )
 from .providers.cost import CostMeter, metered_role_resolver
+from .providers.hard_stop import HardStopClient
 from .figures.distribution_availability import (
     _distribution_availability_figure_step_matches_parent,
 )
@@ -136,16 +142,14 @@ from .research_context.builder import (
 from .research_context.typed import parse_research_context_json
 from .gates.preplan import preplan_data_failure_reason, preplan_data_findings
 from .authority.context_numeric_claims import register_context_numeric_claims
+from .authority.declared_levels import bind_step_declared_levels
 from .authority.table_one_binding import (
     bind_table_one_execution_spec,
     restore_table_one_private_checkpoint,
     write_table_one_private_checkpoint,
 )
-from .authority.plan_scope import (
-    _serializable_plan_scientific_scope_signature,
-    completed_step_record_matches_plan,
-    verified_plan_scientific_scope_count,
-    verified_plan_evidence_rank,
+from .authority.resume_plan import (
+    load_compatible_resume_plan as _load_compatible_resume_plan,
 )
 from .authority import pipeline_cache as _pipeline_cache
 from .planning.analysis_blueprint import (
@@ -153,12 +157,18 @@ from .planning.analysis_blueprint import (
     render_analysis_blueprint_for_prompt,
     validate_plan_against_analysis_blueprint,
 )
+from .planning.cohort_contract import cohort_definition_has_explicit_selection
 from .reporting.article_contract import (
     build_article_analysis_contract,
     validate_plan_against_article_contract,
 )
 from .planning.figure_strategy import build_article_figure_strategy
-from .orchestration.config import PipelineConfig
+from .orchestration.config import (
+    PipelineConfig,
+    assert_step_provider_budget_funds_its_repairs,
+)
+from .orchestration.services import PipelineServices
+from .orchestration.workflow import PipelineRunOutcome
 from .resources.capability_runtime import CapabilityWorkflowRuntime
 from .contracts.runtime import (
     RunResult,
@@ -177,13 +187,11 @@ from .concept_dict_audit import (
     write_concept_dict_fingerprint,
 )
 from .cohort.schema import (
-    COHORT_LOCK_FILENAME,
-    _load_locked_cohort_definition,
+    CohortAuthorityError,
     ensure_cohort_definition,
     materialize_locked_analysis_cohort,
     write_locked_cohort_definition,
 )
-from .planning.cohort_contract import cohort_definition_sha
 from .intake.materialized_metadata import (
     MaterializedCohortAuthorityRef,
     MaterializedMetadataError,
@@ -199,6 +207,7 @@ from .intake.materialized_trajectory import (
     VerifiedLegacyTrajectoryCapsuleReceipt,
     VerifiedMaterializedTrajectoryAuthority,
     load_verified_materialized_trajectory_authority,
+    long_trajectory_is_bound,
     stage_legacy_trajectory_exact,
     stage_materialized_trajectory_authority,
 )
@@ -210,7 +219,9 @@ from .robustness.panel import (
 )
 from .trajectory.plan_contract import (
     augment_trajectory_plan_products,
+    non_trajectory_clustering_stability_guide,
     trajectory_plan_dag_findings,
+    trajectory_planner_contract_guide,
     trajectory_step_roles,
 )
 from .reporting.readiness import (
@@ -251,9 +262,9 @@ from .authority.evidence_store import (
     _coerce_enforcement_mode,
     sha256_of_file,
 )
-from .authority.evidence_snapshot import load_current_evidence_snapshot
 from .learning.experience import (
     ExperienceBank,
+    ExperienceBankCorruptError,
     ExperienceRecord,
     mine_experience_from_run,
 )
@@ -315,6 +326,7 @@ from .plan_utils import (
     _cap_plan_preserving_figure_steps,
     _clustering_contract_applies,
     _cohort_definition_contract_findings,
+    endpoint_contract_findings,
     _cohort_definition_is_empty,
     _ensure_audit_panel_step_in_plan,
     _ensure_publication_figure_step_in_plan,
@@ -359,6 +371,7 @@ from .providers.llm import (
     resolve_role_client,
 )
 from .providers.mocks import MockLLMClient
+from .providers.prompt_budget import budgeted_role_client
 from .providers.protocol import LLMClient, LLMMessage
 from .learning.memory import RunMemory
 from .learning.runtime import ReviewedMemoryRuntime
@@ -371,7 +384,10 @@ from .execution.runner import (
     reject_reserved_runner_env,
     select_safe_runner_kind,
 )
-from .execution.method_capabilities import set_runtime_capability_snapshot_provider
+from .execution.method_capabilities import (
+    runtime_capability_job_scope,
+    set_runtime_capability_snapshot_provider,
+)
 from .concept_availability import normalize_database_name
 from .schema import (
     AgentRuntimeState,
@@ -424,7 +440,18 @@ from .authority.run_input import (
     seal_run_input_capsule,
     verify_legacy_trajectory_capsule_receipt,
 )
-from .authority.run_lock import current_locked_run_id, exclusive_run_execution
+from .authority.plan_review import ReviewExecutionAuthority
+from .canonical_json import canonical_sha256
+from .authority.run_lock import (
+    acquire_run_execution_lock,
+    current_locked_run_id,
+    exclusive_run_execution,
+)
+from .authority.run_heartbeat import (
+    bind_active_run_heartbeat,
+    record_active_run_progress,
+    run_heartbeat_scope,
+)
 from .audits.validators import (
     ClinicalConstraintValidator,
     ConceptUsageAuditor,
@@ -436,6 +463,7 @@ from .audits.validators import (
     StatisticalValidator,
     dedupe_findings,
 )
+from .gates.figure_egress import FigureEgressPolicy
 from .gates.visual_qa import VLMVisualQAAdapter, VisualQAAuditor
 
 
@@ -443,6 +471,28 @@ from .orchestration.finalize import (
     _concept_dictionary_manifest_fields,  # noqa: F401
     _render_cost_summary,  # noqa: F401
 )
+
+
+def _one_capability_job(method: Callable[..., Any]) -> Callable[..., Any]:
+    """Bind a public entry point to one runtime-capability publication scope.
+
+    Applied at the entry point rather than around each
+    ``set_runtime_capability_snapshot_provider`` call because publication has
+    to outlive the runner constructor that performs it — the coder prompt is
+    rendered later. The boundary that matters is the job: whatever a job
+    publishes is visible for the whole job and gone once the job returns,
+    including when it returns a ``HumanReviewPending`` or raises.
+
+    A decorator keeps this a three-line change to a ~900-line method; the
+    alternative would be re-indenting the whole body into a ``with`` block.
+    """
+
+    @functools.wraps(method)
+    def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
+        with runtime_capability_job_scope():
+            return method(self, *args, **kwargs)
+
+    return wrapper
 
 
 def _defer_typed_plan_dag_findings_until_probe(
@@ -477,106 +527,6 @@ def _defer_typed_plan_dag_findings_until_probe(
             )
         )
     return deferred
-
-
-def _resume_plan_candidate_paths(
-    *,
-    run_dir: Path,
-    resume_state: Optional[Dict[str, Any]],
-) -> List[Path]:
-    """Return digest-verified immutable plan evidence, newest first.
-
-    Live ``analysis_plan*.json`` files are mutable runtime conveniences and can
-    be re-serialized under a newer schema during resume. They are never plan
-    authority. The evidence copies retain the planner/replanner bytes and are
-    usable only after path containment and SHA-256 verification.
-    """
-
-    del resume_state  # Evidence authority supersedes a mutable manifest path.
-    records = list(load_current_evidence_snapshot(run_dir).records)
-
-    ranked: List[tuple[int, int, Path]] = []
-    for index, record in enumerate(records):
-        if not isinstance(record, dict):
-            continue
-        revision = verified_plan_evidence_rank(record)
-        if revision is None:
-            continue
-        verified_path = verified_run_evidence_path(run_dir, record)
-        if verified_path is not None:
-            ranked.append((revision, index, verified_path))
-
-    candidates = [path for _revision, _index, path in sorted(ranked, reverse=True)]
-
-    unique: List[Path] = []
-    seen: set[Path] = set()
-    for candidate in candidates:
-        resolved = candidate.resolve()
-        if resolved in seen:
-            continue
-        seen.add(resolved)
-        unique.append(candidate)
-    return unique
-
-
-def _load_compatible_resume_plan(
-    *,
-    run_dir: Path,
-    resume_state: Optional[Dict[str, Any]],
-) -> tuple[Optional[AnalysisPlan], Optional[Path]]:
-    """Load the newest saved plan compatible with completed resume steps."""
-    locked_cohort_sha256: Optional[str] = None
-    if (run_dir / COHORT_LOCK_FILENAME).exists():
-        locked_cohort_sha256 = cohort_definition_sha(
-            _load_locked_cohort_definition(run_dir)
-        )
-    completed_records = [
-        record
-        for record in current_successful_step_records(
-            (resume_state or {}).get("per_step_records") or []
-        )
-        if record.get("step_id") and record.get("step_id") != "00_probe"
-    ]
-    completed_step_ids = {str(record.get("step_id")) for record in completed_records}
-    candidates = _resume_plan_candidate_paths(
-        run_dir=run_dir,
-        resume_state=resume_state,
-    )
-    plan_scope_count = verified_plan_scientific_scope_count(candidates)
-    for candidate in candidates:
-        try:
-            plan = AnalysisPlan.model_validate(
-                json.loads(candidate.read_text(encoding="utf-8"))
-            )
-        except Exception:
-            continue
-        if locked_cohort_sha256 is not None and (
-            plan.cohort is None
-            or cohort_definition_sha(plan.cohort) != locked_cohort_sha256
-        ):
-            # Plan revisions are allowed to change unfinished steps, never the
-            # already sealed cohort authority.  Skip an incomplete/drifted
-            # revision and try the next digest-verified ancestor.
-            continue
-        step_by_id = {step.step_id: step for step in plan.steps}
-        if not plan.steps or not completed_step_ids <= set(step_by_id):
-            continue
-        compatible = True
-        expected_plan_scope = _serializable_plan_scientific_scope_signature(plan)
-        for record in completed_records:
-            step_id = str(record.get("step_id") or "")
-            if not completed_step_record_matches_plan(
-                record,
-                step=step_by_id[step_id],
-                expected_plan_scope=expected_plan_scope,
-                plan_scope_count=plan_scope_count,
-                completed_records=completed_records,
-            ):
-                compatible = False
-                break
-        if compatible:
-            return plan, candidate
-    return None, None
 
 
 class LegacyResumePlanMigrationError(RuntimeError):
@@ -1214,6 +1164,7 @@ def _migrate_legacy_resume_model_requirements(
     evidence: EvidenceStore,
     prompt_version: str,
     llm_signature: str,
+    max_prompt_tokens: Optional[int] = None,
 ) -> tuple[AnalysisPlan, Optional[Path], tuple[str, ...]]:
     """Ask the planner LLM to migrate an old empty typed-model roster.
 
@@ -1328,7 +1279,12 @@ def _migrate_legacy_resume_model_requirements(
         from .providers.structured_retry import call_llm_with_structured_retry
 
         packet = call_llm_with_structured_retry(
-            role_resolver("planner"),
+            budgeted_role_client(
+                role_resolver,
+                "planner",
+                "legacy_model_roster_migration",
+                limit_tokens=max_prompt_tokens,
+            ),
             messages,
             parser=lambda raw: _parse_legacy_model_roster_packet(
                 raw,
@@ -1415,167 +1371,151 @@ class ResearchAgentPipeline:
     """One-shot orchestration. Construct, call :meth:`run`, read the result."""
 
     @classmethod
-    def from_config(cls, config: PipelineConfig) -> "ResearchAgentPipeline":
-        """Construct a pipeline from a :class:`PipelineConfig` object.
-
-        The legacy keyword-argument form of ``__init__`` continues to
-        work; this classmethod is the recommended new-code entry point
-        because the config object is typed, copyable
-        (``config.with_overrides(...)``) and serialisable
-        (``config.as_kwargs()``).
-        """
-        return cls(**config.as_kwargs())
+    def from_config(
+        cls,
+        config: PipelineConfig,
+        services: Optional[PipelineServices] = None,
+    ) -> "ResearchAgentPipeline":
+        """Construct from the canonical configuration and service objects."""
+        return cls(config=config, services=services)
 
     def __init__(
         self,
         *,
-        workdir: Union[str, Path],
-        llm: Optional[LLMClient] = None,
-        timeout_seconds: float = 300.0,
-        standard_executor_timeout_seconds: float = 3_600.0,
-        python_executable: Optional[str] = None,
-        enable_literature: bool = True,
-        enable_visual_qa: bool = True,
-        enable_publication_figure_skill: bool = True,
-        enable_vlm_visual_qa: Optional[bool] = None,
-        vlm_client: Optional[LLMClient] = None,
-        visual_qa_adapter: Optional[VLMVisualQAAdapter] = None,
-        enable_llm_concept_audit: Optional[bool] = None,
-        llm_concept_auditor_client: Optional[LLMClient] = None,
-        enable_memory: bool = True,
-        enable_latex: bool = True,
-        latex_venue_template: str = "article",
-        manuscript_language: str = "en",
-        evidence_enforcement_mode: str = "soft",
-        disable_icu_context: bool = False,
-        context_top_k: Optional[int] = None,
-        max_code_repair_attempts: int = 3,
-        max_step_llm_repair_attempts: int = 2,
-        max_step_provider_calls: int = 7,
-        enable_deterministic_code_fallback: bool = False,
-        enable_deterministic_planner_fallback: bool = False,
-        enable_deterministic_runner_repair: bool = True,
-        enable_pubmed: bool = False,
-        pubmed_email: Optional[str] = None,
-        pubmed_api_key: Optional[str] = None,
-        enable_tavily: bool = False,
-        tavily_api_key: Optional[str] = None,
-        tavily_retmax: int = 5,
-        tavily_include_domains: Optional[Sequence[str]] = None,
-        tavily_exclude_domains: Optional[Sequence[str]] = None,
-        enable_cache: bool = False,
-        cache_dir: Optional[Union[str, Path]] = None,
-        enable_cost_tracking: bool = False,
-        cost_price_table: Optional[Dict[str, Any]] = None,
-        enable_reproducibility_envelope: bool = False,
-        llm_seed: Optional[int] = None,
-        execution_data_seed: Optional[int] = None,
-        execution_input_authority_sha256: Optional[str] = None,
-        envelope_include_previews: bool = False,
-        submission_profile_name: Optional[str] = None,
-        submission_profile_version: Optional[str] = None,
-        submission_profile_locked_at: Optional[str] = None,
-        expected_concept_dict_sha: Optional[str] = None,
-        expected_sofa2_dict_sha: Optional[str] = None,
-        enable_multiple_testing_correction: bool = True,
-        multiple_testing_alpha: float = 0.05,
-        enable_causal_audit: bool = True,
-        enable_reporting_checklist: bool = True,
-        reporting_checklist_names: Optional[Sequence[str]] = None,
-        task_kind: Optional[str] = None,
-        enable_reviewer_round: bool = True,
-        enable_fairness_subgroups: bool = True,
-        enable_hypothesis_generator: bool = False,
-        hypothesis_generator_top_k: int = 5,
-        enable_pdf_render: bool = False,
-        max_concurrent_steps: int = 1,
-        development_sample_size: Optional[int] = None,
-        development_sample_seed: int = 20260719,
-        development_diagnostic: bool = False,
-        enable_probe_step: bool = True,
-        enable_replanning: bool = True,
-        max_total_steps: int = 12,
-        max_consecutive_noop_replans: int = 2,
-        max_replans: int = 6,
-        stabilization_mode: bool = False,
-        max_numeric_claims_per_step: int = 100,
-        writer_digest_widened: bool = False,
-        writer_digest_secondary_cap_per_step: int = 20,
-        enable_experience_bank: bool = False,
-        experience_bank_path: Optional[Union[str, Path]] = None,
-        experience_bank_top_k: int = 5,
-        experience_bank_min_similarity: float = 0.2,
-        enable_know_how: bool = False,
-        enable_coder_resources: bool = False,
-        enable_reviewed_memory: bool = False,
-        reviewed_memory_namespaces: Sequence[str] = (),
-        enable_capability_workflow: bool = False,
-        expected_runner_image_digest: Optional[str] = None,
-        capability_request: Optional[Mapping[str, object]] = None,
-        capability_approval: Optional[Mapping[str, object]] = None,
-        capability_activation: Optional[Mapping[str, object]] = None,
-        know_how_paths: Sequence[Union[str, Path]] = (),
-        know_how_top_k: int = 3,
-        know_how_min_score: float = 0.15,
-        runner_kind: str = "auto",
-        runner_image: Optional[str] = None,
-        runner_network: str = "none",
-        host_runner_authorized: bool = False,
-        runner_factory: Optional[Callable[..., Any]] = None,
-        runner_kwargs: Optional[Dict[str, Any]] = None,
-        case_plugin_registry: Optional[Any] = None,
+        config: Optional[PipelineConfig] = None,
+        services: Optional[PipelineServices] = None,
+        **legacy_options: Any,
     ) -> None:
-        # Snapshot the construction kwargs into a typed config object for
-        # introspection / replay / serialisation. The body below still reads
-        # from local variables directly (so the legacy ``__init__(**kwargs)``
-        # signature stays unchanged); ``self._config`` is purely a view onto
-        # what we were given.
-        self._config: PipelineConfig = PipelineConfig.from_kwargs(
-            **{k: v for k, v in locals().items() if k != "self"}
-        )
+        """Construct a pipeline from declarative settings and live services.
+
+        The flat keyword form is retained as an EasyICU 1.x compatibility
+        adapter. New code should pass config=PipelineConfig(...) and, when
+        needed, services=PipelineServices(...).
+        """
+        if config is not None and legacy_options:
+            names = ", ".join(sorted(legacy_options))
+            raise TypeError(
+                "config= is the complete declarative source; do not combine it "
+                f"with legacy option(s): {names}"
+            )
+        if config is None:
+            warnings.warn(
+                "Flat ResearchAgentPipeline keyword construction is deprecated; "
+                "pass config=PipelineConfig(...) and services=PipelineServices(...).",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            services, config_options = PipelineServices.split_legacy_kwargs(
+                legacy_options,
+                services=services,
+            )
+            config = PipelineConfig.from_kwargs(**config_options)
+        else:
+            services = services or PipelineServices()
+
+        self._config = config
+        self._services = services
         # Lazy import to avoid pulling the plugin registry module if no
         # plugins are configured (the default).
         from .fallback import CasePluginRegistry as _CasePluginRegistry
 
-        self._case_plugin_registry = case_plugin_registry or _CasePluginRegistry()
-        self.workdir = Path(workdir).resolve()
+        self._case_plugin_registry = (
+            services.case_plugin_registry or _CasePluginRegistry()
+        )
+        self.workdir = Path(config.workdir).resolve()
         self.workdir.mkdir(parents=True, exist_ok=True)
-        self._llm = llm
-        self._timeout_seconds = timeout_seconds
-        self._standard_executor_timeout_seconds = standard_executor_timeout_seconds
-        self._python_executable = python_executable
-        self._enable_literature = enable_literature
-        self._enable_visual_qa = enable_visual_qa
-        self._enable_publication_figure_skill = bool(enable_publication_figure_skill)
-        self._vlm_client = vlm_client
-        self._visual_qa_adapter = visual_qa_adapter
-        self._llm_concept_auditor_client = llm_concept_auditor_client
-        if enable_vlm_visual_qa is None:
+        self._llm = services.llm
+        self._provider_hard_stop = services.provider_hard_stop
+        hard_stop_config = {
+            "max_provider_attempts_per_run": config.max_provider_attempts_per_run,
+            "max_provider_attempts_per_batch": config.max_provider_attempts_per_batch,
+            "max_total_tokens_per_run": config.max_total_tokens_per_run,
+            "max_total_tokens_per_batch": config.max_total_tokens_per_batch,
+            "max_estimated_cost_usd_per_batch": (
+                config.max_estimated_cost_usd_per_batch
+            ),
+            "max_wall_clock_seconds_per_task": (config.max_wall_clock_seconds_per_task),
+            "input_cost_usd_per_million_tokens": (
+                config.provider_input_cost_usd_per_million_tokens
+            ),
+            "output_cost_usd_per_million_tokens": (
+                config.provider_output_cost_usd_per_million_tokens
+            ),
+        }
+        hard_stop_configured = any(
+            value is not None for value in hard_stop_config.values()
+        )
+        if hard_stop_configured != (self._provider_hard_stop is not None):
+            raise ValueError(
+                "Provider hard-stop limits and live enforcement service must "
+                "be supplied together"
+            )
+        if self._provider_hard_stop is not None:
+            from .authority.provider_hard_stop import ProviderHardStopLimits
+
+            expected_hard_stop = ProviderHardStopLimits(
+                **hard_stop_config  # type: ignore[arg-type]
+            )
+            if self._provider_hard_stop.ledger.limits != expected_hard_stop:
+                raise ValueError(
+                    "Provider hard-stop service limits differ from PipelineConfig"
+                )
+        self._timeout_seconds = config.timeout_seconds
+        self._standard_executor_timeout_seconds = (
+            config.standard_executor_timeout_seconds
+        )
+        self._python_executable = config.python_executable
+        self._enable_literature = config.enable_literature
+        self._enable_visual_qa = config.enable_visual_qa
+        self._enable_publication_figure_skill = bool(
+            config.enable_publication_figure_skill
+        )
+        self._vlm_client = services.vlm_client
+        self._visual_qa_adapter = services.visual_qa_adapter
+        # Deny-by-default: a rendered figure is not covered by the text
+        # outbound projection, so uploading its bytes to an external VLM is a
+        # separate decision from authorizing the provider.
+        self._allow_external_figure_upload = bool(config.allow_external_figure_upload)
+        self._llm_concept_auditor_client = services.llm_concept_auditor_client
+        if (
+            self._provider_hard_stop is not None
+            and self._llm_concept_auditor_client is not None
+            and not isinstance(self._llm_concept_auditor_client, HardStopClient)
+        ):
+            # An explicitly injected concept auditor bypasses the normal role
+            # resolver in execution/phase.py. Wrap it here so a paid audit
+            # cannot escape the same durable run/batch stop-loss.
+            self._llm_concept_auditor_client = HardStopClient(
+                self._llm_concept_auditor_client,
+                role="concept_auditor",
+                task=self._provider_hard_stop,
+            )
+        if config.enable_vlm_visual_qa is None:
             self._enable_vlm_visual_qa = bool(
-                visual_qa_adapter is not None
-                or llm_supports_vision(vlm_client)
-                or llm_supports_vision(llm)
+                services.visual_qa_adapter is not None
+                or llm_supports_vision(services.vlm_client)
+                or llm_supports_vision(services.llm)
             )
         else:
-            self._enable_vlm_visual_qa = bool(enable_vlm_visual_qa)
-        if enable_llm_concept_audit is None:
-            concept_client = llm_concept_auditor_client or llm
+            self._enable_vlm_visual_qa = bool(config.enable_vlm_visual_qa)
+        if config.enable_llm_concept_audit is None:
+            concept_client = services.llm_concept_auditor_client or services.llm
             self._enable_llm_concept_audit = bool(
                 concept_client is not None and not llm_is_mockish(concept_client)
             )
         else:
-            self._enable_llm_concept_audit = bool(enable_llm_concept_audit)
-        self._enable_memory = enable_memory
-        self._enable_latex = enable_latex
-        self._latex_venue_template = latex_venue_template or "article"
-        lang = (manuscript_language or "en").lower()
+            self._enable_llm_concept_audit = bool(config.enable_llm_concept_audit)
+        self._enable_memory = config.enable_memory
+        self._enable_latex = config.enable_latex
+        self._latex_venue_template = config.latex_venue_template or "article"
+        lang = (config.manuscript_language or "en").lower()
         self._manuscript_language = (
             "zh" if lang.startswith(("zh", "cn", "chinese")) else "en"
         )
         # Stored as the canonical Enum so downstream code can compare
         # against EvidenceEnforcementMode.STRICT without string casing.
         self._evidence_enforcement_mode = _coerce_enforcement_mode(
-            evidence_enforcement_mode
+            config.evidence_enforcement_mode
         )
         # T1.4 — when set, the pipeline strips the ICU rules out of the
         # context that drives planning, coding and validation. This is the
@@ -1584,45 +1524,63 @@ class ResearchAgentPipeline:
         # deliberately rejected at run entry because exposing its V2 physical
         # facts would contaminate that ablation, while sealing it as V1 would
         # discard the authority contract.
-        self._disable_icu_context = bool(disable_icu_context)
-        self._context_top_k = int(context_top_k) if context_top_k else None
-        self._max_code_repair_attempts = max(0, int(max_code_repair_attempts))
-        self._max_step_llm_repair_attempts = max(0, int(max_step_llm_repair_attempts))
-        self._max_step_provider_calls = max(0, int(max_step_provider_calls))
+        self._disable_icu_context = bool(config.disable_icu_context)
+        self._context_top_k = (
+            int(config.context_top_k) if config.context_top_k else None
+        )
+        self._max_code_repair_attempts = max(0, int(config.max_code_repair_attempts))
+        self._max_step_llm_repair_attempts = max(
+            0, int(config.max_step_llm_repair_attempts)
+        )
+        self._max_step_provider_calls = max(0, int(config.max_step_provider_calls))
+        self._max_prompt_tokens_per_call = max(
+            1, int(config.max_prompt_tokens_per_call)
+        )
+        # Re-check after resolving the optional service-dependent concept-audit
+        # flag. PipelineConfig cannot know whether an injected client makes an
+        # ``enable_llm_concept_audit=None`` decision true, so only this layer
+        # can count the reserved audit call exactly.
+        assert_step_provider_budget_funds_its_repairs(
+            max_step_provider_calls=self._max_step_provider_calls,
+            max_code_repair_attempts=self._max_code_repair_attempts,
+            max_step_llm_repair_attempts=self._max_step_llm_repair_attempts,
+            llm_concept_audit_enabled=bool(self._enable_llm_concept_audit),
+            allow_underfunded=bool(config.allow_underfunded_step_provider_calls),
+        )
         self._enable_deterministic_code_fallback = bool(
-            enable_deterministic_code_fallback
+            config.enable_deterministic_code_fallback
         )
         self._enable_deterministic_planner_fallback = bool(
-            enable_deterministic_planner_fallback
+            config.enable_deterministic_planner_fallback
         )
         self._enable_deterministic_runner_repair = bool(
-            enable_deterministic_runner_repair
+            config.enable_deterministic_runner_repair
         )
         # T2.2 — opt-in PubMed live search. Off by default so CI and
         # the offline demo stay deterministic; the LiteratureAgent
         # handles network failure gracefully (empty list → curated
         # registry only).
-        self._enable_pubmed = bool(enable_pubmed)
-        self._pubmed_email = pubmed_email
-        self._pubmed_api_key = pubmed_api_key
+        self._enable_pubmed = bool(config.enable_pubmed)
+        self._pubmed_email = config.pubmed_email
+        self._pubmed_api_key = config.pubmed_api_key
         # O5 — opt-in Tavily web search for preprints/guidelines/trial
         # registries that PubMed may not index. Off by default so CI
         # and offline demos remain deterministic.
-        self._enable_tavily = bool(enable_tavily)
-        self._tavily_api_key = tavily_api_key
-        self._tavily_retmax = int(tavily_retmax)
-        self._tavily_include_domains = list(tavily_include_domains or [])
-        self._tavily_exclude_domains = list(tavily_exclude_domains or [])
+        self._enable_tavily = bool(config.enable_tavily)
+        self._tavily_api_key = config.tavily_api_key
+        self._tavily_retmax = int(config.tavily_retmax)
+        self._tavily_include_domains = list(config.tavily_include_domains or [])
+        self._tavily_exclude_domains = list(config.tavily_exclude_domains or [])
         # T3.5 — cohort cache. When enabled, identical re-runs (same
         # cohort hash + same skill/question/llm signature) short-circuit
         # to the prior run_dir's PipelineResult instead of repeating
         # the entire pipeline. Off by default so production users opt
         # in deliberately and tests that *want* full pipeline
         # execution every time keep their existing semantics.
-        self._enable_cache = bool(enable_cache)
+        self._enable_cache = bool(config.enable_cache)
         self._cache_dir = (
-            Path(cache_dir).resolve()
-            if cache_dir is not None
+            Path(config.cache_dir).resolve()
+            if config.cache_dir is not None
             else self.workdir / ".cache"
         )
         self._cache = _pipeline_cache.PipelineCache(self._cache_dir)
@@ -1633,67 +1591,90 @@ class ResearchAgentPipeline:
         # ``manifest.cost_records`` plus ``cost_summary.md`` and
         # ``cost_records.json`` artefacts. Off by default so the
         # default pipeline behaviour stays bit-identical.
-        self._enable_cost_tracking = bool(enable_cost_tracking)
-        self._cost_price_table = cost_price_table
+        self._enable_cost_tracking = bool(config.enable_cost_tracking)
+        self._cost_price_table = config.cost_price_table
         # O20 — Reproducibility envelope. Records prompt/response
         # sha256, requested seed, temperature, provider/model, and a
         # PHI-safe environment snapshot for every LLM call the pipeline
         # makes. Off by default so the base pipeline behaviour stays
         # bit-identical; turn on when a paper reviewer asks for an
         # auditable replay bundle.
-        self._enable_reproducibility_envelope = bool(enable_reproducibility_envelope)
-        self._llm_seed = int(llm_seed) if llm_seed is not None else None
-        self._envelope_include_previews = bool(envelope_include_previews)
-        self._submission_profile_name = submission_profile_name
-        self._submission_profile_version = submission_profile_version
-        self._submission_profile_ref = (
-            f"{submission_profile_name}/{submission_profile_version}"
+        self._enable_reproducibility_envelope = bool(
+            config.enable_reproducibility_envelope
         )
-        self._submission_profile_locked_at = submission_profile_locked_at
-        self._expected_concept_dict_sha = expected_concept_dict_sha
-        self._expected_sofa2_dict_sha = expected_sofa2_dict_sha
+        self._llm_seed = int(config.llm_seed) if config.llm_seed is not None else None
+        # The seed reaches a provider request through exactly one path: the
+        # envelope's recording client, which forwards it when the inner client
+        # accepts it. With the envelope off there is no such path, yet the
+        # execution identity stamps ``llm_seed`` unconditionally -- so a run
+        # was frozen claiming a seed no request ever carried. Submission
+        # profiles turn the envelope on, so the paper path was honest and only
+        # development runs recorded the false claim; that is the harder case to
+        # notice, not the safer one. Refuse instead of stamping a promise the
+        # transport cannot keep.
+        if self._llm_seed is not None and not self._enable_reproducibility_envelope:
+            raise ValueError(
+                "llm_seed is set but enable_reproducibility_envelope is False: "
+                "the seed would be recorded in the execution identity without "
+                "being sent to any provider request. Enable the envelope, or "
+                "leave llm_seed unset."
+            )
+        self._envelope_include_previews = bool(config.envelope_include_previews)
+        self._submission_profile_name = config.submission_profile_name
+        self._submission_profile_version = config.submission_profile_version
+        self._submission_profile_ref = (
+            f"{config.submission_profile_name}/{config.submission_profile_version}"
+        )
+        self._submission_profile_locked_at = config.submission_profile_locked_at
+        self._expected_concept_dict_sha = config.expected_concept_dict_sha
+        self._expected_sofa2_dict_sha = config.expected_sofa2_dict_sha
         # O22 — family-aware multiple-testing correction. Defaults to ON
         # because reviewers of a research-agent paper will always ask
         # for it; the correction is cheap to compute and does not
         # rewrite existing artefacts.
         self._enable_multiple_testing_correction = bool(
-            enable_multiple_testing_correction
+            config.enable_multiple_testing_correction
         )
-        self._multiple_testing_alpha = float(multiple_testing_alpha)
+        self._multiple_testing_alpha = float(config.multiple_testing_alpha)
         # O18 — Causal audit. Deterministic: labels every primary
         # effect as associational vs causal, scans bound manuscript
         # for causal language over associational effects, emits
         # warnings/errors. Default ON because the cost of a paper
         # that silently sells an OR as causal is high.
-        self._enable_causal_audit = bool(enable_causal_audit)
+        self._enable_causal_audit = bool(config.enable_causal_audit)
         # O16 — Reporting-guideline checklist. STROBE always; TRIPOD+AI
         # when the analysis looks like a prediction model. Default ON
         # because ICU journals routinely require the checklist.
-        self._enable_reporting_checklist = bool(enable_reporting_checklist)
+        self._enable_reporting_checklist = bool(config.enable_reporting_checklist)
         self._reporting_checklist_names = (
-            tuple(reporting_checklist_names) if reporting_checklist_names else None
+            tuple(config.reporting_checklist_names)
+            if config.reporting_checklist_names
+            else None
         )
         # Authoritative benchmark task kind (e.g. "subphenotype_clustering"),
         # used to decide kind-specific reporting-checklist applicability rather
         # than relying on fragile manuscript wording. Optional outside the bench.
-        self._benchmark_task_kind = task_kind
+        self._benchmark_task_kind = config.task_kind
+        self._required_primary_cohort_selection_mode = (
+            config.required_primary_cohort_selection_mode
+        )
         # O15 — Three-role reviewer round (statistician / clinician /
         # methodologist) driven off already-computed evidence and
         # findings. Deterministic; no extra LLM calls. Default ON.
-        self._enable_reviewer_round = bool(enable_reviewer_round)
+        self._enable_reviewer_round = bool(config.enable_reviewer_round)
         # O24 — Fairness / subgroup analysis for the primary effect.
         # Deterministic (pure numpy); runs after E-values.
-        self._enable_fairness_subgroups = bool(enable_fairness_subgroups)
+        self._enable_fairness_subgroups = bool(config.enable_fairness_subgroups)
         # O17 — Front-door hypothesis generator. Runs early (plan phase)
         # to emit a ranked candidate list; does not change the
         # downstream plan unless the user reassigns ``question``.
-        self._enable_hypothesis_generator = bool(enable_hypothesis_generator)
-        self._hypothesis_generator_top_k = int(hypothesis_generator_top_k)
+        self._enable_hypothesis_generator = bool(config.enable_hypothesis_generator)
+        self._hypothesis_generator_top_k = int(config.hypothesis_generator_top_k)
         # PDF rendering (TexLive optional). Off by default because not
         # every CI environment has a LaTeX install; turn on when the
         # user actually wants ``manuscript_scaffold.pdf`` next to the
         # ``.tex`` and ``.bib``.
-        self._enable_pdf_render = bool(enable_pdf_render)
+        self._enable_pdf_render = bool(config.enable_pdf_render)
         # T3.3 — concurrent step execution. The canonical AnalysisPlan
         # has independent steps (each step reads the cohort and writes
         # to its own out_dir), so a small thread pool can shrink the
@@ -1701,10 +1682,10 @@ class ResearchAgentPipeline:
         # bit-identical sequential behaviour for users who don't opt
         # in. EvidenceStore guards its mutators with an RLock so a
         # higher value is safe.
-        self._max_concurrent_steps = max(1, int(max_concurrent_steps))
+        self._max_concurrent_steps = max(1, int(config.max_concurrent_steps))
         self._development_sample_size = (
-            int(development_sample_size)
-            if development_sample_size is not None
+            int(config.development_sample_size)
+            if config.development_sample_size is not None
             else None
         )
         if (
@@ -1712,46 +1693,69 @@ class ResearchAgentPipeline:
             and self._development_sample_size <= 0
         ):
             raise ValueError("development_sample_size must be positive")
-        self._development_sample_seed = int(development_sample_seed)
-        self._development_diagnostic = bool(development_diagnostic)
+        self._development_sample_seed = int(config.development_sample_seed)
+        self._development_diagnostic = bool(config.development_diagnostic)
         if (
             self._development_sample_size is not None
-            and submission_profile_name is not None
+            and config.submission_profile_name is not None
         ):
             raise ValueError(
                 "development cohort sampling is non-paper authority and cannot "
                 "be combined with a submission profile"
             )
-        if self._development_diagnostic and submission_profile_name is not None:
+        if self._development_diagnostic and config.submission_profile_name is not None:
             raise ValueError(
                 "development diagnostics are non-paper authority and cannot "
                 "be combined with a submission profile"
             )
-        self._enable_probe_step = bool(enable_probe_step)
-        self._enable_replanning = bool(enable_replanning)
+        from .orchestration.profiles import is_paper_facing_profile
+
+        if config.allow_underfunded_step_provider_calls and is_paper_facing_profile(
+            config.submission_profile_name
+        ):
+            # Declaring the shortfall makes it visible; it does not make it
+            # paper authority. A submission run whose steps could exhaust their
+            # provider budget mid-repair reports an accounting failure in the
+            # shape of a scientific one. Keyed off paper-facing rather than
+            # "a profile was supplied", so `*_dev` profiles can still exercise
+            # exhaustion.
+            raise ValueError(
+                "an under-funded provider budget is non-paper authority and "
+                "cannot be combined with a paper-facing submission profile"
+            )
+        self._enable_probe_step = bool(config.enable_probe_step)
+        self._enable_replanning = bool(config.enable_replanning)
         # 0 / None means "no cap". Anything positive enforces the cap in
         # the replanner overflow guard (see execution/phase.py).
         self._max_total_steps = (
-            int(max_total_steps) if max_total_steps and max_total_steps > 0 else 0
+            int(config.max_total_steps)
+            if config.max_total_steps and config.max_total_steps > 0
+            else 0
         )
         # Replan convergence guards (see pipeline_config / execution.phase).
         # 0 disables the guard.
         self._max_consecutive_noop_replans = (
-            int(max_consecutive_noop_replans)
-            if max_consecutive_noop_replans and max_consecutive_noop_replans > 0
+            int(config.max_consecutive_noop_replans)
+            if config.max_consecutive_noop_replans
+            and config.max_consecutive_noop_replans > 0
             else 0
         )
-        self._max_replans = int(max_replans) if max_replans and max_replans > 0 else 0
+        self._max_replans = (
+            int(config.max_replans)
+            if config.max_replans and config.max_replans > 0
+            else 0
+        )
         # Stabilization / primary-only iterations tighten the replan budget so a
         # non-converging run fails closed fast (~3 revisions) instead of burning
         # the full-run budget of 6. A caller that already set a smaller positive
         # cap keeps it; a disabled cap (0) is re-armed to 3 under stabilization.
-        self._stabilization_mode = bool(stabilization_mode)
+        self._stabilization_mode = bool(config.stabilization_mode)
         if self._stabilization_mode:
             self._max_replans = min(self._max_replans, 3) if self._max_replans else 3
         self._max_numeric_claims_per_step = (
-            int(max_numeric_claims_per_step)
-            if max_numeric_claims_per_step and max_numeric_claims_per_step > 0
+            int(config.max_numeric_claims_per_step)
+            if config.max_numeric_claims_per_step
+            and config.max_numeric_claims_per_step > 0
             else 0
         )
         # Phase-1 writer-digest widening (default off). When True, the
@@ -1760,36 +1764,47 @@ class ResearchAgentPipeline:
         # ``WRITER_DIGEST_PREFERRED_KEYS`` primary subset. The binder
         # already accepts these; the flag controls only what the
         # writer SEES. See reporting.writer_evidence._render_writer_evidence_digest_v2.
-        self._writer_digest_widened = bool(writer_digest_widened)
+        self._writer_digest_widened = bool(config.writer_digest_widened)
         self._writer_digest_secondary_cap_per_step = max(
-            0, int(writer_digest_secondary_cap_per_step)
+            0, int(config.writer_digest_secondary_cap_per_step)
         )
         # Legacy cross-run stores are write-only compatibility sources.
         # Their free-text records are never injected into Planner context.
         # Run-derived records are additionally mirrored into the v2
         # permissioned quarantine store during finalization.
-        self._enable_experience_bank = bool(enable_experience_bank)
+        self._enable_experience_bank = bool(config.enable_experience_bank)
         self._experience_bank_path: Optional[Path] = (
-            Path(experience_bank_path) if experience_bank_path else None
+            Path(config.experience_bank_path) if config.experience_bank_path else None
         )
-        self._experience_bank_top_k = max(0, int(experience_bank_top_k))
-        self._experience_bank_min_similarity = float(experience_bank_min_similarity)
-        self._enable_know_how = bool(enable_know_how)
-        self._enable_coder_resources = bool(enable_coder_resources)
-        self._enable_reviewed_memory = bool(enable_reviewed_memory)
-        self._reviewed_memory_namespaces = tuple(reviewed_memory_namespaces)
+        self._experience_bank_top_k = max(0, int(config.experience_bank_top_k))
+        self._experience_bank_min_similarity = float(
+            config.experience_bank_min_similarity
+        )
+        self._enable_know_how = bool(config.enable_know_how)
+        self._enable_coder_resources = bool(config.enable_coder_resources)
+        self._enable_reviewed_memory = bool(config.enable_reviewed_memory)
+        self._reviewed_memory_namespaces = tuple(config.reviewed_memory_namespaces)
         self._capability_runtime = CapabilityWorkflowRuntime.create(
-            enabled=enable_capability_workflow,
-            profile_name=submission_profile_name,
-            profile_version=submission_profile_version,
-            expected_image_digest=expected_runner_image_digest,
-            request=capability_request,
-            approval=capability_approval,
-            activation=capability_activation,
+            enabled=config.enable_capability_workflow,
+            profile_name=config.submission_profile_name,
+            profile_version=config.submission_profile_version,
+            expected_image_digest=config.expected_runner_image_digest,
+            request=config.capability_request,
+            approval=config.capability_approval,
+            activation=config.capability_activation,
         )
-        self._know_how_paths = tuple(Path(path) for path in know_how_paths)
-        self._know_how_top_k = int(know_how_top_k)
-        self._know_how_min_score = float(know_how_min_score)
+        # Operator-supplied control plane for the human-review pause. The
+        # optional ``reviewer_identity_resolver`` supplies authenticated
+        # identity. Left ``None`` a run cannot answer a pause, so a plan that
+        # raises one fails closed rather than continuing unattended.
+        self._human_review_gate = services.human_review_gate
+        # Set by ``run()`` when the workflow pauses; consumed by
+        # ``resume_human_review()``. Holds the state machine because its phase
+        # invokers close over this run's evidence store and services.
+        self._pending_human_review: Optional[Dict[str, Any]] = None
+        self._know_how_paths = tuple(Path(path) for path in config.know_how_paths)
+        self._know_how_top_k = int(config.know_how_top_k)
+        self._know_how_min_score = float(config.know_how_min_score)
         if not 0 <= self._know_how_top_k <= 5:
             raise ValueError("know_how_top_k must be between 0 and 5")
         if not 0.0 <= self._know_how_min_score <= 1.0:
@@ -1797,22 +1812,22 @@ class ResearchAgentPipeline:
         from .orchestration.profiles import require_profile_know_how_setting
 
         require_profile_know_how_setting(
-            name=submission_profile_name,
-            version=submission_profile_version,
+            name=config.submission_profile_name,
+            version=config.submission_profile_version,
             enabled=self._enable_know_how,
         )
         from .orchestration.profiles import require_profile_coder_resource_setting
 
         require_profile_coder_resource_setting(
-            name=submission_profile_name,
-            version=submission_profile_version,
+            name=config.submission_profile_name,
+            version=config.submission_profile_version,
             enabled=self._enable_coder_resources,
         )
         from .orchestration.profiles import require_profile_reviewed_memory_setting
 
         require_profile_reviewed_memory_setting(
-            name=submission_profile_name,
-            version=submission_profile_version,
+            name=config.submission_profile_name,
+            version=config.submission_profile_version,
             enabled=self._enable_reviewed_memory,
             namespaces=self._reviewed_memory_namespaces,
         )
@@ -1824,8 +1839,8 @@ class ResearchAgentPipeline:
         # (e.g. OpenHands) can pass an arbitrary ``runner_factory``
         # that accepts ``workdir=, cohort_parquet=, timeout_seconds=``
         # and returns a runner with a ``run(step_id, code)`` method.
-        kind = (runner_kind or "auto").lower()
-        if runner_factory is not None:
+        kind = (config.runner_kind or "auto").lower()
+        if services.runner_factory is not None:
             self._runner_kind = "custom"
         elif kind in {"auto", "default"}:
             self._runner_kind = "auto"
@@ -1835,27 +1850,45 @@ class ResearchAgentPipeline:
             self._runner_kind = "docker"
         else:
             raise ValueError(
-                f"Unknown runner_kind {runner_kind!r}; "
+                f"Unknown runner_kind {config.runner_kind!r}; "
                 "expected 'auto', 'subprocess', 'docker', or pass a runner_factory."
             )
-        self._runner_image = runner_image
-        self._runner_network = runner_network
-        self._expected_runner_image_digest = expected_runner_image_digest
-        self._host_runner_authorized = bool(host_runner_authorized)
-        self._runner_factory = runner_factory
-        self._runner_kwargs = dict(runner_kwargs or {})
+        self._runner_image = config.runner_image
+        self._runner_network = config.runner_network
+        self._expected_runner_image_digest = config.expected_runner_image_digest
+        self._host_runner_authorized = bool(config.host_runner_authorized)
+        self._runner_factory = services.runner_factory
+        self._runner_kwargs = dict(config.runner_kwargs or {})
         self._validated_runtime_capabilities: Optional[Tuple[str, ...]] = None
         self._validated_runtime_bundle: Optional[Dict[str, object]] = None
-        self._memory = RunMemory(self.workdir) if enable_memory else None
+        self._memory = RunMemory(self.workdir) if config.enable_memory else None
         self._permissioned_memory_store = (
             FileSystemMemoryStore(self.workdir / ".memory_v2")
-            if enable_memory or enable_experience_bank or enable_reviewed_memory
+            if config.enable_memory
+            or config.enable_experience_bank
+            or config.enable_reviewed_memory
             else None
         )
         self._reviewed_memory_runtime = ReviewedMemoryRuntime(
             enabled=self._enable_reviewed_memory,
             store=self._permissioned_memory_store,
             allowed_namespaces=self._reviewed_memory_namespaces,
+        )
+
+    def _figure_egress_policy(
+        self,
+        *,
+        evidence: Optional[Any] = None,
+        run_dir: Optional[Path] = None,
+        active_step_evidence_ids: Optional[frozenset] = None,
+    ) -> FigureEgressPolicy:
+        """Authority for putting rendered figure bytes on the network."""
+
+        return FigureEgressPolicy(
+            allow_external_upload=self._allow_external_figure_upload,
+            evidence=evidence,
+            run_dir=run_dir,
+            active_step_evidence_ids=active_step_evidence_ids,
         )
 
     def _build_runner(
@@ -1970,6 +2003,10 @@ class ResearchAgentPipeline:
         effective_timeout_seconds = (
             self._timeout_seconds if timeout_seconds is None else float(timeout_seconds)
         )
+        if self._provider_hard_stop is not None:
+            effective_timeout_seconds = self._provider_hard_stop.cap_timeout(
+                effective_timeout_seconds
+            )
         if self._runner_factory is not None:
             # A user-supplied factory (OpenHands, firecracker, ...) also needs
             # the run's outcome column so deterministic repairs resolve it from
@@ -1996,6 +2033,7 @@ class ResearchAgentPipeline:
                     image=self._runner_image,
                     network=self._runner_network,
                     extra_env=extra_env,
+                    submission_profile_name=self._submission_profile_name,
                     **runner_kwargs,
                 )
             else:
@@ -2110,6 +2148,13 @@ class ResearchAgentPipeline:
         emit_progress: Callable[..., None],
     ) -> _PlanPhaseResult:
         """Build context, attach memory, and emit an execution plan."""
+        # The Planner is refused a trajectory design unless the host can see a
+        # trajectory, and ResearchContext only ever shows the wide fixed-window
+        # representation.  Answering here, from the same predicate the execution
+        # phase uses, is what lets the trajectory contract be raised while the
+        # Planner can still act on it -- H3 previously met that contract only
+        # after its last revision, so it never got to satisfy it.
+        long_trajectory_bound = long_trajectory_is_bound(trajectory_binding)
         context_path = run_dir / "research_context.json"
         if resume_context_evidence_path is not None:
             # Resume context authority is the digest-verified evidence copy,
@@ -2531,8 +2576,14 @@ class ResearchAgentPipeline:
         article_contract = None
         article_figure_strategy = None
         analysis_blueprint = None
+        planning_contract_context = ""
         try:
-            study_design_brief = build_study_design_brief(agent_context)
+            # Contract scope comes only from the frozen user/data context.
+            # Prompt-enrichment notes include generic examples such as
+            # "external validation" and "transportability"; feeding those
+            # generated notes back into adaptive trigger inference would
+            # silently widen a single-database study.
+            study_design_brief = build_study_design_brief(context)
             study_design_path = run_dir / "study_design_brief.json"
             study_design_path.write_text(
                 study_design_brief.model_dump_json(indent=2),
@@ -2552,7 +2603,7 @@ class ResearchAgentPipeline:
                     generation_mode="deterministic_skill",
                 )
             article_contract = build_article_analysis_contract(
-                agent_context,
+                context,
                 brief=study_design_brief,
             )
             article_contract_path = run_dir / "article_analysis_contract.json"
@@ -2573,7 +2624,7 @@ class ResearchAgentPipeline:
                     producer="study_design_scout",
                     generation_mode="deterministic_skill",
                 )
-            article_figure_strategy = build_article_figure_strategy(agent_context)
+            article_figure_strategy = build_article_figure_strategy(context)
             figure_strategy_path = run_dir / "article_figure_strategy.json"
             figure_strategy_path.write_text(
                 article_figure_strategy.model_dump_json(indent=2),
@@ -2593,7 +2644,7 @@ class ResearchAgentPipeline:
                     generation_mode="deterministic_skill",
                 )
             analysis_blueprint = build_analysis_blueprint(
-                agent_context,
+                context,
                 brief=study_design_brief,
                 contract=article_contract,
                 figure_strategy=article_figure_strategy,
@@ -2617,6 +2668,7 @@ class ResearchAgentPipeline:
                     generation_mode="deterministic_skill",
                 )
             design_note = render_analysis_blueprint_for_prompt(analysis_blueprint)
+            planning_contract_context = design_note
             agent_notes = (
                 f"{agent_context.notes}\n\n{design_note}"
                 if agent_context.notes
@@ -2634,6 +2686,63 @@ class ResearchAgentPipeline:
                     ),
                 )
             )
+        if self._required_primary_cohort_selection_mode is not None:
+            population_contract = (
+                "CALLER-BOUND PRIMARY COHORT MODE: set "
+                "AnalysisPlan.cohort.selection_mode exactly to "
+                f"{self._required_primary_cohort_selection_mode!r}. "
+            )
+            if self._required_primary_cohort_selection_mode == "all_input_rows":
+                population_contract += (
+                    "Keep cohort.inclusion and cohort.exclusion empty; do not "
+                    "invent a completeness, anchor, or proxy eligibility filter."
+                )
+            else:
+                population_contract += (
+                    "Declare at least one typed inclusion/exclusion predicate."
+                )
+            planning_contract_context = "\n\n".join(
+                value
+                for value in (planning_contract_context, population_contract)
+                if value
+            )
+
+        # The Planner prompt renders this guide itself, but from the context
+        # alone -- which carries only the wide representation. A run whose
+        # trajectory is bound as the long typed input therefore saw nothing,
+        # and was then refused by a gate that DOES know about that tier. Only
+        # the pipeline holds the flag, so it supplies the guide the prompt
+        # could not build, and only when the prompt's own attempt came back
+        # empty, so a wide-column run is never told twice.
+        analysis_type_key = infer_analysis_type(agent_context).key
+        trajectory_planning_guides = []
+        if long_trajectory_bound and not trajectory_planner_contract_guide(
+            context=agent_context,
+            analysis_type=analysis_type_key,
+        ):
+            trajectory_planning_guides.append(
+                trajectory_planner_contract_guide(
+                    context=agent_context,
+                    analysis_type=analysis_type_key,
+                    long_trajectory_bound=True,
+                )
+            )
+        # The converse case: a group-discovery study with no trajectory in
+        # either representation is still asked for a stability audit, and the
+        # only typed stability field it can see belongs to the trajectory
+        # calculator. Declaring that field is what refused m3's whole plan.
+        trajectory_planning_guides.append(
+            non_trajectory_clustering_stability_guide(
+                context=agent_context,
+                analysis_type=analysis_type_key,
+                long_trajectory_bound=long_trajectory_bound,
+            )
+        )
+        planning_contract_context = "\n\n".join(
+            value
+            for value in (planning_contract_context, *trajectory_planning_guides)
+            if value
+        )
 
         for client in self._iter_mock_clients(llm):
             client.context = agent_context
@@ -2650,6 +2759,32 @@ class ResearchAgentPipeline:
                 seed=self._llm_seed,
                 include_previews=self._envelope_include_previews,
             )
+        if repro_envelope is not None:
+            base_role_resolver = envelope_role_resolver(
+                llm,
+                repro_envelope,
+                seed=self._llm_seed,
+            )
+        else:
+
+            def base_role_resolver(role: str):
+                return resolve_role_client(llm, role)
+
+        if self._provider_hard_stop is not None:
+
+            def stopped_role_resolver(role: str):
+                base = base_role_resolver(role)
+                if base is None or isinstance(base, HardStopClient):
+                    return base
+                return HardStopClient(
+                    base,
+                    role=role,
+                    task=self._provider_hard_stop,
+                )
+
+        else:
+            stopped_role_resolver = base_role_resolver
+
         if self._enable_cost_tracking:
             cost_meter = (
                 CostMeter(
@@ -2661,57 +2796,30 @@ class ResearchAgentPipeline:
                 if self._cost_price_table is not None
                 else CostMeter(runtime_dir=run_dir / ".runtime")
             )
-            # Order: envelope wraps the innermost client so prompt /
-            # response hashes are computed on the exact strings the
-            # agent sent / received; the metered layer then receives usage
-            # owned by that same response through ``complete_with_usage``.
-            if repro_envelope is not None:
-                env_resolver = envelope_role_resolver(
-                    llm,
-                    repro_envelope,
-                    seed=self._llm_seed,
-                )
 
-                class _EnvelopeShim:
-                    """Bridges a ``role -> client`` resolver back into an LLMClient-like object.
+            # Order: envelope -> hard stop -> meter. The hard-stop wrapper
+            # reserves every raw transport retry before delivery; the meter
+            # receives usage from that same call for the normal run manifest.
+            class _RoleResolverShim:
+                name = "role_resolver_shim"
 
-                    ``metered_role_resolver`` expects an object it can
-                    call ``resolve_role_client`` on. The shim exposes
-                    ``for_role`` so the downstream resolver takes our
-                    envelope-wrapped client as the inner client.
-                    """
+                def __init__(self, resolver):
+                    self._resolver = resolver
 
-                    name = "envelope_shim"
+                def for_role(self, role: str):
+                    return self._resolver(role)
 
-                    def __init__(self, resolver):
-                        self._resolver = resolver
+                def complete(self, *args, **kwargs):  # pragma: no cover
+                    raise RuntimeError(
+                        "RoleResolverShim is a dispatcher; call for_role() first."
+                    )
 
-                    def for_role(self, role: str):
-                        return self._resolver(role)
-
-                    # A no-op ``complete`` so static checks don't trip;
-                    # the real call always goes through ``for_role``.
-                    def complete(self, *args, **kwargs):  # pragma: no cover
-                        raise RuntimeError(
-                            "EnvelopeShim is a role dispatcher; call for_role() first."
-                        )
-
-                role_resolver = metered_role_resolver(
-                    _EnvelopeShim(env_resolver),
-                    cost_meter,
-                )
-            else:
-                role_resolver = metered_role_resolver(llm, cost_meter)
-        elif repro_envelope is not None:
-            role_resolver = envelope_role_resolver(
-                llm,
-                repro_envelope,
-                seed=self._llm_seed,
+            role_resolver = metered_role_resolver(
+                _RoleResolverShim(stopped_role_resolver),
+                cost_meter,
             )
         else:
-
-            def role_resolver(role: str):
-                return resolve_role_client(llm, role)
+            role_resolver = stopped_role_resolver
 
         # Resume: reuse the locked plan from the prior run instead of
         # re-planning. A non-deterministic planner would otherwise emit a
@@ -2726,6 +2834,9 @@ class ResearchAgentPipeline:
             plan, _prior_plan_path = _load_compatible_resume_plan(
                 run_dir=run_dir,
                 resume_state=resume_state,
+                context=context,
+                evidence=evidence,
+                prompt_pack_version=PROMPT_PACK_VERSION,
             )
             if plan is not None and plan.steps:
                 restore_table_one_private_checkpoint(
@@ -2733,6 +2844,11 @@ class ResearchAgentPipeline:
                     plan=plan,
                     context=agent_context,
                 )
+                # The resumed plan is the one on disk, so it still carries the
+                # host's opaque placeholders; a resume that skipped this would
+                # execute a different declaration than the first attempt did.
+                for resumed_step in plan.steps:
+                    bind_step_declared_levels(resumed_step, agent_context)
                 know_how_binding.verify_resume(
                     plan.know_how_decisions,
                     enabled=self._enable_know_how,
@@ -2780,6 +2896,7 @@ class ResearchAgentPipeline:
                     evidence=evidence,
                     prompt_version=prompt_version,
                     llm_signature=llm_signature,
+                    max_prompt_tokens=self._max_prompt_tokens_per_call,
                 )
             )
             if migrated_plan_path is not None:
@@ -2907,9 +3024,13 @@ class ResearchAgentPipeline:
                     agent_context,
                     **know_how_binding.planner_kwargs,
                     enforce_article_contract=True,
+                    article_contract_context=context,
+                    planning_contract_context=planning_contract_context,
                 )
                 planner_prompt_metrics = know_how_binding.prompt_metrics(
-                    planner, agent_context
+                    planner,
+                    agent_context,
+                    planning_contract_context=planning_contract_context,
                 )
             except PlannerArticleContractError:
                 raise
@@ -2961,6 +3082,8 @@ class ResearchAgentPipeline:
                         agent_context,
                         **know_how_binding.planner_kwargs,
                         enforce_article_contract=True,
+                        article_contract_context=context,
+                        planning_contract_context=planning_contract_context,
                     )
                 except Exception:
                     retry_plan = None
@@ -3008,6 +3131,8 @@ class ResearchAgentPipeline:
                         agent_context,
                         **know_how_binding.planner_kwargs,
                         enforce_article_contract=True,
+                        article_contract_context=context,
+                        planning_contract_context=planning_contract_context,
                     )
                 except Exception:
                     cohort_retry = None
@@ -3037,6 +3162,7 @@ class ResearchAgentPipeline:
             plan, plan_contract_findings = _enforce_advanced_plan_contract(
                 plan=plan,
                 context=context,
+                long_trajectory_bound=long_trajectory_bound,
             )
             findings.extend(plan_contract_findings)
             plan, split_findings = _split_table_and_figure_outputs_in_plan(plan=plan)
@@ -3089,6 +3215,7 @@ class ResearchAgentPipeline:
                 for finding in trajectory_plan_dag_findings(
                     plan=plan,
                     context=context,
+                    long_trajectory_bound=long_trajectory_bound,
                 )
             )
             plan = ensure_cohort_definition(plan)
@@ -3098,6 +3225,10 @@ class ResearchAgentPipeline:
             # it), record a loud, auditable contract error instead of silently
             # running the analysis on the full universe.
             findings.extend(_cohort_definition_contract_findings(plan))
+        # The endpoint half of the same declaration, checked for every plan
+        # rather than only inside the cohort branch above: a family can require
+        # a typed endpoint whether or not it also defines an analysis cohort.
+        findings.extend(endpoint_contract_findings(plan, context=context))
         if study_design_brief is not None:
             if (
                 plan.analysis_type
@@ -3109,20 +3240,20 @@ class ResearchAgentPipeline:
                 # contract instead of letting provisional inference retain
                 # scientific headline authority.
                 final_brief = build_study_design_brief(
-                    agent_context,
+                    context,
                     analysis_type=plan.analysis_type,
                 )
                 final_contract = build_article_analysis_contract(
-                    agent_context,
+                    context,
                     brief=final_brief,
                     analysis_type=plan.analysis_type,
                 )
                 final_strategy = build_article_figure_strategy(
-                    agent_context,
+                    context,
                     analysis_family=final_brief.analysis_family,
                 )
                 final_blueprint = build_analysis_blueprint(
-                    agent_context,
+                    context,
                     brief=final_brief,
                     contract=final_contract,
                     figure_strategy=final_strategy,
@@ -3191,11 +3322,25 @@ class ResearchAgentPipeline:
                     blueprint=analysis_blueprint,
                 )
             )
+        if self._required_primary_cohort_selection_mode is not None:
+            observed_mode = str(getattr(plan.cohort, "selection_mode", "") or "")
+            if observed_mode != self._required_primary_cohort_selection_mode:
+                raise CohortAuthorityError(
+                    "Planner primary cohort selection mode does not match the "
+                    "caller-bound contract: expected "
+                    f"{self._required_primary_cohort_selection_mode!r}, observed "
+                    f"{observed_mode!r}"
+                )
+            if not cohort_definition_has_explicit_selection(plan.cohort):
+                raise CohortAuthorityError(
+                    "Planner primary cohort selection is not explicit"
+                )
         plan_path = (
             migrated_plan_path or reused_plan_path or (run_dir / "analysis_plan.json")
         )
         for planned_step in plan.steps:
             bind_table_one_execution_spec(planned_step, agent_context)
+            bind_step_declared_levels(planned_step, agent_context)
         write_table_one_private_checkpoint(run_dir=run_dir, plan=plan)
         if not reused_prior_plan:
             plan_path.write_text(plan.model_dump_json(indent=2), encoding="utf-8")
@@ -3274,17 +3419,36 @@ class ResearchAgentPipeline:
                     )
                 )
             elif analysis_cohort["status"] == "error":
+                # The comment above this block records why the materializer
+                # exists: run10/run11 left 纳排 to each generated step, and the
+                # primary model silently ran on the full universe. Falling back
+                # to "downstream steps must apply it themselves" on failure
+                # reinstates exactly that path, on a run that has already
+                # *locked* a cohort definition. A locked cohort that cannot be
+                # applied is a stop, not a warning.
                 findings.append(
                     ValidationFinding(
                         validator="cohort_materializer",
-                        severity="warning",
+                        severity="error",
                         message=(
-                            "Could not auto-apply the locked cohort definition to the "
-                            "universe; downstream steps read the unfiltered universe "
-                            "and must apply inclusion/exclusion themselves. Reason: "
-                            f"{analysis_cohort['error']}"
+                            "Could not apply the locked cohort definition to the "
+                            "universe. The run is stopped rather than analysing "
+                            "the unfiltered universe under a cohort the plan "
+                            f"declared. Reason: {analysis_cohort['error']}"
                         ),
+                        detail={
+                            "reason": "locked_cohort_not_materialized",
+                            "materializer_error": str(analysis_cohort["error"]),
+                            "cohort_definition_sha256": analysis_cohort.get(
+                                "cohort_definition_sha256"
+                            ),
+                        },
                     )
+                )
+                raise CohortAuthorityError(
+                    "the locked cohort definition could not be materialised "
+                    f"({analysis_cohort['error']}); refusing to continue on the "
+                    "unfiltered universe"
                 )
         emit_progress(
             "plan",
@@ -3491,12 +3655,22 @@ class ResearchAgentPipeline:
         bank = self._experience_bank()
         if bank is None:
             return []
-        return bank.retrieve(
-            research_question=research_question,
-            database=database,
-            top_k=self._experience_bank_top_k,
-            min_similarity=self._experience_bank_min_similarity,
-        )
+        try:
+            return bank.retrieve(
+                research_question=research_question,
+                database=database,
+                top_k=self._experience_bank_top_k,
+                min_similarity=self._experience_bank_min_similarity,
+            )
+        except ExperienceBankCorruptError:
+            # Plan with no bank rather than with an unprovable subset of one.
+            # Logged loudly: a corrupt shared bank is an operator problem that
+            # will otherwise recur on every run that reads it.
+            logger.error(
+                "experience bank %s is corrupt; planning without it",
+                self._experience_bank_path,
+            )
+            return []
 
     def reflect_and_persist_experience(
         self,
@@ -3569,6 +3743,7 @@ class ResearchAgentPipeline:
     # ------------------------------------------------------------------
 
     @exclusive_run_execution
+    @_one_capability_job
     def run(
         self,
         *,
@@ -3609,11 +3784,13 @@ class ResearchAgentPipeline:
         source_files: Optional[Sequence[Any]] = None,
         progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
         force_writer_probe: bool = False,
-    ) -> PipelineResult:
-        """Run the explicit Plan → Execute → Write phases for one cohort.
+    ) -> PipelineRunOutcome:
+        """Run the explicit Plan → Review → Execute → Write workflow.
 
-        LangGraph dispatches the phases while EasyICU's receipt, capsule,
-        evidence, and checkpoint remain the sole scientific authority.
+        Returns a :class:`PipelineResult` for a run that finished, or a
+        :class:`HumanReviewPending` for a run that stopped at the human-review
+        gate. The pause is not an error and carries no result: nothing
+        downstream of it executed. Answer it with :meth:`resume_human_review`.
         """
         skill_obj: Optional[ClinicalSkill] = None
         if skill is not None:
@@ -3637,6 +3814,26 @@ class ResearchAgentPipeline:
         if resume_run_id and self._capability_runtime.activation is not None:
             raise ValueError(
                 "Approved capability activation requires a new run; resume is forbidden"
+            )
+        # One instance holds exactly one pause. Starting a second run here used
+        # to overwrite ``_pending_human_review`` (on pause) or clear it (on
+        # completion), silently destroying a paused run that an operator was
+        # still deciding on: its live plan handoff cannot be rebuilt, so the
+        # Planner work was simply gone and ``resume_human_review`` reported no
+        # pending review at all. Refuse instead of discarding it. Each run also
+        # gets a fresh run id, so the run-level file lock cannot catch this.
+        blocking_pause = self._pending_human_review
+        if blocking_pause:
+            blocked_by = blocking_pause["pending"]
+            raise RuntimeError(
+                f"run {blocked_by.run_id!r} on this pipeline instance is paused "
+                "for human review and would be discarded by starting another "
+                "run. A pause holds a live plan handoff that cannot be "
+                "reconstructed, so it must be answered with "
+                "resume_human_review() (or abandoned by using a separate "
+                "ResearchAgentPipeline instance for the new run) before this "
+                "instance can start again. Pending review ids: "
+                + ", ".join(blocked_by.review_ids)
             )
         verified_source_authority = None
         authority_declared = (
@@ -3823,15 +4020,25 @@ class ResearchAgentPipeline:
         audit_logger: Optional[AuditLogger] = None
 
         def _emit_progress(stage: str, message: str, **extra: Any) -> None:
+            progress_status = str(extra.get("status", "running"))
+            progress_step_id = (
+                str(extra.get("step_id")) if extra.get("step_id") else None
+            )
+            record_active_run_progress(
+                stage=stage,
+                message=message,
+                status=progress_status,
+                step_id=progress_step_id,
+                phase_timeout_seconds=extra.get("phase_timeout_seconds"),
+                run_id=(str(extra.get("run_id")) if extra.get("run_id") else None),
+            )
             if audit_logger is not None:
                 try:
                     audit_logger.emit(
                         phase=stage,
                         event=message,
-                        status=str(extra.get("status", "running")),
-                        step_id=(
-                            str(extra.get("step_id")) if extra.get("step_id") else None
-                        ),
+                        status=progress_status,
+                        step_id=progress_step_id,
                         detail={
                             k: v
                             for k, v in extra.items()
@@ -4011,6 +4218,10 @@ class ResearchAgentPipeline:
         else:
             run_dir = self.workdir / run_id
             run_dir.mkdir(parents=True, exist_ok=True)
+        bind_active_run_heartbeat(
+            run_dir,
+            task_timeout_seconds=self._heartbeat_wall_clock_remaining(),
+        )
 
         if not resume_input_verified and spec_obj is not None:
             experiment_spec_path = dump_experiment_spec(
@@ -4147,7 +4358,7 @@ class ResearchAgentPipeline:
                 emit_progress=_emit_progress,
             )
 
-        from .graph import orchestration_runtime_receipt
+        from .orchestration.workflow import orchestration_runtime_receipt
 
         orchestration_receipt = orchestration_runtime_receipt()
         orchestration_receipt_path = run_dir / "orchestration_runtime.json"
@@ -4183,16 +4394,34 @@ class ResearchAgentPipeline:
                         generation_mode="system",
                     )
             except Exception as exc:
+                # A paper-facing profile claims the full raw EHR → cohort →
+                # analysis → manuscript chain. If the first link cannot be
+                # hashed, that claim is unsupported, so the run stops instead
+                # of finishing with a warning nobody reads. Development runs
+                # keep the warning: they make no provenance claim.
+                from .orchestration.profiles import is_paper_facing_profile
+
+                paper_facing = is_paper_facing_profile(self._submission_profile_name)
                 plan_result.findings.append(
                     ValidationFinding(
                         validator="provenance",
-                        severity="warning",
+                        severity="error" if paper_facing else "warning",
                         message=(
                             f"Failed to compute raw-EHR provenance bundle: "
                             f"{type(exc).__name__}: {exc}"
                         ),
+                        detail={
+                            "reason": "raw_ehr_provenance_unavailable",
+                            "submission_profile_name": self._submission_profile_name,
+                        },
                     )
                 )
+                if paper_facing:
+                    raise RuntimeError(
+                        "raw-EHR provenance could not be computed under submission "
+                        f"profile {self._submission_profile_name!r}; the "
+                        "manuscript's provenance chain would be incomplete"
+                    ) from exc
             if plan_result.evidence.get("orchestration_runtime") is None:
                 plan_result.evidence.register_file(
                     kind="log",
@@ -4285,25 +4514,375 @@ class ResearchAgentPipeline:
                 emit_progress=_emit_progress,
             )
 
-        from .graph import build_pipeline_graph
+        # The recorder needs this run's own EvidenceStore, which lives on the
+        # plan result rather than in ``run()``'s locals. Keep the live handoff
+        # for the supported same-process resume; the defensive reopen also
+        # makes direct recorder diagnostics fail closed instead of indexing an
+        # empty list.
+        reviewed_plan: List[Any] = []
 
-        graph = build_pipeline_graph(
+        def _review_evidence_store():
+            if reviewed_plan:
+                return reviewed_plan[-1].evidence
+            return EvidenceStore(
+                run_dir, enforcement_mode=self._evidence_enforcement_mode
+            )
+
+        def _human_review_invoker(plan_result):
+            from .orchestration.workflow import human_review_requests_for_plan
+
+            reviewed_plan.append(plan_result)
+            plan_evidence = getattr(plan_result, "evidence", None)
+            capsule_record = (
+                plan_evidence.get(RUN_INPUT_CAPSULE_EVIDENCE_ID)
+                if plan_evidence is not None
+                else None
+            )
+            if capsule_record is None:
+                requests_without_execution = human_review_requests_for_plan(
+                    findings=plan_result.findings,
+                    plan=plan_result.plan,
+                    evidence=plan_evidence,
+                )
+                if not requests_without_execution:
+                    return requests_without_execution
+                raise RuntimeError(
+                    "human review cannot bind execution identity because the "
+                    "run input capsule is absent"
+                )
+            submission_profile_ref = (
+                self._submission_profile_ref
+                if self._submission_profile_name and self._submission_profile_version
+                else None
+            )
+            execution_authority = ReviewExecutionAuthority(
+                pipeline_config_sha256=self._config.canonical_digest(),
+                submission_profile_ref=submission_profile_ref,
+                capability_activation_sha256=canonical_sha256(
+                    self._capability_runtime.activation.model_dump(mode="json")
+                    if self._capability_runtime.activation is not None
+                    else None
+                ),
+                run_input_capsule_sha256=str(capsule_record.sha256),
+            )
+            requests = human_review_requests_for_plan(
+                findings=plan_result.findings,
+                plan=plan_result.plan,
+                evidence=plan_evidence,
+                execution_authority=execution_authority,
+            )
+            return requests
+
+        def _human_review_recorder(records):
+            if not records:
+                return
+            from .orchestration.profiles import is_paper_facing_profile
+
+            decision_records = list(records)
+            if is_paper_facing_profile(self._submission_profile_name):
+                # Field names follow the workflow decision record,
+                # which emits a flat record. Reading a nested ``request`` key
+                # here raised KeyError on every real decision and turned the
+                # authentication check into a crash.
+                unauthenticated = [
+                    str(record.get("review_id") or "<unknown>")
+                    for record in decision_records
+                    if record.get("reviewer_identity_source") != "authenticated"
+                ]
+                if unauthenticated:
+                    raise RuntimeError(
+                        "human review under submission profile "
+                        f"{self._submission_profile_name!r} requires an "
+                        "authenticated reviewer identity; a client-claimed "
+                        "reviewer is diagnostic-only "
+                        f"(unauthenticated: {', '.join(unauthenticated)})"
+                    )
+            decisions_path = run_dir / "human_review_decisions.json"
+            decisions_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "easyicu.human_review_decisions/1",
+                        "run_id": run_id,
+                        "decisions": decision_records,
+                    },
+                    indent=2,
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+            # Registering into this run's own store is what puts the decision
+            # into the final manifest: workflow state is discarded at exit, so an
+            # unregistered approval leaves the run unable to answer who
+            # authorised it, against which digest, and when.
+            review_evidence = _review_evidence_store()
+            review_evidence.register_file(
+                kind="log",
+                description=(
+                    "Operator decisions for the human-review interrupts raised "
+                    "by this run, with server-stamped decision time and the "
+                    "authority digest each decision was bound to."
+                ),
+                source_path=decisions_path,
+                evidence_id="human_review_decisions",
+                producer="pipeline",
+                generation_mode="human_confirmed",
+            )
+            rejected_review_ids = [
+                str(record.get("review_id") or "<unknown>")
+                for record in decision_records
+                if record.get("decision") == "rejected"
+            ]
+            if rejected_review_ids:
+                # A rejection ends before the normal finalisation phase, so
+                # write the canonical run-level receipt here. This lets a
+                # restarted process distinguish a terminal operator refusal
+                # from a merely paused or abandoned run without reconstructing
+                # state from the decision log.
+                run_status_path = run_dir / "run_status.json"
+                run_status_path.write_text(
+                    json.dumps(
+                        {
+                            "schema_version": "easyicu.run_status/2",
+                            "run_id": run_id,
+                            "status": "human_review_rejected",
+                            "strict_fail_closed": True,
+                            "terminal_reason": "operator_rejected",
+                            "rejected_review_ids": rejected_review_ids,
+                            "gates": {
+                                "human_review_approved": False,
+                                "execution_complete": False,
+                                "manuscript_ready": False,
+                                "publication_ready": False,
+                                # The paper-authority contract is three axes.
+                                # State all three: a consumer that has to tell
+                                # "absent" from "explicitly false" is reading a
+                                # different schema from a completed run's.
+                                "publication_artifacts_ready": False,
+                                "execution_paper_eligible": False,
+                                "paper_authorized": False,
+                            },
+                            "canonical_outputs": {
+                                "human_review_decisions": (
+                                    "human_review_decisions.json"
+                                ),
+                                "run_status": "run_status.json",
+                            },
+                        },
+                        indent=2,
+                        sort_keys=True,
+                    ),
+                    encoding="utf-8",
+                )
+                review_evidence.register_file(
+                    kind="log",
+                    description=(
+                        "Fail-closed terminal status for an operator-rejected "
+                        "human-review pause."
+                    ),
+                    source_path=run_status_path,
+                    evidence_id="run_status",
+                    aliases=["run_status"],
+                    producer="pipeline",
+                    generation_mode="system",
+                )
+
+        gate = self._human_review_gate
+        from .orchestration.workflow import build_pipeline_workflow
+
+        workflow = build_pipeline_workflow(
             plan_invoker=_plan_invoker,
             execute_invoker=_execute_invoker,
             write_invoker=_write_invoker,
             finalise_invoker=_finalise_invoker,
             provenance_hook=_provenance_hook,
+            human_review_invoker=_human_review_invoker,
+            human_review_recorder=_human_review_recorder,
+            reviewer_identity_resolver=(
+                getattr(gate, "reviewer_identity_resolver", None)
+                if gate is not None
+                else None
+            ),
         )
-        final_state = graph.invoke({})
-        return final_state["final_result"]
+        outcome = workflow.start()
+        return self._pipeline_result_or_pending(
+            outcome,
+            workflow=workflow,
+            run_id=run_id,
+            run_dir=run_dir,
+        )
+
+    def _pipeline_result_or_pending(
+        self,
+        outcome: Any,
+        *,
+        workflow: Any,
+        run_id: str,
+        run_dir: Path,
+    ) -> Any:
+        """Return the run's result, or the typed pause that replaced it.
+
+        A run that stopped for human review has no ``PipelineResult`` because
+        nothing downstream of the pause executed.
+        """
+
+        from .orchestration.workflow import (
+            HumanReviewPending,
+            WorkflowCompleted,
+            WorkflowPaused,
+        )
+
+        if isinstance(outcome, WorkflowCompleted):
+            self._pending_human_review = None
+            return outcome.final_result
+
+        if not isinstance(outcome, WorkflowPaused):
+            raise RuntimeError(
+                "the pipeline workflow returned neither a completed result nor "
+                f"a human-review pause (outcome={type(outcome).__name__})"
+            )
+        pending = HumanReviewPending(
+            run_id=run_id,
+            thread_id=run_id,
+            run_dir=str(run_dir),
+            requests=outcome.requests,
+        )
+        # Held so ``resume_human_review`` can drive the same state machine: its
+        # invokers close over this run's evidence store, run dir and services.
+        self._pending_human_review = {
+            "workflow": workflow,
+            "pending": pending,
+            # Captured here, not read off the instance at resume time. A second
+            # run on the same pipeline overwrites
+            # ``_validated_runtime_capabilities`` during its own preflight, so
+            # a review approved against image A could otherwise be resumed
+            # under image B's allow-list — the environment the reviewer signed
+            # off is not the one that would finish the analysis. A tuple of
+            # import names, copied, not a provider callable.
+            # ``getattr`` rather than attribute access: this method is reached
+            # by test doubles that never ran ``__init__``, and a pause must not
+            # start failing because the capability fields are absent.
+            "runtime_capabilities": tuple(
+                getattr(self, "_validated_runtime_capabilities", None) or ()
+            ),
+            "runtime_bundle": deepcopy(
+                getattr(self, "_validated_runtime_bundle", None)
+            ),
+        }
+        return pending
+
+    @_one_capability_job
+    def resume_human_review(
+        self,
+        decisions: Sequence[Union[Any, Mapping[str, Any]]],
+        *,
+        run_id: Optional[str] = None,
+    ) -> Any:
+        """Answer the review that paused :meth:`run` and finish the run.
+
+        ``decisions`` must contain exactly one entry per paused request, each
+        carrying the request's own ``authority_sha256`` — the workflow rejects
+        a decision that does not bind the request it claims to answer, so an
+        approval cannot be replayed against a different pause.
+
+        Resume is ``same_process`` only (see
+        :data:`~easyicu.research_agent.orchestration.workflow.HUMAN_REVIEW_RESUME_SCOPE`);
+        the pause object states that in ``resume_scope``/``resume_pid`` so a
+        caller can check before asking a human for a decision it cannot deliver.
+        """
+
+        from .orchestration.workflow import (
+            HUMAN_REVIEW_RESUME_SCOPE,
+            HumanReviewRejected,
+        )
+
+        pending_state = self._pending_human_review
+        if not pending_state:
+            raise RuntimeError(
+                "no human review is pending on this pipeline instance. "
+                "resume_human_review() answers the pause returned by run(), "
+                "and that pause is resumable only in the process and pipeline "
+                "instance that produced it (HumanReviewPending.resume_scope == "
+                f"{HUMAN_REVIEW_RESUME_SCOPE!r}): the plan phase's live "
+                "evidence store cannot be checkpointed, so a new process has "
+                "nothing to resume from. Re-run instead."
+            )
+        pending = pending_state["pending"]
+        if not pending.resumable_here:
+            raise RuntimeError(
+                f"human review for run {pending.run_id!r} was paused in process "
+                f"{pending.resume_pid} and cannot be answered from process "
+                f"{os.getpid()}"
+            )
+        if run_id is not None and str(run_id) != pending.run_id:
+            raise RuntimeError(
+                f"pending human review belongs to run {pending.run_id!r}, "
+                f"not {str(run_id)!r}"
+            )
+        # The pause ended the run's capability scope, so the provider the
+        # runner published is gone. Republish the snapshot captured *at the
+        # pause* rather than whatever the instance holds now: a second run on
+        # this pipeline overwrites the instance field during its own preflight,
+        # and resuming under another image's allow-list would finish the
+        # analysis in an environment the reviewer never saw.
+        resumed_snapshot = tuple(pending_state.get("runtime_capabilities") or ())
+        if resumed_snapshot:
+            set_runtime_capability_snapshot_provider(lambda: resumed_snapshot)
+
+        payload = [
+            item if isinstance(item, Mapping) else item.model_dump(mode="json")
+            for item in decisions
+        ]
+        # Same writer lease ``run`` holds, bound to the paused run's own id
+        # rather than a fresh one: resuming writes into that run's directory
+        # and evidence store, so it must not proceed while another call is
+        # writing there. ``run`` returns when it pauses, releasing its lease,
+        # which is exactly why resume has to take one of its own.
+        workflow = pending_state["workflow"]
+        try:
+            with run_heartbeat_scope(run_id=pending.run_id):
+                bind_active_run_heartbeat(
+                    Path(pending.run_dir),
+                    task_timeout_seconds=self._heartbeat_wall_clock_remaining(),
+                )
+                with acquire_run_execution_lock(
+                    workdir=Path(self.workdir), run_id=pending.run_id
+                ):
+                    outcome = workflow.resume(payload)
+            return self._pipeline_result_or_pending(
+                outcome,
+                workflow=workflow,
+                run_id=pending.run_id,
+                run_dir=Path(pending.run_dir),
+            )
+        except HumanReviewRejected:
+            # The workflow has recorded the rejection and discarded its live
+            # handoff. Do not keep presenting the public pipeline pause as
+            # answerable or allow a later approval attempt against it.
+            self._pending_human_review = None
+            raise
+        except Exception:
+            # Validation failures leave the workflow paused so the caller can
+            # correct and resubmit the exact decision set. Once execution,
+            # writing or finalisation terminalises the workflow, however, the
+            # live handoff is no longer resumable and must not be retained.
+            if getattr(workflow, "state", None) in {
+                "failed",
+                "rejected",
+                "completed",
+            }:
+                self._pending_human_review = None
+            raise
 
     def run_from_spec(
         self,
         spec: Union[ExperimentSpec, Dict[str, Any]],
         *,
         progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
-    ) -> PipelineResult:
-        """Run the pipeline from a typed YAML/JSON experiment specification."""
+    ) -> PipelineRunOutcome:
+        """Run the pipeline from a typed YAML/JSON experiment specification.
+
+        Same two outcomes as :meth:`run`, which this delegates to.
+        """
         spec_obj = (
             spec
             if isinstance(spec, ExperimentSpec)
@@ -4314,12 +4893,18 @@ class ResearchAgentPipeline:
         kwargs["progress_callback"] = progress_callback
         return self.run(**kwargs)
 
-    async def run_async(self, **kwargs: Any) -> PipelineResult:
+    async def run_async(self, **kwargs: Any) -> PipelineRunOutcome:
         """Async wrapper for UI/API runtimes that need non-blocking orchestration."""
         return await asyncio.to_thread(self.run, **kwargs)
 
-    def run_with_graph(self, **kwargs: Any) -> PipelineResult:
-        """Backward-compatible alias for the sole LangGraph runtime."""
+    def run_with_graph(self, **kwargs: Any) -> PipelineRunOutcome:
+        """Deprecated alias retained for EasyICU 1.x callers."""
+        warnings.warn(
+            "run_with_graph() is deprecated; run() uses the sole explicit "
+            "EasyICU workflow.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         return self.run(**kwargs)
 
     def replicate(
@@ -4763,6 +5348,13 @@ class ResearchAgentPipeline:
     @staticmethod
     def _iter_mock_clients(llm: Any):
         yield from _pipeline_cache.iter_mock_clients(llm)
+
+    def _heartbeat_wall_clock_remaining(self) -> Optional[float]:
+        """Return the live task window rather than restarting it on resume."""
+
+        if self._provider_hard_stop is not None:
+            return self._provider_hard_stop.assert_active()
+        return self._config.max_wall_clock_seconds_per_task
 
     def _cache_flag_payload(self) -> Dict[str, Any]:
         """Return the bag of pipeline-level flags that participate in
@@ -10538,14 +11130,8 @@ _SEMANTIC_ALIAS_MAP: Dict[tuple, tuple] = {
         "table_one",
     ),
     ("", "cluster_mortality.csv"): ("cluster_mortality", "outcome_rate"),
-    ("", "clustering_algorithm_details.json"): (
-        "clustering_algorithm_details",
-        "clustering_methodology",
-    ),
-    ("", "clustering_methodology.json"): (
-        "clustering_methodology",
-        "cluster_summary",
-    ),
+    ("", "clustering_algorithm_details.json"): ("clustering_algorithm_details",),
+    ("", "clustering_methodology.json"): ("clustering_methodology",),
     # Figures.
     ("", "mortality_by_sofa2_stratum.png"): (
         "mortality_by_sofa2_stratum",
@@ -10624,16 +11210,21 @@ def _semantic_aliases_for(step: AnalysisStep, artefact: Path) -> List[str]:
             intent=intent,
             expected_outputs=step.expected_outputs or [],
         ):
-            out.extend(
-                [
-                    "cluster_summary",
-                    "cluster_characteristics",
-                    "cluster_mortality",
-                    "clustering_performance",
-                    "clustering_methodology",
-                    "table_one",
-                ]
-            )
+            out.append("clustering_performance")
+            if not (artefact.parent / "cluster_characteristics.csv").exists():
+                out.extend(
+                    ["cluster_summary", "cluster_characteristics", "table_one"]
+                )
+            if not (artefact.parent / "cluster_mortality.csv").exists():
+                out.append("cluster_mortality")
+            if not any(
+                (artefact.parent / name).exists()
+                for name in (
+                    "clustering_methodology.json",
+                    "clustering_algorithm_details.json",
+                )
+            ):
+                out.append("clustering_methodology")
         if (
             "robustness" in expected
             or "robustness" in intent
@@ -10663,6 +11254,11 @@ def _semantic_aliases_for(step: AnalysisStep, artefact: Path) -> List[str]:
         if step_substr and step_substr not in (step.step_id or "").lower():
             continue
         out.extend(aliases)
+    if (
+        artefact.name == "clustering_algorithm_details.json"
+        and not (artefact.parent / "clustering_methodology.json").exists()
+    ):
+        out.append("clustering_methodology")
     return out
 
 

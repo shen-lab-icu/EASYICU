@@ -147,13 +147,7 @@ class ExecutionInputAuthorityState:
     @property
     def trajectory_authority_sha256(self) -> Optional[str]:
         binding = self.trajectory_binding
-        if binding is None:
-            return None
-        if binding.authority_ref is not None:
-            return binding.authority_ref.sha256
-        if binding.legacy_capsule_receipt is not None:
-            return binding.legacy_capsule_receipt.capsule_sha256
-        return None
+        return binding.verified_authority_sha256 if binding is not None else None
 
     def rebind_cohort(self, *, plan: Any, context: Any) -> None:
         """Refresh the selected analysis-cohort child without changing inputs."""

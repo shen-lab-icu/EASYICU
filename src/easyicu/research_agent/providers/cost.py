@@ -102,6 +102,89 @@ class CostMeter:
         repr=False,
     )
 
+    def __post_init__(self) -> None:
+        """Recover completed call records from durable receipts on resume."""
+
+        if self.records or self.runtime_dir is None:
+            return
+        receipt_payloads = self._transport_receipt_payloads()
+        recovered: List[CostRecord] = []
+        for payload in receipt_payloads:
+            usage = payload.get("usage")
+            if payload.get("state") != "completed" or not isinstance(usage, dict):
+                continue
+            try:
+                prompt_tokens = max(0, int(usage.get("prompt_tokens") or 0))
+                completion_tokens = max(
+                    0,
+                    int(usage.get("completion_tokens") or 0),
+                )
+                model = str(payload.get("model") or "unknown")
+                timestamp = payload.get("started_at")
+                recovered.append(
+                    CostRecord(
+                        timestamp=timestamp,
+                        role=(
+                            str(payload["role"])
+                            if payload.get("role") is not None
+                            else None
+                        ),
+                        model=model,
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=completion_tokens,
+                        total_tokens=max(
+                            prompt_tokens + completion_tokens,
+                            int(usage.get("total_tokens") or 0),
+                        ),
+                        estimated_cost_usd=self.estimate_cost(
+                            model,
+                            prompt_tokens,
+                            completion_tokens,
+                        ),
+                        is_heuristic=bool(usage.get("is_heuristic")),
+                    )
+                )
+            except (TypeError, ValueError):
+                continue
+        if recovered:
+            self.records.extend(recovered)
+            return
+        legacy = Path(self.runtime_dir).parent / "cost_records.json"
+        if not legacy.exists():
+            return
+        try:
+            raw_records = json.loads(legacy.read_text(encoding="utf-8"))
+            if isinstance(raw_records, list):
+                self.records.extend(
+                    CostRecord.model_validate(item)
+                    for item in raw_records
+                    if isinstance(item, dict)
+                )
+        except (OSError, TypeError, ValueError, json.JSONDecodeError):
+            return
+
+    def _transport_receipt_payloads(self) -> List[Dict[str, Any]]:
+        if self.runtime_dir is None:
+            return []
+        receipt_dir = Path(self.runtime_dir) / "provider_transport_receipts"
+        if not receipt_dir.is_dir():
+            return []
+        payloads: List[Dict[str, Any]] = []
+        for path in sorted(receipt_dir.glob("*.json")):
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if isinstance(payload, dict):
+                payloads.append(payload)
+        return sorted(
+            payloads,
+            key=lambda item: (
+                str(item.get("started_at") or ""),
+                str(item.get("call_id") or ""),
+            ),
+        )
+
     @staticmethod
     def _atomic_write_receipt(path: Path, payload: Dict[str, Any]) -> None:
         temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
@@ -181,12 +264,20 @@ class CostMeter:
             request_hasher.update(b"\0")
             request_hasher.update(encoded)
             request_hasher.update(b"\0")
+        # A role client serves several consumers, so the role alone cannot say
+        # which one produced this call. Without it an over-budget prompt is
+        # visible but unattributable, which is how the analyzer envelope stayed
+        # broken. None means the caller is not on a budgeted role.
+        from .prompt_budget import active_prompt_consumer
+
         payload: Dict[str, Any] = {
             "schema_version": "easyicu.provider_transport_receipt/1",
             "call_id": call_id,
             "state": "in_progress",
             "role": role,
+            "consumer": active_prompt_consumer.get(),
             "model": model,
+            "executed_model": None,
             "request_sha256": request_hasher.hexdigest(),
             "prompt_bytes": prompt_bytes,
             "max_tokens": int(max_tokens),
@@ -208,7 +299,8 @@ class CostMeter:
         *,
         state: str,
         error_type: Optional[str] = None,
-        usage: Optional[Dict[str, int]] = None,
+        usage: Optional[Dict[str, Any]] = None,
+        executed_model: Optional[str] = None,
         response: Optional[str] = None,
     ) -> None:
         """Terminalize a transport receipt without persisting prompt/response."""
@@ -223,6 +315,7 @@ class CostMeter:
                 "finished_at": datetime.now(timezone.utc).isoformat(),
                 "error_type": str(error_type) if error_type else None,
                 "usage": dict(usage) if usage is not None else None,
+                "executed_model": str(executed_model) if executed_model else None,
                 "response_sha256": (
                     hashlib.sha256(str(response).encode("utf-8")).hexdigest()
                     if response is not None
@@ -273,7 +366,85 @@ class CostMeter:
     # Aggregation
     # ------------------------------------------------------------------
 
-    def summary(self) -> Dict[str, Any]:
+    def _receipt_usage_accounting(self) -> Dict[str, Any]:
+        reported = {
+            "n_calls": 0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "estimated_cost_usd": 0.0,
+        }
+        heuristic = dict(reported)
+        unknown = {
+            "n_calls": 0,
+            "states": {},
+        }
+        conservative_tokens = 0
+        conservative_cost = 0.0
+        for payload in self._transport_receipt_payloads():
+            usage = payload.get("usage")
+            model = str(
+                payload.get("executed_model") or payload.get("model") or "unknown"
+            )
+            if isinstance(usage, dict):
+                prompt = max(0, int(usage.get("prompt_tokens") or 0))
+                completion = max(0, int(usage.get("completion_tokens") or 0))
+                total = max(
+                    prompt + completion,
+                    int(usage.get("total_tokens") or 0),
+                )
+                bucket = heuristic if bool(usage.get("is_heuristic")) else reported
+                bucket["n_calls"] += 1
+                bucket["prompt_tokens"] += prompt
+                bucket["completion_tokens"] += completion
+                bucket["total_tokens"] += total
+                cost = self.estimate_cost(model, prompt, completion)
+                if cost is not None:
+                    bucket["estimated_cost_usd"] += cost
+                if not bool(usage.get("is_heuristic")):
+                    conservative_tokens += total
+                    conservative_cost += cost or 0.0
+                    continue
+            unknown["n_calls"] += 1
+            state = str(payload.get("state") or "unknown")
+            unknown["states"][state] = unknown["states"].get(state, 0) + 1
+            prompt_reserve = max(0, int(payload.get("prompt_bytes") or 0)) + 4096
+            completion_reserve = max(0, int(payload.get("max_tokens") or 0))
+            conservative_tokens += prompt_reserve + completion_reserve
+            cost = self.estimate_cost(model, prompt_reserve, completion_reserve)
+            conservative_cost += cost or 0.0
+        for bucket in (reported, heuristic):
+            bucket["estimated_cost_usd"] = round(
+                float(bucket["estimated_cost_usd"]),
+                12,
+            )
+        unknown["states"] = dict(sorted(unknown["states"].items()))
+        return {
+            "provider_reported": reported,
+            "heuristic": heuristic,
+            "usage_unknown": unknown,
+            "conservative_upper_bound": {
+                "total_tokens": conservative_tokens,
+                "estimated_cost_usd": round(conservative_cost, 12),
+                "source": "transport_receipt_fallback",
+            },
+        }
+
+    def summary(
+        self,
+        *,
+        hard_stop_accounting: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        usage_accounting = self._receipt_usage_accounting()
+        if isinstance(hard_stop_accounting, dict):
+            for key in (
+                "provider_reported",
+                "usage_unknown",
+                "conservative_upper_bound",
+            ):
+                value = hard_stop_accounting.get(key)
+                if isinstance(value, dict):
+                    usage_accounting[key] = dict(value)
         if not self.records:
             return {
                 "n_calls": 0,
@@ -284,6 +455,7 @@ class CostMeter:
                 "by_role": {},
                 "by_model": {},
                 "any_heuristic": False,
+                "usage_accounting": usage_accounting,
             }
         by_role: Dict[str, Dict[str, Any]] = defaultdict(
             lambda: {
@@ -323,6 +495,7 @@ class CostMeter:
             "by_role": {k: dict(v) for k, v in by_role.items()},
             "by_model": {k: dict(v) for k, v in by_model.items()},
             "any_heuristic": any_heuristic,
+            "usage_accounting": usage_accounting,
         }
 
 
@@ -364,6 +537,17 @@ class MeteredClient:
     def complete(
         self, messages, *, max_tokens: int = 2048, temperature: float = 0.2
     ) -> str:
+        result, _usage = self.complete_with_usage(
+            messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+        return result
+
+    def complete_with_usage(
+        self, messages, *, max_tokens: int = 2048, temperature: float = 0.2
+    ) -> tuple[str, Dict[str, Any]]:
+        """Meter one call while preserving its call-scoped model provenance."""
         model = self._model_override or _identify_model(self._inner)
         receipt = self._meter.begin_transport(
             role=self._role,
@@ -412,13 +596,29 @@ class MeteredClient:
             completion_tokens = max(1, completion_chars // _CHARS_PER_TOKEN)
             is_heuristic = True
 
+        executed_model = (
+            str(usage.get("actual_model")).strip()
+            if isinstance(usage, dict) and usage.get("actual_model")
+            else model
+        )
+
         self._meter.record(
             role=self._role,
-            model=model,
+            model=executed_model,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             is_heuristic=is_heuristic,
         )
+        recorded_usage: Dict[str, Any] = {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+            "is_heuristic": is_heuristic,
+            "actual_model": executed_model,
+        }
+        if isinstance(usage, dict) and isinstance(usage.get("model_provenance"), dict):
+            recorded_usage["model_provenance"] = dict(usage["model_provenance"])
+        self.last_usage = dict(recorded_usage)
         self._meter.finish_transport(
             receipt,
             state="completed",
@@ -428,9 +628,10 @@ class MeteredClient:
                 "total_tokens": prompt_tokens + completion_tokens,
                 "is_heuristic": is_heuristic,
             },
+            executed_model=executed_model,
             response=result,
         )
-        return result
+        return result, recorded_usage
 
     # Mirror commonly-touched attributes so existing duck-typing keeps
     # working (e.g. MockLLMClient.context).

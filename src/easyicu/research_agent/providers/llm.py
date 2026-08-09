@@ -31,10 +31,49 @@ from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Sequence
 
 from ..authority.provider_budget import (
-    active_provider_retry_available,
+    consume_active_provider_handoff,
     consume_active_transport_attempt,
 )
+from ..authority.secret_redaction import (
+    debug_capture_enabled,
+    redact_debug_value,
+)
 from .protocol import LLMClient, LLMMessage
+
+#: Per-field ceiling for the optional LLM debug dump. A full prompt is tens of
+#: kilobytes, and an unbounded per-call dump fills the disk of a machine that
+#: is already tight on space during a long run.
+LLM_DEBUG_FIELD_CHARS = 4000
+
+
+def _truncated_debug_text(value: Any) -> str:
+    text = value if isinstance(value, str) else str(value)
+    if len(text) <= LLM_DEBUG_FIELD_CHARS:
+        return text
+    return f"{text[:LLM_DEBUG_FIELD_CHARS]}… [{len(text)} chars total]"
+
+
+def _truncated_debug_messages(messages: Any) -> Any:
+    """Bound each debug-dumped message so one call cannot write megabytes."""
+
+    if not isinstance(messages, (list, tuple)):
+        return _truncated_debug_text(messages)
+    bounded = []
+    for message in messages:
+        if isinstance(message, dict):
+            bounded.append(
+                {
+                    key: (
+                        _truncated_debug_text(value)
+                        if isinstance(value, str)
+                        else value
+                    )
+                    for key, value in message.items()
+                }
+            )
+        else:
+            bounded.append(_truncated_debug_text(message))
+    return bounded
 
 
 def _strip_reasoning_blocks(text: str) -> str:
@@ -219,7 +258,15 @@ def _response_namespace_from_payload(payload: Dict[str, Any]) -> Any:
         )
     usage = payload.get("usage")
     usage_ns = SimpleNamespace(**usage) if isinstance(usage, dict) else None
-    return SimpleNamespace(choices=choices, usage=usage_ns)
+    # Keep relay-supplied model provenance with the normalised response.  The
+    # local no-auth path otherwise used to discard the only evidence that a
+    # hosted relay had substituted a fallback model.
+    return SimpleNamespace(
+        choices=choices,
+        usage=usage_ns,
+        model=payload.get("model"),
+        easyicu_model_provenance=payload.get("easyicu_model_provenance"),
+    )
 
 
 def _response_namespace_from_stream(stream: Any) -> Any:
@@ -235,9 +282,13 @@ def _response_namespace_from_stream(stream: Any) -> Any:
     reasoning_parts: List[str] = []
     finish_reason: Optional[str] = None
     usage = None
+    response_model = None
     saw_choice = False
     try:
         for chunk in stream:
+            chunk_model = getattr(chunk, "model", None)
+            if isinstance(chunk_model, str) and chunk_model.strip():
+                response_model = chunk_model.strip()
             chunk_usage = getattr(chunk, "usage", None)
             if chunk_usage is not None:
                 usage = chunk_usage
@@ -263,7 +314,7 @@ def _response_namespace_from_stream(stream: Any) -> Any:
             close()
 
     if not saw_choice:
-        return SimpleNamespace(choices=[], usage=usage)
+        return SimpleNamespace(choices=[], usage=usage, model=response_model)
     reasoning = "".join(reasoning_parts)
     message = SimpleNamespace(
         content="".join(content_parts),
@@ -271,7 +322,7 @@ def _response_namespace_from_stream(stream: Any) -> Any:
         reasoning=reasoning or None,
     )
     choice = SimpleNamespace(message=message, finish_reason=finish_reason)
-    return SimpleNamespace(choices=[choice], usage=usage)
+    return SimpleNamespace(choices=[choice], usage=usage, model=response_model)
 
 
 # ---------------------------------------------------------------------------
@@ -310,25 +361,37 @@ class OpenAIClient:
         extra_headers: Optional[Dict[str, str]] = None,
         extra_body: Optional[Dict[str, Any]] = None,
         supports_vision: Optional[bool] = None,
+        stream_enabled: Optional[bool] = None,
+        allow_environment_overrides: bool = True,
     ) -> None:
         # 🔧 2026-07-10: allow env overrides so a flaky SHARED local proxy (the
         # cli-proxy-api / Codex Tools instance that intermittently rotates its key
         # or drops the connection) can be given a longer per-call timeout and a
         # bigger retry budget without a code change:
         #   EASYICU_LLM_TIMEOUT=<seconds>   EASYICU_LLM_MAX_RETRIES=<attempts>
-        request_timeout = float(
-            os.environ.get("EASYICU_LLM_TIMEOUT") or request_timeout
-        )
-        max_retries = int(os.environ.get("EASYICU_LLM_MAX_RETRIES") or max_retries)
+        if allow_environment_overrides:
+            request_timeout = float(
+                os.environ.get("EASYICU_LLM_TIMEOUT") or request_timeout
+            )
+            max_retries = int(os.environ.get("EASYICU_LLM_MAX_RETRIES") or max_retries)
+        if stream_enabled is None:
+            stream_enabled = (
+                str(os.environ.get("EASYICU_LLM_STREAM", "") or "").strip().lower()
+                in {"1", "true", "yes", "on"}
+                if allow_environment_overrides
+                else False
+            )
         kwargs: Dict[str, Any] = {}
         # Accept either OPENAI_API_KEY (vanilla) or OPENROUTER_API_KEY so
         # users don't have to alias the variable themselves.
-        env_key = (
-            api_key
-            or os.environ.get("OPENAI_API_KEY")
-            or os.environ.get("OPENROUTER_API_KEY")
+        env_key = api_key
+        if not env_key and allow_environment_overrides:
+            env_key = os.environ.get("OPENAI_API_KEY") or os.environ.get(
+                "OPENROUTER_API_KEY"
+            )
+        resolved_base_url = base_url or (
+            os.environ.get("OPENAI_BASE_URL") if allow_environment_overrides else None
         )
-        resolved_base_url = base_url or os.environ.get("OPENAI_BASE_URL")
         if env_key:
             kwargs["api_key"] = env_key
         # macOS system proxies (Clash, Surge, etc.) silently break
@@ -406,8 +469,11 @@ class OpenAIClient:
                 ) from exc
             self._client = OpenAI(**kwargs)
         self._model = model
+        self._completion_token_parameter = _completion_token_parameter_name(model)
         self._timeout = request_timeout
         self._max_retries = int(max_retries)
+        self._stream_enabled = bool(stream_enabled)
+        self._allow_environment_overrides = bool(allow_environment_overrides)
         self._extra_body = dict(extra_body or {})
         self.supports_vision = (
             bool(supports_vision)
@@ -558,7 +624,7 @@ class OpenAIClient:
         temperature: float = 0.2,
         seed: Optional[int] = None,
         top_p: Optional[float] = None,
-    ) -> tuple[str, Optional[Dict[str, int]]]:
+    ) -> tuple[str, Optional[Dict[str, Any]]]:
         """Return text and usage from the same provider response.
 
         The tuple is call-scoped: concurrent callers never have to read the
@@ -569,10 +635,10 @@ class OpenAIClient:
         create_kwargs: Dict[str, Any] = {
             "model": self._model,
             "messages": chat_messages,
-            "max_tokens": max_tokens,
             "temperature": temperature,
             "timeout": self._timeout,
         }
+        create_kwargs[self._completion_token_parameter] = int(max_tokens)
         if seed is not None:
             # OpenAI / OpenRouter / most OpenAI-compatible providers
             # accept a ``seed`` integer for deterministic(-ish) output.
@@ -597,42 +663,51 @@ class OpenAIClient:
         import json as _json
 
         def _do_call():
-            consume_active_transport_attempt()
+            hard_stop_remaining = consume_active_transport_attempt()
+            transport_kwargs = dict(create_kwargs)
+            if hard_stop_remaining is not None:
+                transport_kwargs["timeout"] = min(
+                    float(transport_kwargs["timeout"]),
+                    float(hard_stop_remaining),
+                )
             if getattr(self, "_local_noauth_mode", False):
                 if self._local_http_client is None:
                     raise RuntimeError("Local no-auth HTTP client was not initialized.")
                 payload = {
                     "model": self._model,
                     "messages": chat_messages,
-                    "max_tokens": max_tokens,
                     "temperature": temperature,
                 }
+                payload[self._completion_token_parameter] = int(max_tokens)
                 if seed is not None:
                     payload["seed"] = int(seed)
                 if top_p is not None:
                     payload["top_p"] = float(top_p)
                 if self._extra_body:
                     payload.update(self._extra_body)
-                resp = self._local_http_client.post("/chat/completions", json=payload)
+                post_kwargs: Dict[str, Any] = {"json": payload}
+                if hard_stop_remaining is not None:
+                    post_kwargs["timeout"] = transport_kwargs["timeout"]
+                resp = self._local_http_client.post(
+                    "/chat/completions",
+                    **post_kwargs,
+                )
                 resp.raise_for_status()
                 data = resp.json()
                 return _response_namespace_from_payload(data)
-            stream_enabled = str(
-                os.environ.get("EASYICU_LLM_STREAM", "") or ""
-            ).strip().lower() in {"1", "true", "yes", "on"}
-            if stream_enabled:
+            if self._stream_enabled:
                 # Do not send ``stream_options`` unconditionally: several local
                 # OpenAI-compatible proxies accept SSE streaming but reject the
                 # optional include-usage extension.  Usage is still collected
                 # when a provider includes it in any chunk; otherwise the
                 # existing MeteredClient heuristic remains the fallback.
                 stream = self._client.chat.completions.create(  # type: ignore[union-attr,arg-type]
-                    **create_kwargs,
+                    **transport_kwargs,
                     stream=True,
                 )
                 resp = _response_namespace_from_stream(stream)
             else:
-                resp = self._client.chat.completions.create(**create_kwargs)  # type: ignore[union-attr,arg-type]
+                resp = self._client.chat.completions.create(**transport_kwargs)  # type: ignore[union-attr,arg-type]
             # Eager validation of the envelope so transient null-choices/null-
             # message responses surface here and are caught by the retry loop
             # below, rather than crashing the caller with `'NoneType' object
@@ -666,10 +741,13 @@ class OpenAIClient:
         manual_attempts = max(1, int(getattr(self, "_max_retries", 8)))
 
         def _sleep_before_retry(seconds: float, attempt_index: int) -> None:
-            if (
-                attempt_index + 1 < manual_attempts
-                and active_provider_retry_available()
-            ):
+            # Only the attempt count decides. This also consulted the step
+            # allowance, which was coherent while that allowance cancelled
+            # retries; once it stopped doing so (2026-08-04) the check
+            # survived only to suppress the backoff of a retry that was going
+            # to happen regardless -- i.e. to hammer a failing endpoint
+            # hardest exactly when the step was nearly out of budget.
+            if attempt_index + 1 < manual_attempts:
                 _time.sleep(seconds)
 
         for attempt in range(manual_attempts):
@@ -735,7 +813,9 @@ class OpenAIClient:
         # ``MeteredClient`` can pull authoritative token counts instead of
         # falling back to the chars/4 heuristic. Defensive: not every
         # provider populates ``usage`` on every response.
-        call_usage: Optional[Dict[str, int]] = None
+        call_usage: Optional[Dict[str, Any]] = None
+        actual_model: Optional[str] = None
+        relay_provenance: Optional[Dict[str, Any]] = None
         try:
             usage = getattr(resp, "usage", None)
             if usage is not None:
@@ -746,6 +826,18 @@ class OpenAIClient:
                     ),
                     "total_tokens": int(getattr(usage, "total_tokens", 0) or 0),
                 }
+            response_model = getattr(resp, "model", None)
+            if isinstance(response_model, str) and response_model.strip():
+                actual_model = response_model.strip()
+                if call_usage is None:
+                    call_usage = {}
+                call_usage["actual_model"] = actual_model
+            response_provenance = getattr(resp, "easyicu_model_provenance", None)
+            if isinstance(response_provenance, dict):
+                relay_provenance = dict(response_provenance)
+                if call_usage is None:
+                    call_usage = {}
+                call_usage["model_provenance"] = relay_provenance
         except Exception:
             call_usage = None
         # Compatibility only; cost attribution uses the call-scoped return.
@@ -811,31 +903,59 @@ class OpenAIClient:
         # Optional debug dump — ``EASYICU_LLM_DEBUG=1 …`` writes one
         # JSON file per call so the user can inspect what the model
         # actually returned (finish_reason, raw message, prompt).
-        if os.environ.get("EASYICU_LLM_DEBUG"):
+        if debug_capture_enabled(os.environ.get("EASYICU_LLM_DEBUG")) and (
+            configured_debug_dir := str(
+                os.environ.get("EASYICU_LLM_DEBUG_DIR") or ""
+            ).strip()
+        ):
             try:
                 from datetime import datetime
                 from pathlib import Path
 
-                log_dir = Path(
-                    os.environ.get("EASYICU_LLM_DEBUG_DIR")
-                    or "./research_output/llm_debug"
-                )
-                log_dir.mkdir(parents=True, exist_ok=True)
+                log_dir = Path(configured_debug_dir)
+                log_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+                # The dump contains the full prompt: the research question,
+                # variable definitions, cohort description and every method
+                # detail the agent reasoned over. That is study-sensitive even
+                # though it is not patient-level, so the directory is owner-only
+                # and each file is written 0600.
+                try:
+                    os.chmod(log_dir, 0o700)
+                except OSError:
+                    pass
                 ts = datetime.now().strftime("%Y%m%dT%H%M%S_%f")
-                payload = {
-                    "model": self._model,
-                    "finish_reason": getattr(choice, "finish_reason", None),
-                    "prompt_messages": chat_messages,
-                    "raw_message": (
-                        msg.model_dump() if hasattr(msg, "model_dump") else str(msg)
-                    ),
-                    "extracted_content_head": content[:1200],
-                    "extracted_content_chars": len(content),
-                }
-                (log_dir / f"{ts}.json").write_text(
-                    json.dumps(payload, indent=2, ensure_ascii=False, default=str),
-                    encoding="utf-8",
+                payload = redact_debug_value(
+                    {
+                        # Do not collapse configured/requested and actual
+                        # response models. A hosted relay may have fallen back
+                        # after the request left this client.
+                        "requested_model": self._model,
+                        "actual_model": actual_model,
+                        "model_provenance": relay_provenance,
+                        "finish_reason": getattr(choice, "finish_reason", None),
+                        "prompt_messages": _truncated_debug_messages(chat_messages),
+                        "raw_message_head": _truncated_debug_text(
+                            msg.model_dump_json()
+                            if hasattr(msg, "model_dump_json")
+                            else str(msg)
+                        ),
+                        "extracted_content_head": content[:1200],
+                        "extracted_content_chars": len(content),
+                        "note": (
+                            "Truncated and recursively redacted debug dump. "
+                            "Contains study design detail; keep it out of shared "
+                            "or synced directories."
+                        ),
+                    }
                 )
+                target = log_dir / f"{ts}.json"
+                descriptor = os.open(
+                    target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
+                )
+                with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                    json.dump(
+                        payload, handle, indent=2, ensure_ascii=False, default=str
+                    )
             except Exception:
                 pass
 
@@ -872,10 +992,10 @@ class OpenAIClient:
         create_kwargs: Dict[str, Any] = {
             "model": self._model,
             "messages": [{"role": "user", "content": content}],
-            "max_tokens": max_tokens,
             "temperature": temperature,
             "timeout": self._timeout,
         }
+        create_kwargs[self._completion_token_parameter] = int(max_tokens)
         if self._extra_body:
             create_kwargs["extra_body"] = self._extra_body
         resp = self._client.chat.completions.create(**create_kwargs)  # type: ignore[arg-type]
@@ -902,6 +1022,21 @@ class OpenAIClient:
 def _model_looks_like_qwen3(model: str) -> bool:
     lowered = (model or "").strip().lower()
     return lowered.startswith("qwen3") or "/qwen3" in lowered or "qwen3-" in lowered
+
+
+def _completion_token_parameter_name(model: str) -> str:
+    """Return the output-cap field honored by the selected model family.
+
+    GPT-5 and OpenAI ``o`` reasoning models use ``max_completion_tokens``.
+    Several compatible gateways silently accept but ignore the legacy
+    ``max_tokens`` field for those models, which defeats both output-size and
+    cost controls. Other compatible providers still require ``max_tokens``.
+    """
+
+    leaf = (model or "").strip().lower().rsplit("/", 1)[-1]
+    if leaf.startswith("gpt-5") or re.match(r"^o[134](?:-|$)", leaf):
+        return "max_completion_tokens"
+    return "max_tokens"
 
 
 def _model_looks_vision_capable(model: str) -> bool:
@@ -973,7 +1108,7 @@ def _retryable_provider_error(exc: Exception) -> bool:
     )
 
 
-def _client_counts_transport_attempts(client: Any) -> bool:
+def client_counts_transport_attempts(client: Any) -> bool:
     """Detect transport-aware clients through common transparent wrappers."""
 
     seen: set[int] = set()
@@ -984,6 +1119,11 @@ def _client_counts_transport_attempts(client: Any) -> bool:
             return True
         current = getattr(current, "_inner", None)
     return False
+
+
+# Private compatibility alias for older call sites and tests. New wrappers use
+# the public name so the pre-transport accounting contract is explicit.
+_client_counts_transport_attempts = client_counts_transport_attempts
 
 
 class FallbackLLMClient:
@@ -1048,14 +1188,14 @@ class FallbackLLMClient:
         temperature: float = 0.2,
         seed: Optional[int] = None,
         top_p: Optional[float] = None,
-    ) -> tuple[str, Optional[Dict[str, int]]]:
+    ) -> tuple[str, Optional[Dict[str, Any]]]:
         """Return usage from the same successful fallback call, when available."""
         errors: List[str] = []
         last_exc: Optional[Exception] = None
         for client in self._clients:
             try:
-                if not _client_counts_transport_attempts(client):
-                    consume_active_transport_attempt()
+                if not client_counts_transport_attempts(client):
+                    consume_active_provider_handoff()
                 # Forward top_p only to clients that accept it (OpenAI-
                 # compatible); legacy clients keep their previous
                 # 3-kwarg signature.
@@ -1267,9 +1407,7 @@ class LLMRouter:
             client = self._roles.get(role) or self._default
             extra_body = getattr(client, "_extra_body", None)
             reasoning = (
-                extra_body.get("reasoning")
-                if isinstance(extra_body, dict)
-                else None
+                extra_body.get("reasoning") if isinstance(extra_body, dict) else None
             )
             actual_effort = (
                 reasoning.get("effort") if isinstance(reasoning, dict) else None

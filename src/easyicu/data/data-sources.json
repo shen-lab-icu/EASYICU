@@ -3935,7 +3935,7 @@
     "name": "mimic",
     "profile": {
       "display_name": "MIMIC-III",
-      "aliases": ["mimiciii", "mimic-iii", "mimic3", "mimic_iii"],
+      "aliases": ["mimiciii", "mimic-iii", "mimic3", "mimic_iii", "miii"],
       "display_order": 50
     },
     "url": "https://physionet.org/files/mimiciii/1.4",

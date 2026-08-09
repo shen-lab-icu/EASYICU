@@ -106,6 +106,17 @@ class CoverageReport:
 
     @property
     def sufficient(self) -> bool:
+        """Whether every *requested* concept resolved — not scientific adequacy.
+
+        ``missing`` is derived from ``requested``, so this answers "did we get
+        what we asked for", never "is this enough to answer the question". A
+        request that never named a needed confounder, time anchor or censoring
+        variable is reported ``sufficient``, and so is an empty request: both
+        produce an empty ``missing`` list, indistinguishable from full
+        coverage. A caller that needs the second question answered must state
+        its requirements (``required_feature_concepts``) and check those; it
+        cannot recover them from this property.
+        """
         return not self.missing
 
     def to_dict(self) -> Dict[str, object]:

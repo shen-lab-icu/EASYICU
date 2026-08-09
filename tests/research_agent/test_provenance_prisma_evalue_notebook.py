@@ -167,7 +167,16 @@ def test_pipeline_writes_provenance_prisma_evalue_notebook_lockfile(
     assert (run_dir / "literature_prisma.md").exists()
     prisma_payload = json.loads((run_dir / "literature_prisma.json").read_text())
     assert "prisma" in prisma_payload
-    assert "identified" in prisma_payload["prisma"]
+    # The artifact is always published, but a PRISMA flow is only reported when
+    # a retrieval source actually ran.  This run enables none, so it must say so
+    # rather than presenting the preset reference list as a completed search.
+    provenance = prisma_payload["search_provenance"]
+    assert provenance["search_conducted"] is False
+    assert provenance["sources_enabled"] == []
+    assert prisma_payload["prisma"] is None
+    assert "No PRISMA flow is reported" in (
+        run_dir / "literature_prisma.md"
+    ).read_text(encoding="utf-8")
 
     # O23 — E-values
     # Only required when primary_association produced a CSV; the

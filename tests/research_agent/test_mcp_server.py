@@ -6,82 +6,48 @@ import json
 from types import SimpleNamespace
 
 import pandas as pd
+import pytest
 
 from easyicu.concept.availability_signal import ConceptAvailabilityRecord
+from easyicu.research_agent.mcp_policy import (
+    MCP_ALLOWED_ROOTS_ENV,
+    MCP_SCOPES_ENV,
+    SCOPE_READ_PATIENT_DATA,
+)
 
 
-def test_mcp_initialize_and_tools_list(ra):
-    from easyicu.research_agent.mcp_server import handle_jsonrpc
+@pytest.fixture(autouse=True)
+def _mcp_roots(tmp_path, monkeypatch):
+    """Grant the test's tmp_path as an MCP root, and the working scopes.
 
-    init = handle_jsonrpc(
-        {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": {},
-        }
+    Every filesystem argument is confined to a root configured at startup, so
+    without this an operator-style declaration the tools would refuse to touch
+    ``tmp_path`` at all. Declaring it here keeps each test exercising the guard
+    it is actually about rather than the outer confinement.
+
+    The process default is ``metadata`` only: running a pipeline, writing
+    artefacts and binding evidence are authorities an operator grants
+    explicitly, so these tests grant them the same way a deployment would.
+    ``read_patient_data`` / ``read_internal_context`` stay ungranted — the
+    tests that need those opt in individually.
+    """
+
+    monkeypatch.setenv(MCP_ALLOWED_ROOTS_ENV, str(tmp_path))
+    monkeypatch.setenv(
+        MCP_SCOPES_ENV, "metadata,run_pipeline,write_artifacts,bind_evidence"
     )
-    assert init["result"]["capabilities"]["tools"] == {}
-    assert init["result"]["serverInfo"]["name"] == "easyicu-research-agent"
-
-    listed = handle_jsonrpc(
-        {
-            "jsonrpc": "2.0",
-            "id": 2,
-            "method": "tools/list",
-            "params": {},
-        }
-    )
-    names = {tool["name"] for tool in listed["result"]["tools"]}
-    assert {
-        "research_agent.run",
-        "research_agent.list_skills",
-        "research_agent.read_manifest",
-    } <= names
 
 
-def test_mcp_tools_call_wraps_tool_result_as_content(ra):
-    from easyicu.research_agent.mcp_server import handle_jsonrpc
+def test_mcp_python_dispatch_remains_available(ra):
+    from easyicu.research_agent.mcp_server import dispatch
 
-    resp = handle_jsonrpc(
-        {
-            "jsonrpc": "2.0",
-            "id": "skills",
-            "method": "tools/call",
-            "params": {
-                "name": "research_agent.list_skills",
-                "arguments": {},
-            },
-        }
-    )
-    assert resp["id"] == "skills"
-    assert resp["result"]["isError"] is False
-    text = resp["result"]["content"][0]["text"]
-    data = json.loads(text)
-    keys = {skill["key"] for skill in data["skills"]}
-    assert {
-        "association_analysis",
-        "prediction_model",
-        "data_quality_audit",
-    } <= keys
+    result = dispatch("research_agent.list_skills", {})
 
-
-def test_mcp_legacy_tool_shape_still_dispatches(ra):
-    from easyicu.research_agent.mcp_server import handle_jsonrpc
-
-    resp = handle_jsonrpc(
-        {
-            "id": 7,
-            "tool": "research_agent.list_skills",
-            "arguments": {},
-        }
-    )
-    assert resp["id"] == 7
-    assert "skills" in resp["result"]
+    assert "skills" in result
 
 
 def test_mcp_exposes_atomic_context_and_validator_tools(ra, tmp_path):
-    from easyicu.research_agent.mcp_server import dispatch, handle_jsonrpc
+    from easyicu.research_agent.mcp_server import TOOL_SCHEMAS, dispatch
 
     cohort_path = tmp_path / "cohort.parquet"
     pd.DataFrame(
@@ -92,15 +58,7 @@ def test_mcp_exposes_atomic_context_and_validator_tools(ra, tmp_path):
         }
     ).to_parquet(cohort_path)
 
-    listed = handle_jsonrpc(
-        {
-            "jsonrpc": "2.0",
-            "id": "tools",
-            "method": "tools/list",
-            "params": {},
-        }
-    )
-    names = {tool["name"] for tool in listed["result"]["tools"]}
+    names = {tool["name"] for tool in TOOL_SCHEMAS}
     assert {
         "research_agent.build_context",
         "research_agent.list_concepts",
@@ -147,10 +105,14 @@ def test_mcp_exposes_atomic_context_and_validator_tools(ra, tmp_path):
     )
     assert audited["validator"] == "concept_usage_auditor"
     # Mean of an ordinal score is an advisory caution (impartiality contract),
-    # surfaced as a warning rather than a blocking error.
+    # surfaced as a warning rather than a blocking error. The caller identifies
+    # it from the projected detail: ``message`` is an interpolated sentence and
+    # is not disclosed over MCP.
+    assert not any("message" in f for f in audited["findings"])
     assert any(
         f["severity"] == "warning"
-        and ("ordinal" in f["message"].lower() or "sofa" in f["message"].lower())
+        and f.get("detail", {}).get("column") == "sofa2"
+        and f.get("detail", {}).get("function") == "mean"
         for f in audited["findings"]
     )
 
@@ -182,6 +144,10 @@ def test_mcp_load_concepts_calls_standardized_easyicu_api(ra, tmp_path, monkeypa
         )
 
     monkeypatch.setattr(easyicu, "load_concepts", fake_load_concepts, raising=False)
+    monkeypatch.setenv(
+        MCP_SCOPES_ENV,
+        f"metadata,write_artifacts,bind_evidence,{SCOPE_READ_PATIENT_DATA}",
+    )
     out_path = tmp_path / "vitals.parquet"
     workdir = tmp_path / "run"
     result = dispatch(
@@ -264,6 +230,10 @@ def test_mcp_extract_concept_registers_evidence_by_default(ra, tmp_path, monkeyp
         )
 
     monkeypatch.setattr(easyicu, "load_concepts", fake_load_concepts, raising=False)
+    monkeypatch.setenv(
+        MCP_SCOPES_ENV,
+        f"metadata,write_artifacts,bind_evidence,{SCOPE_READ_PATIENT_DATA}",
+    )
     workdir = tmp_path / "run"
     result = dispatch(
         "research_agent.extract_concept",
@@ -325,6 +295,7 @@ def test_mcp_run_returns_clear_error_without_llm_configuration(
         {
             "question": "Inspect the cohort.",
             "cohort_path": str(tmp_path / "cohort.parquet"),
+            "workdir": str(tmp_path / "run"),
         },
     )
 
@@ -379,6 +350,58 @@ def test_mcp_run_constructs_explicit_llm(ra, tmp_path, monkeypatch):
     assert seen["run_kwargs"]["question"] == "Inspect the cohort."
 
 
+def test_mcp_run_returns_explicit_unresumable_pending(ra, tmp_path, monkeypatch):
+    import easyicu.research_agent.mcp_server as mcp
+    from easyicu.research_agent.orchestration.workflow import (
+        HumanReviewPending,
+        HumanReviewRequest,
+    )
+
+    cohort = tmp_path / "cohort.parquet"
+    cohort.write_bytes(b"fixture")
+    request = HumanReviewRequest.create(
+        kind="capability_request",
+        summary="Approve the exact capability-bound plan.",
+        authority_sha256="a" * 64,
+        payload={"reason": "capability_review_required"},
+    )
+    pending = HumanReviewPending(
+        run_id="run_mcp_review",
+        thread_id="run_mcp_review",
+        run_dir=str(tmp_path / "run_mcp_review"),
+        requests=(request,),
+    )
+
+    class FakePipeline:
+        def __init__(self, **_kwargs):
+            pass
+
+        def run(self, **_kwargs):
+            return pending
+
+    monkeypatch.setattr(mcp, "_build_run_llm", lambda _args: (object(), None))
+    monkeypatch.setattr(mcp, "ResearchAgentPipeline", FakePipeline)
+
+    result = mcp.dispatch(
+        "research_agent.run",
+        {
+            "question": "Inspect the cohort.",
+            "cohort_path": str(cohort),
+            "workdir": str(tmp_path / "runs"),
+            "provider": "openai",
+            "model": "test-model",
+        },
+    )
+
+    assert result["status"] == "human_review_pending"
+    assert result["terminal"] is False
+    assert result["resume_scope"] == "same_process"
+    assert result["resumable_via_mcp"] is False
+    assert result["external_resume_supported"] is False
+    assert "does not retain the Pipeline instance" in result["message"]
+    assert result["requests"][0]["review_id"] == request.review_id
+
+
 def test_mcp_run_rejects_key_exfiltration_base_url(ra, tmp_path, monkeypatch):
     import easyicu.research_agent.mcp_server as mcp
 
@@ -395,6 +418,7 @@ def test_mcp_run_rejects_key_exfiltration_base_url(ra, tmp_path, monkeypatch):
         {
             "question": "Inspect the cohort.",
             "cohort_path": str(tmp_path / "cohort.parquet"),
+            "workdir": str(tmp_path / "run"),
             "provider": "openai",
             "model": "test-model",
             "base_url": "https://attacker.example/collect?next=localhost",
@@ -433,6 +457,7 @@ def test_mcp_run_loopback_override_does_not_forward_environment_key(
         {
             "question": "Inspect the cohort.",
             "cohort_path": str(tmp_path / "cohort.parquet"),
+            "workdir": str(tmp_path / "run"),
             "provider": "openai",
             "model": "test-model",
             "base_url": "http://127.0.0.1:8787/v1",
@@ -442,6 +467,125 @@ def test_mcp_run_loopback_override_does_not_forward_environment_key(
     assert result == {"status": "ok"}
     assert seen["api_key"] == "easyicu-local-noauth"
     assert seen["api_key"] != "must-not-reach-loopback"
+
+
+def test_mcp_multi_concept_outputs_are_collision_safe_and_mapped(
+    ra, tmp_path, monkeypatch
+):
+    import easyicu
+    import easyicu.research_agent.mcp_server as mcp
+
+    frames = {
+        "a/b": pd.DataFrame({"value": [1]}),
+        "a:b": pd.DataFrame({"value": [2]}),
+        "a b": pd.DataFrame({"value": [3]}),
+    }
+    monkeypatch.setattr(
+        easyicu,
+        "load_concepts",
+        lambda **_kwargs: frames,
+        raising=False,
+    )
+
+    result = mcp.dispatch(
+        "research_agent.load_concepts",
+        {
+            "concepts": list(frames),
+            "database": "synthetic",
+            "output_path": str(tmp_path / "exports"),
+            "register_evidence": True,
+            "workdir": str(tmp_path / "run"),
+            "metadata": {
+                "logical_concept_name": "forged",
+                "physical_filename": "forged.parquet",
+            },
+        },
+    )
+
+    assert len(result["output_paths"]) == 3
+    assert len(set(result["output_paths"])) == 3
+    output_by_name = {
+        item["logical_concept_names"][0]: item for item in result["outputs"]
+    }
+    for logical_name, frame in frames.items():
+        item = output_by_name[logical_name]
+        assert item["physical_filename"] == mcp._concept_output_filename(logical_name)
+        assert pd.read_parquet(item["path"]).equals(frame)
+    evidence_by_name = {
+        item["metadata"]["logical_concept_name"]: item for item in result["evidence"]
+    }
+    assert set(evidence_by_name) == set(frames)
+    for logical_name, record in evidence_by_name.items():
+        assert (
+            record["metadata"]["physical_filename"]
+            == output_by_name[logical_name]["physical_filename"]
+        )
+
+
+def test_mcp_concept_output_refuses_to_overwrite_existing_file(
+    ra, tmp_path, monkeypatch
+):
+    import easyicu
+    import easyicu.research_agent.mcp_server as mcp
+
+    monkeypatch.setattr(
+        easyicu,
+        "load_concepts",
+        lambda **_kwargs: pd.DataFrame({"value": [1]}),
+        raising=False,
+    )
+    target = tmp_path / "existing.parquet"
+    sentinel = b"do-not-overwrite"
+    target.write_bytes(sentinel)
+
+    result = mcp.dispatch(
+        "research_agent.load_concepts",
+        {
+            "concepts": ["lactate"],
+            "database": "synthetic",
+            "output_path": str(target),
+        },
+    )
+
+    assert result["error_code"] == "output_exists"
+    assert "choose a new output_path" in result["error"]
+    assert target.read_bytes() == sentinel
+
+
+def test_mcp_multi_output_preflights_every_destination_before_writing(
+    ra, tmp_path, monkeypatch
+):
+    import easyicu
+    import easyicu.research_agent.mcp_server as mcp
+
+    frames = {
+        "first/concept": pd.DataFrame({"value": [1]}),
+        "second/concept": pd.DataFrame({"value": [2]}),
+    }
+    monkeypatch.setattr(
+        easyicu,
+        "load_concepts",
+        lambda **_kwargs: frames,
+        raising=False,
+    )
+    output_dir = tmp_path / "exports"
+    output_dir.mkdir()
+    occupied = output_dir / mcp._concept_output_filename("second/concept")
+    occupied.write_bytes(b"occupied")
+    first = output_dir / mcp._concept_output_filename("first/concept")
+
+    result = mcp.dispatch(
+        "research_agent.load_concepts",
+        {
+            "concepts": list(frames),
+            "database": "synthetic",
+            "output_path": str(output_dir),
+        },
+    )
+
+    assert result["error_code"] == "output_exists"
+    assert occupied.read_bytes() == b"occupied"
+    assert not first.exists()
 
 
 def test_mcp_read_manifest_rejects_path_traversal(ra, tmp_path):

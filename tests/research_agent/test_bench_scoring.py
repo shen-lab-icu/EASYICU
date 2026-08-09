@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from tools.run_research_agent_bench import _artifact_substring_hits, _primary_or
 
 
@@ -277,9 +279,9 @@ def test_external_protocol_adapter_keeps_old_jsonl_runnable_with_visible_default
     assert item.expected_finding_substrings == ["audit tag"]
     assert item.protocol_adapter["database"]["defaulted"] is True
     assert item.protocol_adapter["operational_exposure"]["defaulted"] is True
-    assert item.protocol_adapter["operational_exposure"][
-        "resolved_column_present"
-    ] is True
+    assert (
+        item.protocol_adapter["operational_exposure"]["resolved_column_present"] is True
+    )
     defaults = {
         (entry["field"], entry["status"])
         for entry in item.protocol_adapter["diagnostics"]
@@ -287,6 +289,26 @@ def test_external_protocol_adapter_keeps_old_jsonl_runnable_with_visible_default
     assert ("database", "missing_defaulted") in defaults
     assert ("operational_exposure", "missing_defaulted") in defaults
     assert ("expected_finding_substrings", "coerced_scalar_to_list") in defaults
+
+
+def test_external_protocol_adapter_rejects_declared_non_column_before_provider():
+    from tools.run_research_agent_bench import _external_item_from_row
+
+    with pytest.raises(
+        ValueError,
+        match="declared operational exposure must be an exact sealed cohort column",
+    ):
+        _external_item_from_row(
+            row={
+                "primary_predictor": "scientific_concept",
+                "operational_exposure": "human_facing_alias",
+            },
+            key="structured_task",
+            question="Estimate the declared association.",
+            target="event",
+            cohort_columns=["executable_exposure_max", "event"],
+            cohort_size=12,
+        )
 
 
 def test_five_dim_scoring_uses_concept_key_and_activates_explicit_frozen_gold(
@@ -317,9 +339,7 @@ def test_five_dim_scoring_uses_concept_key_and_activates_explicit_frozen_gold(
         expected_finding_substrings=[],
         expected_artifact_substrings=[],
         expected_outputs=[],
-        gold_answer={
-            "numeric_targets": {"primary_or": {"lower": 0.5, "upper": 2.0}}
-        },
+        gold_answer={"numeric_targets": {"primary_or": {"lower": 0.5, "upper": 2.0}}},
         gold_answer_status="frozen",
     )
 
@@ -371,7 +391,14 @@ def test_external_jsonl_runner_persists_protocol_adapter_contract(
     def fake_run_one_arm(**kwargs):
         captured["item"] = kwargs["item"]
         score = bench._skipped_arm(kwargs["label"])
-        score["status"] = "ok"
+        score.update(
+            status="ok",
+            execution_complete=True,
+            step_scientific_requirements_complete=True,
+            failed_step_ids=[],
+            missing_step_ids=[],
+            scientific_acceptance={"status": "accepted", "issues": []},
+        )
         return score
 
     monkeypatch.setattr(bench, "_make_llm", lambda **kwargs: object())
@@ -388,9 +415,7 @@ def test_external_jsonl_runner_persists_protocol_adapter_contract(
     )
 
     result = json.loads(
-        (tmp_path / "results" / "ehrflowbench_results.json").read_text(
-            encoding="utf-8"
-        )
+        (tmp_path / "results" / "ehrflowbench_results.json").read_text(encoding="utf-8")
     )["scores"][0]
     assert captured["item"].database == "aumc"
     assert captured["item"].operational_exposure == "signal_max"
@@ -398,9 +423,10 @@ def test_external_jsonl_runner_persists_protocol_adapter_contract(
     assert result["expected_predictor"] == "signal"
     assert result["operational_exposure"] == "signal_max"
     assert result["protocol_adapter"]["database"]["defaulted"] is False
-    assert result["protocol_adapter"]["operational_exposure"][
-        "resolved_column_present"
-    ] is True
+    assert (
+        result["protocol_adapter"]["operational_exposure"]["resolved_column_present"]
+        is True
+    )
 
 
 def test_five_dim_scorecard_is_additive_and_robust(tmp_path):
@@ -505,6 +531,9 @@ def test_score_arm_reports_active_errors_separately_from_historical_errors(tmp_p
                     "numeric_error_count": 0,
                     "evidence_error_count": 0,
                     "analysis_error_count": 0,
+                    "publication_artifacts_ready": True,
+                    "execution_paper_eligible": False,
+                    "paper_authorized": False,
                 },
             }
         ),
@@ -522,6 +551,9 @@ def test_score_arm_reports_active_errors_separately_from_historical_errors(tmp_p
 
     assert score["n_errors"] == 0
     assert score["n_historical_errors"] == 1
+    assert score["publication_artifacts_ready"] is True
+    assert score["execution_paper_eligible"] is False
+    assert score["paper_authorized"] is False
 
 
 def test_score_arm_uses_only_latest_successful_step_records_and_active_evidence(

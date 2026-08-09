@@ -40,6 +40,7 @@ import shutil
 import stat
 import tempfile
 import threading
+import traceback
 from contextvars import copy_context
 from dataclasses import dataclass
 from enum import Enum
@@ -90,12 +91,13 @@ from ..audits.validators import (
 )
 from ..audits.patterns import AnalysisPatternAuditor
 from ..audits.step_summary_integrity import StepSummaryIntegrityValidator
-from ..audits.envelope_consumers import StepSummaryFractionEnvelopeDualReader
 from ..repairs.source import (
     _deterministic_runner_repair,
     _deterministic_summary_repair,
     deterministic_contract_repair,
 )
+from ..repairs.semantic_boundary import SemanticRepairRecorder
+from ..repairs.attempt_record import record_deterministic_runner_repair_attempt
 from .code_hygiene import reorder_forward_references
 from ..repairs.coordination import (
     RepairAuthorityBinding,
@@ -129,6 +131,10 @@ from .concept_audit import (
     ConceptQuarantineState,
     verified_capsule_concept_audit_replay as _verified_capsule_concept_audit_replay,
 )
+from .concept_reaudit import (
+    deterministic_concept_reaudit_authority,
+    deterministic_concept_reaudit_pending_errors,
+)
 from ..gates.concept import (
     DETERMINISTIC_CODE_GATE_VALIDATORS as _DETERMINISTIC_CODE_GATE_VALIDATORS,
     deterministic_code_gate_findings as _deterministic_code_gate_findings,
@@ -138,7 +144,25 @@ from ..gates.concept import (
     quarantined_deterministic_errors_resolved_by_current_gate as _quarantined_deterministic_errors_resolved_by_current_gate,
     quarantined_errors_superseded_by_current_policy as _quarantined_errors_superseded_by_current_policy,
 )
+from ..gates.plausibility_receipt import plausibility_audit_receipt_findings
+from .owner_declaration import (
+    execution_declaration_refusal,
+    owner_declaration_plan_findings,
+    owner_declaration_replan_directive,
+)
+from ..gates.plan_declared_inputs import declared_raw_input_plan_findings
+from ..gates.product_promise import (
+    product_promise_plan_findings,
+    product_promise_replan_directive,
+)
 from ..authority.coder_authority import HostCoderAuthority
+from ..authority.plausibility import (
+    FlagOnlyPlausibilityScope,
+    StepPlausibilityAuthority,
+    compile_resumed_flag_only_plausibility_scope,
+    compile_step_plausibility_authority,
+    restore_revalidated_resolved_inputs_sha256,
+)
 from ..cohort.repair import extract_cohort_definition_from_prose
 from ..cohort.schema import (
     CohortDefinition,
@@ -150,7 +174,11 @@ from ..authority.execution_input import ExecutionInputAuthorityState
 from ..authority.execution_identity import (
     execution_identity_for_pipeline as _execution_identity,
 )
-from ..intake.materialized_metadata import MaterializedMetadataError
+from ..intake.materialized_metadata import (
+    MaterializedMetadataError,
+    load_verified_materialized_cohort_authority,
+    materialized_provenance_path,
+)
 from ..intake.materialized_trajectory import (
     MaterializedTrajectoryError,
     StagedTrajectoryBinding,
@@ -160,13 +188,21 @@ from ..resources.coder import (
     bind_materialized_coder_authority,
     bind_primary_cohort_role,
 )
-from ..research_context.typed import resolved_raw_input_contracts
+from ..research_context.typed import resolved_raw_input_contracts_for_step
 from ..contracts.runtime import ValidationFinding, _ExecutePhaseResult, _PlanPhaseResult
+from ..gates.plausibility_obligation import (
+    flag_only_plausibility_obligation_findings as _flag_only_plausibility_obligation_findings,
+)
+from .runners.plausibility_receipt import (
+    host_plausibility_receipt_injected as _host_plausibility_receipt_injected,
+)
 from .runners.deterministic_descriptive import absolute_risk_context_code
 from .runners.deterministic_missingness import (
+    missingness_audit_input_scope_supported,
     missingness_measurement_audit_code,
 )
 from .runners.deterministic_robustness import (
+    robustness_replay_spec_is_emittable,
     robustness_sensitivity_preflight_code,
 )
 from ..contracts.declared_product import (
@@ -198,6 +234,11 @@ from ..authority.plan_authority import (
     _preserve_locked_robustness_specs_after_replan,
     normalize_replan_candidate,
 )
+from ..authority.plan_input_closure import (
+    close_measurement_companion_inputs,
+    plan_manifest_fields,
+    register_measurement_companion_input_closure,
+)
 from ..authority.plan_scope import (
     _normalise_scientific_text,
     _plan_scientific_scope_signature,
@@ -228,6 +269,10 @@ from ..authority.typed_binding import (
     _typed_parent_schema_context_block,
     _write_host_input_binding_receipts,
     _write_resolved_inputs_manifest,
+    host_authorized_ambient_trajectory_entry,
+    rank_scale_columns_entry,
+    study_endpoint_declaration_entry,
+    host_owns_input_binding_receipts,
 )
 from ..gates.contract import (  # execute-layer collaborators use the canonical gate API
     _AGENT_OWNED_ROBUSTNESS_RESULT_METHODS,
@@ -254,6 +299,16 @@ from .figure_preparation import (
     _reader_label_from_stem,
     _step_has_figure_only_output_contract,
     _step_summary_paths,
+)
+from .final_validation import (
+    _FinalDeterministicGateFindings,
+    _PRIMARY_DETERMINISTIC_RUNNERS,
+    _bind_findings_to_step_attempt,
+    _demote_result_figure_shape_for_family_renderer,
+    _demote_step_contract_for_primary_runner,
+    _evaluate_final_deterministic_gates,
+    _is_too_few_panels_figure_finding,
+    _primary_runner_core_estimate_present,
 )
 from .publication_figure import (
     SealedRendererState,
@@ -284,6 +339,17 @@ from ..gates.semantics import (
     blocking_validator_findings as _blocking_validator_findings,
 )
 from ..providers.mocks import MockLLMClient
+from ..providers.prompt_budget import (
+    budgeted_coder_clients,
+    budgeted_role_client,
+    budgeted_vlm_client,
+)
+from ..planning.cohort_contract import (
+    CohortSchemaError,
+    coerce_cohort_definition,
+    cohort_definition_has_explicit_selection,
+    cohort_definition_sha,
+)
 from ..planning.method_vocabulary import (
     MISSINGNESS_SOURCE_AVAILABILITY_AUDIT,
 )
@@ -301,13 +367,13 @@ from ..repairs.reasons import (
     typed_repair_ticket,
 )
 from ..plan_utils import (
-    _augment_measurement_companion_inputs,
     _augment_report_typed_product_inputs,
     _cap_plan_preserving_figure_steps,
     _clustering_contract_applies,
     _cohort_definition_contract_findings,
     _cohort_definition_is_empty,
     _cohort_definition_prose,
+    endpoint_contract_findings,
     _normalised_expected_output_names,
     _normalised_structured_output_names,
     _output_declares_figure,
@@ -340,6 +406,7 @@ from ..robustness.panel import (
     build_robustness_panel_from_records,
     robustness_specs_for_execution,
     robustness_specs_sha,
+    unexecuted_locked_spec_ids,
     write_robustness_panel,
 )
 from ..trajectory.bundle import trajectory_bundle_findings
@@ -348,7 +415,9 @@ from ..trajectory.plan_contract import (
     trajectory_plan_contract_applies,
     trajectory_plan_dag_findings,
 )
-from .runners.selection import select_standard_executor
+from .runners.selection import StandardExecutorCandidate, select_standard_executor
+from .runners.selection_report import standard_executor_candidate_report
+from .standard_executor_diagnostics import standard_executor_failure_finding
 from ..repair_registry import (
     InvariantStatus,
     RepairClass,
@@ -431,6 +500,7 @@ from ..authority.step_runtime import (
     select_explicit_step_capsule_for_targeted_resume,
 )
 from ..authority.step_attempt import (
+    RESUMABLE_ATTEMPT_COORDINATE_FIELDS,
     CheckpointAuthority,
     StepAttemptState,
     StepAuthorityOperations,
@@ -475,6 +545,7 @@ def _untrusted_runtime_repair_allowed(*, repair_id: str, source: str) -> bool:
         repair_id
         in {
             "all_rows_outcome_coordinate_filter_v1",
+            "nonfinite_missing_mask_conflation_v1",
             "non_tabular_companion_row_gate_v1",
         }
         or metadata.repair_class is RepairClass.SYNTACTIC
@@ -487,6 +558,7 @@ _STANDARD_EXECUTOR_INTERNAL_PENDING_ARTIFACTS = frozenset(
 _FIGURE_CONTRACT_SOURCE_DATA_SCHEMA_REPAIR_ID = "figure_contract_source_data_schema_v1"
 _COHORT_TRANSLATION_PROVIDER_CATEGORY = "cohort_definition_translation"
 _HOST_COHORT_TRANSLATION_BUDGET_STEP_ID = "host_cohort_definition_translation"
+_RAW_UNIVERSE_EXECUTION_ROLE = "raw_universe_for_primary_analysis_cohort_producer"
 
 
 def _submit_in_current_context(executor: Any, callback: Any, *args: Any) -> Any:
@@ -581,11 +653,12 @@ def _extract_cohort_definition_with_provider_budget(
     effective_limit = max(0, int(configured_limit))
     consumed_categories: Tuple[str, ...] = ()
     logical_repair_entries: tuple[Dict[str, object], ...] = ()
-    initial_generation_entry: Optional[Dict[str, object]] = None
+    initial_generation_entries: tuple[Dict[str, object], ...] = ()
     required_reservation_token: Optional[str] = None
     reservation_bound_provider_history_len: Optional[int] = None
     completed_reservation_token: Optional[str] = None
     reservation_released = False
+    reserved_category_extensions: tuple[Dict[str, object], ...] = ()
     if receipt_path.exists():
         receipt_state = load_provider_call_budget_state(
             receipt_path,
@@ -595,25 +668,27 @@ def _extract_cohort_definition_with_provider_budget(
         effective_limit = min(effective_limit, receipt_state.limit)
         consumed_categories = receipt_state.categories
         logical_repair_entries = receipt_state.logical_repairs
-        initial_generation_entry = receipt_state.initial_generation
+        initial_generation_entries = receipt_state.initial_generations
         required_reservation_token = receipt_state.required_reservation_token
         reservation_bound_provider_history_len = (
             receipt_state.reservation_bound_provider_history_len
         )
         completed_reservation_token = receipt_state.completed_reservation_token
         reservation_released = receipt_state.reservation_released
+        reserved_category_extensions = receipt_state.reserved_category_extensions
     budget = StepProviderCallBudget(
         effective_limit,
         step_id=budget_owner_step_id,
         consumed_categories=consumed_categories,
         logical_repair_entries=logical_repair_entries,
-        initial_generation_entry=initial_generation_entry,
+        initial_generation_entries=initial_generation_entries,
         receipt_path=receipt_path,
         reserved_final_category=reserved_final_category,
         required_reservation_token=required_reservation_token,
         reservation_bound_provider_history_len=(reservation_bound_provider_history_len),
         completed_reservation_token=completed_reservation_token,
         reservation_released=reservation_released,
+        reserved_category_extensions=reserved_category_extensions,
     )
     definition = complete_with_provider_budget(
         budget=budget,
@@ -781,6 +856,159 @@ def _planner_locked_cohort_prompt_payload(plan: AnalysisPlan) -> str:
     cohort = plan.model_dump(mode="json", include={"cohort"}).get("cohort")
     return json.dumps(
         cohort,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _planner_materialized_cohort_execution_receipt(
+    *,
+    plan: AnalysisPlan,
+    universe_path: Path,
+    analysis_cohort_path: Path,
+) -> Dict[str, Any]:
+    """Return a verified execution receipt for the Planner-owned predicates.
+
+    The host already applies the locked cohort definition before execution.
+    This projection gives both the Coder prompt and its read-only runtime
+    manifest the same physical column bindings and row-accounting checks
+    without exposing row identities or choosing any new scientific rule.
+    """
+
+    analysis_cohort_path = Path(analysis_cohort_path)
+    verified = load_verified_materialized_cohort_authority(analysis_cohort_path)
+    if verified is not None:
+        raw_provenance = verified.authority.to_dict()["semantic_provenance"]
+        if not isinstance(raw_provenance, Mapping):
+            raise MaterializedMetadataError(
+                "typed analysis cohort provenance is not an object"
+            )
+        provenance = dict(raw_provenance)
+        identity_column: Optional[str] = verified.authority.identity_column
+        row_identity_sha256: Optional[str] = verified.authority.row_identity_sha256
+        authority_sha256: Optional[str] = verified.reference.sha256
+        authoritative_rows = verified.authority.cohort_rows
+    else:
+        provenance_path = materialized_provenance_path(analysis_cohort_path)
+        if provenance_path.is_symlink() or not provenance_path.is_file():
+            raise MaterializedMetadataError(
+                "analysis cohort provenance is unavailable for Coder authority"
+            )
+        try:
+            provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise MaterializedMetadataError(
+                "analysis cohort provenance is unreadable for Coder authority"
+            ) from exc
+        if not isinstance(provenance, dict):
+            raise MaterializedMetadataError(
+                "analysis cohort provenance is not an object"
+            )
+        if provenance.get("cohort_parquet_sha256") != sha256_of_file(
+            analysis_cohort_path
+        ):
+            raise MaterializedMetadataError(
+                "legacy analysis cohort provenance digest changed"
+            )
+        identity_column = None
+        row_identity_sha256 = None
+        authority_sha256 = None
+        authoritative_rows = provenance.get("n_analysis_cohort")
+
+    # Both sides of this comparison are serializations of one locked
+    # definition, so both must come from the same owner.  ``to_dict`` omits a
+    # default ``selection_mode`` to keep legacy authority digests stable while
+    # pydantic's ``model_dump`` always emits it, so comparing those two
+    # spellings reported every predicate-filtered cohort as a mismatch.
+    # Re-hashing the recorded definition through the canonical digest owner
+    # additionally proves the stored ``cohort_sha256`` indexes the stored
+    # definition rather than merely asserting it.
+    definition = coerce_cohort_definition(getattr(plan, "cohort", None))
+    if definition is None:
+        raise MaterializedMetadataError(
+            "active plan carries no cohort definition for the execution receipt"
+        )
+    planner_cohort_sha256 = cohort_definition_sha(definition)
+    recorded_cohort = provenance.get("cohort_definition")
+    if not isinstance(recorded_cohort, Mapping):
+        raise MaterializedMetadataError(
+            "analysis cohort execution receipt has no recorded cohort definition"
+        )
+    try:
+        recorded_cohort_sha256 = cohort_definition_sha(
+            CohortDefinition.from_dict(dict(recorded_cohort))
+        )
+    except (CohortSchemaError, KeyError, TypeError, ValueError) as exc:
+        raise MaterializedMetadataError(
+            "analysis cohort execution receipt cohort definition is unreadable"
+        ) from exc
+    flow = provenance.get("cohort_flow")
+    if (
+        recorded_cohort_sha256 != planner_cohort_sha256
+        or str(provenance.get("cohort_sha256") or "") != planner_cohort_sha256
+        or not isinstance(flow, list)
+        or not flow
+        or any(not isinstance(row, dict) for row in flow)
+    ):
+        raise MaterializedMetadataError(
+            "analysis cohort execution receipt does not match the active plan"
+        )
+    try:
+        n_universe = int(provenance["n_universe"])
+        n_analysis_cohort = int(provenance["n_analysis_cohort"])
+        authoritative_rows_int = int(authoritative_rows)
+        first_before = int(flow[0]["n_before"])
+        first_remaining = int(flow[0]["n_remaining"])
+        final_remaining = int(flow[-1]["n_remaining"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise MaterializedMetadataError(
+            "analysis cohort execution receipt has invalid row accounting"
+        ) from exc
+    if (
+        flow[0].get("predicate_kind") != "universe"
+        or first_before != n_universe
+        or first_remaining != n_universe
+        or final_remaining != n_analysis_cohort
+        or authoritative_rows_int != n_analysis_cohort
+    ):
+        raise MaterializedMetadataError(
+            "analysis cohort execution receipt row accounting changed"
+        )
+
+    return {
+        "schema_version": "easyicu.primary_cohort_execution_prompt/1",
+        "cohort_definition_sha256": planner_cohort_sha256,
+        "raw_universe": {
+            "rows": n_universe,
+            "sha256": sha256_of_file(universe_path),
+        },
+        "authoritative_analysis_cohort": {
+            "rows": n_analysis_cohort,
+            "sha256": sha256_of_file(analysis_cohort_path),
+            "identity_column": identity_column,
+            "row_identity_sha256": row_identity_sha256,
+            "authority_sha256": authority_sha256,
+        },
+        "ordered_predicate_flow": flow,
+    }
+
+
+def _planner_materialized_cohort_prompt_payload(
+    *,
+    plan: AnalysisPlan,
+    universe_path: Path,
+    analysis_cohort_path: Path,
+) -> str:
+    """Serialize the verified cohort receipt for the Coder authority prompt."""
+
+    receipt = _planner_materialized_cohort_execution_receipt(
+        plan=plan,
+        universe_path=universe_path,
+        analysis_cohort_path=analysis_cohort_path,
+    )
+    return json.dumps(
+        receipt,
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
@@ -1044,6 +1272,7 @@ def _step_snapshot_requires_provider_receipt(
         3,
         4,
         5,
+        6,
         PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION,
     }:
         return False
@@ -1158,35 +1387,6 @@ def _step_status_from_contract_findings(
     }:
         return "critic_failed"
     return "ok"
-
-
-def _bind_findings_to_step_attempt(
-    findings: Sequence[ValidationFinding],
-    *,
-    step_id: str,
-    attempt_id: str,
-    checkpoint_id: str,
-) -> List[ValidationFinding]:
-    """Attach host-owned execution identity to deterministic findings.
-
-    Validator payloads are intentionally reusable and therefore do not know
-    which resume attempt invoked them.  Supersession must never infer that
-    identity from a message string: the orchestrator binds it at the review
-    checkpoint before persisting either the finding or the outer step record.
-    """
-
-    bound: List[ValidationFinding] = []
-    for finding in findings:
-        detail = dict(finding.detail or {})
-        detail.update(
-            {
-                "step_id": step_id,
-                "attempt_id": attempt_id,
-                "checkpoint_id": checkpoint_id,
-            }
-        )
-        bound.append(finding.model_copy(update={"detail": detail}))
-    return bound
 
 
 _LOCKED_MEASUREMENT_DATA_QUALITY_ISSUES = frozenset(
@@ -1663,10 +1863,6 @@ def build_self_block_replan_directive(
     )
 
 
-# No deterministic runner owns a primary scientific estimand.  Kept as an
-# explicit empty compatibility surface for drift checks and legacy run records.
-_PRIMARY_DETERMINISTIC_RUNNERS: set[str] = set()
-
 # Method names the planner uses for a PRIMARY estimation step (not a
 # prep/audit/figure step). A dose-response is routed to the ordinal runner only
 # when a dose-response signal is ALSO present, so listing broad association
@@ -1880,13 +2076,6 @@ _COMPACT_MISSINGNESS_METHODS = frozenset(
         "data_quality",
     }
 )
-_ABSOLUTE_RISK_CONTEXT_METHODS = frozenset(
-    {
-        "absolute_risk_context",
-        "descriptive_context",
-        "exposure_outcome_summary",
-    }
-)
 _ROBUSTNESS_SENSITIVITY_METHODS = frozenset(
     {
         "prespecified_robustness",
@@ -1987,17 +2176,39 @@ def _absolute_risk_context_runner_owns_step(
     """True for a descriptive exposure-prevalence / absolute-risk owner."""
 
     del step_id
-    outputs = {str(item or "").lower() for item in (expected_outputs or [])}
-    if any(item.startswith("figure:") for item in outputs):
-        return False
+    # No figure clause. MEASURED over 1,965 recorded plan steps: 597 declare a
+    # figure and the closed-product clause below refuses every one of them on
+    # its own -- ``figure:absolute_risk_context`` is not a supported PRODUCT, so
+    # the set never closes. A guard that has never decided a case reads as
+    # protection while protecting nothing; the property it stood for is pinned
+    # by a test instead, so a change to the product reader fails loudly rather
+    # than being silently absorbed here.
     supported_products = {
         "exposure_outcome_summary",
         "exposure_prevalence_and_absolute_risk",
         "absolute_risk",
         "absolute_risk_context",
     }
-    if _method_head(method) not in _ABSOLUTE_RISK_CONTEXT_METHODS:
-        return False
+    # No method allowlist. It had three spellings -- ``absolute_risk_context``,
+    # ``descriptive_context``, ``exposure_outcome_summary`` -- and MEASURED over
+    # 89 recorded steps promising ``table:absolute_risk_context``, the Planner
+    # wrote none of them: 52 said ``descriptive``, 7
+    # ``descriptive_binary_outcome_summary``, 5
+    # ``prevalence_and_absolute_risk_summary``, and so on down a tail of
+    # synonyms. So this owner -- registered in the capability registry,
+    # advertised to the Planner, and wired into the dispatcher -- claimed 0 of
+    # 89, the Coder wrote the table every time, and the figures drawn over it
+    # died 46 times out of 47. The sibling table written by a real owner ran the
+    # other way: 40 of 51 figures over it passed.
+    #
+    # The promised product IS the claim, and the clauses below already do every
+    # bit of the discrimination: a figure output, an effect method or an effect
+    # output, and a product set outside this owner's four are each refused.
+    # Re-measured over all 1,965 recorded plan steps, dropping the allowlist
+    # claims 77 of the 89 and adds exactly ZERO steps that do not promise the
+    # product -- so the allowlist only ever subtracted correct claims. This is
+    # the same conclusion the exposure/outcome distribution owner reached about
+    # its own two-string allowlist.
     if _method_is_effect_or_association(method) or _declares_effect_output(
         expected_outputs
     ):
@@ -2020,13 +2231,49 @@ def _robustness_sensitivity_runner_owns_step(
     method: str,
     step_id: str,
     expected_outputs: Sequence[str],
+    *,
+    step: Optional[AnalysisStep] = None,
 ) -> bool:
-    """True for a separate prespecified robustness-comparison owner."""
+    """True for a separate prespecified robustness-comparison owner.
+
+    A step carrying an EMITTABLE ``robustness_replay_spec`` has stated outright
+    that it is the locked-grid replay, so neither the method label below nor the
+    product names need decide anything for it.  Both were string sets, and over
+    the recorded corpus the method set is the one that bled: 182 robustness
+    steps that were neither figures nor claimed by the agent-owned validation
+    gate were turned away by it.
+
+    AN INCOMPLETE DECLARATION MUST NOT COST THE STEP ITS OWNER.  Until
+    2026-07-31 the spec branch *returned* rather than fell through, so declaring
+    a spec replaced the label path outright -- and a spec that did not yet back
+    every promised product answered ``False``, permanently.  Measured over the
+    recorded plans: 10 steps that declare NO spec are claimed by the label path,
+    and 8 that declare a PARTIAL one are refused -- every one of which the label
+    path would have claimed had the field simply been left empty.  The host was
+    punishing the Planner for answering half its question, which teaches exactly
+    the wrong lesson and is invisible from the plan.
+
+    So an unemittable spec now falls through to the same path an absent one
+    takes: no better off, and no worse.  The gap is still reported --
+    ``robustness_replay_declaration_verdict`` names the unbacked products for
+    the plan-time gate -- so the Planner is still asked to close it, but the
+    step is not left to the Coder in the meantime for having tried.
+    """
 
     del step_id
-    outputs = {str(item or "").lower() for item in (expected_outputs or [])}
-    if any(item.startswith("figure:") for item in outputs):
-        return False
+    # A promised figure is refused structurally by both paths below, so the
+    # explicit `figure:` guard that used to stand here was unreachable and was
+    # deleted (verified 2026-07-31): `figure` is not one of the three
+    # `_AUXILIARY_OUTPUT_KINDS`, so `_closed_auxiliary_output_products` returns
+    # None for any step promising one, and no replay `output` names a figure,
+    # so `robustness_replay_spec_is_emittable` is False for one too. The
+    # property is locked by a test rather than by a guard that never fires.
+    if (
+        step is not None
+        and step.robustness_replay_spec is not None
+        and robustness_replay_spec_is_emittable(step)
+    ):
+        return True
     method_head = _method_head(method)
     if method_head not in _ROBUSTNESS_SENSITIVITY_METHODS:
         return False
@@ -2114,166 +2361,6 @@ def _trajectory_clustering_step_matches(
         auxiliary_kmeans_only=True,
         minimum_output_signals=2,
     )
-
-
-def _primary_runner_core_estimate_present(
-    kind: Optional[str], step_summary: Mapping[str, Any]
-) -> bool:
-    """True when a PRIMARY deterministic runner emitted its core estimate.
-
-    The runner's own ``status`` is the authority: it writes ``ok`` only when the
-    estimate computed and ``blocked`` on genuinely non-viable data. When ``ok``
-    and the effect key is present, the runner has satisfied the scientific
-    contract for the step -- any extra planner-requested output tables it does
-    not emit are advisory, not a reason to discard a trustworthy estimate.
-    """
-    if kind not in _PRIMARY_DETERMINISTIC_RUNNERS:
-        return False
-    if not isinstance(step_summary, Mapping):
-        return False
-    if str(step_summary.get("status") or "").lower() != "ok":
-        return False
-    if kind in ("causal_primary_iptw", "ordinal_dose_response"):
-        # Both emit the scale-neutral ``adjusted_effect`` as their core estimate
-        # (causal: marginal OR; ordinal: trend OR per +1 stage).
-        return step_summary.get("adjusted_effect") is not None
-    # survival_primary_cox
-    if step_summary.get("hazard_ratio") is not None:
-        return True
-    primary_model = step_summary.get("primary_model")
-    return (
-        isinstance(primary_model, Mapping)
-        and primary_model.get("hazard_ratio") is not None
-    )
-
-
-def _demote_step_contract_for_primary_runner(
-    step_record: Mapping[str, Any],
-    step_summary: Mapping[str, Any],
-    findings: Sequence[ValidationFinding],
-) -> List[ValidationFinding]:
-    """Apply contract compatibility to legacy deterministic-primary records.
-
-    When such a runner produced its core estimate, demote ``step_contract``
-    missing-output ERRORS to advisory warnings. Otherwise a planner that
-    over-specifies a step's ``expected_outputs`` (e.g. 17 documentation tables a
-    causal step does not need) fail-closes the step and triggers a repair that
-    replaces a validated legacy estimate with a repair. Integrity findings from
-    other validators (exposure / overadjustment / leakage / figure) remain
-    blocking. Live primary science is agent-owned; this is record compatibility.
-    """
-    kind = step_record.get("deterministic_standard_analysis")
-    if not _primary_runner_core_estimate_present(kind, step_summary):
-        return list(findings)
-    demoted: List[ValidationFinding] = []
-    for finding in findings:
-        if (
-            getattr(finding, "validator", "") == "step_contract"
-            and finding.severity == "error"
-        ):
-            finding = finding.model_copy(
-                update={
-                    "severity": "warning",
-                    "message": (
-                        finding.message
-                        + f" [advisory: step satisfied by deterministic {kind} "
-                        "runner; extra planner-requested outputs are non-blocking]"
-                    ),
-                }
-            )
-        demoted.append(finding)
-    return demoted
-
-
-def _is_too_few_panels_figure_finding(finding: ValidationFinding) -> bool:
-    """True for the ``figure_contract_quality`` "result figure has <2 panels"
-    ERROR specifically.
-
-    Keyed off ``detail['panel_count']`` (which only that finding sets) rather
-    than the message text, so it stays robust if the wording changes. Blank-
-    title / weak-claim / fallback-term figure errors are deliberately NOT
-    matched -- only the panel-count shape rule is demoted below.
-    """
-    if getattr(finding, "validator", "") != "figure_contract_quality":
-        return False
-    if getattr(finding, "severity", "") != "error":
-        return False
-    detail = getattr(finding, "detail", None) or {}
-    panel_count = detail.get("panel_count") if isinstance(detail, Mapping) else None
-    return isinstance(panel_count, int) and panel_count < 2
-
-
-def _demote_result_figure_shape_for_family_renderer(
-    context: Any,
-    findings: Sequence[ValidationFinding],
-) -> List[ValidationFinding]:
-    """Demote a step-level "result figure has <2 panels" ERROR to a warning when
-    the study-design family assembles its primary figure deterministically.
-
-    A family in ``FAMILY_RENDERERS`` can have a deterministic multi-panel publication
-    figure renderer, but it only runs in the WRITE phase -- which is gated behind
-    ``execution_complete``. When the LLM's step-level figure is single-panel, the
-    ``figure_contract_quality`` panel-count ERROR marks the step ``contract_
-    failed`` -> ``execution_complete`` stays False -> the write phase is skipped
-    -> the deterministic renderer (the very thing that would produce the >=2-panel
-    primary) never runs. The step-level figure is NOT the manuscript's primary
-    for these families, so its panel count is advisory here. The write-phase
-    display-suite gate remains fully fail-closed: if the deterministic renderer
-    cannot build a >=2-panel primary from the registered tables, the run still
-    fails with "no primary publication result-bearing figure contract". Pure so
-    both branches are unit-testable.
-    """
-    if not any(_is_too_few_panels_figure_finding(f) for f in findings):
-        return list(findings)
-    if not _family_has_deterministic_figure_renderer(context):
-        return list(findings)
-    demoted: List[ValidationFinding] = []
-    for finding in findings:
-        if _is_too_few_panels_figure_finding(finding):
-            finding = finding.model_copy(
-                update={
-                    "severity": "warning",
-                    "message": (
-                        finding.message
-                        + " [advisory: this study-design family builds its "
-                        "manuscript-facing primary figure deterministically in "
-                        "the write phase; the display-suite gate remains the "
-                        "fail-closed backstop for panel count and role diversity]"
-                    ),
-                }
-            )
-        demoted.append(finding)
-    return demoted
-
-
-@dataclass(frozen=True)
-class _FinalDeterministicGateFindings:
-    """Attempt-bound finding groups produced by the final deterministic gate.
-
-    The immutable grouping keeps evaluation separate from orchestration: the
-    evaluator below reads sealed outputs and returns findings, while the caller
-    remains responsible for publishing them to the run manifest, evidence
-    metadata, and outer step status.  Resume revalidation can therefore reuse
-    the same evaluator without duplicating its gate composition.
-    """
-
-    stat_findings: Tuple[ValidationFinding, ...]
-    clinical_findings: Tuple[ValidationFinding, ...]
-    guard_findings: Tuple[ValidationFinding, ...]
-    contract_findings: Tuple[ValidationFinding, ...]
-    figure_source_findings: Tuple[ValidationFinding, ...]
-    result_envelope_snapshot: Optional[SealedStepResultEnvelopeSnapshot] = None
-
-    def all_findings(self) -> Tuple[ValidationFinding, ...]:
-        """Return all groups in the historical manifest publication order."""
-
-        return (
-            *self.stat_findings,
-            *self.clinical_findings,
-            *self.guard_findings,
-            *self.contract_findings,
-            *self.figure_source_findings,
-        )
 
 
 @dataclass(frozen=True)
@@ -2407,6 +2494,7 @@ _STALE_RESOLVED_INPUT_RECEIPT_FIELDS = (
     "resolved_inputs_path",
     "resolved_inputs_sha256",
     "revalidated_input_bindings_fingerprint",
+    "flag_only_plausibility_scope",
 )
 
 
@@ -2641,175 +2729,17 @@ def _resume_success_dependencies(
     return dependencies
 
 
-def _evaluate_final_deterministic_gates(
-    *,
-    context: ResearchContext,
-    plan: AnalysisPlan,
-    cohort_path: Path,
-    universe_path: Path,
-    run_dir: Path,
-    out_dir: Path,
+def _fresh_plausibility_receipt_findings(
+    step_summary: Mapping[str, Any],
     step: AnalysisStep,
-    step_summary: Dict[str, Any],
-    step_record: Mapping[str, Any],
-    completed_step_records: Sequence[Mapping[str, Any]],
-    resolved_input_bindings: Mapping[str, Mapping[str, Any]],
-    attempt_id: str,
-    checkpoint_id: str,
-    stat_validator: StatisticalValidator,
-    clinical_validator: ClinicalConstraintValidator,
-    statistical_guard: StatisticalGuard,
-    cross_step_cohort_lock_validator: CrossStepCohortLockValidator,
-    cross_step_registered_output_validator: CrossStepRegisteredOutputValidator,
-    cross_step_reconciliation_trace_validator: CrossStepReconciliationTraceValidator,
-    step_summary_integrity_validator: StepSummaryIntegrityValidator,
-    step_summary_fraction_validator: StepSummaryFractionValidator,
-    cross_step_source_status_validator: CrossStepSourceStatusValidator,
-    primary_model_contract_validator: PrimaryModelContractValidator,
-    figure_contract_validator: FigureContractQualityValidator,
-    figure_source_validator: FigureSourceDataValidator,
-) -> _FinalDeterministicGateFindings:
-    """Evaluate the complete final deterministic review for one step attempt.
-
-    This function deliberately does not append to the run-wide findings list,
-    mutate ``step_record``, publish evidence, or decide the outer step status.
-    Filesystem-reading validators make it only *pure-ish*, but all gate
-    composition, compatibility demotions, and attempt binding now live here as
-    one reusable authority.
-    """
-
-    current_step_status = (
-        str(step_record.get("status")).strip()
-        if step_record.get("status") is not None
-        else None
-    )
-    execution_cohort_path = _step_execution_cohort_path(
-        step=step,
-        plan=plan,
-        run_dir=run_dir,
-        universe_path=universe_path,
-        cohort_path=cohort_path,
-    )
-    execution_cohort_path = _bound_step_execution_cohort_path(
-        run_dir=run_dir,
-        fallback_path=execution_cohort_path,
-        resolved_input_bindings=resolved_input_bindings,
-    )
-    execution_cohort_sha256 = str(
-        step_record.get("execution_cohort_sha256") or ""
-    ).strip()
-    result_envelope_snapshot = compile_sealed_step_result_shadow(
-        step=step,
+    script_text: str,
+    authority: StepPlausibilityAuthority,
+) -> List[ValidationFinding]:
+    return plausibility_audit_receipt_findings(
         step_summary=step_summary,
-        output_dir=out_dir,
-        run_dir=run_dir,
-        resolved_input_bindings=resolved_input_bindings,
-        # Archived/isolated gate callers may not carry the host digest.  In
-        # that case omit the optional binding pair; any raw cohort path in the
-        # summary still fails normalization because it is not authorized.
-        execution_cohort_path=(
-            execution_cohort_path if execution_cohort_sha256 else None
-        ),
-        execution_cohort_sha256=execution_cohort_sha256 or None,
-        current_status=current_step_status,
-    )
-
-    stat_findings = stat_validator.audit(
-        context=context,
-        cohort_path=execution_cohort_path,
         step=step,
-        out_dir=out_dir,
-        step_summary=step_summary,
-    )
-    clinical_findings = clinical_validator.audit(
-        context=context,
-        step=step,
-        out_dir=out_dir,
-        step_summary=step_summary,
-    )
-    guard_findings = statistical_guard.audit(
-        context=context,
-        cohort_path=execution_cohort_path,
-        step=step,
-        out_dir=out_dir,
-        step_summary=step_summary,
-    )
-    contract_findings = _step_deterministic_contract_findings(
-        step=step,
-        plan=plan,
-        context=context,
-        step_summary=step_summary,
-        completed_step_records=completed_step_records,
-        resolved_input_bindings=resolved_input_bindings,
-        out_dir=out_dir,
-        run_dir=run_dir,
-        universe_path=universe_path,
-        cohort_path=cohort_path,
-        execution_cohort_path=execution_cohort_path,
-        cross_step_cohort_lock_validator=cross_step_cohort_lock_validator,
-        cross_step_registered_output_validator=cross_step_registered_output_validator,
-        cross_step_reconciliation_trace_validator=(
-            cross_step_reconciliation_trace_validator
-        ),
-        step_summary_integrity_validator=step_summary_integrity_validator,
-        step_summary_fraction_validator=step_summary_fraction_validator,
-        cross_step_source_status_validator=cross_step_source_status_validator,
-        primary_model_contract_validator=primary_model_contract_validator,
-        final_fraction_envelope_validator=StepSummaryFractionEnvelopeDualReader(),
-        final_fraction_envelope=result_envelope_snapshot.envelope,
-        final_fraction_current_status=current_step_status,
-    )
-    contract_findings.extend(
-        figure_contract_validator.audit(
-            step=step,
-            out_dir=out_dir,
-            run_dir=run_dir,
-            step_summary=step_summary,
-        )
-    )
-    # Legacy deterministic-primary records own their historical core estimate;
-    # only their excess step-output declarations are demoted.  All integrity,
-    # exposure, leakage, and figure findings remain blocking.
-    contract_findings = _demote_step_contract_for_primary_runner(
-        step_record,
-        step_summary,
-        contract_findings,
-    )
-    # Some study-design families build the manuscript-facing multi-panel figure
-    # in the write phase.  Preserve the existing narrow step-figure demotion;
-    # the publication display-suite gate remains fail-closed.
-    contract_findings = _demote_result_figure_shape_for_family_renderer(
-        context,
-        contract_findings,
-    )
-    figure_source_findings = figure_source_validator.audit(
-        step=step,
-        out_dir=out_dir,
-        run_dir=run_dir,
-        step_summary=step_summary,
-        completed_step_records=completed_step_records,
-        resolved_input_bindings=resolved_input_bindings,
-    )
-
-    def _bind(
-        group: Sequence[ValidationFinding],
-    ) -> Tuple[ValidationFinding, ...]:
-        return tuple(
-            _bind_findings_to_step_attempt(
-                group,
-                step_id=step.step_id,
-                attempt_id=attempt_id,
-                checkpoint_id=checkpoint_id,
-            )
-        )
-
-    return _FinalDeterministicGateFindings(
-        stat_findings=_bind(stat_findings),
-        clinical_findings=_bind(clinical_findings),
-        guard_findings=_bind(guard_findings),
-        contract_findings=_bind(contract_findings),
-        figure_source_findings=_bind(figure_source_findings),
-        result_envelope_snapshot=result_envelope_snapshot,
+        script_text=script_text,
+        scope=authority.scope,
     )
 
 
@@ -3103,6 +3033,11 @@ def _selectively_revalidate_resume_successes(
         )
     )
     for prior_record in stale_successes:
+        prior_record = restore_revalidated_resolved_inputs_sha256(
+            prior_record=prior_record,
+            checkpoint_history=history,
+            run_dir=run_dir,
+        )
         step_id = str(prior_record.get("step_id") or "").strip()
         invalid_upstream = sorted(
             dependencies.get(step_id, set()).intersection(invalidated)
@@ -3227,11 +3162,18 @@ def _selectively_revalidate_resume_successes(
                 run_dir=run_dir,
             )
             script_text = script_path.read_text(encoding="utf-8")
+            plausibility_scope = compile_resumed_flag_only_plausibility_scope(
+                prior_record=prior_record,
+                run_dir=run_dir,
+                context=context,
+                step=step,
+            )
             code_findings = _bind_findings_to_step_attempt(
                 _deterministic_code_gate_findings(
                     context=context,
                     step=step,
                     script_text=script_text,
+                    plausibility_scope=plausibility_scope,
                 ),
                 step_id=step_id,
                 attempt_id=attempt_id,
@@ -3295,6 +3237,8 @@ def _selectively_revalidate_resume_successes(
                     step_record=prior_record,
                     completed_step_records=completed_records,
                     resolved_input_bindings=resolved_bindings,
+                    plausibility_scope=plausibility_scope,
+                    script_text=script_text,
                     attempt_id=attempt_id,
                     checkpoint_id=checkpoint_id,
                     stat_validator=StatisticalValidator(),
@@ -3415,6 +3359,8 @@ def _selectively_revalidate_resume_successes(
             **stamp,
         }
         _discard_stale_resolved_input_receipts(replayed)
+        replayed["resolved_inputs_sha256"] = prior_record["resolved_inputs_sha256"]
+        replayed["flag_only_plausibility_scope"] = plausibility_scope.to_dict()
         replayed["revalidated_input_bindings_fingerprint"] = (
             _resume_typed_input_bindings_fingerprint(resolved_bindings)
         )
@@ -3624,28 +3570,18 @@ def run_execute_phase(
     findings = plan_result.findings
     plan = plan_result.plan
     plan_path = plan_result.plan_path
-    plan, companion_input_findings = _augment_measurement_companion_inputs(
+    plan, companion_input_findings = close_measurement_companion_inputs(
         plan=plan,
         context=context,
     )
     if companion_input_findings:
         findings.extend(companion_input_findings)
-        plan_path = run_dir / "analysis_plan_input_closure.json"
-        plan_path.write_text(plan.model_dump_json(indent=2), encoding="utf-8")
-        if evidence.get("analysis_plan_input_closure") is None:
-            evidence.register_file(
-                kind="log",
-                description=(
-                    "Analysis plan with structural measurement-provenance "
-                    "input closure."
-                ),
-                source_path=plan_path,
-                evidence_id="analysis_plan_input_closure",
-                producer="runtime_supervisor",
-                generation_mode="system",
-                prompt_pack_version=plan_result.prompt_version,
-                metadata={"reason": "measurement_companion_input_closure"},
-            )
+        plan_path = register_measurement_companion_input_closure(
+            run_dir=run_dir,
+            evidence=evidence,
+            plan=plan,
+            prompt_pack_version=plan_result.prompt_version,
+        ).evidence_path
         plan_result.plan_path = plan_path
     stop_after_step_id = _resolve_stop_after_step_selector(plan, stop_after_step_id)
     resume_controller = ResumeController(
@@ -3702,8 +3638,13 @@ def run_execute_phase(
     }
     role_resolver = plan_result.role_resolver
     llm_signature = plan_result.llm_signature
-    llm_concept_audit_client = pipeline._llm_concept_auditor_client or role_resolver(
-        "analyzer"
+    llm_concept_audit_client = pipeline._llm_concept_auditor_client or (
+        budgeted_role_client(
+            role_resolver,
+            "analyzer",
+            "concept_audit",
+            limit_tokens=pipeline._max_prompt_tokens_per_call,
+        )
     )
     llm_concept_auditor_signature = (
         pipeline._llm_signature(llm_concept_audit_client)
@@ -3757,6 +3698,13 @@ def run_execute_phase(
     run_input_authority_state.require_trajectory_integrity(
         step_id="execute_phase_initialization",
     )
+    # The context can only ever show the wide fixed-window representation; the
+    # long tier is a verified typed run input this scope can see and it cannot.
+    # Derived here, beside the integrity check, because the trajectory contract
+    # is consulted from several points below and every one of them needs it.
+    long_trajectory_bound = (
+        run_input_authority_state.trajectory_authority_sha256 is not None
+    )
 
     if (
         pipeline._development_sample_size is not None
@@ -3807,11 +3755,14 @@ def run_execute_phase(
         plan_result.resume_state = resume_revalidation.resume_state
         resume_controller.resume_state = resume_revalidation.resume_state
 
-    coder_llm_client = role_resolver("coder")
-    fallback_coder_provider_identity_sha256 = canonical_sha256(
-        pipeline._llm_signature(coder_llm_client)
+    coder_transports = budgeted_coder_clients(
+        role_resolver,
+        limit_tokens=pipeline._max_prompt_tokens_per_call,
     )
-    coder = CoderAgent(coder_llm_client, repair_llm=role_resolver("repair"))
+    fallback_coder_provider_identity_sha256 = canonical_sha256(
+        pipeline._llm_signature(coder_transports[0])
+    )
+    coder = CoderAgent(coder_transports[0], repair_llm=coder_transports[1])
     # Opt-in altitude-2a: delegate script authoring + self-repair to a local
     # coding-agent CLI when EASYICU_AGENTIC_CODER_BACKEND is set. Off by default;
     # degrades back to ``coder`` when the CLI is unavailable. The script it
@@ -3832,7 +3783,14 @@ def run_execute_phase(
         if isinstance(coder, AgenticCoderAgent)
         else fallback_coder_provider_identity_sha256
     )
-    analyzer = AnalyzerAgent(role_resolver("analyzer"))
+    analyzer = AnalyzerAgent(
+        budgeted_role_client(
+            role_resolver,
+            "analyzer",
+            "analyzer_interpretation",
+            limit_tokens=pipeline._max_prompt_tokens_per_call,
+        )
+    )
     supervisor = RuntimeSupervisor(
         clinical_semantics=ClinicalSemanticsAgent(),
         data_extraction=DataExtractionAgent(),
@@ -3914,13 +3872,30 @@ def run_execute_phase(
             snapshot = dict(record)
             if snapshot not in step_attempt_history:
                 step_attempt_history.append(snapshot)
+        # The partial manifest is a diagnostic snapshot, and one of its callers
+        # is the step-crash handler.  ``plan_manifest_fields`` fails closed when
+        # the executing plan is not bound to an immutable record; letting that
+        # abort the write replaces the diagnosis being recorded (which step
+        # raised what) with an authority message that names none of it -- which
+        # is exactly how the binding defect below stayed invisible.  Record the
+        # binding failure alongside everything else and finish the write.  This
+        # weakens nothing: the run's fate is still decided by the same
+        # fail-closed call in ``finalize``, which still raises.  ``plan_path``
+        # is deliberately omitted rather than guessed, because its consumers
+        # require a run-relative path and already have a defined fallback.
+        try:
+            plan_fields: Dict[str, Any] = dict(
+                plan_manifest_fields(run_dir, evidence, plan, plan_path)
+            )
+        except ValueError as authority_error:
+            plan_fields = {"current_plan_authority_error": str(authority_error)}
         payload: Dict[str, Any] = {
             "schema_version": "easyicu.research_manifest_partial/1",
             "run_id": run_id,
             "research_question": context.research_question,
             "started_at": plan_result.started_at.isoformat(),
             "context_path": str(plan_result.context_path.relative_to(run_dir)),
-            "plan_path": str(plan_path.relative_to(run_dir)),
+            **plan_fields,
             "evidence": [r.model_dump(mode="json") for r in evidence.records()],
             "findings": [f.model_dump(mode="json") for f in findings],
             "per_step_records": per_step_records,
@@ -3969,7 +3944,9 @@ def run_execute_phase(
         revised_plan: AnalysisPlan,
         *,
         reason: str,
+        producer: str = "replanner",
     ) -> Path:
+        from ..authority.declared_levels import bind_step_declared_levels
         from ..authority.table_one_binding import (
             bind_table_one_execution_spec,
             write_table_one_private_checkpoint,
@@ -3977,6 +3954,7 @@ def run_execute_phase(
 
         for revised_step in revised_plan.steps:
             bind_table_one_execution_spec(revised_step, context)
+            bind_step_declared_levels(revised_step, context)
         write_table_one_private_checkpoint(run_dir=run_dir, plan=revised_plan)
         revision_path = run_dir / f"analysis_plan_revision_{revised_plan.revision}.json"
         revision_path.write_text(
@@ -3990,7 +3968,7 @@ def run_execute_phase(
                 description=f"Revised analysis plan (reason={reason}).",
                 source_path=revision_path,
                 evidence_id=base_id,
-                producer="replanner",
+                producer=producer,
                 generation_mode="llm",
                 prompt_pack_version=prompt_version,
                 metadata={"reason": reason, "llm_signature": llm_signature},
@@ -4013,7 +3991,7 @@ def run_execute_phase(
                 ),
                 source_path=revision_path,
                 evidence_id=f"{base_id}_{digest}",
-                producer="replanner",
+                producer=producer,
                 generation_mode="llm",
                 prompt_pack_version=prompt_version,
                 metadata={
@@ -4092,7 +4070,12 @@ def run_execute_phase(
                     configured_limit=pipeline._max_step_provider_calls,
                     cohort_prose=_cohort_definition_prose(candidate_plan),
                     universe_columns=columns,
-                    llm=role_resolver("planner"),
+                    llm=budgeted_role_client(
+                        role_resolver,
+                        "planner",
+                        "cohort_extraction",
+                        limit_tokens=pipeline._max_prompt_tokens_per_call,
+                    ),
                     name=getattr(
                         getattr(candidate_plan, "cohort", None),
                         "name",
@@ -4312,20 +4295,40 @@ def run_execute_phase(
         candidate_plan: AnalysisPlan,
         *,
         reason: str,
-    ) -> None:
+    ) -> bool:
         """For an executing plan that implies a cohort but left it unstructured:
         first try to materialise it from the step prose (real enforcement); if
-        that fails, surface the auditable contract error (visibility)."""
+        that fails, surface the auditable contract error (visibility).
+
+        Returns ``True`` when this call changed the plan's public cohort, so the
+        caller can seal the plan that will actually execute.  The comparison is
+        on the serialized payload rather than on the materializer's own return
+        value, because the caller's obligation is defined by what changed in the
+        plan, not by which branch reported success.
+        """
         if not (
             _plan_expects_analysis_cohort(candidate_plan)
             and _cohort_definition_is_empty(candidate_plan)
         ):
-            return
-        if _try_materialize_cohort_from_prose(candidate_plan, reason=reason):
-            return
-        _enforce_cohort_contract_on_executing_plan(candidate_plan, reason=reason)
+            return False
+        before = candidate_plan.model_dump(mode="json").get("cohort")
+        if not _try_materialize_cohort_from_prose(candidate_plan, reason=reason):
+            _enforce_cohort_contract_on_executing_plan(candidate_plan, reason=reason)
+        return candidate_plan.model_dump(mode="json").get("cohort") != before
 
-    _resolve_cohort_definition(plan, reason="execute_start")
+    if _resolve_cohort_definition(plan, reason="execute_start"):
+        # Same obligation as the replan path below, on the plan that entered
+        # execution: whatever cohort the host just wrote is the one this run
+        # analyses, so an immutable record of it has to exist before any step
+        # runs.  Sealed only when the cohort actually changed -- every run
+        # reaches this line, and registering an identical revision on each of
+        # them would add a record that carries no new authority.
+        plan_path = _register_plan_revision(
+            plan,
+            reason="execute_start_cohort_materialization",
+            producer="cohort_materializer",
+        )
+        plan_result.plan_path = plan_path
 
     def _maybe_replan(
         *,
@@ -4443,11 +4446,24 @@ def run_execute_phase(
             return current_plan
 
         # Substantive revision: reset the no-op streak and register it.
+        #
+        # Resolve the cohort BEFORE sealing.  ``_resolve_cohort_definition``
+        # may translate this plan's own prose 纳排 into typed predicates and
+        # write them onto ``revised.cohort``, and ``cohort`` is a public,
+        # scientifically load-bearing field: it decides which patients the run
+        # analyses.  Two host authorities read the plan back and require an
+        # immutable record of exactly what executes --
+        # ``resolve_registered_plan_authority`` compares the executing plan's
+        # whole public payload against the registered record on every manifest
+        # flush and at finalize, and resume rejects any candidate plan whose
+        # cohort digest is not the locked one.  Sealing first therefore
+        # registered a plan nothing would execute, and left both authorities
+        # with no match at all.
         _replan_state["noop_streak"] = 0
         _replan_state["total"] += 1
+        _resolve_cohort_definition(revised, reason=reason)
         plan_path = _register_plan_revision(revised, reason=reason)
         plan_result.plan_path = plan_path
-        _resolve_cohort_definition(revised, reason=reason)
         findings.append(
             ValidationFinding(
                 validator="replanner",
@@ -4493,7 +4509,18 @@ def run_execute_phase(
 
     trajectory_plan_blocked = False
     typed_plan_dag_blocked = False
+    endpoint_contract_blocked = False
     probe_step_id = "00_probe"
+    # The plan-time gates below validate the PLAN, not the probe, so they
+    # must not live inside the probe branch. canary36 is why: its probe was
+    # satisfied by pre-execution, the whole branch was skipped, and with it
+    # went the typed-DAG, primary-cohort, trajectory, declared-input,
+    # product-promise and owner-declaration gates AND the replan that
+    # answers them. A robustness step whose declaration the gate names
+    # exactly then reached execution unrepaired and died -- in a run where
+    # six other steps were claimed by their deterministic owners.
+    probe_summary: Optional[Dict[str, Any]] = None
+    probe_record: Optional[Dict[str, Any]] = None
     if pipeline._enable_probe_step and probe_step_id not in resumed_step_ids:
         probe_summary, probe_files = services.build_probe_summary(
             context=context,
@@ -4548,100 +4575,216 @@ def run_execute_phase(
         per_step_records.append(probe_record)
         preexecuted_step_ids.add(probe_step_id)
         _flush_partial_manifest()
-        typed_plan_preflight = _typed_plan_dag_findings(plan)
-        primary_cohort_preflight = primary_analysis_cohort_plan_findings(plan=plan)
-        trajectory_preflight = trajectory_plan_dag_findings(
-            plan=plan,
-            context=context,
+    typed_plan_preflight = _typed_plan_dag_findings(plan)
+    primary_cohort_preflight = primary_analysis_cohort_plan_findings(plan=plan)
+    trajectory_preflight = trajectory_plan_dag_findings(
+        plan=plan,
+        context=context,
+        long_trajectory_bound=long_trajectory_bound,
+    )
+    declared_input_preflight = declared_raw_input_plan_findings(
+        plan=plan,
+        context=context,
+    )
+    owner_declaration_preflight = owner_declaration_plan_findings(plan=plan)
+    product_promise_preflight = product_promise_plan_findings(plan=plan)
+    endpoint_preflight = endpoint_contract_findings(plan, context=context, severity="error")
+    trajectory_directive = None
+    typed_plan_directive = None
+    declared_input_directive = None
+    if typed_plan_preflight:
+        typed_plan_directive = (
+            "Repair the plan's declared typed product DAG without changing "
+            "its scientific choices. Every typed kind:product input must "
+            "have exactly one declared producer, every required producer "
+            "must remain in the plan, and producers must precede consumers. "
+            "Do not invent an exposure, outcome, cohort, estimator, or "
+            "analysis method. Contract findings: "
+            + json.dumps(
+                [
+                    {
+                        "message": finding.message,
+                        "detail": finding.detail,
+                    }
+                    for finding in typed_plan_preflight
+                ],
+                ensure_ascii=False,
+                default=str,
+            )
         )
-        trajectory_directive = None
-        typed_plan_directive = None
-        if typed_plan_preflight:
-            typed_plan_directive = (
-                "Repair the plan's declared typed product DAG without changing "
-                "its scientific choices. Every typed kind:product input must "
-                "have exactly one declared producer, every required producer "
-                "must remain in the plan, and producers must precede consumers. "
-                "Do not invent an exposure, outcome, cohort, estimator, or "
-                "analysis method. Contract findings: "
-                + json.dumps(
-                    [
-                        {
-                            "message": finding.message,
-                            "detail": finding.detail,
-                        }
-                        for finding in typed_plan_preflight
-                    ],
-                    ensure_ascii=False,
-                    default=str,
-                )
+    primary_cohort_directive = None
+    if primary_cohort_preflight:
+        primary_cohort_directive = (
+            "Repair the plan's primary-cohort typed-product ownership "
+            "without changing any scientific choice. A cohort construction + "
+            "attrition step must uniquely own exactly one materialised product: "
+            "`artifact|dataset|table:analysis_cohort`, `cohort:analysis_set`, "
+            "or `cohort:<exact cohort.name>`. Definition/protocol/status artifacts "
+            "are not cohort datasets. Contract findings: "
+            + json.dumps(
+                [
+                    {
+                        "message": finding.message,
+                        "detail": finding.detail,
+                    }
+                    for finding in primary_cohort_preflight
+                ],
+                ensure_ascii=False,
+                default=str,
             )
-        primary_cohort_directive = None
-        if primary_cohort_preflight:
-            primary_cohort_directive = (
-                "Repair the plan's primary-cohort typed-product ownership "
-                "without changing any scientific choice. A cohort construction + "
-                "attrition step must uniquely own exactly one materialised product: "
-                "`artifact|dataset|table:analysis_cohort`, `cohort:analysis_set`, "
-                "or `cohort:<exact cohort.name>`. Definition/protocol/status artifacts "
-                "are not cohort datasets. Contract findings: "
-                + json.dumps(
-                    [
-                        {
-                            "message": finding.message,
-                            "detail": finding.detail,
-                        }
-                        for finding in primary_cohort_preflight
-                    ],
-                    ensure_ascii=False,
-                    default=str,
-                )
-            )
-        if trajectory_preflight:
-            trajectory_directive = (
-                "Repair the agent-declared fixed-window trajectory plan DAG "
-                "without changing its scientific choices. Preserve legitimate "
-                "representation, candidate-selection, stability/freeze, and "
-                "characterization step boundaries; repair only missing/ambiguous "
-                "typed artifact edges, role declarations, and silent internal "
-                "window-grid omissions. Do not choose a clustering method, k, "
-                "eligibility threshold, or deterministic runner. Contract findings: "
-                + json.dumps(
-                    [
-                        {
-                            "message": finding.message,
-                            "detail": finding.detail,
-                        }
-                        for finding in trajectory_preflight
-                    ],
-                    ensure_ascii=False,
-                    default=str,
-                )
-            )
-        plan = _maybe_replan(
-            current_plan=plan,
-            reason="probe_summary",
-            probe_summary_payload=probe_summary,
-            completed_records=[probe_record],
-            directive="\n\n".join(
-                directive
-                for directive in (
-                    typed_plan_directive,
-                    primary_cohort_directive,
-                    trajectory_directive,
-                )
-                if directive
-            )
-            or None,
-            force=bool(
-                typed_plan_preflight or primary_cohort_preflight or trajectory_preflight
-            ),
         )
+    if trajectory_preflight:
+        trajectory_directive = (
+            "Repair the agent-declared fixed-window trajectory plan DAG "
+            "without changing its scientific choices. Preserve legitimate "
+            "representation, candidate-selection, stability/freeze, and "
+            "characterization step boundaries; repair only missing/ambiguous "
+            "typed artifact edges, role declarations, and silent internal "
+            "window-grid omissions. Do not choose a clustering method, k, "
+            "eligibility threshold, or deterministic runner. Contract findings: "
+            + json.dumps(
+                [
+                    {
+                        "message": finding.message,
+                        "detail": finding.detail,
+                    }
+                    for finding in trajectory_preflight
+                ],
+                ensure_ascii=False,
+                default=str,
+            )
+        )
+    if declared_input_preflight:
+        declared_input_directive = (
+            "Repair the plan's declared raw column inputs without changing "
+            "any scientific choice. Every declared raw input must be a "
+            "column the sealed research context carries; a value a previous "
+            "step derives must be declared as that step's typed product "
+            "instead. Do not invent an exposure, outcome, cohort, covariate, "
+            "or method to satisfy this. Contract findings: "
+            + json.dumps(
+                [
+                    {
+                        "message": finding.message,
+                        "detail": finding.detail,
+                    }
+                    for finding in declared_input_preflight
+                ],
+                ensure_ascii=False,
+                default=str,
+            )
+        )
+    owner_declaration_directive = owner_declaration_replan_directive(
+        owner_declaration_preflight
+    )
+    # Ordered before the ownership directive on purpose: an owner cannot
+    # claim a step whose promise no declaration can name, so telling the
+    # Planner to complete a declaration first would be asking for work that
+    # still leaves the step unowned.
+    product_promise_directive = product_promise_replan_directive(
+        product_promise_preflight
+    )
+    endpoint_directive = None
+    if endpoint_preflight and (endpoint_preflight[0].detail or {}).get("reason") == "endpoint_projection_mismatch":
+        endpoint_directive = (
+            "Repair or remove the plan's stale endpoint projection without "
+            "changing the sealed ResearchContext endpoint or any other science. "
+            "The projection may equal the context exactly; it is not a second "
+            "authority. Contract findings: "
+            + json.dumps(
+                [
+                    {"message": finding.message, "detail": finding.detail}
+                    for finding in endpoint_preflight
+                ],
+                ensure_ascii=False,
+                default=str,
+            )
+        )
+    plan = _maybe_replan(
+        current_plan=plan,
+        reason=(
+            "probe_summary" if probe_record is not None else "plan_contract_preflight"
+        ),
+        probe_summary_payload=probe_summary,
+        # Every completed record, not just the probe. This used to pass
+        # ``[probe_record]``, which is the one pre-execution record that is NOT
+        # a plan step: it carries no ``analysis_request`` and its step_id is not
+        # in the plan, so the completed-step preservation authority inside
+        # ``normalize_replan_candidate`` built an empty snapshot set and could
+        # restore nothing, whatever else had already been sealed. The three
+        # other _maybe_replan call sites all pass ``per_step_records``; this one
+        # was the outlier.
+        #
+        # It matters because the host cohort materializer also seals a real plan
+        # step before the step loop, and ``record_planned_host_cohort_checkpoint``
+        # is idempotent by step id -- once that checkpoint exists it is never
+        # re-snapshotted, so whichever plan revision sealed it first is the one
+        # every downstream typed consumer is judged against forever. When this
+        # replan then rewrote that step, the guard that exists to reconcile the
+        # two was the one thing that could not see it.
+        #
+        # MEASURED across the recorded corpus: of 12 runs that both materialize
+        # a host cohort and revise their plan, 2 fixture runs ended with
+        # producer_plan_snapshot_mismatch on exactly that step, and each lost
+        # nearly everything downstream -- one completed 1 of 10 steps, the
+        # other 1 of 7. Passing the full list is a no-op
+        # when nothing else has been sealed yet.
+        completed_records=per_step_records,
+        directive="\n\n".join(
+            directive
+            for directive in (
+                endpoint_directive,
+                typed_plan_directive,
+                primary_cohort_directive,
+                trajectory_directive,
+                declared_input_directive,
+                product_promise_directive,
+                owner_declaration_directive,
+            )
+            if directive
+        )
+        or None,
+        force=bool(
+            typed_plan_preflight
+            or endpoint_directive
+            or primary_cohort_preflight
+            or trajectory_preflight
+            or declared_input_preflight
+            or product_promise_preflight
+            or owner_declaration_preflight
+        ),
+    )
 
     final_typed_plan_findings = [
         *_typed_plan_dag_findings(plan),
         *primary_analysis_cohort_plan_findings(plan=plan),
+        # A raw input the sealed context cannot resolve raises inside
+        # _execute_one_step, and nothing wraps execute_step -- so without this
+        # the run dies mid-flight with no sealed artifacts instead of blocking
+        # here with a named, repairable finding.
+        *declared_raw_input_plan_findings(plan=plan, context=context),
     ]
+    final_endpoint_findings = [
+        finding.model_copy(
+            update={
+                "detail": {
+                    **dict(finding.detail or {}),
+                    "stage": "execute_final",
+                    "reason": "endpoint_retry_exhausted",
+                }
+            }
+        )
+        for finding in endpoint_contract_findings(plan, context=context, severity="error")
+    ]
+    if final_endpoint_findings:
+        endpoint_contract_blocked = True
+        findings.extend(final_endpoint_findings)
+        _flush_partial_manifest(
+            {
+                "endpoint_contract_blocked": True,
+                "endpoint_contract_error_count": len(final_endpoint_findings),
+            }
+        )
     if final_typed_plan_findings:
         typed_plan_dag_blocked = True
         findings.extend(final_typed_plan_findings)
@@ -4655,6 +4798,7 @@ def run_execute_phase(
     final_trajectory_plan_findings = trajectory_plan_dag_findings(
         plan=plan,
         context=context,
+        long_trajectory_bound=long_trajectory_bound,
     )
     if final_trajectory_plan_findings:
         trajectory_plan_blocked = True
@@ -4928,6 +5072,7 @@ def run_execute_phase(
                 _serializable_plan_scientific_scope_signature(plan)
             ),
         }
+
         step_execution_cohort_path = _step_execution_cohort_path(
             step=step,
             plan=plan,
@@ -4935,13 +5080,10 @@ def run_execute_phase(
             universe_path=universe_path,
             cohort_path=cohort_path,
         )
-        primary_cohort_uses_universe = step_execution_cohort_path == universe_path
-        if primary_cohort_uses_universe:
+        if step_execution_cohort_path == universe_path:
             step_record.update(
                 {
-                    "execution_cohort_role": (
-                        "raw_universe_for_primary_analysis_cohort_producer"
-                    ),
+                    "execution_cohort_role": _RAW_UNIVERSE_EXECUTION_ROLE,
                     "execution_cohort_sha256": sha256_of_file(universe_path),
                     "authoritative_analysis_cohort_sha256": sha256_of_file(cohort_path),
                 }
@@ -4987,11 +5129,12 @@ def run_execute_phase(
         provider_receipt_relative_path = str(provider_receipt_path.relative_to(run_dir))
         prior_provider_categories: tuple[str, ...] = ()
         prior_logical_repair_entries: tuple[Dict[str, object], ...] = ()
-        prior_initial_generation_entry: Optional[Dict[str, object]] = None
+        prior_initial_generation_entries: tuple[Dict[str, object], ...] = ()
         prior_required_reservation_token: Optional[str] = None
         prior_reservation_bound_provider_history_len: Optional[int] = None
         prior_completed_reservation_token: Optional[str] = None
         prior_reservation_released = False
+        prior_reserved_category_extensions: tuple[Dict[str, object], ...] = ()
         prior_provider_attempts = 0
         provider_receipt_integrity_error: Optional[str] = None
         prior_snapshot_present = False
@@ -5050,7 +5193,7 @@ def run_execute_phase(
                 receipt_limit = receipt_state.limit
                 receipt_categories = receipt_state.categories
                 prior_logical_repair_entries = receipt_state.logical_repairs
-                prior_initial_generation_entry = receipt_state.initial_generation
+                prior_initial_generation_entries = receipt_state.initial_generations
                 prior_required_reservation_token = (
                     receipt_state.required_reservation_token
                 )
@@ -5061,6 +5204,9 @@ def run_execute_phase(
                     receipt_state.completed_reservation_token
                 )
                 prior_reservation_released = receipt_state.reservation_released
+                prior_reserved_category_extensions = (
+                    receipt_state.reserved_category_extensions
+                )
                 effective_provider_limit = min(
                     effective_provider_limit,
                     receipt_limit,
@@ -5096,7 +5242,10 @@ def run_execute_phase(
             step_id=step.step_id,
             consumed_categories=prior_provider_categories,
             logical_repair_entries=prior_logical_repair_entries,
-            initial_generation_entry=prior_initial_generation_entry,
+            initial_generation_entries=prior_initial_generation_entries,
+            allow_terminal_initial_generation_restart=(
+                resume_controller.explicitly_reruns_step(step.step_id)
+            ),
             receipt_path=provider_receipt_path,
             reserved_final_category=reserved_final_category,
             required_reservation_token=prior_required_reservation_token,
@@ -5105,6 +5254,7 @@ def run_execute_phase(
             ),
             completed_reservation_token=prior_completed_reservation_token,
             reservation_released=prior_reservation_released,
+            reserved_category_extensions=prior_reserved_category_extensions,
         )
 
         if provider_receipt_integrity_error is None:
@@ -5122,7 +5272,10 @@ def run_execute_phase(
                         "Initial generation has paid provider calls but no durable "
                         "transport result."
                     )
-                if initial_resume_status == "failed":
+                if (
+                    initial_resume_status == "failed"
+                    and not provider_budget.terminal_initial_generation_restart_allowed
+                ):
                     raise ProviderCallBudgetReceiptError(
                         "Initial generation previously reached a terminal provider "
                         "failure."
@@ -5152,6 +5305,15 @@ def run_execute_phase(
                 initial_llm_repair_attempts=step_llm_repair_attempts,
                 provider_receipt_relative_path=provider_receipt_relative_path,
             )
+        step_repair_budget.bind_semantic_escalation_recorder(
+            SemanticRepairRecorder(
+                step_record=step_record,
+                findings=findings,
+                lock=shared_lock,
+                step_id=step.step_id,
+                attempt_id=attempt_id,
+            )
+        )
         _sync_provider_budget = step_repair_budget.sync_provider
 
         _sync_provider_budget()
@@ -5193,6 +5355,23 @@ def run_execute_phase(
                 total_steps=total_steps,
             )
             return step_record
+        primary_cohort_execution_receipt = (
+            _planner_materialized_cohort_execution_receipt(
+                plan=plan,
+                universe_path=universe_path,
+                analysis_cohort_path=run_input_authority_state.analysis_path,
+            )
+            if step_record.get("execution_cohort_role") == _RAW_UNIVERSE_EXECUTION_ROLE
+            # One owner decides whether a plan made an explicit locked
+            # selection.  An ``all_input_rows`` cohort is such a selection, and
+            # it is exactly the case where a host-verified row-conservation
+            # receipt is cheapest and most useful: it tells the producer the
+            # universe count it must still hold after materialisation.
+            and cohort_definition_has_explicit_selection(
+                coerce_cohort_definition(getattr(plan, "cohort", None))
+            )
+            else None
+        )
         coder_authority = _coder_authority_with_locked_robustness_specs(
             authority=HostCoderAuthority(),
             context=coder_base_context,
@@ -5206,7 +5385,18 @@ def run_execute_phase(
             authority=coder_authority,
             locked_cohort_payload=(
                 _planner_locked_cohort_prompt_payload(plan)
-                if primary_cohort_uses_universe
+                if step_record.get("execution_cohort_role")
+                == _RAW_UNIVERSE_EXECUTION_ROLE
+                else None
+            ),
+            materialized_execution_payload=(
+                json.dumps(
+                    primary_cohort_execution_receipt,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                if primary_cohort_execution_receipt is not None
                 else None
             ),
         )
@@ -5483,17 +5673,52 @@ def run_execute_phase(
         step_execution_cohort_path = _bind_step_execution_cohort(
             run_dir, step_execution_cohort_path, resolved_input_bindings, step_record
         )
-        primary_cohort_uses_universe = step_execution_cohort_path == universe_path
+        plausibility_authority = compile_step_plausibility_authority(
+            context=context,
+            step=step,
+            raw_input_contracts=resolved_raw_input_contracts_for_step(
+                coder_base_context=coder_base_context,
+                coder_context=coder_context,
+                planner_declared_inputs=step.inputs,
+                primary_cohort_execution_receipt=primary_cohort_execution_receipt,
+            ),
+        )
+        step_record["flag_only_plausibility_scope"] = (
+            plausibility_authority.scope.to_dict()
+        )
         resolved_inputs_path = _write_resolved_inputs_manifest(
             run_dir=run_dir,
             step_id=step.step_id,
             planner_declared_inputs=step.inputs,
             bindings=resolved_input_bindings,
             context_path=plan_result.context_path,
-            raw_input_contracts=resolved_raw_input_contracts(
-                coder_context,
-                step.inputs,
+            raw_input_contracts=plausibility_authority.raw_input_contracts(),
+            host_verified_cohort_execution_receipt=(
+                primary_cohort_execution_receipt
+                if step_execution_cohort_path == universe_path
+                else None
             ),
+            host_authorized_ambient_trajectory=(
+                host_authorized_ambient_trajectory_entry(
+                    # The unscoped context: this entry describes the staged
+                    # table, and `coder_context` is the step-scoped projection
+                    # whose concept list a long-bound run empties out.
+                    getattr(
+                        getattr(context, "materialized_inputs", None),
+                        "trajectory",
+                        None,
+                    )
+                )
+            ),
+            # From the sealed context, the study's unique endpoint authority.
+            study_endpoint=study_endpoint_declaration_entry(
+                context.endpoint
+            ),
+            # Which of this step's bound columns are ranks rather than interval
+            # measurements. From the unscoped context: the roles are a property
+            # of the columns, and the step-scoped projection would drop the ones
+            # this step reads through an artifact rather than declaring by name.
+            rank_scale_columns=rank_scale_columns_entry(context),
         )
         coder_authority = attach_step_coder_input_authority(
             enabled=pipeline._enable_coder_resources,
@@ -5503,6 +5728,7 @@ def run_execute_phase(
             context=coder_context,
             step=step,
             resolved_input_bindings=resolved_input_bindings,
+            plausibility_scope=plausibility_authority.scope,
             runtime_import_names=pipeline._validated_runtime_capabilities or (),
             step_record=step_record,
             reviewed_memory_runtime=pipeline._reviewed_memory_runtime,
@@ -5809,9 +6035,7 @@ def run_execute_phase(
                     step_record["step_authority_capsule_stage"] = (
                         step_attempt_state.selected_resume_capsule.capsule.stage
                     )
-                    selected_digest = (
-                        step_attempt_state.selected_resume_capsule.capsule.candidate_code.sha256
-                    )
+                    selected_digest = step_attempt_state.selected_resume_capsule.capsule.candidate_code.sha256
                     if (
                         step_attempt_state.selected_resume_capsule.capsule.concept_audit
                         is not None
@@ -5995,13 +6219,51 @@ def run_execute_phase(
             quarantine_state.resumed_draft_used = True
             quarantine_state.draft_active = True
             quarantine_state.repair_succeeded = False
+            budget_snapshot = provider_budget.snapshot()
+            historical_repair_names = deterministic_concept_reaudit_authority(
+                code_sha256=draft.sha256,
+                current_repair_count=0,
+                current_repair_names=(),
+                prior_step_record=prior_step_record,
+                prior_step_records=prior_attempt_records,
+                provider_used=budget_snapshot["used"],
+                provider_limit=budget_snapshot["limit"],
+            )
+            reaudit_errors = deterministic_concept_reaudit_pending_errors(
+                draft.findings,
+                provider_used=budget_snapshot["used"],
+                provider_limit=budget_snapshot["limit"],
+            )
+            active_findings = (
+                reaudit_errors
+                if historical_repair_names and reaudit_errors
+                else draft.findings
+            )
             quarantine_state.pending_errors = [
-                ValidationFinding.model_validate(payload) for payload in draft.findings
+                ValidationFinding.model_validate(payload) for payload in active_findings
             ]
             # Historical errors remain binding regression constraints, but
             # their old source coordinates are not findings on the current
             # digest and must never enter an exact minimal-patch ticket.
-            _remember_concept_constraints(quarantine_state.pending_errors)
+            _remember_concept_constraints(
+                [
+                    ValidationFinding.model_validate(payload)
+                    for payload in draft.findings
+                ]
+            )
+            if historical_repair_names and reaudit_errors:
+                # The append-only checkpoint proves this exact draft was
+                # materially changed by the named deterministic repair in the
+                # prior attempt.  Preserve that lifecycle state so a passing
+                # digest-bound re-audit can retire the quarantine normally.
+                quarantine_state.repair_materially_changed = True
+                step_record["resumed_deterministic_concept_reaudit"] = {
+                    "code_sha256": draft.sha256,
+                    "repair_names": list(historical_repair_names),
+                    "diagnostic_code": (
+                        "deterministic_repair_budget_only_quarantine_v1"
+                    ),
+                }
             step_record["resumed_quarantined_draft"] = True
             step_record["quarantined_draft_sha256"] = draft.sha256
             step_record["quarantined_draft_relative_path"] = draft.relative_path
@@ -6366,7 +6628,9 @@ def run_execute_phase(
                 total_steps=total_steps,
                 fallback_reason=reason,
             )
-            return absolute_risk_context_code()
+            return absolute_risk_context_code(
+                plausibility_scope=plausibility_authority.scope
+            )
 
         def _robustness_sensitivity_preflight_supported() -> bool:
             if _step_expects_figure(step):
@@ -6375,12 +6639,14 @@ def run_execute_phase(
                 str(step.method or ""),
                 str(step.step_id or ""),
                 step.expected_outputs or [],
+                step=step,
             )
 
         def _deterministic_robustness_sensitivity_code(
             reason: str,
             *,
             preflight: bool = False,
+            plausibility_scope: FlagOnlyPlausibilityScope = plausibility_authority.scope,
         ) -> Optional[str]:
             if (
                 worker_progress.deterministic_fallback_used
@@ -6402,7 +6668,10 @@ def run_execute_phase(
                 total_steps=total_steps,
                 fallback_reason=reason,
             )
-            return robustness_sensitivity_preflight_code()
+            return robustness_sensitivity_preflight_code(
+                step,
+                plausibility_scope=plausibility_scope,
+            )
 
         def _missingness_audit_preflight_supported() -> bool:
             """True for a missingness / measurement-process AUDIT step.
@@ -6415,6 +6684,8 @@ def run_execute_phase(
             case-neutral (the controlled ``method`` first, then audit vocabulary).
             """
             if _step_expects_figure(step):
+                return False
+            if not missingness_audit_input_scope_supported(step):
                 return False
             return _simple_missingness_audit_runner_owns_step(
                 str(step.method or ""),
@@ -6450,7 +6721,7 @@ def run_execute_phase(
                 total_steps=total_steps,
                 fallback_reason=reason,
             )
-            return missingness_measurement_audit_code()
+            return missingness_measurement_audit_code(step)
 
         # ``--resume-from-step-id`` means the selected step is intentionally
         # rerun. Completed predecessors stay checkpointed. A previously
@@ -6458,7 +6729,14 @@ def run_execute_phase(
         # to reuse; a prior deterministic ``contract_failed`` attempt may reuse
         # only its exact evidence-bound code and scientific signature. Reused
         # code still runs through every current execution audit and repair gate.
-        standard_executor = select_standard_executor(step, plan=plan)
+        standard_executor_trace: list[StandardExecutorCandidate] = []
+        standard_executor = select_standard_executor(
+            step,
+            plan=plan,
+            plausibility_scope=plausibility_authority.scope,
+            resolved_bindings=resolved_input_bindings,
+            trace=standard_executor_trace,
+        )
         preflight_standard_code = None
         if standard_executor is not None:
             worker_progress.deterministic_standard_executor_used = True
@@ -6478,6 +6756,98 @@ def run_execute_phase(
                 fallback_reason=standard_executor.selection_reason,
             )
             preflight_standard_code = standard_executor.code
+        # A step no deterministic owner claims falls to the stochastic Coder
+        # silently.  Record which owners were consulted and how they answered,
+        # so the next reader can tell an unsupported analysis apart from a
+        # supported one wearing a name or a product count nobody recognises.
+        # The verdicts come from the selector's own trace, never from re-running
+        # its predicates here -- a second evaluation cannot see the gates the
+        # selector applies after a contract matches.
+        step_record["standard_executor_candidates"] = (
+            standard_executor_candidate_report(
+                step,
+                plan=plan,
+                trace=standard_executor_trace,
+                resolved_bindings=resolved_input_bindings,
+                claimed_by=(
+                    standard_executor.analysis_kind
+                    if standard_executor is not None
+                    else None
+                ),
+            )
+        )
+        # ...and "silently" is the part that is not acceptable when the owner is
+        # only waiting on a field.  The plan-time gate already asked for it and
+        # spent a forced replan on the answer; arriving here means the Planner
+        # did not fill it in.  Handing the step to the Coder anyway is a
+        # fail-open at a declaration boundary: it produces a number for the
+        # paper's primary result whose model nobody declared, by the one actor
+        # whose accumulated repair guidance records it going wrong.
+        #
+        # Blocked per step, not per run.  The sibling plan-DAG blocks set
+        # ``steps_to_run = []`` and kill everything; a step the host merely
+        # cannot claim should not take the table-one and missingness steps down
+        # with it.  The manuscript still cannot be authorised without its
+        # primary result -- that is a different gate's job, and it already
+        # holds.
+        #
+        # What counts as under-declared is decided in one place, shared with the
+        # plan-time gate that already asked for the field.  The verdicts come
+        # from the selector's own trace, never from re-running its predicates
+        # here -- a second evaluation cannot see the gates the selector applies
+        # after a contract matches.
+        owner_declaration_gaps = execution_declaration_refusal(
+            claimed_by=standard_executor,
+            trace=standard_executor_trace,
+        )
+        if owner_declaration_gaps:
+            missing_by_owner = {
+                candidate.analysis_kind: list(candidate.missing_declarations)
+                for candidate in owner_declaration_gaps
+            }
+            step_record.update(
+                {
+                    "status": "blocked_owner_declaration_incomplete",
+                    "diagnostic_only": True,
+                    "generation_mode": "system",
+                    "owner_declaration_missing": missing_by_owner,
+                }
+            )
+            declaration_finding = ValidationFinding(
+                validator="execution_owner_declaration",
+                severity="error",
+                message=(
+                    f"Step {step.step_id} was refused rather than generated: the "
+                    "host has a deterministic owner for its declared product and "
+                    "the plan still does not declare "
+                    + "; ".join(
+                        f"{kind}: {', '.join(repr(name) for name in names)}"
+                        for kind, names in sorted(missing_by_owner.items())
+                    )
+                    + ". The plan-time gate asked for these fields and the replan "
+                    "did not supply them. Generating this step would answer the "
+                    "question with a model the plan never specified."
+                ),
+                detail={
+                    "reason": "owner_declaration_incomplete_at_execution",
+                    "step_id": step.step_id,
+                    "missing_declarations_by_owner": missing_by_owner,
+                },
+            )
+            with shared_lock:
+                findings.append(declaration_finding)
+                _append_terminal_step_record(per_step_records, step_record)
+                _flush_partial_manifest()
+            emit_progress(
+                "audit",
+                f"Blocked {step.step_id}; its declared model is incomplete.",
+                status="error",
+                run_id=run_id,
+                step_id=step.step_id,
+                current_step=step_current,
+                total_steps=total_steps,
+            )
+            return step_record
         preflight_figure_code = (
             None
             if preflight_standard_code is not None
@@ -6874,11 +7244,59 @@ def run_execute_phase(
                 host_authority=coder_authority,
             )
 
+        # Every branch above has now settled `code`. The flag-only plausibility
+        # receipt is mechanical and host-owned, and it is the single largest
+        # pre-execution blocker on record: 37 findings over 32 distinct steps in
+        # 8 of the 9 tasks, 53 % of all mechanical-preflight findings. The
+        # deterministic executors get it rendered for them; agent-authored steps
+        # had to hand-write it and repeatedly could not -- h2's causal step spent
+        # BOTH LLM repairs on this one message with five provider calls unspent.
+        #
+        # The injection itself lives at the audit loop head (see below), not
+        # here: a repair that rewrites the script drops an appended host block,
+        # and injecting only at initial settling let exactly that happen.
+        def _authorize_deterministic_concept_reaudit(
+            *,
+            token: str,
+            code_sha256: str,
+        ) -> bool:
+            budget_snapshot = provider_budget.snapshot()
+            repair_names = deterministic_concept_reaudit_authority(
+                code_sha256=code_sha256,
+                current_repair_count=worker_progress.deterministic_concept_repairs,
+                current_repair_names=worker_progress.applied_concept_repair_names,
+                current_repair_code_sha256=step_record.get(
+                    "deterministic_concept_repair_code_sha256"
+                ),
+                prior_step_record=prior_step_record,
+                prior_step_records=prior_attempt_records,
+                provider_used=budget_snapshot["used"],
+                provider_limit=budget_snapshot["limit"],
+            )
+            if not repair_names:
+                return False
+            granted = (
+                provider_budget.authorize_deterministic_reserved_category_extension(
+                    "concept_audit",
+                    token=token,
+                )
+            )
+            if granted:
+                step_record["deterministic_concept_reaudit_extension"] = {
+                    "code_sha256": code_sha256,
+                    "repair_names": list(repair_names),
+                    "diagnostic_code": (
+                        "deterministic_repair_final_audit_extension_v1"
+                    ),
+                }
+            return granted
+
         concept_audit = ConceptAuditCoordinator(
             authority=ConceptAuditAuthority(
                 context=context,
                 step=step,
                 resolved_input_bindings=resolved_input_bindings,
+                plausibility_scope=plausibility_authority.scope,
                 environment_sha256=concept_audit_environment_sha256,
                 auditor_implementation_sha256=(
                     llm_concept_auditor_implementation_sha256
@@ -6887,6 +7305,23 @@ def run_execute_phase(
                     lambda: pipeline._llm_signature(llm_concept_audit_client)
                 ),
                 enable_llm_audit=pipeline._enable_llm_concept_audit,
+                study_endpoint=study_endpoint_declaration_entry(
+                    context.endpoint
+                ),
+                # Every step of the locked plan, so a requirement the plan
+                # assigned to another step stops looking like this script's
+                # omission. Id/role/method only: the other steps' rule prose
+                # would be the largest block in that prompt and would invite
+                # auditing them instead of this one.
+                plan_step_roster=tuple(
+                    {
+                        "step_id": other.step_id,
+                        "planned_analysis_role": other.planned_analysis_role,
+                        "method": other.method,
+                    }
+                    for other in (plan_result.plan.steps or ())
+                    if other.step_id != step.step_id
+                ),
             ),
             runtime=ConceptAuditRuntime(
                 usage_auditor=usage_auditor,
@@ -6906,6 +7341,9 @@ def run_execute_phase(
                 emit_progress=emit_progress,
                 quarantine_error_payloads=_quarantine_error_payloads,
                 store_quarantined_draft=store_quarantined_concept_draft,
+                authorize_deterministic_reaudit=(
+                    _authorize_deterministic_concept_reaudit
+                ),
             ),
         )
 
@@ -6928,6 +7366,7 @@ def run_execute_phase(
                 step=step,
                 source=source,
                 context=context,
+                on_semantic_escalation=step_repair_budget.record_semantic_escalation,
             )
 
         worker_progress.concept_repair_attempts = 0
@@ -6944,6 +7383,32 @@ def run_execute_phase(
             # proof and force an otherwise unnecessary LLM repair.
             if not quarantine_state.draft_active:
                 code = reorder_forward_references(code)
+                # The receipt belongs HERE, before the gate that reads it.
+                #
+                # It was first placed at the post-execution loop, then moved to
+                # that loop's head so a repaired rewrite could not drop it. Both
+                # were the wrong loop: `flag_only_plausibility_obligation` is a
+                # PRE-execution gate, run by `findings_for_code` two lines down,
+                # so a step refused here never reached the later loop at all.
+                # verify37's h3 step 02 is the proof -- scope of 7 columns,
+                # reason `plausibility_check_not_attributable`, and zero trace of
+                # the receipt in its quarantined draft; replayed offline that
+                # draft goes 1 finding -> 0 once injected.
+                #
+                # Guarded by the same condition as the normalization above, and
+                # for the same reason stated in its comment: a quarantined draft
+                # is digest-bound authority, and editing it would break the exact
+                # SHA proof and force an otherwise unnecessary repair.
+                code = _host_plausibility_receipt_injected(
+                    code,
+                    scope=plausibility_authority.scope,
+                    already_satisfied=not _flag_only_plausibility_obligation_findings(
+                        None,
+                        script_text=code,
+                        step=step,
+                        scope=plausibility_authority.scope,
+                    ),
+                )
             usage_findings = concept_audit.findings_for_code(
                 code,
                 include_llm=False,
@@ -7029,18 +7494,11 @@ def run_execute_phase(
                 return step_record
 
             if worker_progress.deterministic_standard_executor_used:
-                terminal_finding = ValidationFinding(
-                    validator="trajectory_stability_executor",
-                    severity="error",
-                    message=(
-                        "The trusted trajectory stability adapter failed the "
-                        "pre-execution deterministic concept gate; execution was "
-                        "blocked without coder repair."
-                    ),
-                    detail={
-                        "step_id": step.step_id,
-                        "reason": "preexecution_concept_gate_failed",
-                    },
+                terminal_finding = standard_executor_failure_finding(
+                    step_record=step_record,
+                    step_id=step.step_id,
+                    reason="preexecution_concept_gate_failed",
+                    failure_phase="preexecution_concept_gate",
                 )
                 terminal_findings = [terminal_finding, *usage_findings]
                 step_record.update(
@@ -7114,6 +7572,9 @@ def run_execute_phase(
                     step_record["applied_concept_repair_names"] = list(
                         worker_progress.applied_concept_repair_names
                     )
+                    step_record["deterministic_concept_repair_code_sha256"] = (
+                        sha256_of_bytes(_det_code.encode("utf-8"))
+                    )
                     for _name in _det_names:
                         _record_repair(
                             repair_id=_name,
@@ -7164,10 +7625,10 @@ def run_execute_phase(
             if (
                 worker_progress.concept_repair_attempts
                 >= pipeline._max_code_repair_attempts
-                or not _llm_repair_budget_available()
+                or not _llm_repair_budget_available("concept")
                 or provider_budget.exhausted
             ):
-                if not _logical_llm_repair_budget_available():
+                if not _logical_llm_repair_budget_available("concept"):
                     step_record["step_llm_repair_budget_exhausted"] = True
                     step_record["step_llm_repair_budget"] = (
                         pipeline._max_step_llm_repair_attempts
@@ -7648,6 +8109,40 @@ def run_execute_phase(
         final_concept_gate_approved_code_digest: Optional[str] = None
         while True:
             code = reorder_forward_references(code)
+            # The flag-only plausibility receipt is mechanical and host-owned,
+            # and it is the largest pre-execution blocker on record: 37 findings
+            # over 32 steps in 8 of the 9 tasks. It is re-established HERE, at
+            # the loop head, because every candidate the audit will judge --
+            # the first one AND every repaired rewrite -- passes through this
+            # point.
+            #
+            # It used to be injected once, where `code` was first settled.
+            # MEASURED on a live run (verify30, m2 05_fit_prediction_model):
+            # that worked for the initial script -- concept-approved, executed,
+            # and it clears the gate offline with 0 findings -- and then TWO
+            # `post_mutation_concept` full rewrites regenerated the script from
+            # the prompt, dropping the appended host block. The step was
+            # blocked citing a quarantined draft carrying no receipt, while the
+            # code that actually ran carried one. The agent was being asked to
+            # hand-write something the host had already written and the repair
+            # had thrown away.
+            #
+            # Re-applying is safe by construction: a script that already
+            # satisfies the gate reports `already_satisfied` and comes back
+            # byte-identical, so a repaired script gets the receipt once and an
+            # untouched one is not double-rendered. Placing it before
+            # `ensure_candidate` and `candidate_code_digest` keeps the
+            # checkpoint and both digests covering the assembled script.
+            code = _host_plausibility_receipt_injected(
+                code,
+                scope=plausibility_authority.scope,
+                already_satisfied=not _flag_only_plausibility_obligation_findings(
+                    None,
+                    script_text=code,
+                    step=step,
+                    scope=plausibility_authority.scope,
+                ),
+            )
             checkpoint_authority.ensure_candidate(
                 code,
                 reason="host_code_normalization_or_deterministic_mutation",
@@ -7816,6 +8311,9 @@ def run_execute_phase(
                             step_record["applied_concept_repair_names"] = list(
                                 worker_progress.applied_concept_repair_names
                             )
+                            step_record["deterministic_concept_repair_code_sha256"] = (
+                                sha256_of_bytes(code.encode("utf-8"))
+                            )
                             for repair_name in deterministic_names:
                                 _record_repair(
                                     repair_id=repair_name,
@@ -7835,12 +8333,9 @@ def run_execute_phase(
                                         "error named the anti-pattern"
                                     ),
                                 )
-                            _clear_output_dir(
-                                run_dir / "steps" / step.step_id / "outputs"
-                            )
                             continue
 
-                    if _llm_repair_budget_available():
+                    if _llm_repair_budget_available("post_mutation_concept"):
                         post_mutation_ticket = typed_repair_ticket(post_mutation_errors)
                         current_post_mutation_repair_authority = (
                             RepairPromptAuthority.create(
@@ -7928,9 +8423,6 @@ def run_execute_phase(
                             )
                             _sync_provider_budget()
                             worker_progress.llm_repair_used = True
-                            _clear_output_dir(
-                                run_dir / "steps" / step.step_id / "outputs"
-                            )
                             continue
                         except (
                             ProviderCallBudgetReceiptError,
@@ -7964,9 +8456,6 @@ def run_execute_phase(
                             )
                             if fallback_code is not None:
                                 code = fallback_code
-                                _clear_output_dir(
-                                    run_dir / "steps" / step.step_id / "outputs"
-                                )
                                 continue
                             with shared_lock:
                                 findings.extend(usage_findings)
@@ -8011,7 +8500,9 @@ def run_execute_phase(
                             )
                             return step_record
 
-                    if not _logical_llm_repair_budget_available():
+                    if not _logical_llm_repair_budget_available(
+                        "post_mutation_concept"
+                    ):
                         step_record["step_llm_repair_budget_exhausted"] = True
                         step_record["step_llm_repair_budget"] = (
                             pipeline._max_step_llm_repair_attempts
@@ -8173,21 +8664,11 @@ def run_execute_phase(
                 "fallback": "fallback script",
                 "deterministic_standard": "standard executor script",
             }.get(current_generation_mode, "repaired script")
-            emit_progress(
-                "runner",
-                f"Running {run_label} for {step.step_id}.",
-                run_id=run_id,
-                step_id=step.step_id,
-                current_step=step_current,
-                total_steps=total_steps,
-                repair_attempts=worker_progress.repair_attempts,
-            )
             execution_runner = runner
             execution_timeout_seconds = pipeline._timeout_seconds
             if worker_progress.deterministic_standard_executor_used:
-                # A registered standard executes the exact typed workload the
-                # planner froze. Give it the dedicated bounded timeout even
-                # when the step also consumes a staged primary-cohort universe.
+                # Give a registered standard's exact typed workload its dedicated
+                # timeout even with a staged primary-cohort universe.
                 execution_timeout_seconds = pipeline._standard_executor_timeout_seconds
             if step_execution_cohort_path != cohort_path or (
                 worker_progress.deterministic_standard_executor_used
@@ -8200,6 +8681,19 @@ def run_execute_phase(
                     **run_input_authority_state.runner_bindings(),
                     timeout_seconds=execution_timeout_seconds,
                 )
+            execution_timeout_seconds = step_executor.runner_timeout(
+                execution_runner, execution_timeout_seconds
+            )
+            emit_progress(
+                "runner",
+                f"Running {run_label} for {step.step_id}.",
+                run_id=run_id,
+                step_id=step.step_id,
+                current_step=step_current,
+                total_steps=total_steps,
+                repair_attempts=worker_progress.repair_attempts,
+                phase_timeout_seconds=execution_timeout_seconds,
+            )
             run_input_authority_state.require_trajectory_integrity(
                 step_id=step.step_id,
             )
@@ -8379,7 +8873,7 @@ def run_execute_phase(
                 run_result.outputs_safe_to_collect
             )
             authority_findings: List[ValidationFinding] = []
-            if primary_cohort_uses_universe:
+            if step_record.get("execution_cohort_role") == _RAW_UNIVERSE_EXECUTION_ROLE:
                 cohort_authority_finding = _execution_input_authority_integrity_finding(
                     step_id=step.step_id,
                     universe_path=universe_path,
@@ -8694,7 +9188,6 @@ def run_execute_phase(
                     fallback_code = _deterministic_fallback_code("no_artefacts")
                     if fallback_code is not None:
                         code = fallback_code
-                        _clear_output_dir(run_result.out_dir)
                         continue
                 visual_step_summary: Dict[str, Any] = {}
                 visual_summary_path = run_result.out_dir / "step_summary.json"
@@ -8735,9 +9228,22 @@ def run_execute_phase(
                     visual_step_summary,
                     run_result.out_dir,
                 )
-                if worker_progress.deterministic_standard_executor_used or (
-                    worker_progress.runner_repair_name
-                    and is_sealed_renderer_repair(worker_progress.runner_repair_name)
+                # Same rule as the post-execution site below, from the single
+                # owner -- this one runs BEFORE the contract gate, so a producer
+                # missing here is refused for a receipt the host never wrote.
+                if host_owns_input_binding_receipts(
+                    deterministic_standard_executor_used=(
+                        worker_progress.deterministic_standard_executor_used
+                    ),
+                    deterministic_fallback_used=(
+                        worker_progress.deterministic_fallback_used
+                    ),
+                    sealed_renderer_repair=bool(
+                        worker_progress.runner_repair_name
+                        and is_sealed_renderer_repair(
+                            worker_progress.runner_repair_name
+                        )
+                    ),
                 ):
                     visual_step_summary = _write_host_input_binding_receipts(
                         out_dir=run_result.out_dir,
@@ -8854,7 +9360,6 @@ def run_execute_phase(
                             fallback_code = _deterministic_fallback_code("visual_qa")
                             if fallback_code is not None:
                                 code = fallback_code
-                                _clear_output_dir(run_result.out_dir)
                                 continue
                             demoted_findings = list(visual_gate.demoted_findings)
                             blocking_visual_errors = list(visual_gate.blocking_errors)
@@ -8971,7 +9476,6 @@ def run_execute_phase(
                                 )
                                 _sync_provider_budget()
                                 worker_progress.llm_repair_used = True
-                                _clear_output_dir(run_result.out_dir)
                                 continue
                             except (
                                 ProviderCallBudgetReceiptError,
@@ -9030,7 +9534,6 @@ def run_execute_phase(
                                     )
                                     if fallback_code is not None:
                                         code = fallback_code
-                                        _clear_output_dir(run_result.out_dir)
                                         continue
                                     with shared_lock:
                                         findings.extend(visual_findings)
@@ -9062,7 +9565,7 @@ def run_execute_phase(
                 with shared_lock:
                     completed_records_snapshot = list(per_step_records)
                 # Early pre-registration deterministic contract gate: the SAME
-                # 14-validator sequence the final gate runs
+                # 15-validator sequence the final gate runs
                 # (_evaluate_final_deterministic_gates), evaluated here before
                 # evidence registration so contract errors enter the in-run repair
                 # loop instead of becoming a terminal record. The figure-contract
@@ -9285,17 +9788,27 @@ def run_execute_phase(
                             },
                         )
                     )
-                # A deterministic PRIMARY runner owns its step's contract: if it
-                # produced the core estimate, planner-requested extra outputs it
-                # does not emit are advisory, never a reason to repair-away the
-                # trustworthy estimate.
+                # PRIMARY runners keep their trustworthy core estimate.
                 early_contract_findings = _demote_step_contract_for_primary_runner(
                     step_record, visual_step_summary, early_contract_findings
+                )
+                early_contract_findings += _fresh_plausibility_receipt_findings(
+                    visual_step_summary, step, code, plausibility_authority
                 )
                 early_contract_errors = [
                     f for f in early_contract_findings if f.severity == "error"
                 ]
                 if early_contract_errors:
+                    # Record the reason here, where the host decides the
+                    # contract failed -- not on whichever terminal branch
+                    # happens to fire later.  A repaired draft can be
+                    # quarantined before it ever executes, and that branch
+                    # writes its own status; without this the only surviving
+                    # trace is a bare ``contract_repair_attempts`` counter and
+                    # the record reads as if the quarantine were the cause.
+                    step_record.setdefault("contract_repair_triggers", []).append(
+                        [finding.model_dump() for finding in early_contract_errors]
+                    )
                     locked_data_quality_issues = (
                         _locked_measurement_data_quality_issues(early_contract_errors)
                     )
@@ -9395,6 +9908,9 @@ def run_execute_phase(
                             step_summary=visual_step_summary,
                             previous_repair=worker_progress.runner_repair_name,
                             analysis_family=local_runtime_state.analysis_family,
+                            on_semantic_escalation=(
+                                step_repair_budget.record_semantic_escalation
+                            ),
                         )
                         summary_repair = _authorize_automatic_repair(
                             summary_repair,
@@ -9446,7 +9962,6 @@ def run_execute_phase(
                             current_step=step_current,
                             total_steps=total_steps,
                         )
-                        _clear_output_dir(run_result.out_dir)
                         continue
                     if pipeline._enable_deterministic_runner_repair:
                         before_repair_code = code
@@ -9454,6 +9969,9 @@ def run_execute_phase(
                             code=code,
                             findings=early_contract_errors,
                             previous_repair=worker_progress.runner_repair_name,
+                            on_semantic_escalation=(
+                                step_repair_budget.record_semantic_escalation
+                            ),
                         )
                         contract_repair = _authorize_automatic_repair(
                             contract_repair,
@@ -9503,7 +10021,6 @@ def run_execute_phase(
                             current_step=step_current,
                             total_steps=total_steps,
                         )
-                        _clear_output_dir(run_result.out_dir)
                         continue
                     if (
                         worker_progress.llm_contract_repair_attempts
@@ -9626,7 +10143,6 @@ def run_execute_phase(
                         )
                         _sync_provider_budget()
                         worker_progress.llm_repair_used = True
-                        _clear_output_dir(run_result.out_dir)
                         continue
                     except (
                         ProviderCallBudgetReceiptError,
@@ -9641,7 +10157,6 @@ def run_execute_phase(
                         )
                         if fallback_code is not None:
                             code = fallback_code
-                            _clear_output_dir(run_result.out_dir)
                             continue
                         with shared_lock:
                             findings.extend(early_contract_findings)
@@ -9682,6 +10197,9 @@ def run_execute_phase(
                         step_summary=visual_step_summary,
                         previous_repair=worker_progress.runner_repair_name,
                         analysis_family=local_runtime_state.analysis_family,
+                        on_semantic_escalation=(
+                            step_repair_budget.record_semantic_escalation
+                        ),
                     )
                     summary_repair = _authorize_automatic_repair(
                         summary_repair,
@@ -9715,7 +10233,6 @@ def run_execute_phase(
                         current_step=step_current,
                         total_steps=total_steps,
                     )
-                    _clear_output_dir(run_result.out_dir)
                     continue
                 deterministic_contract_approved_code_digest = candidate_code_digest
                 step_record["deterministic_contract_approved_code_sha256"] = (
@@ -9739,12 +10256,44 @@ def run_execute_phase(
                 _remove_standard_executor_pending_artifacts(run_result.out_dir)
                 standard_executor_terminal_block = True
                 standard_executor_terminal_reason = "executor_runtime_failure"
+                # This branch is already terminal and already spends no repair,
+                # so it is safe. It is not diagnosable: the executor with the
+                # largest wall clock in the pipeline reports the same generic
+                # reason whether it raised in its first second or was killed an
+                # hour in. Name the timeout in the vocabulary generated code
+                # already uses, and leave the terminal decision above untouched.
+                #
+                # Only the timeout class is adopted. The classifier also reads a
+                # plan/data contract failure out of the log text, and this
+                # executor's log is not the log that vocabulary was written for.
+                timeout_decision = (
+                    classify_runtime_failure(
+                        run_log=run_log,
+                        timed_out=True,
+                        step_id=step.step_id,
+                        returncode=run_result.returncode,
+                        timeout_seconds=execution_timeout_seconds,
+                        deterministic_executor_used=True,
+                    )
+                    if run_result.timed_out
+                    else None
+                )
+                if timeout_decision is not None:
+                    step_record["runtime_failure_class"] = (
+                        timeout_decision.step_updates["runtime_failure_class"]
+                    )
+                    with shared_lock:
+                        findings.append(timeout_decision.finding)
                 break
             runtime_failure = classify_runtime_failure(
                 run_log=run_log,
                 timed_out=bool(run_result.timed_out),
                 step_id=step.step_id,
                 returncode=run_result.returncode,
+                timeout_seconds=execution_timeout_seconds,
+                deterministic_executor_used=bool(
+                    worker_progress.deterministic_standard_executor_used
+                ),
             )
             if runtime_failure is not None:
                 step_record.update(runtime_failure.step_updates)
@@ -9825,6 +10374,9 @@ def run_execute_phase(
                         previous_repair=worker_progress.runner_repair_name,
                         analysis_family=local_runtime_state.analysis_family,
                         resolved_input_bindings=resolved_input_bindings,
+                        on_semantic_escalation=(
+                            step_repair_budget.record_semantic_escalation
+                        ),
                     )
                 runner_repair = _authorize_automatic_repair(
                     runner_repair,
@@ -9836,8 +10388,24 @@ def run_execute_phase(
                     ),
                     before_code=before_repair_code,
                 )
+                record_deterministic_runner_repair_attempt(
+                    step_record,
+                    code=before_repair_code,
+                    run_log=run_log,
+                    previous_repair=worker_progress.runner_repair_name,
+                    outcome=("applied" if runner_repair is not None else "declined"),
+                    repair_id=(runner_repair[0] if runner_repair is not None else None),
+                )
             else:
                 runner_repair = None
+                record_deterministic_runner_repair_attempt(
+                    step_record,
+                    code=code,
+                    run_log=run_log,
+                    previous_repair=worker_progress.runner_repair_name,
+                    outcome="disabled",
+                    repair_id=None,
+                )
             if runner_repair is not None:
                 worker_progress.runner_repair_name, code = runner_repair
                 step_record["runner_repair"] = worker_progress.runner_repair_name
@@ -9860,17 +10428,15 @@ def run_execute_phase(
                     current_step=step_current,
                     total_steps=total_steps,
                 )
-                _clear_output_dir(run_result.out_dir)
                 continue
             if (
                 worker_progress.runtime_repair_attempts
                 >= pipeline._max_code_repair_attempts
-                or not _llm_repair_budget_available()
+                or not _llm_repair_budget_available("runtime")
             ):
                 fallback_code = _deterministic_fallback_code("execution_failure")
                 if fallback_code is not None:
                     code = fallback_code
-                    _clear_output_dir(run_result.out_dir)
                     continue
                 with shared_lock:
                     findings.append(
@@ -9903,7 +10469,7 @@ def run_execute_phase(
             while (
                 worker_progress.runtime_repair_attempts
                 < pipeline._max_code_repair_attempts
-                and _llm_repair_budget_available()
+                and _llm_repair_budget_available("runtime")
             ):
                 worker_progress.repair_attempts += 1
                 worker_progress.runtime_repair_attempts += 1
@@ -9982,7 +10548,7 @@ def run_execute_phase(
                         (is_transient or is_noop_repair)
                         and worker_progress.runtime_repair_attempts
                         < pipeline._max_code_repair_attempts
-                        and _llm_repair_budget_available()
+                        and _llm_repair_budget_available("runtime")
                         and not provider_budget.exhausted
                     )
                     if can_retry_repair:
@@ -10046,7 +10612,9 @@ def run_execute_phase(
         figure_role = (
             "publication_figure"
             if publication_step
-            else "analysis_figure" if _step_expects_figure(step) else None
+            else "analysis_figure"
+            if _step_expects_figure(step)
+            else None
         )
         if (
             publication_step
@@ -10260,9 +10828,18 @@ def run_execute_phase(
         # replaces the entire output directory, so running it after registration
         # would leave evidence digests and claims bound to a retired draft.
         step_summary = _load_step_summary_from_outputs(run_result.out_dir)
-        if worker_progress.deterministic_standard_executor_used or (
-            worker_progress.runner_repair_name
-            and is_sealed_renderer_repair(worker_progress.runner_repair_name)
+        # Any host-authored deterministic code, not only a registered standard
+        # executor.  The rule itself lives with the writer it governs; widening
+        # it here alone was what left the pre-gate site narrower.
+        if host_owns_input_binding_receipts(
+            deterministic_standard_executor_used=(
+                worker_progress.deterministic_standard_executor_used
+            ),
+            deterministic_fallback_used=worker_progress.deterministic_fallback_used,
+            sealed_renderer_repair=bool(
+                worker_progress.runner_repair_name
+                and is_sealed_renderer_repair(worker_progress.runner_repair_name)
+            ),
         ):
             step_summary = _write_host_input_binding_receipts(
                 out_dir=run_result.out_dir,
@@ -10673,23 +11250,16 @@ def run_execute_phase(
             terminal_summary = (
                 step_summary if step_summary else standard_executor_terminal_summary
             )
-            terminal_finding = ValidationFinding(
-                validator="trajectory_stability_executor",
-                severity="error",
-                message=(
-                    "The planner-specified trajectory stability computation failed "
-                    "closed; its diagnostic outputs were preserved and no coder, "
-                    "fallback method, seed change, or cluster-count change was used."
+            terminal_finding = standard_executor_failure_finding(
+                step_record=step_record,
+                step_id=step.step_id,
+                reason=standard_executor_terminal_reason,
+                failure_phase="execution_or_output_validation",
+                executor_errors=(
+                    terminal_summary.get("errors")
+                    if isinstance(terminal_summary, Mapping)
+                    else None
                 ),
-                detail={
-                    "step_id": step.step_id,
-                    "reason": standard_executor_terminal_reason,
-                    "executor_errors": (
-                        terminal_summary.get("errors")
-                        if isinstance(terminal_summary, Mapping)
-                        else None
-                    ),
-                },
             )
             terminal_findings = [
                 terminal_finding,
@@ -10720,7 +11290,11 @@ def run_execute_phase(
                 _flush_partial_manifest()
             emit_progress(
                 "runner",
-                f"Trajectory stability failed closed for {step.step_id}.",
+                (
+                    "Deterministic standard executor "
+                    f"{step_record.get('deterministic_standard_analysis')!r} "
+                    f"failed closed for {step.step_id}."
+                ),
                 status="error",
                 run_id=run_id,
                 step_id=step.step_id,
@@ -10743,6 +11317,8 @@ def run_execute_phase(
             step_record=step_record,
             completed_step_records=completed_records_snapshot,
             resolved_input_bindings=resolved_input_bindings,
+            plausibility_scope=plausibility_authority.scope,
+            script_text=code,
             attempt_id=attempt_id,
             checkpoint_id=review_checkpoint_id,
             stat_validator=stat_validator,
@@ -11214,21 +11790,68 @@ def run_execute_phase(
             )
         )
 
-    steps_to_run = (
-        []
-        if (
-            trajectory_plan_blocked
-            or typed_plan_dag_blocked
-            or (
-                pipeline._development_sample_size is not None
-                and run_input_authority_state.development_sample is None
+    development_sample_blocked = (
+        pipeline._development_sample_size is not None
+        and run_input_authority_state.development_sample is None
+    )
+    plan_block_reason = (
+        "endpoint_contract_blocked"
+        if endpoint_contract_blocked
+        else (
+            "trajectory_plan_contract_blocked"
+            if trajectory_plan_blocked
+            else (
+                "typed_plan_dag_blocked"
+                if typed_plan_dag_blocked
+                else (
+                    "development_sample_unauthorized"
+                    if development_sample_blocked
+                    else None
+                )
             )
         )
+    )
+    steps_to_run = (
+        []
+        if plan_block_reason is not None
         else resume_controller.remaining_steps(
             plan=plan,
             executed_step_ids=set(preexecuted_step_ids),
         )
     )
+    if plan_block_reason is not None:
+        # A RUN MUST SAY WHEN IT DECIDES TO EXECUTE NOTHING.
+        #
+        # Each block above already records findings and a partial-manifest flag,
+        # but neither reaches the audit log -- the run's own narrative. So the
+        # log read "skipped 00_probe, skipped 01_define_analysis_cohort" and
+        # then "Auditing generated figures / run complete", with the seven
+        # remaining steps simply absent: no start, no failure, no reason.
+        #
+        # MEASURED on a trajectory-clustering fixture. The plan had 9 steps;
+        # step_attempt_history recorded 2. Reconstructing why cost a
+        # full diagnostic pass over the manifest, run_status and plan before the
+        # trajectory block was found -- and the fixture has never executed past
+        # its cohort step in any of its 7 recorded runs, so this silence is what
+        # every one of them looked like.
+        dropped = [
+            step.step_id
+            for step in plan.steps
+            if step.step_id not in preexecuted_step_ids
+        ]
+        emit_progress(
+            "step",
+            f"Plan blocked before execution ({plan_block_reason}); "
+            f"{len(dropped)} planned step(s) will not run.",
+            status="blocked",
+            run_id=run_id,
+            # Passed as flat keywords: the emitter forwards every extra kwarg
+            # except status/step_id into the audit record's detail, so a
+            # ``detail=`` argument would arrive nested one level too deep.
+            block_reason=plan_block_reason,
+            dropped_step_ids=dropped,
+            planned_step_count=len(plan.steps),
+        )
     has_typed_input_dependencies = any(
         _typed_input_product(input_name) is not None
         for step in steps_to_run
@@ -11426,6 +12049,118 @@ def run_execute_phase(
             total_steps = len(plan.steps)
             return remaining
 
+        def _record_step_exception(
+            step: AnalysisStep,
+            error: BaseException,
+        ) -> None:
+            """Seal a terminal record for a step that raised instead of returning.
+
+            The coordinator stops the run fail-closed; this only makes sure the
+            run says why. Before it existed, an escaping exception left no
+            manifest at all, so the operator saw a traceback and the run
+            directory held nothing that named the failing step.
+
+            The traceback is persisted deliberately. Not propagating the
+            exception is what keeps the run sealable, but there are ~2,900
+            raise sites behind this call, so the frames are the only thing that
+            says which one fired -- dropping them would trade one lost
+            diagnosis for another.
+
+            An operator interrupt is handled differently, and the docstring
+            above says why: this seal exists because "an unexpected exception
+            means an unknown invariant broke".  Ctrl-C is neither unexpected
+            nor an invariant break -- it is a person stopping the machine.
+            Sealing it here would be actively destructive, because
+            ``_append_terminal_step_record`` DELETES the attempt's transient
+            capsule checkpoint before appending the terminal one.  That
+            checkpoint (``capsule_revalidation_pending``,
+            ``executed_pending_review``, ...) is exactly the state a resume
+            needs to pick the attempt back up; replacing it with a terminal
+            verdict turns "the operator stopped a long run" into "this step
+            failed", permanently, in that run's own record.  The interrupt
+            still flushes the partial manifest, still records that the run did
+            not finish, and the coordinator still re-raises.
+            """
+
+            if isinstance(error, (KeyboardInterrupt, SystemExit)):
+                with shared_lock:
+                    findings.append(
+                        ValidationFinding(
+                            validator="run_interrupted",
+                            severity="error",
+                            message=(
+                                f"The run was interrupted by "
+                                f"{type(error).__name__} while step "
+                                f"{step.step_id} was in flight; the step's own "
+                                "in-flight record is kept so a resume can pick "
+                                "it up, and no later step ran."
+                            ),
+                            detail={
+                                "reason": "operator_interrupt",
+                                "step_id": step.step_id,
+                                "error_type": type(error).__name__,
+                            },
+                        )
+                    )
+                    _flush_partial_manifest({"run_interrupted": step.step_id})
+                return
+
+            detail = f"{type(error).__name__}: {error}".strip()
+            # This record becomes the step's CURRENT record, and a resume reads
+            # only the current one.  Measured before this carry existed: a step
+            # that crashed mid repair-transport left its
+            # `repair_transport_pending` checkpoint intact, but the resume saw
+            # the crash record instead -- no `step_authority_capsule_ref`, no
+            # `capsule_pending_repair_*` -- so it skipped recovery entirely and
+            # bought a second generation (WRITE THE PYTHON CODE 1 -> 2) for a
+            # repair that had already been paid for.  The keys are not guessed
+            # here; the checkpoint owner publishes exactly which ones make a
+            # half-finished attempt recoverable.
+            superseded = next(
+                (
+                    record
+                    for record in reversed(per_step_records)
+                    if isinstance(record, Mapping)
+                    and str(record.get("step_id") or "") == step.step_id
+                ),
+                None,
+            )
+            carried_coordinates: Dict[str, Any] = {}
+            if superseded is not None:
+                for field_name in RESUMABLE_ATTEMPT_COORDINATE_FIELDS:
+                    value = superseded.get(field_name)
+                    if value is not None:
+                        carried_coordinates[field_name] = value
+            crash_record: Dict[str, Any] = {
+                "step_id": step.step_id,
+                "status": "execution_raised",
+                "error": detail,
+                "error_type": type(error).__name__,
+                "traceback": "".join(
+                    traceback.format_exception(type(error), error, error.__traceback__)
+                ),
+                **carried_coordinates,
+            }
+            with shared_lock:
+                findings.append(
+                    ValidationFinding(
+                        validator="step_execution_exception",
+                        severity="error",
+                        message=(
+                            f"Step {step.step_id} raised {detail} instead of "
+                            "returning a step record, so the run stopped "
+                            "fail-closed before any later step."
+                        ),
+                        detail={
+                            "reason": "step_execution_raised",
+                            "step_id": step.step_id,
+                            "error_type": type(error).__name__,
+                        },
+                    )
+                )
+                _append_terminal_step_record(per_step_records, crash_record)
+                _flush_partial_manifest({"step_execution_raised": step.step_id})
+
         # ``steps_to_run`` carries the fail-closed preflight decision; recomputing
         # from the full plan here would revive
         # every step after a typed-DAG/trajectory contract ERROR and spend
@@ -11440,6 +12175,7 @@ def run_execute_phase(
             execute_step=_execute_one_step,
             resolve_transition=_resolve_run_transition,
             apply_revised_plan=_apply_revised_plan,
+            on_step_exception=_record_step_exception,
         )
     else:
 
@@ -11475,15 +12211,21 @@ def run_execute_phase(
         return _ExecutePhaseResult(
             plan=plan,
             per_step_records=per_step_records,
+            step_attempt_history=step_attempt_history,
             probe_summary=probe_summary,
             runtime_state=runtime_state,
             flush_partial_manifest=_flush_partial_manifest,
         )
 
     if (
-        not trajectory_plan_blocked
+        not endpoint_contract_blocked
+        and not trajectory_plan_blocked
         and not typed_plan_dag_blocked
-        and trajectory_plan_contract_applies(plan=plan, context=context)
+        and trajectory_plan_contract_applies(
+            plan=plan,
+            context=context,
+            long_trajectory_bound=long_trajectory_bound,
+        )
     ):
         run_level_trajectory_findings = trajectory_bundle_findings(
             context=context,
@@ -11492,6 +12234,7 @@ def run_execute_phase(
             evidence=evidence,
             run_dir=run_dir,
             cohort_path=cohort_path,
+            long_trajectory_bound=long_trajectory_bound,
         )
         findings.extend(run_level_trajectory_findings)
         _flush_partial_manifest(
@@ -11544,6 +12287,38 @@ def run_execute_phase(
             evidence=evidence,
             prompt_pack_version=prompt_version,
         )
+        # A specification the run LOCKED and then never estimated is a hole in
+        # the protocol, not a blank cell.  The panel already records it as
+        # ``converged: false`` with an explanatory note, and a real E1 run
+        # finished with exactly that -- the pre-specified complete-case variant
+        # unexecuted -- while every error the run reported was about something
+        # else, so the sensitivity analysis read as done.  Keyed on the locked
+        # spec ids themselves, so no method or product allowlist decides
+        # whether the hole is noticed.
+        unexecuted_locked_specs = unexecuted_locked_spec_ids(robustness_panel)
+        if unexecuted_locked_specs:
+            findings.append(
+                ValidationFinding(
+                    validator="robustness_panel",
+                    severity="error",
+                    message=(
+                        "The run locked robustness specifications that no step "
+                        "estimated, so the panel carries them as blank rows: "
+                        + ", ".join(unexecuted_locked_specs)
+                        + ". A step re-estimating the locked grid must declare "
+                        "robustness_replay_spec to reach the deterministic "
+                        "replay owner; generic refitting stays disabled here "
+                        "because it would choose an exposure, outcome or "
+                        "method on the plan's behalf."
+                    ),
+                    detail={
+                        "unexecuted_spec_ids": unexecuted_locked_specs,
+                        "primary_spec_id": robustness_panel.primary_spec_id,
+                        "locked_spec_count": len(robustness_specs),
+                        "panel_path": "robustness_panel.json",
+                    },
+                )
+            )
         _flush_partial_manifest(
             {
                 "robustness_panel_path": "robustness_panel.json",
@@ -11572,9 +12347,14 @@ def run_execute_phase(
         ]
         vlm_adapter = pipeline._visual_qa_adapter
         if vlm_adapter is None and pipeline._enable_vlm_visual_qa:
-            client = pipeline._vlm_client or role_resolver("analyzer")
+            client = budgeted_vlm_client(pipeline, role_resolver, "vlm_visual_qa")
             if client is not None:
-                vlm_adapter = VLMVisualQAAdapter(client)
+                vlm_adapter = VLMVisualQAAdapter(
+                    client,
+                    egress_policy=pipeline._figure_egress_policy(
+                        evidence=evidence, run_dir=run_dir
+                    ),
+                )
         final_visual_findings = VisualQAAuditor(vlm_adapter=vlm_adapter).audit(
             figure_paths=fig_paths
         )
@@ -11642,6 +12422,7 @@ def run_execute_phase(
     return _ExecutePhaseResult(
         plan=plan,
         per_step_records=per_step_records,
+        step_attempt_history=step_attempt_history,
         probe_summary=probe_summary,
         runtime_state=runtime_state,
         flush_partial_manifest=_flush_partial_manifest,

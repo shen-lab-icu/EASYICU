@@ -35,7 +35,8 @@ class RuntimeSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     workdir: str = "./research_output"
-    timeout_seconds: float = 300.0
+    # Kept in step with PipelineConfig.timeout_seconds; see the note there.
+    timeout_seconds: float = 900.0
     standard_executor_timeout_seconds: float = 3_600.0
     manuscript_language: str = "en"
     stop_after_analysis: bool = False

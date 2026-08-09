@@ -13,6 +13,10 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from easyicu.concept import catalog as concept_catalog
+from easyicu.concept_output_sources import (
+    ConceptLoadPlan,
+    compile_concept_load_plan,
+)
 from easyicu.databases.profiles import (
     DATABASE_LABELS,
     normalize_database_key as canonical_database_key,
@@ -53,6 +57,9 @@ _NON_FEATURE_COLUMNS = {
     "icustay_id",
     "patient_id",
     "patient",
+    "patientunitstayid",
+    "patienthealthsystemstayid",
+    "uniquepid",
     "charttime",
     "time",
     "timestamp",
@@ -1413,6 +1420,7 @@ def _load_raw_feature_data(
         )
         all_data = []
         for chunk_index, chunk in enumerate(chunks, start=1):
+            load_plan = compile_concept_load_plan(chunk)
             _raise_if_raw_cancelled(
                 should_cancel,
                 phase="chunk",
@@ -1443,7 +1451,7 @@ def _load_raw_feature_data(
             used_fallback = False
             try:
                 frame = load_concepts(
-                    concepts=chunk,
+                    concepts=list(load_plan.source_concepts),
                     database=db,
                     data_path=str(db_path),
                     max_patients=max_patients,
@@ -1459,12 +1467,14 @@ def _load_raw_feature_data(
                     completed_databases=completed_databases,
                     completed_chunks=completed_chunks,
                 )
+                frame = _materialize_raw_output_columns(frame, load_plan)
                 all_data.extend(_wide_concepts_to_long(frame, chunk, sample_size))
             except _CrossdbRawCancelled:
                 raise
             except Exception:
                 used_fallback = True
                 for concept in chunk:
+                    concept_plan = compile_concept_load_plan([concept])
                     _raise_if_raw_cancelled(
                         should_cancel,
                         phase="fallback",
@@ -1476,7 +1486,7 @@ def _load_raw_feature_data(
                     )
                     try:
                         frame = load_concepts(
-                            concepts=[concept],
+                            concepts=list(concept_plan.source_concepts),
                             database=db,
                             data_path=str(db_path),
                             max_patients=max_patients,
@@ -1492,6 +1502,7 @@ def _load_raw_feature_data(
                             completed_databases=completed_databases,
                             completed_chunks=completed_chunks,
                         )
+                        frame = _materialize_raw_output_columns(frame, concept_plan)
                         all_data.extend(
                             _wide_concepts_to_long(frame, [concept], sample_size)
                         )
@@ -1575,6 +1586,32 @@ def _load_raw_feature_data(
             completed_chunks=completed_chunks,
         )
     return result
+
+
+def _materialize_raw_output_columns(frame: Any, plan: ConceptLoadPlan) -> Any:
+    """Project executable loader sources back to public catalog outputs.
+
+    Raw Cross-DB requests use the public 288-feature catalog, while a small
+    number of composite outputs intentionally load through a different
+    executable source (for example ``sep3_sofa1`` through ``sep3``).  The
+    dependency-neutral concept-output authority compiles that mapping once;
+    this boundary applies it without teaching the raw loader case-specific
+    aliases.
+    """
+    if frame is None or not hasattr(frame, "columns"):
+        return frame
+    projected = frame
+    copied = False
+    for binding in plan.materializations:
+        output = binding.output_concept
+        source = binding.source_concept
+        if output in projected.columns or source not in projected.columns:
+            continue
+        if not copied:
+            projected = projected.copy()
+            copied = True
+        projected[output] = projected[source]
+    return projected
 
 
 def _wide_concepts_to_long(
@@ -1739,30 +1776,28 @@ def _raw_feature_distribution_payload(
                         **summary,
                     }
                 )
-            if present_count:
-                feature_rows.append(
-                    {
-                        "feature": feature,
-                        "label": concept_catalog.CONCEPT_DICTIONARY.get(
-                            feature, (feature, feature, "")
-                        )[0],
-                        "shared": present_count == len(dbs),
-                        "present_count": present_count,
-                        "values": values,
-                    }
-                )
-        if feature_rows:
-            out.append(
+            feature_rows.append(
                 {
-                    "module": module,
-                    "source_count": len(dbs),
-                    "feature_count": len(feature_rows),
-                    "shared_feature_count": sum(
-                        1 for row in feature_rows if row["shared"]
-                    ),
-                    "features": feature_rows,
+                    "feature": feature,
+                    "label": concept_catalog.CONCEPT_DICTIONARY.get(
+                        feature, (feature, feature, "")
+                    )[0],
+                    "shared": present_count == len(dbs),
+                    "present_count": present_count,
+                    "values": values,
                 }
             )
+        out.append(
+            {
+                "module": module,
+                "source_count": len(dbs),
+                "feature_count": len(feature_rows),
+                "shared_feature_count": sum(
+                    1 for row in feature_rows if row["shared"]
+                ),
+                "features": feature_rows,
+            }
+        )
     return out
 
 
@@ -1772,22 +1807,36 @@ def _raw_module_availability(
     labels = [str(source.get("label") or source.get("database")) for source in sources]
     out = []
     for module in feature_distributions:
+        features = list(module.get("features") or [])
+        source_values = []
+        for source_index, label in enumerate(labels):
+            present_features = sum(
+                1
+                for feature in features
+                if source_index < len(feature.get("values") or [])
+                and bool(feature["values"][source_index].get("present"))
+            )
+            feature_count = len(features)
+            source_values.append(
+                {
+                    "source": label,
+                    "present": present_features > 0,
+                    "coverage_pct": (
+                        round(present_features / feature_count * 100.0, 1)
+                        if feature_count
+                        else 0.0
+                    ),
+                    "quality_status": "aggregate_density_only",
+                }
+            )
         out.append(
             {
                 "module": module.get("module"),
-                "present_count": sum(1 for _ in labels),
+                "present_count": sum(1 for value in source_values if value["present"]),
                 "source_count": len(labels),
                 "shared": module.get("shared_feature_count", 0) > 0,
                 "median_coverage_pct": None,
-                "values": [
-                    {
-                        "source": label,
-                        "present": True,
-                        "coverage_pct": None,
-                        "quality_status": "aggregate_density_only",
-                    }
-                    for label in labels
-                ],
+                "values": source_values,
             }
         )
     return out

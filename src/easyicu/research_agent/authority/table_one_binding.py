@@ -18,25 +18,20 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ..canonical_json import canonical_json as _canonical_json
 from ..methods.table_one import table_one_spec_sha256
-from ..research_context.prompt_variables import opaque_level_tokens
 from ..schema import AnalysisPlan, AnalysisStep, ResearchContext, TableOneSpec
+from .declared_levels import (
+    OPAQUE_LEVEL_PREFIX,
+    observed_levels_for,
+    resolve_typed_levels,
+)
 
 TABLE_ONE_EXECUTION_BINDING_SCHEMA = "easyicu.table_one_execution_binding/1"
 TABLE_ONE_PRIVATE_CHECKPOINT_SCHEMA = "easyicu.table_one_private_checkpoint/1"
 TABLE_ONE_PRIVATE_CHECKPOINT_RELATIVE_PATH = Path(
     ".runtime/table_one_private_checkpoint.json"
 )
-
-
-def _canonical_json(value: Any) -> str:
-    return json.dumps(
-        value,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        allow_nan=False,
-    )
 
 
 class TableOneExecutionBinding(BaseModel):
@@ -64,80 +59,15 @@ class TableOneExecutionBinding(BaseModel):
         return self
 
 
-def _observed_levels(
-    *,
-    name: str,
-    variables: dict[str, Any],
-) -> list[Any]:
-    variable = variables.get(name)
-    if variable is None or not variable.observed_domain:
-        return []
-    domain = variable.observed_domain
-    levels = domain.get("levels")
-    if isinstance(levels, list):
-        return list(levels)
-    if not domain.get("is_binary"):
-        return []
-    dtype = str(variable.dtype or "").lower()
-    if dtype.startswith(("int", "uint")):
-        return [0, 1]
-    if dtype.startswith("bool"):
-        return [False, True]
-    if dtype.startswith(("float", "double")):
-        return [0.0, 1.0]
-    return []
-
-
 def _typed_token(value: Any) -> tuple[str, str]:
     return type(value).__name__, repr(value)
 
 
-def _resolve_levels(
-    *,
-    name: str,
-    declared: list[Any],
-    variables: dict[str, Any],
-) -> tuple[list[Any], list[Any]]:
-    observed = _observed_levels(name=name, variables=variables)
-    if not observed:
-        return list(declared), []
-    opaque = list(opaque_level_tokens(len(observed)))
-    if opaque and list(declared) == opaque:
-        return observed, observed
-    if {_typed_token(value) for value in declared} == {
-        _typed_token(value) for value in observed
-    }:
-        return list(declared), observed
-    # JSON has one ``number`` type even though Python/pandas distinguish
-    # integral and floating scalar representations.  A Planner declaration
-    # of ``[0, 1]`` therefore denotes the same closed binary domain as a
-    # float-backed cohort column whose verified levels are ``[0.0, 1.0]``.
-    # Canonicalise execution back to the host-observed scalar types; never
-    # apply this equivalence to booleans or categorical strings.
-    declared_numeric = all(
-        isinstance(value, (int, float)) and not isinstance(value, bool)
-        for value in declared
-    )
-    observed_numeric = all(
-        isinstance(value, (int, float)) and not isinstance(value, bool)
-        for value in observed
-    )
-    if (
-        declared_numeric
-        and observed_numeric
-        and len(declared) == len(observed)
-        and {float(value) for value in declared} == {float(value) for value in observed}
-    ):
-        return observed, observed
-    safe_expected = opaque or ["<host-observed numeric scalar types>"]
-    raise ValueError(
-        "Planner Table 1 levels for "
-        f"{name!r} must preserve the exact observed scalar types or use the "
-        f"exact host-safe tokens {safe_expected!r}; expected_count="
-        f"{len(observed)}, declared_count={len(declared)}, declared_types="
-        f"{[type(value).__name__ for value in declared]!r}. No observed "
-        "category literal is available to the Provider."
-    )
+# One ordering authority for every declared level set, not a Table 1 copy of
+# one: token ``N`` denotes the ``N``-th observed level for whoever reads it, so
+# a second ordering here would silently relabel another consumer's contrasts.
+_observed_levels = observed_levels_for
+_resolve_levels = resolve_typed_levels
 
 
 def bind_table_one_execution_spec(
@@ -162,7 +92,32 @@ def bind_table_one_execution_spec(
     payload["group_levels"] = group_levels
     observed_payload: dict[str, Any] = {planner_spec.group_by: observed_groups}
     for index, variable_spec in enumerate(planner_spec.variables):
-        if variable_spec.summary != "count_percent":
+        # WHAT NEEDS RESOLVING IS A DECLARED LEVEL SET, NOT A SUMMARY STYLE.
+        #
+        # This read ``summary != "count_percent": continue``, and an ordinal row
+        # declares closed levels while summarising as ``median_iqr`` -- so its
+        # placeholders survived into the execution spec, into the host's own
+        # generated code, and into ``build_grouped_table_one``, which refused
+        # the column it was handed: "sofa2_resp_max contains values outside the
+        # Planner-declared closed levels". The five declared tokens were the
+        # host's own; the column held 0/1/2/3/4. The Coder was then asked to
+        # repair the host's script, changed the spec -- the only change that
+        # could make it run -- and ``table_one_spec_not_planner_owned`` refused
+        # that too. Two host layers, one contradiction, and the step plus the
+        # figure depending on it both died (m1, 2026-08-03).
+        #
+        # MEASURED over every recorded plan, deduplicated per (run, step): 348
+        # Table 1 specs, 18 (5.2%) carry a level set this filter skipped, 56
+        # variables in all, and every one of them is ordinal x median_iqr.
+        #
+        # Nothing that resolves today stops resolving, and that is a type
+        # guarantee rather than a corpus observation: ``TableOneVariableSpec``
+        # refuses ``count_percent`` with fewer than two declared levels, so
+        # every variable the old clause admitted this one admits too. Keeping
+        # ``or summary == "count_percent"`` beside it was drafted and dropped
+        # -- the schema makes it unreachable, and a clause that can never fire
+        # reads as protection while protecting nothing.
+        if not variable_spec.levels:
             continue
         levels, observed = _resolve_levels(
             name=variable_spec.name,
@@ -363,7 +318,7 @@ def restore_table_one_private_checkpoint(
         for variable in spec.variables:
             levels.extend(variable.levels)
         return any(
-            isinstance(value, str) and value.startswith("__easyicu_level_")
+            isinstance(value, str) and value.startswith(OPAQUE_LEVEL_PREFIX)
             for value in levels
         )
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+from collections import Counter
 
 _SCOPE_NODES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
 
@@ -62,6 +63,65 @@ def _resolved_manifest_loads(
 ) -> set[tuple[int, str]]:
     """Return names loaded directly from the host manifest path."""
 
+    def local_json_loader_names() -> set[str]:
+        loaders: set[str] = set()
+        for function in tree.body:
+            if not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            positional = [*function.args.posonlyargs, *function.args.args]
+            if (
+                function.decorator_list
+                or len(positional) != 1
+                or function.args.vararg is not None
+                or function.args.kwarg is not None
+            ):
+                continue
+            body = [
+                statement
+                for statement in function.body
+                if not (
+                    isinstance(statement, ast.Expr)
+                    and isinstance(statement.value, ast.Constant)
+                    and isinstance(statement.value.value, str)
+                )
+            ]
+            if len(body) != 1 or not isinstance(body[0], (ast.With, ast.AsyncWith)):
+                continue
+            path_name = positional[0].arg
+            returns = [node for node in ast.walk(function) if isinstance(node, ast.Return)]
+            if len(returns) != 1:
+                continue
+            returned = returns[0].value
+            if not (
+                isinstance(returned, ast.Call)
+                and isinstance(returned.func, ast.Attribute)
+                and isinstance(returned.func.value, ast.Name)
+                and returned.func.value.id == "json"
+                and returned.func.attr == "load"
+                and len(returned.args) == 1
+                and isinstance(returned.args[0], ast.Name)
+            ):
+                continue
+            handle_name = returned.args[0].id
+            opens_parameter = any(
+                isinstance(node, (ast.With, ast.AsyncWith))
+                and any(
+                    isinstance(item.optional_vars, ast.Name)
+                    and item.optional_vars.id == handle_name
+                    and isinstance(item.context_expr, ast.Call)
+                    and isinstance(item.context_expr.func, ast.Name)
+                    and item.context_expr.func.id == "open"
+                    and item.context_expr.args
+                    and isinstance(item.context_expr.args[0], ast.Name)
+                    and item.context_expr.args[0].id == path_name
+                    for item in node.items
+                )
+                for node in ast.walk(function)
+            )
+            if opens_parameter:
+                loaders.add(function.name)
+        return loaders
+
     manifest_paths: set[tuple[int, str]] = set()
     manifest_handles: set[tuple[int, str]] = set()
     assignments: list[tuple[int, str, ast.AST]] = []
@@ -85,6 +145,10 @@ def _resolved_manifest_loads(
         ):
             manifest_paths.add((scope, targets[0].id))
 
+    assignment_counts = Counter(
+        (scope, target) for scope, target, _value in assignments
+    )
+
     for node in ast.walk(tree):
         if not isinstance(node, (ast.With, ast.AsyncWith)):
             continue
@@ -103,8 +167,21 @@ def _resolved_manifest_loads(
                 continue
             manifest_handles.add((scope, item.optional_vars.id))
 
+    loader_names = local_json_loader_names()
     resolved: set[tuple[int, str]] = set()
     for scope, target, value in assignments:
+        if (
+            isinstance(value, ast.Call)
+            and isinstance(value.func, ast.Name)
+            and value.func.id in loader_names
+            and len(value.args) == 1
+            and isinstance(value.args[0], ast.Name)
+            and (scope, value.args[0].id) in manifest_paths
+            and assignment_counts[(scope, value.args[0].id)] == 1
+            and assignment_counts[(scope, target)] == 1
+        ):
+            resolved.add((scope, target))
+            continue
         if not (
             isinstance(value, ast.Call)
             and isinstance(value.func, ast.Attribute)
@@ -131,6 +208,35 @@ def _resolved_manifest_loads(
             and (scope, source.func.value.id) in manifest_paths
         ):
             resolved.add((scope, target))
+
+    changed = True
+    while changed:
+        changed = False
+        for scope, target, value in assignments:
+            source_name: str | None = None
+            if isinstance(value, ast.Name):
+                source_name = value.id
+            elif (
+                isinstance(value, ast.Call)
+                and isinstance(value.func, ast.Attribute)
+                and value.func.attr == "get"
+                and isinstance(value.func.value, ast.Name)
+                and len(value.args) >= 2
+                and subscript_key(value.args[0]) == "manifest"
+                and isinstance(value.args[1], ast.Name)
+                and value.args[1].id == value.func.value.id
+            ):
+                source_name = value.func.value.id
+            coordinate = (scope, target)
+            if (
+                source_name is not None
+                and (scope, source_name) in resolved
+                and assignment_counts[(scope, source_name)] == 1
+                and assignment_counts[(scope, target)] == 1
+                and coordinate not in resolved
+            ):
+                resolved.add(coordinate)
+                changed = True
     return resolved
 
 

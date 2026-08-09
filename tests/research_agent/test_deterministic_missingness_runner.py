@@ -17,6 +17,7 @@ from measurement missingness, and blocks gracefully on an empty cohort.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -25,7 +26,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from easyicu.research_agent.authority.evidence_store import _walk_numeric_leaves
+from easyicu.research_agent.authority.plausibility import (
+    FlagOnlyPlausibilityScope,
+)
 from easyicu.research_agent.execution.runners.deterministic_missingness import (
+    declared_audit_products_are_emittable,
     is_missingness_complete_case_contract,
     is_missingness_measurement_availability_contract,
     missingness_audit_executor_owns_step,
@@ -34,6 +40,12 @@ from easyicu.research_agent.execution.runners.deterministic_missingness import (
 )
 from easyicu.research_agent.execution.runners.selection import select_standard_executor
 from easyicu.research_agent.gates.preflight import audit_mechanical_code_contracts
+from easyicu.research_agent.gates.plausibility_obligation import (
+    flag_only_plausibility_obligation_findings,
+)
+from easyicu.research_agent.gates.plausibility_receipt import (
+    plausibility_audit_receipt_findings,
+)
 from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
 
@@ -346,6 +358,223 @@ def test_structured_availability_executor_accepts_implicit_locked_cohort_scope()
     assert audit_mechanical_code_contracts(selection.code, step) == []
 
 
+def test_compact_missingness_executor_consumes_declared_cohort_product():
+    step = AnalysisStep(
+        step_id="03_missingness_and_measurement_audit",
+        intent="Audit missingness and measurement availability.",
+        inputs=[
+            "cohort:analysis_set",
+            "lactate",
+            "lactate_measured",
+            "lactate_n",
+        ],
+        expected_outputs=["table:missingness_measurement_audit"],
+        method="missingness_measurement_audit",
+    )
+    plan = AnalysisPlan(research_question="Test", steps=[step])
+
+    selection = select_standard_executor(step, plan=plan)
+
+    assert selection is not None
+    assert selection.analysis_kind == "missingness_measurement_audit"
+    assert selection.consumed_input_keys == ("cohort:analysis_set",)
+    assert audit_mechanical_code_contracts(selection.code, step) == []
+
+
+def test_compact_missingness_executor_emits_exact_plausibility_receipt(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    step = AnalysisStep(
+        step_id="04_missingness_and_measurement_audit",
+        planned_analysis_role="auxiliary",
+        intent="Audit missingness without changing the analysis cohort.",
+        inputs=["artifact:analysis_cohort", "age"],
+        expected_outputs=["table:missingness_measurement_audit"],
+        method="missingness_measurement_audit",
+    )
+    plan = AnalysisPlan(research_question="Test", steps=[step])
+    frame = pd.DataFrame({"age": [-1.0, 50.0, 101.0]})
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    cohort_path = run_dir / "cohort.parquet"
+    frame.to_parquet(cohort_path, index=False)
+    (run_dir / "research_context.json").write_text("{}", encoding="utf-8")
+    (run_dir / "analysis_plan.json").write_text(
+        plan.model_dump_json(),
+        encoding="utf-8",
+    )
+
+    raw_contracts: dict[str, object] = {
+        "schema_version": "easyicu.resolved_raw_input_contracts/1",
+        "authority_scope": (
+            "host_verified_physical_representation_and_domain_constraints"
+        ),
+        "scientific_ownership": "Planner retains scientific decisions",
+        "contracts": {
+            "age": {
+                "column": "age",
+                "analysis_plausibility_range": {
+                    "minimum": 0.0,
+                    "maximum": 100.0,
+                },
+                "plausibility_policy": {
+                    "range_policy": "flag_only",
+                    "out_of_range_action": "retain_and_flag",
+                },
+            }
+        },
+    }
+    encoded_contracts = json.dumps(
+        raw_contracts,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    contracts_sha256 = hashlib.sha256(encoded_contracts).hexdigest()
+    raw_contracts["contracts_sha256"] = contracts_sha256
+    resolved_path = run_dir / "resolved_inputs.json"
+    resolved_path.write_text(
+        json.dumps(
+            {
+                "step_id": step.step_id,
+                "inputs": {
+                    "artifact:analysis_cohort": {
+                        "relative_path": cohort_path.name,
+                        "sha256": hashlib.sha256(cohort_path.read_bytes()).hexdigest(),
+                        "product_contract": {
+                            "columns": list(frame.columns),
+                            "row_count": len(frame),
+                        },
+                    }
+                },
+                "raw_input_contracts": raw_contracts,
+            }
+        ),
+        encoding="utf-8",
+    )
+    out_dir = run_dir / "outputs"
+    monkeypatch.setenv("EASYICU_RUN_DIR", str(run_dir))
+    monkeypatch.setenv("EASYICU_STEP_ID", step.step_id)
+    monkeypatch.setenv("EASYICU_RESOLVED_INPUTS_JSON", str(resolved_path))
+    monkeypatch.setenv("COHORT_PARQUET", str(cohort_path))
+    monkeypatch.setenv("STEP_OUT_DIR", str(out_dir))
+    scope = FlagOnlyPlausibilityScope(
+        step_id=step.step_id,
+        expected_columns=("age",),
+        source_contracts_sha256=contracts_sha256,
+        authority_kind="resolved_raw_input_contracts",
+    )
+
+    selection = select_standard_executor(
+        step,
+        plan=plan,
+        plausibility_scope=scope,
+    )
+    assert selection is not None
+    assert selection.analysis_kind == "missingness_measurement_audit"
+    assert (
+        flag_only_plausibility_obligation_findings(
+            None,
+            script_text=selection.code,
+            step=step,
+            scope=scope,
+        )
+        == []
+    )
+
+    exec(compile(selection.code, "<missingness-executor>", "exec"), {})
+
+    summary = json.loads((out_dir / "step_summary.json").read_text("utf-8"))
+    assert summary["n_total"] == len(frame)
+    receipt = summary["plausibility_audit"]["age"]
+    assert set(summary["plausibility_audit"]) == {"age"}
+    assert receipt["policy"] == "retain_and_flag"
+    assert receipt["below_minimum_n"] == 1
+    assert receipt["above_maximum_n"] == 1
+    assert receipt["out_of_range_n"] == 2
+    # The denominator is what separates "2 of many were out of range" from a
+    # column that was never observed and reports 0 for both.
+    assert receipt["compared_n"] >= receipt["out_of_range_n"]
+    assert receipt["compared_n"] > 0
+    assert (
+        plausibility_audit_receipt_findings(
+            step_summary=summary,
+            step=step,
+            script_text=selection.code,
+            scope=scope,
+        )
+        == []
+    )
+
+
+def test_compact_missingness_executor_reads_exact_bound_cohort(
+    tmp_path: Path,
+    monkeypatch,
+):
+    step = AnalysisStep(
+        step_id="03_missingness_and_measurement_audit",
+        intent="Audit missingness and measurement availability.",
+        inputs=[
+            "cohort:analysis_set",
+            "lactate",
+            "lactate_measured",
+            "lactate_n",
+        ],
+        expected_outputs=["table:missingness_measurement_audit"],
+        method="missingness_measurement_audit",
+    )
+    plan = AnalysisPlan(research_question="Test", steps=[step])
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    bound = _cohort(n=50, seed=41)
+    raw = _cohort(n=100, seed=42)
+    bound_path = run_dir / "bound.parquet"
+    raw_path = run_dir / "raw.parquet"
+    bound.to_parquet(bound_path, index=False)
+    raw.to_parquet(raw_path, index=False)
+    (run_dir / "research_context.json").write_text("{}", encoding="utf-8")
+    (run_dir / "analysis_plan.json").write_text(
+        plan.model_dump_json(),
+        encoding="utf-8",
+    )
+    resolved_path = run_dir / "resolved_inputs.json"
+    resolved_path.write_text(
+        json.dumps(
+            {
+                "inputs": {
+                    "cohort:analysis_set": {
+                        "relative_path": bound_path.name,
+                        "sha256": hashlib.sha256(bound_path.read_bytes()).hexdigest(),
+                        "product_contract": {
+                            "columns": list(bound.columns),
+                            "row_count": len(bound),
+                        },
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    out_dir = run_dir / "outputs"
+    monkeypatch.setenv("EASYICU_RUN_DIR", str(run_dir))
+    monkeypatch.setenv("EASYICU_STEP_ID", step.step_id)
+    monkeypatch.setenv("EASYICU_RESOLVED_INPUTS_JSON", str(resolved_path))
+    monkeypatch.setenv("COHORT_PARQUET", str(raw_path))
+    monkeypatch.setenv("STEP_OUT_DIR", str(out_dir))
+    selection = select_standard_executor(step, plan=plan)
+    assert selection is not None
+
+    exec(compile(selection.code, "<missingness-executor>", "exec"), {})
+
+    summary = json.loads((out_dir / "step_summary.json").read_text(encoding="utf-8"))
+    assert summary["status"] == "ok"
+    assert summary["cohort_input_key"] == "cohort:analysis_set"
+    assert summary["n_total"] == len(bound)
+    assert summary["measurement_provenance_audit"]["checks"][0]["status"] == "checked"
+
+
 def test_missingness_audit_counts_from_measured_indicator(tmp_path: Path):
     cohort = _cohort(n=1000, seed=1)
     summary, out_dir = _exec_runner(tmp_path, cohort, {})
@@ -376,6 +605,143 @@ def test_missingness_audit_counts_from_measured_indicator(tmp_path: Path):
         "measured_pct",
     ):
         assert col in audit.columns
+
+
+#: The tolerance the shipped missingness figure re-derives at, copied from the
+#: recorded ``analysis.py`` that raised on it: ``np.allclose(..., rtol=0.0,
+#: atol=1e-8)``. A published percentage has to survive THIS, not a friendlier
+#: number chosen here.
+_CONSUMER_ATOL = 1e-8
+
+
+def test_published_percentages_survive_the_consumer_rederiving_them(
+    tmp_path: Path,
+):
+    """Rounding a number a downstream contract re-derives is a broken contract.
+
+    e1 in the 2026-08-02 sweep ran 11 steps and lost exactly one:
+    ``11_missingness_figure`` died in 1.2 s with "missing_pct is inconsistent
+    with n_total and n_nonmissing", and that single death is what turned the
+    whole manuscript into a fail-closed placeholder.  Nothing was inconsistent.
+    The figure recomputes ``100 * (n_total - n_nonmissing) / n_total`` and
+    compares at ``atol=1e-8``; this executor published the same quantity
+    through ``round(..., 6)``.  On the real artifact 4 of 6 rows were off by
+    2e-7 to 4e-7 -- entirely the rounding, and far outside the tolerance.
+
+    Six decimals is a display decision.  The consumer of a machine-readable
+    table is doing arithmetic, not reading, so the rounding belongs at the
+    point of display and nowhere upstream of it.
+    """
+
+    cohort = _cohort(n=94458, seed=3)
+    _summary, out_dir = _exec_runner(tmp_path, cohort, {})
+
+    audit = pd.read_csv(out_dir / "missingness_measurement_audit.csv")
+    nonzero = audit["n_total"] != 0
+    assert nonzero.any(), "the probe needs at least one audited concept"
+
+    # Exactly the two checks the shipped renderer performs.
+    expected_missing = (
+        100.0
+        * (audit.loc[nonzero, "n_total"] - audit.loc[nonzero, "n_nonmissing"])
+        / audit.loc[nonzero, "n_total"]
+    )
+    expected_measured = (
+        100.0
+        * audit.loc[nonzero, "n_nonmissing"]
+        / audit.loc[nonzero, "n_total"]
+    )
+    assert np.allclose(
+        audit.loc[nonzero, "missing_pct"].to_numpy(dtype=float),
+        expected_missing.to_numpy(dtype=float),
+        rtol=0.0,
+        atol=_CONSUMER_ATOL,
+    ), "missing_pct cannot be re-derived at the tolerance its consumer uses"
+    assert np.allclose(
+        audit.loc[nonzero, "measured_pct"].to_numpy(dtype=float),
+        expected_measured.to_numpy(dtype=float),
+        rtol=0.0,
+        atol=_CONSUMER_ATOL,
+    ), "measured_pct cannot be re-derived at the tolerance its consumer uses"
+
+    # The same rule for the other rate this step publishes to a machine.
+    denominators = pd.read_csv(out_dir / "analytic_denominators.csv")
+    scoped = denominators[
+        denominators["n_total"].notna()
+        & (denominators["n_total"] != 0)
+        & denominators["n_complete"].notna()
+    ]
+    if len(scoped):
+        assert np.allclose(
+            scoped["complete_pct"].to_numpy(dtype=float),
+            (100.0 * scoped["n_complete"] / scoped["n_total"]).to_numpy(
+                dtype=float
+            ),
+            rtol=0.0,
+            atol=_CONSUMER_ATOL,
+        ), "complete_pct cannot be re-derived at the tolerance a consumer uses"
+
+
+def test_the_worst_concepts_summary_publishes_the_count_not_only_the_rate(
+    tmp_path: Path,
+):
+    """A rate whose numerator this step withholds cannot be cited.
+
+    Recorded 2026-08-02 in the nine-task sweep, on ``e3`` -- the only task
+    whose steps all passed, and therefore the only one that produced a
+    manuscript at all.  It said "The first-24-hour maximum KDIGO stage was
+    missing for 696 of 94,458 stays" and cited THIS step.  696 sat in five of
+    this step's own output CSVs, but ``worst_measured_concepts`` published
+    only ``value_missing_pct`` (0.736835 == 100 * 696 / 94,458), so the only
+    registered claims for 696 belonged to two OTHER steps.
+    ``_select_numeric_claim`` restricts candidates to the cited evidence
+    before anything else, found none of them there, and returned ambiguous --
+    three such markers, two distinct values, all the same shape.
+
+    The count and the rate are one fact and are asserted together, because
+    publishing half of it is the whole defect: dropping the count again
+    leaves the percentage looking perfectly well-formed.
+    """
+
+    cohort = _cohort(n=1000, seed=1)
+    summary, out_dir = _exec_runner(tmp_path, cohort, {})
+    assert summary["status"] == "ok"
+
+    worst = summary["worst_measured_concepts"]
+    assert worst, "the audit published no worst-measured concepts to cite"
+
+    audit = pd.read_csv(out_dir / "missingness_measurement_audit.csv")
+    n_total = int(summary["n_total"])
+
+    for record in worst:
+        concept = record["concept"]
+        assert "value_missing_n" in record, (
+            f"{concept!r} is published as a percentage with no numerator. A "
+            "manuscript states the count and cites this step; without the "
+            "count registered here, the cited step owns no claim for the "
+            "number in the sentence and the binder must refuse."
+        )
+        row = audit[audit["concept"] == concept].iloc[0]
+        assert record["value_missing_n"] == int(row["value_missing_n"])
+        assert (
+            abs(
+                record["value_missing_pct"]
+                - 100.0 * record["value_missing_n"] / n_total
+            )
+            < 1e-6
+        ), f"{concept!r}: the published rate and count disagree"
+
+    # The count has to survive as a registrable claim, not merely exist in the
+    # JSON: the binder can only reach what the leaf walker turns into a claim.
+    leaves = _walk_numeric_leaves(summary)
+    counts_by_path = {path: canonical for path, _literal, canonical in leaves}
+    for index, record in enumerate(worst):
+        path = f"worst_measured_concepts[{index}].value_missing_n"
+        assert path in counts_by_path, (
+            f"{path} never becomes a numeric claim, so a sentence citing this "
+            "step still cannot bind the count."
+        )
+        assert counts_by_path[path] == float(record["value_missing_n"])
 
 
 def test_missingness_and_source_outputs_are_distinct_declared_products(tmp_path: Path):
@@ -470,13 +836,13 @@ def test_measurement_availability_is_a_concrete_declared_product(tmp_path: Path)
         ],
     )
 
-    availability = pd.read_csv(out_dir / "measurement_availability.csv")
+    availability = pd.read_csv(out_dir / "measurement_source_audit.csv")
     lactate = availability.loc[availability["concept"] == "lactate"].iloc[0]
     assert lactate["indicator_semantics"] == "measurement_availability"
     assert summary["status"] == "ok"
     assert summary["output_files"] == {
         "table:missingness_audit": "missingness_audit.csv",
-        "table:measurement_availability": "measurement_availability.csv",
+        "table:measurement_availability": "measurement_source_audit.csv",
     }
 
 
@@ -500,14 +866,41 @@ def test_measurement_availability_audit_is_a_concrete_declared_product(
         ],
     )
 
-    availability = pd.read_csv(out_dir / "measurement_availability_audit.csv")
+    availability = pd.read_csv(out_dir / "measurement_source_audit.csv")
     lactate = availability.loc[availability["concept"] == "lactate"].iloc[0]
     assert lactate["indicator_semantics"] == "measurement_availability"
     assert summary["status"] == "ok"
     assert summary["output_files"] == {
         "table:missingness_audit": "missingness_audit.csv",
-        "table:measurement_availability_audit": ("measurement_availability_audit.csv"),
+        "table:measurement_availability_audit": "measurement_source_audit.csv",
     }
+
+
+def test_the_availability_spellings_are_one_answer_not_several_products() -> None:
+    """These three names were once three files holding the identical table.
+
+    Both tests above assert the property that matters -- a declared product
+    resolves to a file the runner really writes -- and used to assert the
+    filename too.  What no test asserted was the consequence: a step could
+    declare two of these spellings, satisfy the "as many distinct files as
+    products" rule, and hand its reader one table twice.  They resolve to one
+    audit now, so that declaration is refused instead.
+    """
+
+    assert (
+        declared_audit_products_are_emittable(
+            "missingness_and_measurement_availability_audit",
+            ["table:measurement_availability", "table:measurement_availability_audit"],
+        )
+        is False
+    )
+    assert (
+        declared_audit_products_are_emittable(
+            "missingness_and_measurement_availability_audit",
+            ["table:missingness_audit", "table:measurement_availability"],
+        )
+        is True
+    )
 
 
 def test_missingness_runner_uses_manifest_selected_current_plan(tmp_path: Path):
@@ -532,7 +925,7 @@ def test_missingness_runner_uses_manifest_selected_current_plan(tmp_path: Path):
     assert summary["requested_input_count"] == 3
     assert summary["output_files"] == {
         "table:missingness_audit": "missingness_audit.csv",
-        "table:measurement_availability": "measurement_availability.csv",
+        "table:measurement_availability": "measurement_source_audit.csv",
     }
 
 
@@ -637,6 +1030,150 @@ def test_complete_binary_event_flag_is_not_misread_as_measurement_missingness(
     assert rrt["measured_one_n"] == 5
     assert rrt["value_missing_n"] == 0
     assert rrt["value_present_but_measured_zero_n"] == 0
+
+
+def test_typed_positive_only_event_absence_is_not_missingness(
+    tmp_path: Path,
+) -> None:
+    cohort = pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3, 4, 5],
+            "death": [0, 1, 0, 0, 1],
+            "susp_inf_n": [0, 1, 2, 0, 1],
+            "susp_inf_measured": [0, 1, 1, 0, 1],
+            "susp_inf_first": [np.nan, 1.0, 1.0, np.nan, 1.0],
+        }
+    )
+    context = {
+        "variables": [
+            {
+                "name": "susp_inf_first",
+                "observation_semantics": {
+                    "kind": "positive_only_event",
+                    "event_count_column": "susp_inf_n",
+                    "measured_column": "susp_inf_measured",
+                    "representative_column": "susp_inf_first",
+                },
+            }
+        ]
+    }
+
+    summary, out_dir = _exec_runner(
+        tmp_path,
+        cohort,
+        context,
+        requested_inputs=[
+            "susp_inf_first",
+            "susp_inf_measured",
+            "susp_inf_n",
+        ],
+    )
+
+    audit = pd.read_csv(out_dir / "missingness_measurement_audit.csv")
+    row = audit.loc[audit["concept"] == "susp_inf"].iloc[0]
+    assert summary["status"] == "ok"
+    assert row["indicator_semantics"] == "binary_event_presence"
+    assert row["missingness_kind"] == "binary_event_status_complete"
+    assert row["raw_value_missing_n"] == 2
+    assert row["event_present_n"] == 3
+    assert row["event_absent_n"] == 2
+    assert row["measured_one_n"] == len(cohort)
+    assert row["value_missing_n"] == 0
+    assert summary["observation_semantics_audit"]["susp_inf_first"][
+        "event_absent_n"
+    ] == 2
+
+
+def test_typed_conditional_event_time_uses_event_positive_denominator(
+    tmp_path: Path,
+) -> None:
+    cohort = pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3, 4, 5],
+            "death": [0, 1, 1, 0, 1],
+            "death_time": [np.nan, 12.0, np.nan, np.nan, 48.0],
+        }
+    )
+    context = {
+        "variables": [
+            {
+                "name": "death_time",
+                "observation_semantics": {
+                    "kind": "conditional_event_time",
+                    "event_status_column": "death",
+                    "representative_column": "death_time",
+                    "time_origin": "icu_admission",
+                    "time_unit": "h",
+                },
+            }
+        ]
+    }
+
+    summary, out_dir = _exec_runner(
+        tmp_path,
+        cohort,
+        context,
+        requested_inputs=["death_time"],
+    )
+
+    audit = pd.read_csv(out_dir / "missingness_measurement_audit.csv")
+    row = audit.loc[audit["concept"] == "death_time"].iloc[0]
+    missingness = pd.read_csv(out_dir / "missingness_audit.csv").iloc[0]
+    denominator = pd.read_csv(out_dir / "analytic_denominators.csv")
+    observed = denominator.loc[
+        denominator["analysis_set"] == "observed:death_time"
+    ].iloc[0]
+    assert summary["status"] == "ok"
+    assert row["indicator_semantics"] == "conditional_event_time"
+    assert row["eligible_n"] == 3
+    assert row["not_applicable_n"] == 2
+    assert row["raw_value_missing_n"] == 3
+    assert row["value_missing_n"] == 1
+    assert missingness["missing_pct"] == pytest.approx(100.0 / 3.0)
+    assert observed["n_complete"] == 4
+
+
+def test_typed_conditional_event_time_before_origin_is_reported_for_protocol(
+    tmp_path: Path,
+) -> None:
+    cohort = pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3],
+            "death": [0, 1, 1],
+            "death_time": [np.nan, -2.0, 48.0],
+        }
+    )
+    context = {
+        "variables": [
+            {
+                "name": "death_time",
+                "observation_semantics": {
+                    "kind": "conditional_event_time",
+                    "event_status_column": "death",
+                    "representative_column": "death_time",
+                    "time_origin": "icu_admission",
+                    "time_unit": "h",
+                },
+            }
+        ]
+    }
+
+    summary, out_dir = _exec_runner(
+        tmp_path,
+        cohort,
+        context,
+        requested_inputs=["death_time"],
+    )
+
+    audit = pd.read_csv(out_dir / "missingness_measurement_audit.csv")
+    row = audit.loc[audit["concept"] == "death_time"].iloc[0]
+    assert summary["status"] == "ok"
+    assert summary["temporal_validity_audit"] == {
+        "status": "flagged_requires_downstream_protocol",
+        "reason_codes": ["event_time_before_declared_origin:death_time:1"],
+    }
+    assert summary["blocking_reason"] is None
+    assert row["before_origin_n"] == 1
 
 
 def test_binary_value_flag_without_event_count_remains_a_conflict(tmp_path: Path):

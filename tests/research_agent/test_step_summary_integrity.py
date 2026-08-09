@@ -392,7 +392,7 @@ def test_measurement_provenance_missing_audit_fails_closed(tmp_path: Path) -> No
     )
 
     assert [finding.detail["issue"] for finding in findings] == [
-        "measurement_provenance_source_invalid"
+        "measurement_provenance_host_generated"
     ]
 
 
@@ -438,7 +438,7 @@ def test_model_exposure_measurement_provenance_cannot_bypass_typed_inputs(
     )
 
     assert [finding.detail["issue"] for finding in findings] == [
-        "measurement_provenance_source_invalid"
+        "measurement_provenance_host_generated"
     ]
     assert findings[0].detail["planned_measured_columns"] == ["marker_measured"]
 
@@ -485,6 +485,9 @@ def test_measurement_provenance_rejects_non_cohort_source(tmp_path: Path) -> Non
         cohort_path=_write_measurement_cohort(tmp_path, counts=[1, 1, 0]),
     )
 
+    # A block that NAMES a different source is a claim about authority that
+    # contradicts the locked cohort -- still an error.  Only *absence* stopped
+    # being one, because the host derives the same facts itself.
     assert [finding.detail["issue"] for finding in findings] == [
         "measurement_provenance_source_invalid"
     ]
@@ -911,7 +914,7 @@ def test_measurement_provenance_component_qc_cannot_bypass_host_replay(
             cohort_path=cohort_path,
         )
         assert any(
-            finding.detail["issue"] == "measurement_provenance_source_invalid"
+            finding.detail["issue"] == "measurement_provenance_host_generated"
             for finding in missing
         )
 
@@ -962,7 +965,7 @@ def test_measurement_provenance_mixed_result_and_render_outputs_trigger(
     )
 
     assert [finding.detail["issue"] for finding in findings] == [
-        "measurement_provenance_source_invalid"
+        "measurement_provenance_host_generated"
     ]
 
 
@@ -983,7 +986,7 @@ def test_measurement_provenance_manifest_result_triggers(tmp_path: Path) -> None
         )
 
         assert [finding.detail["issue"] for finding in findings] == [
-            "measurement_provenance_source_invalid"
+            "measurement_provenance_host_generated"
         ]
 
 
@@ -1052,3 +1055,111 @@ def test_generic_interval_is_not_assigned_to_risk_when_effect_scale_is_present()
     )
 
     assert findings == []
+
+
+def test_a_correct_receipt_is_not_rejected_for_where_it_sits(tmp_path: Path) -> None:
+    """The real 2026-07-28 E1 Step 06 shape.
+
+    The Coder emitted a complete, correct provenance receipt -- the right
+    source, both pairs checked, zero invalid pairs and zero discordance over
+    all 94,458 rows -- but nested it under ``analysis`` instead of at the top
+    level.  The gate read only the top level, recorded ``reported_source:
+    null``, and killed a step whose numbers were right.  A correct answer must
+    not be rejected for its address.
+    """
+
+    nested = {"analysis": _measurement_summary()}
+
+    findings = StepSummaryIntegrityValidator().audit(
+        step=_measurement_step(),
+        step_summary=nested,
+        resolved_input_bindings={},
+        cohort_path=_write_measurement_cohort(tmp_path, counts=[1, 1, 0]),
+    )
+
+    assert findings == []
+
+
+def test_a_nested_receipt_is_still_checked_against_the_host_replay(
+    tmp_path: Path,
+) -> None:
+    """Finding it elsewhere must not mean trusting it.
+
+    The lookup is for tamper detection, not authority: a declared block that
+    disagrees with the locked cohort is caught wherever it was written.
+    """
+
+    nested = {"analysis": _measurement_summary(comparison_n=2)}
+
+    findings = StepSummaryIntegrityValidator().audit(
+        step=_measurement_step(),
+        step_summary=nested,
+        resolved_input_bindings={},
+        cohort_path=_write_measurement_cohort(tmp_path, counts=[1, 1, 0]),
+    )
+
+    assert findings, "a contradicting nested receipt must still be caught"
+    assert all(finding.severity == "error" for finding in findings)
+
+
+def test_the_host_generated_receipt_carries_the_locked_cohort_numbers(
+    tmp_path: Path,
+) -> None:
+    """An informational finding must be a fact, not a label.
+
+    Downgrading "no declared receipt" from error to info is only defensible
+    because the host derives the same facts from the locked cohort itself. So
+    the recorded receipt has to contain those facts.
+    """
+
+    findings = StepSummaryIntegrityValidator().audit(
+        step=_measurement_step(),
+        step_summary={"source_status_counts": {"observed": 2}},
+        resolved_input_bindings={},
+        cohort_path=_write_measurement_cohort(tmp_path, counts=[1, 1, 0]),
+    )
+
+    assert len(findings) == 1
+    receipt = findings[0]
+    assert receipt.severity == "info"
+    assert receipt.detail["issue"] == "measurement_provenance_host_generated"
+    assert receipt.detail["source"] == "COHORT_PARQUET"
+    assert receipt.detail["planned_measured_columns"] == ["signal_measured"]
+
+    (check,) = receipt.detail["checks"]
+    assert check["measured_column"] == "signal_measured"
+    assert check["resolved_count_column"] == "signal_n"
+    assert check["state"] == "checked"
+    # The three numbers the host replayed off the locked cohort itself.
+    assert check["host"] == {
+        "comparison_n": 3,
+        "invalid_pair_n": 0,
+        "discordant_n": 0,
+    }
+
+
+def test_a_broken_locked_cohort_still_fails_even_with_nothing_declared(
+    tmp_path: Path,
+) -> None:
+    """Absence stopped being an error; a bad cohort did not.
+
+    This is the guarantee the old fail-closed test was really protecting, and
+    it never depended on the agent declaring anything -- the host reads the
+    locked cohort either way.
+    """
+
+    findings = StepSummaryIntegrityValidator().audit(
+        step=_measurement_step(),
+        step_summary={},
+        resolved_input_bindings={},
+        cohort_path=_write_measurement_cohort(
+            tmp_path,
+            measured=[1, 0, 1],
+            counts=[0, 0, 1],  # measured=1 with count 0 -> discordant
+        ),
+    )
+
+    issues = {finding.detail["issue"] for finding in findings}
+    assert "measurement_provenance_count_flag_discordance" in issues
+    errors = [finding for finding in findings if finding.severity == "error"]
+    assert errors, "a discordant locked cohort must fail regardless of the summary"

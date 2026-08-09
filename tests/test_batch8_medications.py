@@ -119,13 +119,15 @@ def test_batch8_hirid_scope_matches_audit(cdict):
 def test_anticoagulation_group_includes_batch8(cdict):
     """Verify load_medications anticoagulation group references all batch-8
     anticoagulants, not just heparin."""
-    from easyicu import api
+    from easyicu.api import medications
 
     # Inspect string literals rather than depending on Black's choice of quote
     # style in the implementation.
     literals = {
         node.value
-        for node in ast.walk(ast.parse(pathlib.Path(api.__file__).read_text()))
+        for node in ast.walk(
+            ast.parse(pathlib.Path(medications.__file__).read_text())
+        )
         if isinstance(node, ast.Constant) and isinstance(node.value, str)
     }
     assert {"warfarin", "apixaban", "enoxaparin"} <= literals

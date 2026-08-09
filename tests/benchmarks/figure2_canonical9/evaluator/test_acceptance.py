@@ -117,7 +117,11 @@ def _expected_path(results_path: Path) -> Path:
     return results_path.parent.parent / "expected_execution_identity.json"
 
 
-def _install_valid_attempt_stubs(monkeypatch: pytest.MonkeyPatch) -> None:
+def _install_valid_attempt_stubs(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    tristate: str = "gate_reportable",
+) -> None:
     def parse_attempt(
         _cls: type[object],
         payload: bytes,
@@ -141,7 +145,7 @@ def _install_valid_attempt_stubs(monkeypatch: pytest.MonkeyPatch) -> None:
         acceptance,
         "verify_figure2_evaluation_attempt",
         lambda _run_dir, _attempt: SimpleNamespace(
-            scorecard=SimpleNamespace(tristate="gate_reportable")
+            scorecard=SimpleNamespace(tristate=tristate)
         ),
     )
 
@@ -167,6 +171,28 @@ def test_exact_nine_valid_aware_attempts_are_replay_accepted(
     assert report.status == "accepted"
     assert tuple(row.task_id for row in report.verified_tasks) == FIGURE2_TASK_IDS
     assert report.issues == ()
+
+
+@pytest.mark.parametrize("tristate", ["analysis_only", "diagnostic_only"])
+def test_replay_verified_but_nonreportable_tasks_are_not_paper_accepted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tristate: str,
+) -> None:
+    path = _write_results(tmp_path)
+    _install_valid_attempt_stubs(monkeypatch, tristate=tristate)
+
+    report = acceptance.evaluate_figure2_paper_acceptance(
+        path,
+        expected_execution_identity_path=_expected_path(path),
+    )
+
+    assert report.status == "invalid"
+    assert len(report.verified_tasks) == len(FIGURE2_TASK_IDS)
+    issues = [
+        issue for issue in report.issues if issue.code == "TASK_NOT_GATE_REPORTABLE"
+    ]
+    assert [issue.task_id for issue in issues] == list(FIGURE2_TASK_IDS)
 
 
 @pytest.mark.parametrize(

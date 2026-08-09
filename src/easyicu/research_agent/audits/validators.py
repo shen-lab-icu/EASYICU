@@ -49,6 +49,7 @@ from ..contracts.fraction_scale import (
     is_scale_descriptor_field,
     normalize_metric_key,
 )
+from ..contracts.model_tokens import canonical_association_method
 from ..replication.metrics import compare_metric_values
 from ..contracts.ordered_stratified import ordered_stratified_numeric_findings
 from ..schema import (
@@ -193,6 +194,57 @@ def cohort_hygiene_findings(
                         },
                     )
                 )
+
+    # (C) Elapsed-time columns that contradict their own anchor. The export
+    # writes ``<concept>_time`` as hours elapsed from the cohort anchor, so a
+    # negative value places the event before the anchor that defines the row.
+    #
+    # The rule is STRUCTURAL, not a named-column rule: it reads the export's
+    # own convention off the export. MEASURED on the real MIMIC-IV cohort --
+    # 21 elapsed-time columns, and 20 of them have min EXACTLY 0.00. The
+    # convention is not in doubt; one column breaks it, in 28 of 94,458 rows.
+    #
+    # Every one of the nine recorded tasks carries those same 28 rows and NONE
+    # was told. Only a survival analysis ever compares the columns, so h1 hit
+    # it 20 minutes into its primary step, wrote its own guard, raised, and
+    # died with four provider calls unspent -- having discovered a property of
+    # the cohort that was fixed before it was ever handed one.
+    #
+    # Reported, never enforced: 0.03 % of rows is a data-quality fact, not a
+    # reason to refuse an analysis, and which rows to drop or censor is the
+    # analyst's call. Same severity and impartiality as (A) and (B).
+    for column in df.columns:
+        if not str(column).lower().endswith("_time"):
+            continue
+        elapsed = pd.to_numeric(df[column], errors="coerce").dropna()
+        if elapsed.empty:
+            continue
+        negative_n = int((elapsed < 0).sum())
+        if not negative_n:
+            continue
+        findings.append(
+            ValidationFinding(
+                validator="cohort_auditor",
+                severity="warning",
+                message=(
+                    f"{negative_n} row(s) give column '{column}' a negative "
+                    "elapsed time, placing the event before the anchor the row "
+                    f"is measured from (minimum {float(elapsed.min()):.4g}). "
+                    "Every other elapsed-time column in this export starts at "
+                    "0. No row is dropped or censored — recorded for the "
+                    "analyst to judge before any time-to-event analysis."
+                ),
+                detail={
+                    "kind": "cohort_hygiene",
+                    "subkind": "elapsed_time_precedes_anchor",
+                    "column": str(column),
+                    "negative_n": negative_n,
+                    "minimum": float(elapsed.min()),
+                    "n_rows": int(len(df)),
+                    "impartial": True,
+                },
+            )
+        )
 
     return findings
 
@@ -824,6 +876,80 @@ def _concept_audit_script_excerpt(
     )
 
 
+def _concept_audit_step_roster_block(
+    plan_step_roster: Optional[Sequence[Mapping[str, Any]]],
+) -> str:
+    """The plan's other steps, so "nobody did this" can be distinguished.
+
+    Deliberately id/role/method only. The other steps' rule prose would be the
+    largest block in this prompt and would invite auditing them; what the
+    auditor needs is not their content but the fact that they exist and own
+    work, so a requirement discharged elsewhere stops looking undischarged.
+    """
+
+    if not plan_step_roster:
+        return ""
+    lines = []
+    for entry in plan_step_roster:
+        step_id = str(entry.get("step_id") or "").strip()
+        if not step_id:
+            continue
+        role = str(entry.get("planned_analysis_role") or "").strip()
+        method = str(entry.get("method") or "").strip()
+        lines.append(f"- {step_id} [{role or 'unspecified'}] {method}".rstrip())
+    if not lines:
+        return ""
+    return (
+        "Other steps in this locked plan (id, planned role, method):\n"
+        + "\n".join(lines)
+        + "\nYou are auditing ONLY the step named above. A requirement the plan "
+        "assigns to a different step in this roster is that step's obligation, "
+        "not a defect in this script: report it only if THIS step's own declared "
+        "contract carries it. In particular a cohort, eligibility, exclusion or "
+        "attrition rule is discharged by the step that owns the cohort contract, "
+        "and by the time this step runs that step has already run and its output "
+        "is an input here. Do not require this script to re-apply it.\n"
+    )
+
+
+def _concept_audit_endpoint_block(
+    study_endpoint: Optional[Mapping[str, Any]],
+) -> str:
+    """The declared endpoint, or an explicit statement that none was declared.
+
+    Says which case it is either way. Rendering nothing when nothing is declared
+    would let the auditor keep supplying the missing rule from the research
+    question -- silently, and differently each run, which is how one task got
+    blocked twice for opposite censoring choices. An absent declaration is a
+    fact about the plan and is reported as one.
+    """
+
+    if not study_endpoint:
+        return (
+            "Declared study endpoint: NONE. The plan declared no typed endpoint, "
+            "so no follow-up time, time origin, censoring rule or level set is "
+            "authoritative for this run. Do not supply one from the research "
+            "question and do not report the script for contradicting a rule that "
+            "is not declared anywhere; a missing declaration is the plan's "
+            "defect, not this script's.\n"
+        )
+    payload = {
+        key: value
+        for key, value in study_endpoint.items()
+        if key not in {"authorization", "schema_version"}
+    }
+    return (
+        "Declared study endpoint (from the locked plan -- AUTHORITATIVE):\n"
+        + json.dumps(payload, ensure_ascii=False, default=str, sort_keys=True)
+        + "\nThis declaration, not the research question and not your own reading "
+        "of it, defines the endpoint, the follow-up clock, its origin, what "
+        "censors follow-up, and the closed level set. A script implementing "
+        "exactly these fields is correct even if you would have designed the "
+        "study differently; report a mismatch only against a field printed "
+        "above, and name that field.\n"
+    )
+
+
 class LLMConceptAuditor:
     """Optional LLM-based semantic review after deterministic checks.
 
@@ -835,7 +961,7 @@ class LLMConceptAuditor:
 
     name = "llm_concept_auditor"
 
-    def __init__(self, llm: LLMClient, *, max_tokens: int = 1024) -> None:
+    def __init__(self, llm: LLMClient, *, max_tokens: int = 2_048) -> None:
         self.llm = llm
         self.max_tokens = int(max_tokens)
 
@@ -846,8 +972,16 @@ class LLMConceptAuditor:
         script_text: str,
         step: Optional[AnalysisStep] = None,
         provider_budget: Optional[StepProviderCallBudget] = None,
+        study_endpoint: Optional[Mapping[str, Any]] = None,
+        plan_step_roster: Optional[Sequence[Mapping[str, Any]]] = None,
     ) -> List[ValidationFinding]:
-        prompt = self._prompt(context=context, script_text=script_text, step=step)
+        prompt = self._prompt(
+            context=context,
+            script_text=script_text,
+            step=step,
+            study_endpoint=study_endpoint,
+            plan_step_roster=plan_step_roster,
+        )
         try:
             raw = complete_with_provider_budget(
                 budget=provider_budget,
@@ -911,6 +1045,8 @@ class LLMConceptAuditor:
         context: ResearchContext,
         script_text: str,
         step: Optional[AnalysisStep],
+        study_endpoint: Optional[Mapping[str, Any]] = None,
+        plan_step_roster: Optional[Sequence[Mapping[str, Any]]] = None,
     ) -> str:
         # A wide ICU context can exceed the prompt budget.  Never take the
         # first columns blindly: preserve plan-declared inputs and their
@@ -980,6 +1116,27 @@ class LLMConceptAuditor:
             variable_names={variable.name for variable in selected_variables},
         )
         safe_script = outbound_safe_script(step, script_text)
+        step_contract = (
+            {
+                key: value
+                for key, value in step.model_dump(mode="json").items()
+                if key
+                in {
+                    "step_id",
+                    "planned_analysis_role",
+                    "method",
+                    "inputs",
+                    "expected_outputs",
+                    "icu_rule_refs",
+                    "model_requirements",
+                    "input_consumption_contracts",
+                    "table_one_spec",
+                    "trajectory_stability_spec",
+                }
+            }
+            if step is not None
+            else {}
+        )
         return (
             "Review this generated analysis script for ICU concept-use risks "
             "that deterministic regex checks may miss. Focus only on: ordinal "
@@ -1007,6 +1164,24 @@ class LLMConceptAuditor:
             "host-owned fail-closed boundary: it raises on missing, invalid, or "
             "discordant measured/count pairs. Do not demand a second status "
             "guard or inspection of its successful receipt. "
+            # The host's own system prompt (rule 1) tells the agent that a total
+            # score MAY be modelled as a numeric covariate provided the choice is
+            # stated explicitly. Without the sentence below this auditor refused
+            # that exact compliance: a real run declared the coding on its own
+            # balance-table rows and was still blocked for "ordinal scores
+            # treated as continuous", so the two host layers published opposite
+            # contracts and the step died on the one the agent obeyed.
+            "The system rule permits an ordinal score to be modelled as a "
+            "numeric covariate when that choice is stated explicitly. So a "
+            "rank-preserving numeric representation used as an ADJUSTMENT "
+            "covariate, and labelled as such by the script's own output (for "
+            "example a scale or coding field carried on the covariate's row), "
+            "has met that requirement: do not report it as an "
+            "ordinal-treated-as-continuous defect on that basis alone. Report "
+            "instead an ordinal entered numerically with no such declaration "
+            "anywhere in the script, an ordinal serving as the primary exposure "
+            "or estimand without a declared coding, or an ordinal averaged "
+            "rather than summarised rank-preservingly. "
             "A value returned by a direct call imported exactly as "
             "`strict_numeric_input` from that same host module has already "
             "failed closed on every non-missing value that is unconvertible, "
@@ -1018,6 +1193,19 @@ class LLMConceptAuditor:
             "boundary, use issue_code "
             "`strict_numeric_nonfinite_guard_required` and include every "
             "affected name in `detail.variables`. "
+            # The sibling of the two boundaries above, for the event/time pair.
+            # Added with the boundary itself: a host helper the auditor does not
+            # recognise gets a "add a second guard" finding on the step that
+            # correctly called it, which is how a compliant script is blocked.
+            "A direct, uncaught call imported exactly as "
+            "`event_time_reconciliation_receipt` from "
+            "`easyicu.research_agent.methods.survival_inputs` is a host-owned "
+            "fail-closed boundary: it raises when an event row's time cannot "
+            "place it on the follow-up axis and when an event code falls outside "
+            "the declared closed set. Do not demand a second reconciliation of "
+            "the same pair, and do not report a censored row carrying no event "
+            "time as a defect -- that is the expected shape, and excluding on it "
+            "removes non-events from the denominator. "
             "A Step input whose exact ConceptDescriptor names a source_concept, "
             "analysis_window, and aggregation-compatible materialized column is "
             "a host-owned binding. Direct use of that exact input is therefore "
@@ -1076,10 +1264,67 @@ class LLMConceptAuditor:
             "without reconciling them to counts and denominators, or select an "
             "alternate per-stay summary in place of the authoritative exposure; "
             "those behaviors can change the displayed scientific result. "
+            "Do not assume that a generically named `n` field is the total "
+            "denominator when the typed upstream product does not declare that "
+            "meaning. If non-negative integer `n_nonmissing` and `missing_n` "
+            "components are present, `n_nonmissing / (n_nonmissing + missing_n)` "
+            "reconciles availability by construction; require a positive finite "
+            "component sum, but do not demand that it equal an otherwise "
+            "undefined `n`. "
+            "Read an instruction to display standardized feature patterns "
+            "together with an instruction not to recompute scaling as follows: "
+            "the script must not refit or replace upstream analytical "
+            "preprocessing, clustering, profiles, or model inputs, but it may "
+            "apply and label a local rendering-only normalization to values read "
+            "from the completed parent product. Do not call that display "
+            "transform a recomputation of upstream scientific scaling when raw "
+            "parent values remain the bound source-data authority and the "
+            "transformed values are not reused as a scientific artifact. Still "
+            "flag an undeclared transform, mutation of the authoritative parent "
+            "table, refitting of upstream analysis, or downstream reuse of the "
+            "rendering transform. "
+            "For clustering stability steps, distinguish an estimator's fit seed "
+            "(for example KMeans.random_state used to compare initializations) "
+            "from the silhouette sampling seed. A deterministic helper that "
+            "first materializes a bounded sample with "
+            "np.random.default_rng(seed) and then calls silhouette_score on the "
+            "sampled arrays is compliant even when estimator fit seeds vary; do "
+            "not report a silhouette-seed mismatch merely because a KMeans "
+            "initialization seed appears nearby. When the bound feature-matrix "
+            "product declares imputation/scaling upstream, direct use of that "
+            "artifact is the authoritative analytical representation: do not "
+            "demand a second scaling pass. If a profile step's contract binds "
+            "raw per-stay summaries as its reporting source, using that raw "
+            "source for descriptive profiles while using the transformed matrix "
+            "only for row/identity reconciliation is correct; flag only the "
+            "opposite direction (reporting transformed coordinates as raw clinical "
+            "summaries) or an undeclared transformation. A clustering stability "
+            "script that records an explicit threshold-based decision rule has "
+            "discharged that requirement; do not claim that the rule is absent "
+            "when its thresholds and Boolean decision are present in diagnostics "
+            "or the output table. "
             "If a generic outcome column such as 'death' is explicitly bound in "
             "the variable metadata to ICU mortality, hospital mortality or a "
             "fixed follow-up horizon, do not raise an error unless the script "
             "contradicts that binding or mixes incompatible outcome definitions.\n\n"
+            "The Planner-declared step contract below is binding scientific "
+            "authority. Audit whether the code implements that contract; do not "
+            "redesign its cohort, exposure, operator, threshold, input set, model "
+            "roster, or estimand merely because another defensible design exists. "
+            "Do not add a positive-only filter when the locked analysis needs both "
+            "exposure levels, and interpret comparison operators literally: for a "
+            "non-negative binary field, `>= 0` retains both zero and one. A "
+            "host-bound derived ConceptDescriptor may already incorporate its "
+            "`derived_from_concepts`; do not require the generated script to load "
+            "or filter on each raw component unless the Planner contract declares "
+            "that component separately. Conversely, report an ERROR when code "
+            "contradicts an explicit ICU rule or required model contract. "
+            "Measurement/count/source-status companions are audit-only metadata, "
+            "not automatic adjustment covariates. Flag them when they enter a model "
+            "design without Planner authority, including a measured flag together "
+            "with its deterministic missing-indicator complement, which makes an "
+            "intercept-bearing design rank-deficient. Their use in a separate "
+            "provenance audit is valid and should not be flagged.\n\n"
             "A named `full_stay` window is an administrative analysis span: it "
             "starts at ICU admission and ends at discharge, with `end_hours` "
             "serving only as an upper safety cap (the default cap is 720 hours). "
@@ -1100,10 +1345,42 @@ class LLMConceptAuditor:
             '{"findings":[{"severity":"info|warning|error",'
             '"message":"short finding","detail":{"issue_code":"other",'
             '"optional":"context"}}]}. '
-            "Use an empty findings list if no issue is visible.\n\n"
+            "Use an empty findings list if no issue is visible; return at most four "
+            "findings, with messages under 60 words and at most 20 variables each.\n\n"
             f"Step: {step.step_id if step else '(unknown)'}\n"
             f"Step intent: {step.intent if step else '(unknown)'}\n"
-            f"Target outcome: {context.target_outcome}\n"
+            # MEASURED (h1, sweep47_A): step 04_primary_landmark_survival_analysis
+            # was blocked `repair_failed` for "Prevalent exposure is only audited,
+            # not excluded before the 24-hour follow-up landmark" -- and the plan
+            # assigns that exclusion to 01_define_analysis_cohort, whose own
+            # icu_rule_refs read "Exclude prevalent events before the 24-hour
+            # landmark as a cohort-definition step". Step 01 had already run.
+            #
+            # This auditor sees ONE step's contract and no roster, so a
+            # study-level obligation discharged elsewhere is indistinguishable
+            # from one nobody discharged. It was making a whole-plan judgement
+            # from a step-local view, and the step it faulted was not the owner.
+            + _concept_audit_step_roster_block(plan_step_roster)
+            + "Planner-declared step contract:\n"
+            + json.dumps(
+                step_contract,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                default=str,
+            )
+            + "\n"
+            # MEASURED: without this block, this auditor blocked survival steps
+            # for using "los_hosp instead of the contract-required ICU discharge
+            # censoring represented by los_icu" -- a requirement that appears in
+            # no artifact of that run. `los_icu` is absent from every one of that
+            # task's 13 analysis plans, and the plans that stated a follow-up
+            # rule at all stated hospital discharge. Two runs of the same task
+            # were blocked for opposite choices. With nothing declared, the
+            # auditor was comparing the script against its own reading of the
+            # research question -- which is exactly the guess the endpoint
+            # declaration exists to remove, on both sides of the comparison.
+            + _concept_audit_endpoint_block(study_endpoint)
+            + f"Target outcome: {context.target_outcome}\n"
             "Named time windows:\n"
             + json.dumps(
                 [window.model_dump(mode="json") for window in context.time_windows],
@@ -2677,6 +2954,16 @@ def _reclassify_flag_only_plausibility_range_findings(
             "locks another action.",
         )
         detail.setdefault("range_policy_authority", "concept_descriptor_flag_only")
+
+        # This adapter owns retention only. The deterministic plausibility gate
+        # separately owns comparison, preservation, and receipt delivery.
+        detail.setdefault("retain_and_flag_half_satisfied", "retain")
+        detail.setdefault(
+            "flag_obligation",
+            "The script still owes a structured out-of-range count or "
+            "indicator in its canonical step receipt; this downgrade is not "
+            "evidence it exists. The deterministic gate enforces it.",
+        )
         reclassified.append(
             finding.model_copy(update={"severity": "warning", "detail": detail})
         )
@@ -2756,6 +3043,22 @@ class CrossStepCohortLockValidator:
         "runner_repaired",
     }
     _COUNT_PATHS: tuple[tuple[str, ...], ...] = (
+        # First, because it is the only entry the HOST writes. Everything below
+        # is a spelling this validator hopes a producer happened to choose, and
+        # a hoped-for name can mean something else in another producer's
+        # vocabulary. ``n_total`` is exactly that: 8 recorded robustness
+        # summaries use it for the analysis cohort, and one uses it for the
+        # number of variants compared -- so the cohort-lock guard read an
+        # analysis cohort of 2 against a locked 1,000, with the correct value
+        # sitting in the same file under this key.
+        #
+        # Measured over 819 recorded summaries: 53 carry ``analysis_cohort_n``.
+        # Of those the search below lands on ``n_total`` 35 times, ``cohort_n``
+        # 3 times, and on NOTHING 15 times -- so in 15 the guard was blind while
+        # the value it needed was present. Putting this first corrects the one
+        # disagreement, gives the 15 a reading, and leaves the 37 that already
+        # agree untouched.
+        ("analysis_cohort_n",),
         ("n_final_cohort",),
         ("final_analytic_cohort_n",),
         ("final_cohort_n",),
@@ -3847,9 +4150,12 @@ class PrimaryModelContractValidator:
                 "analysis_role",
                 "analysis_set",
             ):
-                if cls._normalise(reported[field]) != cls._normalise(
-                    requirement[field]
-                ):
+                reported_value = reported[field]
+                required_value = requirement[field]
+                if field == "method_family":
+                    reported_value = canonical_association_method(reported_value)
+                    required_value = canonical_association_method(required_value)
+                if cls._normalise(reported_value) != cls._normalise(required_value):
                     mismatches[field] = {
                         "expected": requirement[field],
                         "reported": reported[field],
@@ -3984,7 +4290,8 @@ class PrimaryModelContractValidator:
         )
         if method in cls._FIGURE_ONLY_METHODS or figure_only_outputs:
             return False
-        supported_direct_method = method in (
+        canonical_method = canonical_association_method(method)
+        supported_direct_method = canonical_method in (
             cls._BINARY_MODEL_FAMILIES | cls._CONTINUOUS_MODEL_FAMILIES
         )
         if has_planned_requirements:
@@ -4388,6 +4695,30 @@ class PrimaryModelContractValidator:
         interval_method = cls._normalise(metadata.get("interval_method"))
         point_only = penalized and interval_method == "unavailable"
         issues: List[Dict[str, Any]] = []
+        row_interval_methods = {
+            normalised
+            for raw in rows.get(
+                "interval_method",
+                pd.Series(index=rows.index, dtype=object),
+            )
+            if pd.notna(raw)
+            and (normalised := cls._normalise(raw))
+            not in {"nan", "none", "not_applicable_reference", "null"}
+        }
+        if (
+            interval_method
+            and interval_method not in {"nan", "none", "null"}
+            and row_interval_methods
+            and row_interval_methods != {interval_method}
+        ):
+            issues.append(
+                {
+                    "model_id": model_id,
+                    "issue": "interval_method_contract_mismatch",
+                    "contract_interval_method": metadata.get("interval_method"),
+                    "term_interval_methods": sorted(row_interval_methods),
+                }
+            )
         effect_columns = [
             column
             for column in ("estimate", "odds_ratio", "or")
@@ -5041,15 +5372,23 @@ class PrimaryModelContractValidator:
             issues.append(
                 {
                     "issue": "missing_term_level_coefficient_table",
+                    # Named from what ``_coefficient_rows`` actually accepts.
+                    # It used to say ``estimate_or_odds_ratio``, which is a
+                    # description of the value and not a column this reader
+                    # takes: a table written to that spelling was skipped, and
+                    # the step was told again that its table was missing. A
+                    # fail-closed message whose only implied fix does not
+                    # satisfy the check is a trap, and the repair loop reading
+                    # it has no other source of truth.
                     "required_columns": [
                         "model_id",
                         "term",
                         "term_role",
                         "source_variable",
-                        "estimate_or_odds_ratio",
                         "ci_low",
                         "ci_high",
                     ],
+                    "required_effect_column_one_of": ["estimate", "odds_ratio", "or"],
                 }
             )
         else:
@@ -5584,7 +5923,6 @@ class PrimaryModelContractValidator:
                 declared_categorical.update(
                     cls._normalise(value) for value in raw if str(value or "").strip()
                 )
-
         cells: List[Dict[str, Any]] = []
         for covariate in covariates:
             if covariate not in frame.columns:
@@ -5597,8 +5935,9 @@ class PrimaryModelContractValidator:
                     .map(cls._normalise)
                     .eq(cls._normalise(covariate))
                 ]
-                terms = [str(value) for value in source_rows.get("term", [])]
-                modeled_as_categorical = len(source_rows) > 1 or any(
+                source_rows = source_rows[~source_rows["_term_role"].eq("availability")]
+                terms = {str(value) for value in source_rows.get("term", [])}
+                modeled_as_categorical = len(terms) > 1 or any(
                     re.search(r"(?:\bC\s*\(|\[T\.|one[_ -]?hot|dummy)", term, re.I)
                     for term in terms
                 )
@@ -6102,8 +6441,7 @@ class CrossStepReconciliationTraceValidator:
                             {
                                 "row": label,
                                 "issue": (
-                                    f"registered_{statistic}_field_must_be_"
-                                    f"{statistic}"
+                                    f"registered_{statistic}_field_must_be_{statistic}"
                                 ),
                                 "reported": reported_field,
                             }
@@ -7445,6 +7783,7 @@ class FigureSourceDataValidator:
         "row_type",
         "group_type",
         "estimate_type",
+        "estimate_unit",
         "effect_scale",
         "model_id",
         "source_model_id",
@@ -8473,21 +8812,36 @@ class FigureSourceDataValidator:
             )
         ):
             return product
-        if not {"term_role", "source_variable"} <= set(contract_frame.columns):
-            return product
-        exposure_rows = contract_frame.loc[
-            contract_frame["term_role"].map(cls._normalise).eq("exposure")
-        ]
-        if exposure_rows.empty:
-            return product
-        for _, row in exposure_rows.iterrows():
-            contract = contract_by_model.get(str(row.get("model_id") or "").strip())
-            if (
-                contract is None
-                or str(row.get("source_variable") or "").strip()
-                != str(contract.get("exposure_source") or "").strip()
-            ):
+        if {"term_role", "source_variable"} <= set(contract_frame.columns):
+            exposure_rows = contract_frame.loc[
+                contract_frame["term_role"].map(cls._normalise).eq("exposure")
+            ]
+            if exposure_rows.empty:
                 return product
+            for _, row in exposure_rows.iterrows():
+                contract = contract_by_model.get(str(row.get("model_id") or "").strip())
+                if (
+                    contract is None
+                    or str(row.get("source_variable") or "").strip()
+                    != str(contract.get("exposure_source") or "").strip()
+                ):
+                    return product
+        elif "exposure" in contract_frame.columns:
+            # One-row-per-model display tables may use the exact exposure
+            # source as their row identity instead of re-exporting the richer
+            # term-level ``term_role``/``source_variable`` columns.  Accept
+            # that compact shape only when every row maps exactly to a fitted
+            # host model contract and preserves its locked exposure source.
+            for _, row in contract_frame.iterrows():
+                contract = contract_by_model.get(str(row.get("model_id") or "").strip())
+                if (
+                    contract is None
+                    or str(row.get("exposure") or "").strip()
+                    != str(contract.get("exposure_source") or "").strip()
+                ):
+                    return product
+        else:
+            return product
         tier = next(iter(tiers))
         kind, name = parsed
         if effect_estimand_tier(product) is not None:
@@ -8532,9 +8886,7 @@ class FigureSourceDataValidator:
             interval_columns.setdefault(
                 prefix,
                 {"lower": [], "upper": []},
-            )[
-                side
-            ].append(str(column))
+            )[side].append(str(column))
         normalised_points = {
             str(column): cls._normalise(column) for column in ratio_point_columns
         }
@@ -9625,6 +9977,7 @@ class FigureSourceDataValidator:
         table_products: Dict[Path, str] = dict(same_step_tables)
         table_frames: Dict[Path, pd.DataFrame] = {}
         declared_table_aliases: Dict[str, Set[Path]] = {}
+        declared_statistic_artifacts: Dict[str, Set[str]] = {}
         bound_tabular_paths: Set[Path] = set()
         unsupported_value_inputs: List[str] = []
         if resolved_input_bindings is not None:
@@ -9657,14 +10010,14 @@ class FigureSourceDataValidator:
                         invalid_bound_evidence.append(raw_input)
                         continue
                     bound_path = item["path"]
-                    evidence_path = item.get("evidence_path")
-                    if isinstance(evidence_path, Path):
-                        declared_table_aliases.setdefault(
-                            evidence_path.name, set()
-                        ).add(bound_path.resolve())
-                    declared_table_aliases.setdefault(str(raw_input), set()).add(
-                        bound_path.resolve()
-                    )
+                    for alias in self._bound_artifact_aliases(
+                        input_key=str(raw_input),
+                        product=product_name,
+                        evidence_path=item.get("evidence_path"),
+                    ):
+                        declared_table_aliases.setdefault(alias, set()).add(
+                            bound_path.resolve()
+                        )
                 elif (
                     not self._safe_regular_run_file(bound_path, run_dir=run_dir)
                     or self._sha256_file(bound_path) != expected_sha
@@ -9700,6 +10053,10 @@ class FigureSourceDataValidator:
                         for family in result_families
                     ):
                         required_statistics[raw_input] = (product_name, value)
+                        declared_statistic_artifacts.setdefault(
+                            bound_path.name,
+                            set(),
+                        ).add(raw_input)
                     else:
                         unsupported_value_inputs.append(raw_input)
                     continue
@@ -10144,6 +10501,21 @@ class FigureSourceDataValidator:
                     group_df = source_df.loc[
                         declared_row_names.eq(declared_name)
                     ].copy()
+                    declared_statistic_ids = declared_statistic_artifacts.get(
+                        declared_name,
+                        set(),
+                    )
+                    if declared_statistic_ids and all(
+                        statistic_id in source_statistic_matches
+                        for statistic_id in declared_statistic_ids
+                    ):
+                        # A source row may truthfully name the exact JSON file
+                        # backing a digest-verified typed statistic.  It is not
+                        # an upstream *table*, so do not force that provenance
+                        # claim through the tabular basename resolver.  The
+                        # statistic payload/value checks below still have to
+                        # pass before the source receives credit.
+                        continue
                     group_tables = sorted(
                         {
                             path
@@ -10157,7 +10529,7 @@ class FigureSourceDataValidator:
                     declared_parent_step: Optional[str] = None
                     if "source_step_id" in group_df.columns:
                         declared_step_values = group_df["source_step_id"].map(
-                            lambda item: (str(item).strip() if pd.notna(item) else "")
+                            lambda item: str(item).strip() if pd.notna(item) else ""
                         )
                         declared_parent_steps = {
                             item for item in declared_step_values if item
@@ -10773,6 +11145,51 @@ class FigureSourceDataValidator:
             and "\\" not in text
         )
 
+    @staticmethod
+    def _bound_artifact_aliases(
+        *,
+        input_key: str,
+        product: str,
+        evidence_path: Any,
+    ) -> Set[str]:
+        """The names one bound table answers to besides its own filename.
+
+        The host publishes the same artifact under four names: the typed input
+        key the step declared it as (``table:cohort_flow``), the typed product
+        id inside that key (``cohort_flow``), the file the producing step wrote
+        (``cohort_flow.csv``) and the evidence copy taken of it.  A figure that
+        names its parent with any of them is naming the same digest-verified
+        bytes, so all four must resolve; resolving only some makes the verdict
+        depend on which spelling the producer happened to pick, which is not a
+        property of the figure.  Measured on 2026-07-29: a source-data bundle
+        that reconciled row for row against both of its parents was refused as
+        ``declared source table event_timing_audit was not found in an upstream
+        step`` -- the product id was the one name that did not resolve.
+
+        The written filename is deliberately *not* returned here.  The caller
+        already matches a candidate whose ``name`` equals the declared name --
+        it has to, because a legacy run has no bindings and no aliases at all --
+        so repeating it would be a line that can never decide anything.
+
+        This is vocabulary, not authority.  Aliases *filter* tables the step
+        already bound, so none can reach a table the step did not bind; a name
+        resolving to more than one artifact is still refused as ambiguous
+        lineage; and the rows behind a resolved name are still compared value by
+        value against the parent's bytes.  Derived spellings stay out for the
+        same reason: the file stem would resolve the measured case (product id
+        and stem are the same word there) while also admitting names the host
+        never writes, since the audit runner maps product ``measurement_audit``
+        onto ``missingness_measurement_audit.csv``.
+        """
+
+        names = {
+            str(input_key or "").strip(),
+            str(product or "").strip(),
+        }
+        if isinstance(evidence_path, Path):
+            names.add(evidence_path.name)
+        return {name for name in names if name}
+
     @classmethod
     def _table_step_id(cls, path: Path, *, run_dir: Path) -> str:
         try:
@@ -11006,6 +11423,114 @@ class FigureSourceDataValidator:
                 seen.add(rp)
                 resolved.append(path)
         return resolved
+
+    @classmethod
+    def _identify_rows_uniquely(
+        cls,
+        *,
+        source: pd.DataFrame,
+        upstream: pd.DataFrame,
+        key_cols: tuple,
+    ) -> tuple:
+        """Widen ``key_cols`` until it identifies one row *upstream*.
+
+        Returns ``(key_cols, [])`` once every source row can match at most one
+        parent row, or ``(None, duplicate_examples)`` when no available
+        combination gets there.  Refusing is the point: a value comparison
+        across a many-to-many join reports differences produced by the join
+        itself, which reads as a fabricated figure and is impossible to act on.
+
+        Uniqueness is required on the upstream side only.  The upstream table
+        is the authority each source row is checked against, so one duplicated
+        parent key is what makes "which row authenticates this one?"
+        unanswerable.  A duplicated *source* key is not that: several source
+        rows citing the same parent row is a many-to-one join, and every one of
+        them is still compared against that parent's values.  It is also a
+        shape the projection format supports on purpose -- two panels drawing
+        the same parent row each trace it -- so demanding uniqueness on both
+        sides rejects a truthful long-form projection for a hazard it does not
+        have.  (It did: requiring it broke exactly those cases.)
+        """
+
+        def _duplicates(frame: pd.DataFrame, cols: tuple) -> list:
+            present = [col for col in cols if col in frame.columns]
+            if not present or frame.empty:
+                return []
+            # Built row by row rather than with astype(str).agg: a row-wise
+            # agg re-infers dtypes and hands back the original floats.
+            keys = pd.Series(
+                [
+                    "|".join(str(value) for value in row)
+                    for row in frame[present].itertuples(index=False, name=None)
+                ],
+                index=frame.index,
+                dtype=object,
+            )
+            duplicated = keys[keys.duplicated(keep=False)]
+            return sorted(set(duplicated.tolist()))[:10]
+
+        def _identifies_one_parent(cols: tuple) -> bool:
+            return not _duplicates(upstream, cols)
+
+        if _identifies_one_parent(key_cols):
+            return key_cols, []
+
+        # Any column shared by both frames may help identify the row. Value
+        # columns are not excluded here the way they are when *choosing* a
+        # key: a level indicator such as ``exposure_level`` is numeric and is
+        # exactly what separates the duplicated rows. Correctness comes from
+        # the resulting key being unique, not from the columns' names.
+        shared = [
+            col
+            for col in source.columns
+            if col in upstream.columns and col not in key_cols
+        ]
+
+        def _is_measure(col: str) -> bool:
+            """A column that is fully numeric on both sides reads as a value."""
+
+            left = pd.to_numeric(source[col], errors="coerce")
+            right = pd.to_numeric(upstream[col], errors="coerce")
+            return bool(left.notna().all() and right.notna().all())
+
+        measures = {col: _is_measure(col) for col in shared}
+        remaining = list(shared)
+        widened = tuple(key_cols)
+        while remaining:
+            # Greedy, preferring a real identifier over a measurement: a level
+            # indicator separates the rows and reads as a key, whereas a
+            # confidence bound happens to be distinct and does not. Either
+            # yields a correct join -- a figure that altered the column would
+            # fail to join at all rather than pass -- but the reported key is
+            # also the explanation a reader gets, so it should name what
+            # actually distinguishes the rows.
+            best_col = min(
+                remaining,
+                key=lambda col: (
+                    measures[col],
+                    len(_duplicates(upstream, (*widened, col))),
+                    col,
+                ),
+            )
+            candidate = (*widened, best_col)
+
+            def _ambiguity(cols: tuple) -> int:
+                return len(_duplicates(upstream, cols))
+
+            if _ambiguity(candidate) >= _ambiguity(widened):
+                # The best remaining column separates nothing, so no other
+                # will either -- greedy already picked the most separating.
+                break
+            widened = candidate
+            remaining.remove(best_col)
+            if _identifies_one_parent(widened):
+                return widened, []
+
+        return None, {
+            "source": _duplicates(source, key_cols),
+            "upstream": _duplicates(upstream, key_cols),
+            "attempted_key": list(widened),
+        }
 
     @classmethod
     def _compare_source_to_upstream(
@@ -11246,6 +11771,45 @@ class FigureSourceDataValidator:
         for key in key_cols:
             source[key] = source[key].astype(str)
             upstream[key] = upstream[key].astype(str)
+
+        # A join key must IDENTIFY a row, not merely vary across rows. Both
+        # selectors above could hand back a non-unique key: the named
+        # allowlist does it whenever a table repeats a term across models
+        # (already noted on _COMPOSITE_KEY_COLUMNS), and the structural
+        # selector accepts any shared column that is "mostly distinct"
+        # (>= 50% unique), which is not the same as unique.
+        #
+        # Measured consequence: a three-row distribution table keyed on
+        # ``row_role`` -- two ``exposure_level`` rows plus one ``overall`` --
+        # scored 2/3 and was accepted. pandas then joined the duplicates
+        # many-to-many, so exposure level 0 in the figure's source data was
+        # compared against level 1 upstream, and EVERY numeric column was
+        # reported as disagreeing between two byte-identical files. The
+        # figure was rejected for fabricating values it had copied exactly.
+        #
+        # Extend the key with further shared columns until it identifies a
+        # row. If it cannot be made unique, say so precisely rather than
+        # compare cross-matched rows and report the differences as evidence
+        # of a forged figure.
+        key_cols, duplicate_examples = cls._identify_rows_uniquely(
+            source=source,
+            upstream=upstream,
+            key_cols=key_cols,
+        )
+        if key_cols is None:
+            return {
+                "ok": False,
+                "reason": "ambiguous_join_key",
+                "upstream_table": upstream_path.name,
+                "duplicate_key_values": duplicate_examples,
+                "message": (
+                    f"no key identifies a single row of {upstream_path.name}, "
+                    "so no source row can be traced to one parent row; "
+                    "comparing values across a many-to-many join would report "
+                    "differences that are an artefact of the join, not of the "
+                    "figure"
+                ),
+            }
 
         def _key_set(frame: pd.DataFrame) -> Set[tuple[str, ...]]:
             return set(
@@ -12007,7 +12571,115 @@ class FigureSourceDataValidator:
         unverified_source_columns = sorted(
             source_value_columns - set(verified_value_mappings)
         )
+        if not source_value_columns and not upstream_value_columns:
+            # A DESIGN TABLE HAS NOTHING TO VERIFY, AND DEMANDING IT VERIFIES
+            # NOTHING.
+            #
+            # The rule above exists so a figure cannot claim a number no bound
+            # parent supports. A parent carrying no value column supports no
+            # number, so "verify its values" is a demand nothing can meet: an
+            # exact row-for-row copy of it fails here with
+            # ``no_verifiable_values``, which is what happened to the robustness
+            # renderer's specification-grid companion on e2 (2026-08-03) -- the
+            # grid is the plan's own description of what each specification
+            # CHANGES (``spec_id``/``axis``/``description`` plus override
+            # columns that are empty), and none of that is a result.
+            #
+            # The filter that already exists for this -- ``result_families``
+            # deciding a bound table is not a value source -- is skipped
+            # whenever the step declares no result family, and a rendering-only
+            # figure step never declares one: measured over every recorded plan,
+            # 912 of 1052 visualization steps (87%). So the guard that would
+            # have excused this case is disabled in exactly the case it is for.
+            #
+            # BOTH SIDES MUST BE VALUE-LESS. If the upstream carries values and
+            # the source does not, the source dropped them and must still fail
+            # -- which is why this is not keyed on the source alone.
+            #
+            # AND THE COPY MUST BE EXACT ON EVERY SHARED COLUMN, not only on
+            # ``_TEXT_COLUMNS``. That list is a fixed 22 names and the grid's
+            # own ``description`` -- the sentence the plan registered for a
+            # specification -- is not among them, so the text check above would
+            # have let an altered description through. With no value to verify,
+            # faithful reproduction is the only verification left, so it is the
+            # one this branch performs.
+            infidelities: List[Dict[str, Any]] = []
+            for column in sorted(set(source.columns) & set(upstream.columns)):
+                if column in cls._TEXT_COLUMNS:
+                    continue  # already compared, and already reported above
+                left = _merged_source(column).fillna("").astype(str).str.strip()
+                right = _merged_upstream(column).fillna("").astype(str).str.strip()
+                disagreeing = left != right
+                if disagreeing.any():
+                    index = int(disagreeing[disagreeing].index[0])
+                    infidelities.append(
+                        {
+                            "column": column,
+                            "key": _format_key(merged.loc[index]),
+                            "source": str(left.loc[index]),
+                            "upstream": str(right.loc[index]),
+                        }
+                    )
+            if infidelities:
+                return {
+                    "ok": False,
+                    "reason": "source_values_disagree",
+                    "key_column": key_label,
+                    "upstream_table": upstream_path.name,
+                    "mismatches": infidelities[:20],
+                    "n_mismatches": len(infidelities),
+                    "message": (
+                        f"{upstream_path.name} carries no value to verify, so the "
+                        "source data must reproduce it exactly; it does not"
+                    ),
+                }
+            return {
+                "ok": True,
+                "reason": "valueless_parent_reproduced",
+                "source_table": source_path.name,
+                "upstream_table": upstream_path.name,
+                "key_column": key_label,
+                "n_source_rows": int(len(source_df)),
+                "verified_value_mappings": {},
+                "join_mode": (
+                    "structural_fallback"
+                    if used_structural_fallback
+                    else "declared_key"
+                ),
+            }
         if not verified_value_mappings or unverified_source_columns:
+            # WHY no column matched, when the answer is mechanical.
+            #
+            # A source table that carries SEVERAL rows per upstream row -- one
+            # per panel, per statistic, per level -- holds values from several
+            # upstream columns in one source column, so by construction no
+            # single upstream vector matches it and every column arrives here
+            # unverified. The reader is then told which columns failed but not
+            # the one fact that explains all of them, and the repair that
+            # follows tends to rename columns, which the Coder prompt already
+            # says "is not a repair".
+            #
+            # MEASURED over the recorded corpus: 12 of 361 source-data tables
+            # carry duplicate keys, and 6 of the 8 whose step status is known
+            # failed. It is not fatal on its own -- 2 passed -- so this reports
+            # the shape and does not judge it.
+            #
+            # m1's 09_missingness_audit_figure, 2026-08-04: 6 rows over 3
+            # upstream rows, one per panel, so ``count`` alternated between the
+            # upstream's ``missing_n`` and ``measured_n``.
+            rows_per_upstream_row: dict[str, object] = {}
+            try:
+                distinct_keys = int(source[list(key_cols)].drop_duplicates().shape[0])
+                if distinct_keys and len(source) > distinct_keys:
+                    rows_per_upstream_row = {
+                        "source_rows_per_upstream_row": round(
+                            len(source) / distinct_keys, 3
+                        ),
+                        "n_source_rows": int(len(source)),
+                        "n_distinct_source_keys": distinct_keys,
+                    }
+            except Exception:  # noqa: BLE001 - a diagnostic must never fail the audit
+                rows_per_upstream_row = {}
             if unverified_source_columns:
                 verification_detail = (
                     "these source-data value columns were not verified against "
@@ -12015,6 +12687,14 @@ class FigureSourceDataValidator:
                     f"{unverified_source_columns}; one verified column cannot "
                     "authenticate another renamed, formatted, or transformed value"
                 )
+                if rows_per_upstream_row:
+                    verification_detail += (
+                        f"; the source carries {rows_per_upstream_row['n_source_rows']}"
+                        f" rows over {rows_per_upstream_row['n_distinct_source_keys']}"
+                        " upstream rows, so one source column holds values from"
+                        " several upstream columns and no single upstream vector"
+                        " can match it"
+                    )
             else:
                 verification_detail = (
                     "no source-data value column was available for a real "
@@ -12029,6 +12709,7 @@ class FigureSourceDataValidator:
                 "verified_source_value_columns": sorted(verified_value_mappings),
                 "verified_value_mappings": verified_value_mappings,
                 "ambiguous_value_mappings": ambiguous_value_mappings,
+                **rows_per_upstream_row,
                 "message": (
                     f"source rows joined to {upstream_path.name} on {key_label}, "
                     f"but {verification_detail}"

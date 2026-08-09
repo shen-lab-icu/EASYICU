@@ -33,6 +33,7 @@ from ..schema import (
     ResearchContext,
     VariableRole,
 )
+from ..contracts.post_analysis import EValueConversionSpec
 from ..planning.robustness_contract import RobustnessSpec
 
 # ---------------------------------------------------------------------------
@@ -198,9 +199,9 @@ class BudgetAwareScriptedMockLLMClient(ScriptedMockLLMClient):
         register_offline_test_client(self)
 
     def complete(self, messages: Sequence[LLMMessage], **kwargs: Any) -> str:
-        from ..authority.provider_budget import consume_active_transport_attempt
+        from ..authority.provider_budget import consume_active_provider_handoff
 
-        consume_active_transport_attempt()
+        consume_active_provider_handoff()
         self.calls.append((list(messages), dict(kwargs)))
         if not self.responses:
             raise RuntimeError("scripted mock response sequence exhausted")
@@ -449,8 +450,14 @@ def _mock_plan_json(ctx: ResearchContext) -> str:
     # instead of the old ambiguous ``logistic_or_KM`` placeholder.
     steps = [
         (
-            step.model_copy(update={"method": "logistic_regression"})
+            step.model_copy(
+                update={
+                    "method": "logistic_regression",
+                    "scientific_capability": "association_freeform_v1",
+                }
+            )
             if step.step_id == "04_primary_association"
+            and analysis_type.key == "association_study"
             else (
                 step.model_copy(
                     update={
@@ -533,6 +540,15 @@ def _mock_plan_json(ctx: ResearchContext) -> str:
         research_question=ctx.research_question,
         analysis_type=analysis_type.key,
         steps=steps,
+        evalue_conversion_spec=(
+            EValueConversionSpec(
+                baseline_risk_column="outcome_rate",
+                population_column="population",
+                baseline_population="analysis_cohort",
+            )
+            if analysis_type.key == "association_study"
+            else None
+        ),
         rationale=(
             f"Mock plan generated from ResearchContext for analysis type "
             f"'{analysis_type.key}'. The outer loop stays stable, while inner "
@@ -754,6 +770,97 @@ def _pick_primary_predictor(
     return None
 
 
+def _with_mock_plausibility_receipt(code: str) -> str:
+    """Make deterministic analysis fixtures honor the mounted range contract.
+
+    The offline mock is part of the executable development path, so it must
+    obey the same host-owned contract as a real Coder response.  Appending one
+    case-neutral block also keeps every analysis template from reimplementing
+    the receipt policy independently.
+    """
+
+    receipt_block = r"""
+    # ---- Host-owned flag-only plausibility receipt ----
+    _easyicu_manifest_path = Path(os.environ["EASYICU_RESOLVED_INPUTS_JSON"])
+    _easyicu_document = json.loads(
+        _easyicu_manifest_path.read_text(encoding="utf-8")
+    )
+    _easyicu_manifest = _easyicu_document.get("manifest", _easyicu_document)
+    _easyicu_raw_contracts = _easyicu_manifest["raw_input_contracts"]["contracts"]
+    if not isinstance(_easyicu_raw_contracts, dict):
+        raise RuntimeError("raw_input_contracts.contracts must be an object")
+
+    _easyicu_plausibility_audit = {}
+    for _easyicu_column, _easyicu_contract in _easyicu_raw_contracts.items():
+        if not isinstance(_easyicu_contract, dict):
+            raise RuntimeError(
+                f"raw-input contract for {_easyicu_column!r} must be an object"
+            )
+        _easyicu_bounds = _easyicu_contract.get("analysis_plausibility_range")
+        _easyicu_policy = _easyicu_contract.get("plausibility_policy")
+        if not (
+            isinstance(_easyicu_bounds, dict)
+            and isinstance(_easyicu_policy, dict)
+            and _easyicu_policy.get("out_of_range_action") == "retain_and_flag"
+        ):
+            continue
+        if _easyicu_column not in df.columns:
+            raise RuntimeError(
+                f"ranged raw-input column {_easyicu_column!r} is absent"
+            )
+        _easyicu_source = df[_easyicu_column]
+        _easyicu_numeric = pd.to_numeric(_easyicu_source, errors="coerce")
+        _easyicu_observed = _easyicu_source.notna() & _easyicu_numeric.notna()
+        _easyicu_minimum = _easyicu_bounds.get("minimum")
+        _easyicu_maximum = _easyicu_bounds.get("maximum")
+        _easyicu_below = (
+            int(
+                (
+                    _easyicu_observed
+                    & (_easyicu_numeric < _easyicu_minimum)
+                ).sum()
+            )
+            if _easyicu_minimum is not None
+            else 0
+        )
+        _easyicu_above = (
+            int(
+                (
+                    _easyicu_observed
+                    & (_easyicu_numeric > _easyicu_maximum)
+                ).sum()
+            )
+            if _easyicu_maximum is not None
+            else 0
+        )
+        _easyicu_plausibility_audit[_easyicu_column] = {
+            "policy": "retain_and_flag",
+            "below_minimum_n": _easyicu_below,
+            "above_maximum_n": _easyicu_above,
+            "out_of_range_n": _easyicu_below + _easyicu_above,
+        }
+
+    _easyicu_summary_path = out_dir / "step_summary.json"
+    _easyicu_summary = json.loads(
+        _easyicu_summary_path.read_text(encoding="utf-8")
+    )
+    if _easyicu_plausibility_audit:
+        _easyicu_summary["plausibility_audit"] = _easyicu_plausibility_audit
+    else:
+        _easyicu_summary.pop("plausibility_audit", None)
+    _easyicu_summary_path.write_text(
+        json.dumps(
+            _easyicu_summary,
+            indent=2,
+            ensure_ascii=False,
+            default=str,
+        ),
+        encoding="utf-8",
+    )
+    """
+    return code.rstrip() + "\n\n" + textwrap.dedent(receipt_block).strip() + "\n"
+
+
 def _mock_code_for_step(ctx: ResearchContext, prompt: str) -> str:
     """Return a minimal, ICU-aware analysis script for the requested step.
 
@@ -795,23 +902,29 @@ def _mock_code_for_step(ctx: ResearchContext, prompt: str) -> str:
         primary_pred = (
             _pick_primary_predictor(ctx, outcome=outcome) or score_var or "age"
         )
-        return _mock_code_primary_association(
-            ctx=ctx,
-            step_id=step_id,
-            outcome=outcome,
-            predictor=primary_pred,
+        return _with_mock_plausibility_receipt(
+            _mock_code_primary_association(
+                ctx=ctx,
+                step_id=step_id,
+                outcome=outcome,
+                predictor=primary_pred,
+            )
         )
     if "prediction_model_analysis" in step_id:
-        return _mock_code_prediction_model(
-            ctx=ctx,
-            step_id=step_id,
-            outcome=outcome,
+        return _with_mock_plausibility_receipt(
+            _mock_code_prediction_model(
+                ctx=ctx,
+                step_id=step_id,
+                outcome=outcome,
+            )
         )
     if "trajectory_clustering_analysis" in step_id:
-        return _mock_code_trajectory_clustering(
-            ctx=ctx,
-            step_id=step_id,
-            outcome=outcome,
+        return _with_mock_plausibility_receipt(
+            _mock_code_trajectory_clustering(
+                ctx=ctx,
+                step_id=step_id,
+                outcome=outcome,
+            )
         )
     # Inline script as a triple-quoted heredoc — note: keep this tight; the
     # runner persists it byte-for-byte and hashes it as evidence.
@@ -913,6 +1026,7 @@ def _mock_code_for_step(ctx: ResearchContext, prompt: str) -> str:
             summary["outcome_col"] = outcome_col
             summary["outcome_rate"] = inc
             pd.DataFrame([{{
+                "population": "analysis_cohort",
                 "outcome": outcome_col,
                 "n_total": int(df[outcome_col].notna().sum()),
                 "n_events": int(df[outcome_col].dropna().astype(int).sum()),
@@ -943,7 +1057,7 @@ def _mock_code_for_step(ctx: ResearchContext, prompt: str) -> str:
         ).strip()
         + "\n"
     )
-    return code
+    return _with_mock_plausibility_receipt(code)
 
 
 def _mock_code_declared_figure(*, step_id: str, prompt: str) -> str:
@@ -1602,14 +1716,32 @@ def _mock_code_prediction_model(
         thr = np.concatenate([[scores.max() + 1e-6], scores[order], [scores.min() - 1e-6]])
         return pd.DataFrame({"fpr": fpr, "tpr": tpr, "threshold": thr})
 
+    if "patient_stay_id" in df.columns:
+        patient_groups = df["patient_stay_id"].astype(str).str.split(":s").str[0]
+        patient_group_source = "patient_stay_id_prefix_before_:s"
+    elif "subject_id" in df.columns:
+        patient_groups = df["subject_id"].astype(str)
+        patient_group_source = "subject_id"
+    elif "patient_id" in df.columns:
+        patient_groups = df["patient_id"].astype(str)
+        patient_group_source = "patient_id"
+    else:
+        raise SystemExit(
+            "Prediction preflight requires a patient-level grouping column; "
+            "row-level or stay-level splitting is forbidden."
+        )
+
     feature_order = ["sofa2", "lact", "creat", "map", "hr", "resp", "spo2", "vaso", "age", "sex"]
     features = [c for c in feature_order if c in df.columns and c != outcome_col]
     model_df = df[[outcome_col] + features].copy()
+    model_df["_patient_group"] = patient_groups
     if "sex" in model_df.columns:
         model_df["sex_M"] = (model_df["sex"].astype(str) == "M").astype(int)
         model_df = model_df.drop(columns=["sex"])
         features = ["sex_M" if c == "sex" else c for c in features]
-    model_df = model_df.apply(pd.to_numeric, errors="coerce")
+    model_df[[outcome_col] + features] = model_df[
+        [outcome_col] + features
+    ].apply(pd.to_numeric, errors="coerce")
     model_df = model_df.replace([np.inf, -np.inf], np.nan).dropna()
     model_df[outcome_col] = model_df[outcome_col].astype(int)
 
@@ -1617,13 +1749,20 @@ def _mock_code_prediction_model(
         raise SystemExit("Not enough complete cases for prediction-model example.")
 
     rng = np.random.default_rng(7)
-    perm = rng.permutation(len(model_df))
-    split = max(int(0.7 * len(model_df)), 40)
-    train = model_df.iloc[perm[:split]].copy()
-    test = model_df.iloc[perm[split:]].copy()
-    if test.empty:
-        test = train.iloc[-max(20, len(train) // 4):].copy()
-        train = train.iloc[:-len(test)].copy()
+    unique_groups = np.asarray(sorted(model_df["_patient_group"].unique()))
+    if len(unique_groups) < 10:
+        raise SystemExit("Prediction preflight requires at least 10 patient groups.")
+    shuffled_groups = rng.permutation(unique_groups)
+    split = min(max(int(0.7 * len(shuffled_groups)), 2), len(shuffled_groups) - 1)
+    train_group_set = set(shuffled_groups[:split].tolist())
+    test_group_set = set(shuffled_groups[split:].tolist())
+    overlap = sorted(train_group_set & test_group_set)
+    if overlap:
+        raise RuntimeError("patient-level train/test split overlap detected")
+    train = model_df[model_df["_patient_group"].isin(train_group_set)].copy()
+    test = model_df[model_df["_patient_group"].isin(test_group_set)].copy()
+    if train.empty or test.empty:
+        raise RuntimeError("patient-grouped split produced an empty partition")
 
     coef, cov, names, backend = fit_logit(train, outcome_col, features)
     X_test = np.column_stack([np.ones(len(test)), test[features].astype(float).to_numpy()])
@@ -1632,6 +1771,19 @@ def _mock_code_prediction_model(
 
     auc = auc_rank(y_test, risk)
     brier = float(np.mean((risk - y_test) ** 2))
+    predicted_class = (risk >= 0.5).astype(int)
+    true_positive = int(np.sum((predicted_class == 1) & (y_test == 1)))
+    false_positive = int(np.sum((predicted_class == 1) & (y_test == 0)))
+    false_negative = int(np.sum((predicted_class == 0) & (y_test == 1)))
+    precision = true_positive / max(true_positive + false_positive, 1)
+    recall = true_positive / max(true_positive + false_negative, 1)
+    f1 = 2.0 * precision * recall / max(precision + recall, 1e-12)
+    score_order = np.argsort(-risk)
+    sorted_outcome = y_test[score_order]
+    cumulative_precision = np.cumsum(sorted_outcome) / np.arange(1, len(y_test) + 1)
+    average_precision = float(
+        np.sum(cumulative_precision * sorted_outcome) / max(int(y_test.sum()), 1)
+    )
     logit_pred = np.log(np.clip(risk, 1e-6, 1 - 1e-6) / np.clip(1 - risk, 1e-6, 1 - 1e-6))
     cal_df = pd.DataFrame({"death": y_test, "logit_pred": logit_pred})
     cal_slope = None
@@ -1663,12 +1815,18 @@ def _mock_code_prediction_model(
         "n_train": int(len(train)),
         "n_test": int(len(test)),
         "auc": auc,
+        "auroc": auc,
+        "average_precision": average_precision,
+        "precision": precision,
+        "recall": recall,
+        "f1": f1,
         "brier": brier,
         "calibration_slope": cal_slope,
     }])
     perf_df.to_csv(out_dir / "model_performance_train_test.csv", index=False)
 
-    risk_df = test[features + [outcome_col]].copy()
+    risk_df = test[["_patient_group", *features, outcome_col]].copy()
+    risk_df = risk_df.rename(columns={"_patient_group": "patient_group"})
     risk_df["predicted_risk"] = risk
     risk_df.to_csv(out_dir / "risk_predictions_test.csv", index=False)
 
@@ -1683,6 +1841,33 @@ def _mock_code_prediction_model(
         n_bin=("death", "size"),
     ).reset_index(drop=True)
     cal_curve.to_csv(out_dir / "calibration_curve.csv", index=False)
+
+    thresholds = np.linspace(0.05, 0.50, 10)
+    decision_rows = []
+    prevalence = float(y_test.mean())
+    for threshold in thresholds:
+        predicted_positive = risk >= threshold
+        tp = float(np.sum(predicted_positive & (y_test == 1)))
+        fp = float(np.sum(predicted_positive & (y_test == 0)))
+        odds = threshold / (1.0 - threshold)
+        decision_rows.append({
+            "threshold": float(threshold),
+            "net_benefit_model": (tp / len(y_test)) - (fp / len(y_test)) * odds,
+            "net_benefit_all": prevalence - (1.0 - prevalence) * odds,
+            "net_benefit_none": 0.0,
+        })
+    pd.DataFrame(decision_rows).to_csv(
+        out_dir / "decision_curve.csv", index=False
+    )
+    pd.DataFrame([{
+        "patient_group_source": patient_group_source,
+        "n_train_rows": int(len(train)),
+        "n_test_rows": int(len(test)),
+        "n_train_patients": int(len(train_group_set)),
+        "n_test_patients": int(len(test_group_set)),
+        "patient_overlap_n": int(len(overlap)),
+        "preprocessing_fit_scope": "training_partition_only",
+    }]).to_csv(out_dir / "split_definition.csv", index=False)
 
     fig, ax = plt.subplots(figsize=(4.0, 3.2))
     ax.plot(roc_df["fpr"], roc_df["tpr"], color="#1f77b4", linewidth=1.6)
@@ -1714,15 +1899,36 @@ def _mock_code_prediction_model(
         "n_complete_cases": int(len(model_df)),
         "n_train": int(len(train)),
         "n_test": int(len(test)),
+        "patient_group_source": patient_group_source,
+        "patient_overlap_n": int(len(overlap)),
         "auc": auc,
+        "auroc": auc,
+        "average_precision": average_precision,
+        "precision": precision,
+        "recall": recall,
+        "f1": f1,
         "brier": brier,
         "calibration_slope": cal_slope,
+        "output_files": {
+            "table:model_performance_train_test": "model_performance_train_test.csv",
+            "table:model_coefficients": "model_coefficients.csv",
+            "table:risk_predictions_test": "risk_predictions_test.csv",
+            "table:roc_curve": "roc_curve.csv",
+            "table:calibration_curve": "calibration_curve.csv",
+            "table:decision_curve": "decision_curve.csv",
+            "table:split_definition": "split_definition.csv",
+            "figure:roc_curve": "roc_curve.png",
+            "figure:calibration_curve": "calibration_curve.png",
+            "statistic:auc": "model_performance_train_test.csv",
+        },
         "outputs": {
             "performance_table": "model_performance_train_test.csv",
             "coefficients_table": "model_coefficients.csv",
             "risk_predictions": "risk_predictions_test.csv",
             "roc_curve": "roc_curve.png",
             "calibration_curve": "calibration_curve.png",
+            "decision_curve": "decision_curve.csv",
+            "split_definition": "split_definition.csv",
         },
     }
     with open(out_dir / "step_summary.json", "w", encoding="utf-8") as f:
@@ -1781,10 +1987,20 @@ def _mock_code_trajectory_clustering(
 
     def suffix_key(name):
         m = re.search(r"_t(\d+)$", str(name))
-        return int(m.group(1)) if m else 0
+        if m:
+            return float(m.group(1))
+        m = re.search(r"_h(\d+(?:p\d+)?)_(\d+(?:p\d+)?)$", str(name))
+        return float(m.group(1).replace("p", ".")) if m else 0.0
 
-    lact_cols = sorted([c for c in df.columns if re.match(r"lact_t\d+$", str(c))], key=suffix_key)
-    map_cols = sorted([c for c in df.columns if re.match(r"map_t\d+$", str(c))], key=suffix_key)
+    window_suffix = r"(?:t\d+|h\d+(?:p\d+)?_\d+(?:p\d+)?)"
+    lact_cols = sorted(
+        [c for c in df.columns if re.fullmatch(rf"lact_{window_suffix}", str(c))],
+        key=suffix_key,
+    )
+    map_cols = sorted(
+        [c for c in df.columns if re.fullmatch(rf"map_{window_suffix}", str(c))],
+        key=suffix_key,
+    )
     if not lact_cols or not map_cols:
         raise SystemExit("Trajectory clustering example requires lact_t* and map_t* columns.")
 
@@ -1942,7 +2158,7 @@ def _mock_code_publication_figure(
     from easyicu.research_agent.figures.publication import (
         apply_publication_style,
         add_panel_label,
-        audit_publication_exports,
+        audit_publication_exports_json,
         make_figure_contract,
         save_publication_figure,
     )
@@ -1969,11 +2185,6 @@ def _mock_code_publication_figure(
         except Exception:
             pass
         return x
-
-    def finding_to_dict(f):
-        if hasattr(f, "model_dump"):
-            return f.model_dump(mode="json")
-        return {"message": str(f)}
 
     family = "__ANALYSIS_TYPE__"
     apply_publication_style()
@@ -2055,7 +2266,7 @@ def _mock_code_publication_figure(
         stem = out_dir / "prediction_publication_figure"
         paths = save_publication_figure(fig, stem, contract=contract, dpi=300)
         plt.close(fig)
-        audit = [finding_to_dict(f) for f in audit_publication_exports(paths)]
+        audit = audit_publication_exports_json(paths)
         summary["figure_id"] = "prediction_publication_figure"
         summary["core_claim"] = contract.core_claim
         summary["outputs"] = {k: str(v.name) for k, v in paths.items()}
@@ -2127,7 +2338,7 @@ def _mock_code_publication_figure(
         stem = out_dir / "trajectory_clustering_publication_figure"
         paths = save_publication_figure(fig, stem, contract=contract, dpi=300)
         plt.close(fig)
-        audit = [finding_to_dict(f) for f in audit_publication_exports(paths)]
+        audit = audit_publication_exports_json(paths)
         summary["figure_id"] = "trajectory_clustering_publication_figure"
         summary["core_claim"] = contract.core_claim
         summary["outputs"] = {k: str(v.name) for k, v in paths.items()}

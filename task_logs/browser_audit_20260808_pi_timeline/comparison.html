@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>Guided Pi timeline · reference comparison</title>
+  <style>
+    :root{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#17202a;background:#eef1f3}
+    *{box-sizing:border-box}
+    body{margin:0;padding:28px}
+    header{max-width:1480px;margin:0 auto 22px}
+    h1{margin:0 0 8px;font-size:26px;letter-spacing:-.025em}
+    p{margin:0;color:#5c6772;line-height:1.55}
+    .board{max-width:1480px;margin:0 auto;display:grid;grid-template-columns:1fr 1fr;gap:22px}
+    .card{min-width:0;padding:16px;border:1px solid #d8dde1;border-radius:14px;background:#fff;box-shadow:0 8px 22px rgba(18,28,38,.06)}
+    h2{margin:0 0 12px;font-size:14px;color:#33404c}
+    .frame{height:920px;display:flex;align-items:flex-start;justify-content:center;overflow:auto;border:1px solid #e5e8ea;border-radius:9px;background:#fafafa}
+    .frame.focus{height:620px}
+    img{display:block;max-width:100%;height:auto}
+    .reference-thread img{width:704px}
+    .reference-tools img{width:415px}
+    .implementation img{width:100%}
+    .wide{grid-column:1/-1}
+    .notes{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:12px}
+    .note{padding:10px;border-radius:8px;background:#f3f6f6;color:#52606b;font-size:12px;line-height:1.45}
+    strong{color:#23313d}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Guided Pi Agent 时间线 · 同屏对比</h1>
+    <p>参考：Codex 对话与工具轨迹。实现：EasyICU 真实 gpt-5.6-luna 只读工具回合；未注入假数据。</p>
+  </header>
+  <main class="board">
+    <section class="card reference-thread">
+      <h2>参考 A · Codex 完整对话节奏</h2>
+      <div class="frame"><img src="reference_codex_thread.png" alt="Codex reference thread"></div>
+    </section>
+    <section class="card implementation">
+      <h2>实现 A · EasyICU 完整 Guided Pi 对话</h2>
+      <div class="frame"><img src="easyicu_pi_timeline_complete.png" alt="EasyICU completed Pi timeline"></div>
+    </section>
+    <section class="card reference-tools">
+      <h2>参考 B · Codex 内联工具轨迹</h2>
+      <div class="frame focus"><img src="reference_codex_tool_timeline.png" alt="Codex reference tool timeline"></div>
+    </section>
+    <section class="card implementation">
+      <h2>实现 B · EasyICU 工具回执展开态</h2>
+      <div class="frame focus"><img src="easyicu_pi_tool_expanded.png" alt="EasyICU expanded tool receipt"></div>
+    </section>
+    <section class="card wide">
+      <h2>迁移核对</h2>
+      <div class="notes">
+        <div class="note"><strong>信息层级</strong><br>用户气泡 → 耗时标记 → 工具行 → 助手正文。</div>
+        <div class="note"><strong>组件形状</strong><br>活动与工具默认无卡片；只有展开回执有边框容器。</div>
+        <div class="note"><strong>交互</strong><br>整行可折叠、键盘焦点可见、运行/成功/失败同时有文字与状态点。</div>
+        <div class="note"><strong>EasyICU 边界</strong><br>稳定码、owner、耗时保留在回执详情；私有思维链不展示。</div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

@@ -19,9 +19,14 @@ from typing import Any, Iterable, Literal, Mapping, MutableMapping, Sequence
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..authority.coder_authority import HostCoderAuthority
+from ..authority.plausibility import FlagOnlyPlausibilityScope
 from ..authority.typed_binding import (
     _coder_authority_with_typed_parent_schema_receipts,
 )
+from ..gates.plausibility_receipt import (
+    render_plausibility_receipt_scope_guidance,
+)
+from ..contracts.method_kernels import CURATED_METHOD_KERNELS
 from ..contracts.method_packages import (
     BASELINE_PACKAGES,
     CURATED_METHOD_PACKAGES,
@@ -261,7 +266,96 @@ def _software_resources(
                 ),
             )
         )
+    # In-tree reviewed kernels. Unlike the packages above these need no runtime
+    # snapshot check: DockerRunner byte-verifies every .py under
+    # research_agent/ against the host tree before the step runs, so if the step
+    # runs at all these modules are present and identical. Offering them is what
+    # stops a Coder re-deriving a Schoenfeld test inside a generated script.
+    for kernel in CURATED_METHOD_KERNELS:
+        resources.append(
+            _descriptor(
+                resource_id=f"software:{_slug(kernel.import_path)}",
+                kind="software",
+                projection={
+                    "import_name": kernel.import_path,
+                    "entrypoints": list(kernel.entrypoints),
+                    "capability": kernel.capability,
+                    # The kernel's own imports travel INSIDE its projection
+                    # rather than competing for one of the three software
+                    # slots. Measured: without this, a Cox step selected
+                    # ph_schoenfeld / rmst / temporal_features and lifelines --
+                    # the library needed to fit the model at all -- was ranked
+                    # out. Offering a wrapper while hiding what it wraps is
+                    # worse than offering neither.
+                    "requires": list(kernel.requires),
+                    "fallback": kernel.fallback,
+                    "availability": "verified_in_runner_source_digest",
+                    "runtime_install_allowed": False,
+                },
+                analysis_families=kernel.families,
+                permissions=("coder_context", "sandbox_import"),
+                search_terms=(
+                    kernel.module,
+                    kernel.import_path,
+                    kernel.capability,
+                    *kernel.entrypoints,
+                    *kernel.families,
+                ),
+            )
+        )
     return resources
+
+
+#: Above this many columns the list stops being cheap to carry in every
+#: prompt.  It is then replaced by a count and a pointer -- never by a partial
+#: list, which would read as the whole schema and be wrong in the one way that
+#: matters.
+_MAX_PROJECTED_COLUMNS = 40
+
+
+def _declared_column_projection(
+    binding: Mapping[str, object],
+) -> dict[str, object]:
+    """Name the bound product's actual columns beside its digest.
+
+    MEASURED (e3, ``04_stage_stratified_outcome_figure``): the step consumed
+    ``table:absolute_risk_context``, whose bound contract declares a grouped
+    summary -- one row per group, with the stratum carried as a VALUE in
+    ``group_value`` and ``group_type`` naming what was grouped.  The generated
+    script assumed instead that the stratum was a column named after the
+    clinical variable and killed itself::
+
+        RuntimeError: Cannot render a stage-stratified outcome figure: the
+        bound typed product lacks the required stage coordinate or fields
+        ['aki_stage_max'].
+
+    Five of the six fields it wanted were present.  The real column list was
+    one lookup away in ``EASYICU_RESOLVED_INPUTS_JSON`` -- which this very
+    descriptor pointed at without ever saying what was in it.  The step was
+    9 of 10 in an otherwise complete run.
+
+    So say what is in it.  A column list is a fact about the bound artifact,
+    not a hint, and it costs one lookup the agent has repeatedly not made.
+    """
+
+    contract = binding.get("product_contract")
+    if not isinstance(contract, Mapping):
+        return {}
+    declared = contract.get("columns")
+    if not isinstance(declared, Sequence) or isinstance(declared, (str, bytes)):
+        return {}
+    columns = [str(item) for item in declared if str(item).strip()]
+    if not columns:
+        return {}
+    if len(columns) > _MAX_PROJECTED_COLUMNS:
+        return {
+            "column_count": len(columns),
+            "columns_note": (
+                "too many to list here; read them from "
+                "EASYICU_RESOLVED_INPUTS_JSON before naming any column"
+            ),
+        }
+    return {"columns": columns}
 
 
 def _data_resources(
@@ -292,6 +386,7 @@ def _data_resources(
                         "evidence_id": evidence_id,
                         "sha256": _binding_sha256(binding),
                         "access": "EASYICU_RESOLVED_INPUTS_JSON",
+                        **_declared_column_projection(binding),
                     }
                 ).decode("utf-8"),
             )
@@ -490,29 +585,91 @@ def bind_primary_cohort_role(
     *,
     authority: HostCoderAuthority,
     locked_cohort_payload: str | None,
+    materialized_execution_payload: str | None = None,
 ) -> HostCoderAuthority:
     """Bind the unique universe-to-analysis-cohort producer role."""
 
     if locked_cohort_payload is None:
         return authority
-    return authority.append(
+    attachment = (
         "CURRENT STEP INPUT ROLE (host-owned execution contract): this is the "
         "plan's unique primary analysis_cohort + attrition producer, so "
-        "COHORT_PARQUET is the raw study universe for this step only. Apply "
+        "COHORT_PARQUET is the raw study universe for this step only; it is not "
+        "already filtered to the analysis cohort. Apply "
         "exactly the Planner-locked cohort definition, report truthful "
         "universe-to-final attrition, and emit an analysis_cohort whose ordered "
         "row identity matches the locked host cohort. Downstream steps receive "
         "the filtered cohort. Planner-locked cohort definition JSON: "
         f"{locked_cohort_payload}."
     )
+    if materialized_execution_payload is not None:
+        attachment += (
+            " HOST-VERIFIED COHORT EXECUTION RECEIPT (binding): the host "
+            "deterministically resolved the Planner-owned predicates against "
+            "the sealed raw universe. Use every `resolved_column` and operation "
+            "in order, and assert the recorded before/excluded/remaining counts. "
+            "A flow row whose `event_time_column` is not null was applied as a "
+            "windowed occurrence predicate: the host required BOTH the stated "
+            "op/value on `resolved_column` AND "
+            "`event_time_start_hours <= <event_time_column> <= "
+            "event_time_end_hours`, treating a missing event time as outside "
+            "the window. Reproducing such a row from the op and value alone "
+            "gives a different count, so apply the window whenever those fields "
+            "are present and ignore them when they are null. "
+            "Before applying a predicate, enforce any host-proven closed domain "
+            "in the matching ResearchContext variable descriptor; in particular, "
+            "an observed binary column must fail closed unless every non-missing "
+            "value is exactly in {0, 1}. A threshold check alone is not a domain "
+            "check. "
+            "The counts and digests are integrity checks, not permission to "
+            "select rows by position, truncate, sample, or copy an arbitrary "
+            "same-sized frame. The counts are plain integers you may compare "
+            "directly, but every `row_identity_sha256` is a host "
+            "canonicalisation you cannot infer from the value: reproduce it "
+            "ONLY with "
+            "`from easyicu.research_agent.intake.materialized_metadata import "
+            "cohort_row_identity_sha256`, passing the identity column in stored "
+            "order (for example "
+            "`cohort_row_identity_sha256(df[identity_column].tolist())`). A "
+            "hand-rolled digest -- joining the values, hashing the column "
+            "bytes, or hashing a repr -- computes a different string and "
+            "rejects a cohort that is exactly correct, so never write one. "
+            "The receipt's `resolved_column` entries are the "
+            "only raw predicate coordinates authorized by this side channel. "
+            "The host also places those exact coordinates in "
+            "`manifest['raw_input_contracts']['contracts']`, even when they are "
+            "not ordinary Planner step inputs. `contracts` is a JSON object "
+            "keyed by resolved column: access "
+            "`contracts.get(resolved_column)` rather than iterating it as a "
+            "list. The mounted JSON may be the current unwrapped schema or an "
+            "archived `manifest` wrapper: after parsing it as `document`, "
+            "normalize exactly with "
+            "`manifest = document.get('manifest', document)`; never use an "
+            "empty-object fallback that discards unwrapped host authority. "
+            "Apply an exact `allowed_values` domain there when present, "
+            "but do not treat this receipt-specific metadata as permission to "
+            "analyze any other raw column. "
+            "Do not read or audit related measured/count/status/timing siblings "
+            "unless they also appear in the step's exact Planner-declared "
+            "inputs. At runtime, read this exact receipt only from "
+            "`manifest['host_verified_cohort_execution_receipt']` in the "
+            "host-mounted `EASYICU_RESOLVED_INPUTS_JSON`; do not expect an "
+            "alias or reconstruct the receipt. Receipt JSON: "
+            f"{materialized_execution_payload}."
+        )
+    return authority.append(attachment)
 
 
 def bind_execution_cohort_runtime(
     *,
     authority: HostCoderAuthority,
+    plausibility_scope: FlagOnlyPlausibilityScope | None = None,
 ) -> HostCoderAuthority:
-    """Explain the host-owned current-cohort cardinality coordinate."""
+    """Explain the host-owned current-cohort and raw-domain coordinates."""
 
+    plausibility_guidance = render_plausibility_receipt_scope_guidance(
+        plausibility_scope
+    )
     return authority.append(
         "CURRENT EXECUTION COHORT (host-owned runtime contract): "
         "COHORT_PARQUET is the exact cohort selected for this step. The "
@@ -522,11 +679,28 @@ def bind_execution_cohort_runtime(
         "DataFrame. If an explicit row-count integrity assertion is needed, "
         "compare len(the loaded COHORT_PARQUET frame) with "
         'int(os.environ["EASYICU_COHORT_ROWS"]); the runner owns that value. '
-        "The prompt's outbound-safe variable view uses "
-        "observed_shape.opaque_levels, but the digest-verified local "
-        "ResearchContext JSON uses observed_domain.levels. Read the latter only "
-        "at local execution time when closed categorical helpers need the real "
-        "binding; never copy private literals into generated source."
+        "For every Planner-declared raw input, "
+        "manifest['raw_input_contracts']['contracts'] is the sole executable "
+        "domain authority. It is a JSON object keyed by the exact resolved "
+        "column, already in by-column form: read `contracts.get(column)` and "
+        "never assert it is a list, iterate it as a list of records, or "
+        "rebuild a by-column mapping from it. Use its exact allowed_values "
+        "when present. "
+        "`analysis_plausibility_range` is a JSON object with `minimum` and "
+        "`maximum` keys; either may be null, so apply only non-null bounds and "
+        "never index it as a list or use `lower`/`upper` aliases. "
+        "`plausibility_policy.out_of_range_action` is binding, not a "
+        "suggestion: `retain_and_flag` means keep every such row and record a "
+        "flag column or count -- never drop, clip, impute, or raise on it. "
+        f"{plausibility_guidance} "
+        "Treat a finite out-of-range value as a fatal input error only where "
+        "the policy itself says so. Keep source "
+        "missingness distinct from non-finite values: count non-finite only "
+        "where the converted source value is nonmissing, never by filling "
+        "missing values with NaN and counting `~isfinite`. Absence means "
+        "no closed category list is authorized for this step: do not recover "
+        "one from prompt prose, the broader ResearchContext, or the loaded "
+        "frame, and never copy private literals into generated source."
     )
 
 
@@ -539,6 +713,7 @@ def attach_step_coder_input_authority(
     context: ResearchContext,
     step: AnalysisStep,
     resolved_input_bindings: Mapping[str, Mapping[str, object]],
+    plausibility_scope: FlagOnlyPlausibilityScope,
     runtime_import_names: Iterable[str],
     step_record: MutableMapping[str, object],
     reviewed_memory_runtime: ReviewedMemoryRuntime | None = None,
@@ -546,7 +721,11 @@ def attach_step_coder_input_authority(
 ) -> HostCoderAuthority:
     """Bind typed-input receipts and optional selected resources for one step."""
 
-    authority = bind_execution_cohort_runtime(authority=authority)
+    plausibility_scope.require_step(step.step_id)
+    authority = bind_execution_cohort_runtime(
+        authority=authority,
+        plausibility_scope=plausibility_scope,
+    )
     authority = _coder_authority_with_typed_parent_schema_receipts(
         authority=authority,
         bindings=resolved_input_bindings,

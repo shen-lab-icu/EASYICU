@@ -15,12 +15,17 @@ import hashlib
 import json
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
+from ..authority.plausibility import (
+    FlagOnlyPlausibilityScope,
+    compile_flag_only_plausibility_scope,
+)
 from ..audits.patterns import AnalysisPatternAuditor
 from ..audits.validators import (
     ConceptUsageAuditor,
     _reclassify_llm_concept_findings,
     _verified_authoritative_exposure_flow,
 )
+from .plausibility_obligation import flag_only_plausibility_obligation_findings
 from .preflight import audit_mechanical_code_contracts
 from .typed_schema import host_schema_numeric_alias_findings
 from ..contracts.runtime import ValidationFinding
@@ -78,6 +83,7 @@ def deterministic_code_gate_findings(
     usage_auditor: Optional[ConceptUsageAuditor] = None,
     pattern_auditor: Optional[AnalysisPatternAuditor] = None,
     resolved_input_bindings: Optional[Mapping[str, Any]] = None,
+    plausibility_scope: Optional[FlagOnlyPlausibilityScope] = None,
 ) -> List[ValidationFinding]:
     """Run the shared deterministic pre-execution code gate."""
 
@@ -120,10 +126,27 @@ def deterministic_code_gate_findings(
     except SyntaxError:
         parsed_script = None
     if parsed_script is not None:
+        active_plausibility_scope = (
+            plausibility_scope
+            if plausibility_scope is not None
+            else compile_flag_only_plausibility_scope(
+                context=context,
+                step=step,
+                raw_input_contracts=None,
+            )
+        )
         findings.extend(
             host_schema_numeric_alias_findings(
                 parsed_script,
                 resolved_input_bindings,
+            )
+        )
+        findings.extend(
+            flag_only_plausibility_obligation_findings(
+                parsed_script,
+                script_text=script_text,
+                step=step,
+                scope=active_plausibility_scope,
             )
         )
     requires_primary_exposure_artifact = any(

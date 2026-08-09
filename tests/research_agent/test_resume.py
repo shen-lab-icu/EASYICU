@@ -933,7 +933,7 @@ def test_resume_cohort_materializer_rejects_tampered_authority(
 
     assert invalidated == {
         "01_cohort_definition": (
-            "evidence analysis_cohort_execute_repair failed path/digest " "verification"
+            "evidence analysis_cohort_execute_repair failed path/digest verification"
         )
     }
     assert updated["per_step_records"][-1]["status"] == "resume_evidence_invalid"
@@ -1272,7 +1272,7 @@ def test_resume_requires_interpretation_field_when_analyzer_evidence_exists(
 
     assert invalidated == {
         "01_model": (
-            "successful checkpoint is missing required " "interpretation_evidence_id"
+            "successful checkpoint is missing required interpretation_evidence_id"
         )
     }
 
@@ -2061,6 +2061,33 @@ def test_implicit_resume_offers_only_latest_contract_failed_code_once(
     )
 
 
+def test_explicit_resume_window_marks_selected_and_downstream_steps(
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.orchestration.resume import ResumeController
+
+    steps = [
+        AnalysisStep(
+            step_id=step_id,
+            intent=f"Execute {step_id}.",
+            inputs=["stay_id"],
+            expected_outputs=[f"table:{step_id}"],
+            method="descriptive_summary",
+        )
+        for step_id in ("01_first", "02_selected", "03_downstream")
+    ]
+    controller = ResumeController(
+        plan=AnalysisPlan(research_question="Test explicit resume.", steps=steps),
+        run_dir=tmp_path,
+        resume_state={"per_step_records": []},
+        resume_from_step_id="02_selected",
+    )
+
+    assert controller.explicitly_reruns_step("01_first") is False
+    assert controller.explicitly_reruns_step("02_selected") is True
+    assert controller.explicitly_reruns_step("03_downstream") is True
+
+
 def test_partial_manifest_is_written_after_run(ra, synthetic_cohort, tmp_path: Path):
     result = _run_full(ra, synthetic_cohort, tmp_path)
     run_dir = Path(result.workdir)
@@ -2192,9 +2219,9 @@ def test_resume_reruns_missing_step(ra, synthetic_cohort, tmp_path: Path):
 
     partial_after = json.loads(partial_path.read_text(encoding="utf-8"))
     new_step_ids = [r["step_id"] for r in partial_after["per_step_records"]]
-    assert (
-        dropped["step_id"] in new_step_ids
-    ), f"dropped step {dropped['step_id']!r} was not re-executed; new ids: {new_step_ids}"
+    assert dropped["step_id"] in new_step_ids, (
+        f"dropped step {dropped['step_id']!r} was not re-executed; new ids: {new_step_ids}"
+    )
 
 
 def test_resume_from_completed_step_can_stop_after_that_step(
@@ -2305,11 +2332,32 @@ import pandas as pd
 
 df = pd.read_parquet(os.environ["COHORT_PARQUET"])
 out = os.environ["STEP_OUT_DIR"]
+with open(
+    os.environ["EASYICU_RESOLVED_INPUTS_JSON"], "r", encoding="utf-8"
+) as f:
+    resolved = json.load(f)
+plausibility_audit = {}
+for column, contract in resolved["raw_input_contracts"]["contracts"].items():
+    bounds = contract.get("analysis_plausibility_range")
+    if bounds is None:
+        continue
+    numeric = pd.to_numeric(df[column], errors="coerce")
+    lower = bounds.get("minimum")
+    upper = bounds.get("maximum")
+    below_n = int((numeric < lower).sum()) if lower is not None else 0
+    above_n = int((numeric > upper).sum()) if upper is not None else 0
+    plausibility_audit[column] = {
+        "policy": "retain_and_flag",
+        "below_minimum_n": below_n,
+        "above_maximum_n": above_n,
+        "out_of_range_n": below_n + above_n,
+    }
 summary = {
     "predictor": "sofa2",
     "n": int(len(df)),
     "sofa2_median": float(df["sofa2"].median()),
     "mortality_rate": float(df["death"].mean()),
+    "plausibility_audit": plausibility_audit,
 }
 pd.DataFrame([summary]).to_csv(os.path.join(out, "cohort_summary.csv"), index=False)
 summary["output_files"] = {
@@ -2331,9 +2379,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
         llm=_pattern_llm(
             plan=plan,
             code=code,
-            interpretation=(
-                "The cohort table is available {evidence:cohort_summary}."
-            ),
+            interpretation=("The cohort table is available {evidence:cohort_summary}."),
             manuscript=(
                 "# Title\n\n## Results\n\n"
                 "The table is available {evidence:cohort_summary}."
@@ -2492,8 +2538,21 @@ def test_concept_repair_failure_resumes_quarantined_draft_fail_closed(
     audit_state = {"emit_error": True, "reject_marker": None}
     persisted_message = "Displayed percentage is not reconciled to its denominator."
 
-    def fake_audit(self, *, context, script_text, step, provider_budget=None):
-        del self, context
+    def fake_audit(
+        self,
+        *,
+        context,
+        script_text,
+        step,
+        provider_budget=None,
+        study_endpoint=None,
+        plan_step_roster=None,
+    ):
+        # The declaration arguments are named rather than swallowed by `**_`.
+        # A double that accepts anything would have kept this test green while
+        # the real call site passed a keyword the auditor never read; naming them
+        # is what made the mismatch visible when the interface grew.
+        del self, context, study_endpoint, plan_step_roster
         reject_marker = audit_state["reject_marker"]
         if not audit_state["emit_error"] and not (
             reject_marker and reject_marker in script_text
@@ -2762,7 +2821,16 @@ def test_resume_repair_ticket_uses_only_current_deterministic_coordinates(
 
     coordinate = {"call_line": 10}
 
-    def deterministic_finding(self, *, context, script_text, step):
+    def deterministic_finding(
+        self,
+        *,
+        context,
+        script_text,
+        step,
+        provider_budget=None,
+        study_endpoint=None,
+        plan_step_roster=None,
+    ):
         del self, context, script_text
         call_line = coordinate["call_line"]
         return [
@@ -2961,9 +3029,16 @@ def test_resume_retires_unchanged_draft_after_deterministic_policy_supersession(
     audit_state = {"old_policy": True}
 
     def policy_transition_audit(
-        self, *, context, script_text, step, provider_budget=None
+        self,
+        *,
+        context,
+        script_text,
+        step,
+        provider_budget=None,
+        study_endpoint=None,
+        plan_step_roster=None,
     ):
-        del self, context, script_text
+        del self, context, script_text, study_endpoint, plan_step_roster
         if not audit_state["old_policy"]:
             return []
         finding = _stored_horizon_error(ra)
@@ -3157,7 +3232,14 @@ def test_resume_reaudits_material_deterministic_quarantine_repair(
         *,
         repair_reasons=(),
         repair_findings=(),
+        step=None,
+        on_semantic_escalation=None,
     ):
+        # `step` is forwarded by `authorized_deterministic_concept_repair` since
+        # the all-rows profile-roles repair was registered. Without it here the
+        # call raises TypeError, the whole deterministic-repair path dies, and the
+        # symptom surfaces as "zero coder repairs" on the FIRST run -- which reads
+        # as a deliberate lifecycle change rather than a crashed double.
         if not repair_enabled["value"]:
             return code, []
         return real_repair(
@@ -3165,6 +3247,8 @@ def test_resume_reaudits_material_deterministic_quarantine_repair(
             messages,
             repair_reasons=repair_reasons,
             repair_findings=repair_findings,
+            step=step,
+            on_semantic_escalation=on_semantic_escalation,
         )
 
     monkeypatch.setattr(
@@ -4149,7 +4233,14 @@ def test_resume_adopts_legacy_figure_edge_migration_without_replanning(
     partial = json.loads(
         (run_dir / "manifest_partial.json").read_text(encoding="utf-8")
     )
-    assert partial["plan_path"] == revision_path.name
+    assert partial["plan_path"] == revision_record.relative_path
+    assert partial["current_plan_authority"] == {
+        "schema_version": "easyicu.current_plan_authority/1",
+        "evidence_id": revision_record.evidence_id,
+        "relative_path": revision_record.relative_path,
+        "sha256": revision_record.sha256,
+        "revision": 4,
+    }
     assert any(
         finding.get("validator") == "planner_schema_migration"
         and (finding.get("detail") or {}).get("kind") == "legacy_figure_render_edge"
@@ -4230,8 +4321,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
         plan=plan,
         code=code,
         interpretation=(
-            "The primary association table is available "
-            "{evidence:primary_association}."
+            "The primary association table is available {evidence:primary_association}."
         ),
         manuscript=(
             "# Title\n\n## Results\n\n"
@@ -4271,4 +4361,17 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
     assert manifest["per_step_records"], "final manifest dropped per-step records"
     assert manifest["per_step_records"] == partial["per_step_records"]
     assert manifest["per_step_records"][0]["status"] == "ok"
+    assert manifest["current_plan_authority"] == partial["current_plan_authority"]
+    assert manifest["plan_path"] == manifest["current_plan_authority"]["relative_path"]
+    assert manifest["step_attempt_history"] == []
+    assert manifest["step_attempt_history_ref"]["record_count"] == len(
+        partial["step_attempt_history"]
+    )
+    from easyicu.research_agent.authority.runtime_artifacts import (
+        load_run_artifact_authority,
+    )
+
+    hydrated = load_run_artifact_authority(run_dir)
+    assert hydrated is not None
+    assert hydrated["step_attempt_history"] == partial["step_attempt_history"]
     assert manifest["cost_records"], "hosted-stub path should be metered"

@@ -29,6 +29,13 @@ from easyicu import api  # noqa: E402
 DICT = REPO / "src" / "easyicu" / "data" / "concept-dict.json"
 
 
+def test_medication_errors_are_part_of_the_public_api():
+    import easyicu
+
+    assert easyicu.MedicationLoadError is api.MedicationLoadError
+    assert easyicu.MedicationMergeError is api.MedicationMergeError
+
+
 # ── helpers ──
 class _CaptureCalls:
     """Monkey-patch target for ``api.load_concepts``. Records the concepts
@@ -155,6 +162,77 @@ def test_groups_overrides_include_new(capture):
     loaded = set(c for call in capture.calls for c in call)
     assert "propofol" in loaded  # sedation must still load
     assert "abx" not in loaded   # legacy list ignored
+
+
+def test_load_failure_is_not_silently_returned_as_complete(monkeypatch):
+    monkeypatch.setattr(
+        api, "_validate_concepts", lambda concepts, verbose=False: concepts
+    )
+
+    def load_one(concepts, **kwargs):
+        concept = concepts[0]
+        if concept == "vancomycin":
+            raise OSError("synthetic read failure")
+        return pd.DataFrame(
+            {"stay_id": [1], "charttime": [0.0], concept: [True]}
+        )
+
+    monkeypatch.setattr(api, "load_concepts", load_one)
+
+    with pytest.raises(api.MedicationLoadError) as caught:
+        api.load_medications(groups="antibiotics")
+
+    assert caught.value.report["loaded"] == ["abx", "meropenem"]
+    assert caught.value.report["failed"] == {
+        "vancomycin": {"reason": "load_error", "error_type": "OSError"}
+    }
+    assert "synthetic read failure" not in str(caught.value)
+
+
+def test_explicit_partial_result_has_warning_and_structured_report(monkeypatch):
+    monkeypatch.setattr(
+        api, "_validate_concepts", lambda concepts, verbose=False: concepts
+    )
+
+    def load_one(concepts, **kwargs):
+        concept = concepts[0]
+        if concept == "vancomycin":
+            return pd.DataFrame()
+        return pd.DataFrame(
+            {"stay_id": [1], "charttime": [0.0], concept: [True]}
+        )
+
+    monkeypatch.setattr(api, "load_concepts", load_one)
+
+    with pytest.warns(RuntimeWarning, match="partial result"):
+        result = api.load_medications(groups="antibiotics", allow_partial=True)
+
+    report = result.attrs["easyicu_medication_load_report"]
+    assert report["loaded"] == ["abx", "meropenem"]
+    assert report["failed"] == {"vancomycin": {"reason": "empty_result"}}
+    assert {"abx", "meropenem"}.issubset(result.columns)
+
+
+def test_medication_merge_rejects_many_to_many_row_multiplication(monkeypatch):
+    monkeypatch.setattr(
+        api, "_validate_concepts", lambda concepts, verbose=False: concepts
+    )
+
+    def load_one(concepts, **kwargs):
+        concept = concepts[0]
+        rows = 2 if concept == "abx" else 1
+        return pd.DataFrame(
+            {
+                "stay_id": [1] * rows,
+                "charttime": [0.0] * rows,
+                concept: [True] * rows,
+            }
+        )
+
+    monkeypatch.setattr(api, "load_concepts", load_one)
+
+    with pytest.raises(api.MedicationMergeError, match="could multiply rows"):
+        api.load_medications(groups="antibiotics")
 
 
 # ── catalog ↔ concept-dict consistency ──

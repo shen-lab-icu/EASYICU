@@ -36,6 +36,9 @@ def _patch_failed_execute(monkeypatch, ra) -> None:
             per_step_records=[
                 {"step_id": first_step, "status": "execution_failed"}
             ],
+            step_attempt_history=[
+                {"step_id": first_step, "status": "execution_failed"}
+            ],
             probe_summary={},
             runtime_state=AgentRuntimeState(run_id=run_id),
             flush_partial_manifest=lambda extra=None: None,

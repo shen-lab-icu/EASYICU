@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import json
+import re
 from typing import Any, Iterable, Mapping, Optional, Sequence
 
 from ..authority.table_one_binding import (
@@ -67,6 +68,23 @@ _OUTCOME_SOURCE_LABELS = {
     "length_of_stay": "a length-of-stay outcome",
     "readmission": "a readmission outcome",
 }
+_SAFE_CONCEPT_REFERENCE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.:-]{0,127}$")
+
+
+def _safe_derived_concept_references(
+    variable: Any,
+    *,
+    known_concepts: set[str],
+) -> list[str]:
+    """Project bounded concept identifiers without forwarding free-form text."""
+
+    return [
+        value
+        for raw in list(variable.derived_from_concepts or ())[:16]
+        if (value := str(raw or "").strip())
+        and _SAFE_CONCEPT_REFERENCE_RE.fullmatch(value)
+        and value.casefold() in known_concepts
+    ]
 
 
 def _outcome_semantics(variable: Any) -> dict[str, Any]:
@@ -100,6 +118,13 @@ def outbound_safe_context_payload(
         if variable_names is None
         else {str(name).lower() for name in variable_names}
     )
+    known_concepts = {
+        value.casefold()
+        for variable in context.variables
+        for raw in (variable.name, variable.source_concept)
+        if (value := str(raw or "").strip())
+        and _SAFE_CONCEPT_REFERENCE_RE.fullmatch(value)
+    }
     variables: list[dict[str, Any]] = []
     for variable in context.variables:
         if selected is not None and variable.name.lower() not in selected:
@@ -126,6 +151,14 @@ def outbound_safe_context_payload(
                     ),
                     "source_concept": (
                         variable.source_concept if role != "meta" else None
+                    ),
+                    "derived_from_concepts": (
+                        _safe_derived_concept_references(
+                            variable,
+                            known_concepts=known_concepts,
+                        )
+                        if role != "meta"
+                        else None
                     ),
                     "outcome_semantics": (
                         _outcome_semantics(variable) if role == "outcome" else None
@@ -157,10 +190,22 @@ def outbound_safe_context_payload(
                         else None
                     ),
                     "missingness_semantics": variable.missingness_semantics,
+                    "observation_semantics": (
+                        variable.observation_semantics.model_dump(mode="json")
+                        if variable.observation_semantics is not None
+                        else None
+                    ),
                     "forbidden_transformations": variable.forbidden_transformations,
                     "missingness": (
                         {
                             "fraction_missing": variable.missingness.fraction_missing,
+                            "n_missing": variable.missingness.n_missing,
+                            "n_total": variable.missingness.n_total,
+                            "raw_n_missing": variable.missingness.raw_n_missing,
+                            "eligible_n": variable.missingness.eligible_n,
+                            "not_applicable_n": (
+                                variable.missingness.not_applicable_n
+                            ),
                             "severity": variable.missingness.missingness_severity,
                         }
                         if variable.missingness is not None

@@ -10,6 +10,7 @@ import pandas as pd
 import pytest
 
 from easyicu import api
+from easyicu.api import concepts as concept_api
 from easyicu.config import (
     DATABASE_ID_CONFIG,
     DataSourceConfig,
@@ -153,12 +154,12 @@ def test_api_mimic_demo_normalize_sample_batch_count_and_public_scan(
         sample_calls.append((table, id_col, kwargs))
         return [9, 3]
 
-    monkeypatch.setattr(api, "_query_patient_ids_fast", sample_fast)
+    monkeypatch.setattr(concept_api, "_query_patient_ids_fast", sample_fast)
     assert api._sample_patient_ids(loader, 2, sample_strategy="sorted") == [9, 3]
     assert sample_calls[0][:2] == ("icustays", "icustay_id")
 
     monkeypatch.setattr(
-        api,
+        concept_api,
         "_query_patient_ids_fast",
         lambda _loader, table, id_col, **_kwargs: (
             [5, 6] if (table, id_col) == ("icustays", "icustay_id") else []
@@ -174,7 +175,7 @@ def test_api_mimic_demo_normalize_sample_batch_count_and_public_scan(
         count_calls.append((table, id_col))
         return 123
 
-    monkeypatch.setattr(api, "_count_patient_ids_fast", count_fast)
+    monkeypatch.setattr(concept_api, "_count_patient_ids_fast", count_fast)
     assert api._get_total_patient_count(loader) == 123
     assert count_calls == [("icustays", "icustay_id")]
 
@@ -198,10 +199,10 @@ def test_load_concepts_explicit_batch_size_uses_mimic_demo_profile(
 
     loader = SimpleNamespace(database="mimic_demo", data_path=tmp_path)
     captured = {}
-    monkeypatch.setattr(api, "_get_global_loader", lambda **_kwargs: loader)
-    monkeypatch.setattr(api, "_get_total_patient_count", lambda _loader: 3)
+    monkeypatch.setattr(concept_api, "_get_global_loader", lambda **_kwargs: loader)
+    monkeypatch.setattr(concept_api, "_get_total_patient_count", lambda _loader: 3)
     monkeypatch.setattr(
-        api,
+        concept_api,
         "_sample_patient_ids",
         lambda *_args, **_kwargs: [101, 102, 103],
     )
@@ -230,9 +231,9 @@ def test_load_concepts_required_bounded_sample_fails_closed(
     sampled_patient_ids,
 ) -> None:
     loader = SimpleNamespace(database="mimic_demo", data_path=tmp_path)
-    monkeypatch.setattr(api, "_get_global_loader", lambda **_kwargs: loader)
+    monkeypatch.setattr(concept_api, "_get_global_loader", lambda **_kwargs: loader)
     monkeypatch.setattr(
-        api,
+        concept_api,
         "_sample_patient_ids",
         lambda *_args, **_kwargs: sampled_patient_ids,
     )
@@ -249,6 +250,8 @@ def test_load_concepts_required_bounded_sample_fails_closed(
 def test_load_concepts_bounded_flag_preserves_legacy_positional_tail() -> None:
     parameters = list(inspect.signature(api.load_concepts).parameters)
 
+    # New flags may only be APPENDED here — every existing name must keep its
+    # index so legacy positional callers stay correct.
     assert parameters[parameters.index("max_patients") : parameters.index("kwargs")] == [
         "max_patients",
         "limit",
@@ -256,6 +259,7 @@ def test_load_concepts_bounded_flag_preserves_legacy_positional_tail() -> None:
         "batch_size",
         "memory_efficient",
         "require_bounded_sample",
+        "allow_unbounded_fallback",
     ]
 
 
@@ -269,7 +273,7 @@ def test_load_concepts_positional_database_guard_resolves_alias_to_key(
         captured.update(kwargs)
         return loader
 
-    monkeypatch.setattr(api, "_get_global_loader", fake_loader)
+    monkeypatch.setattr(concept_api, "_get_global_loader", fake_loader)
     result = api.load_concepts("hr", "mimic-iv", max_patients=0)
     assert result.empty
     assert captured["database"] == "miiv"

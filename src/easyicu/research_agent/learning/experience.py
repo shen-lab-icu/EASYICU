@@ -51,25 +51,38 @@ Design choices that diverge from HealthFlow on purpose:
    ICU-rules background.
 
 The bank is a single JSONL file. Concurrent runs writing to the same
-file are handled by an exclusive-lock append pattern; if locking is
-not available on the platform (Windows fallback) the bank is
-loaded-modified-written with a best-effort retry. The lock is per-
-file and not per-process, so different workdirs do not block each
-other.
+file are serialised by an exclusive ``flock`` held across the whole
+read-modify-write, and the rewrite itself lands through a temp file
+plus ``os.replace``, so a reader never observes a half-written bank.
+The lock is per file, so different workdirs do not block each other.
+On a platform without ``fcntl`` only the in-process lock applies; the
+bank then carries the usual last-writer-wins risk across processes and
+says so in a warning.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import threading
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple
 
 logger = logging.getLogger(__name__)
+
+try:  # pragma: no cover - POSIX in production and CI
+    import fcntl
+except ImportError:  # pragma: no cover - Windows
+    fcntl = None  # type: ignore[assignment]
+
+
+class ExperienceBankCorruptError(RuntimeError):
+    """Raised when a rewrite would drop lines the loader could not parse."""
 
 
 ExperienceKind = Literal["concept_usage_hint", "failure_counter_example"]
@@ -140,10 +153,43 @@ class ExperienceRecord:
 _TOKEN_RE = re.compile(r"[a-z0-9_]+")
 _STOPWORDS = frozenset(
     {
-        "a", "an", "and", "are", "as", "at", "be", "by", "for", "from",
-        "has", "have", "in", "is", "it", "its", "of", "on", "or", "that",
-        "the", "to", "was", "were", "will", "with", "we", "this", "these",
-        "those", "do", "does", "what", "which", "who", "how", "why",
+        "a",
+        "an",
+        "and",
+        "are",
+        "as",
+        "at",
+        "be",
+        "by",
+        "for",
+        "from",
+        "has",
+        "have",
+        "in",
+        "is",
+        "it",
+        "its",
+        "of",
+        "on",
+        "or",
+        "that",
+        "the",
+        "to",
+        "was",
+        "were",
+        "will",
+        "with",
+        "we",
+        "this",
+        "these",
+        "those",
+        "do",
+        "does",
+        "what",
+        "which",
+        "who",
+        "how",
+        "why",
     }
 )
 
@@ -187,14 +233,49 @@ class ExperienceBank:
         self.path: Optional[Path] = Path(path) if path else None
         self._records: List[ExperienceRecord] = []
         self._lock = threading.Lock()
+        #: Lines the last load could not parse. A mutation refuses to rewrite
+        #: the file while this is non-zero, because the rewrite would drop
+        #: them permanently.
+        self.corrupt_lines: int = 0
         if self.path is not None and self.path.exists():
             self._load()
 
     # --- persistence -------------------------------------------------
 
+    @contextmanager
+    def _exclusive_file_lock(self):
+        """Serialise the read-modify-write across processes, not just threads.
+
+        The bank is explicitly documented as shareable between concurrent
+        runs, and every mutation rewrites the whole file, so a thread lock
+        alone loses records whenever two runs share a path.
+        """
+
+        if self.path is None or fcntl is None:
+            if fcntl is None:
+                logger.warning(
+                    "experience-bank: fcntl is unavailable on this platform; "
+                    "concurrent processes sharing %s can lose records",
+                    self.path,
+                )
+            yield
+            return
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = self.path.with_name(self.path.name + ".lock")
+        descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            yield
+        finally:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+            finally:
+                os.close(descriptor)
+
     def _load(self) -> None:
         assert self.path is not None
         records: List[ExperienceRecord] = []
+        corrupt = 0
         try:
             for line in self.path.read_text(encoding="utf-8").splitlines():
                 line = line.strip()
@@ -203,16 +284,24 @@ class ExperienceBank:
                 try:
                     payload = json.loads(line)
                 except json.JSONDecodeError:
-                    logger.warning(
+                    corrupt += 1
+                    logger.error(
                         "experience-bank %s: skipping non-JSON line: %r",
-                        self.path, line[:80],
+                        self.path,
+                        line[:80],
                     )
                     continue
                 records.append(ExperienceRecord.from_dict(payload))
         except OSError as exc:
-            logger.warning("experience-bank %s: read failed: %s", self.path, exc)
-            return
+            # Returning here left ``self._records`` at its previous value while
+            # the file on disk was never read. The next ``add()`` would then
+            # rewrite the whole file from that stale in-memory state, silently
+            # discarding whatever the unreadable file actually contained.
+            raise ExperienceBankCorruptError(
+                f"experience bank {self.path} could not be read: {exc}"
+            ) from exc
         self._records = records
+        self.corrupt_lines = corrupt
 
     def _save(self) -> None:
         if self.path is None:
@@ -222,7 +311,11 @@ class ExperienceBank:
             json.dumps(r.to_dict(), ensure_ascii=False, sort_keys=False)
             for r in self._records
         ]
-        self.path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+        payload = "\n".join(lines) + ("\n" if lines else "")
+        # Write-then-replace: a reader (or a crash) never sees a half-file.
+        tmp = self.path.with_name(f"{self.path.name}.{os.getpid()}.tmp")
+        tmp.write_text(payload, encoding="utf-8")
+        os.replace(tmp, self.path)
 
     # --- mutation ----------------------------------------------------
 
@@ -232,12 +325,20 @@ class ExperienceBank:
         Re-adding an identical lesson refreshes ``produced_at`` /
         ``producer_run_id`` but does not duplicate the row.
         """
-        with self._lock:
+        with self._lock, self._exclusive_file_lock():
+            # Re-read under the lock: another process may have appended since
+            # this instance loaded, and a rewrite from the stale in-memory
+            # list would silently drop its records.
+            if self.path is not None and self.path.exists():
+                self._load()
+            if self.corrupt_lines:
+                raise ExperienceBankCorruptError(
+                    f"experience bank {self.path} has {self.corrupt_lines} "
+                    "unparseable line(s); refusing to rewrite the file because "
+                    "that would drop them permanently"
+                )
             for existing in self._records:
-                if (
-                    existing.kind == record.kind
-                    and existing.summary == record.summary
-                ):
+                if existing.kind == record.kind and existing.summary == record.summary:
                     existing.produced_at = record.produced_at or existing.produced_at
                     existing.producer_run_id = (
                         record.producer_run_id or existing.producer_run_id
@@ -273,7 +374,21 @@ class ExperienceBank:
         ranking. Matching the same database adds a small fixed boost
         (0.1) so a cross-database match never outranks a same-database
         match with similar lexical overlap.
+
+        Raises :class:`ExperienceBankCorruptError` when the file held lines
+        that could not be parsed. Serving the parseable remainder looks
+        harmless — nothing crashes — but this output *steers the Planner*, and
+        a silently truncated bank is an unprovable planning input: neither the
+        run nor a reviewer can tell whether the record that would have changed
+        the plan was one of the unreadable ones. The caller decides whether to
+        continue without a bank; it must not continue with a partial one.
         """
+        if self.corrupt_lines:
+            raise ExperienceBankCorruptError(
+                f"experience bank {self.path} has {self.corrupt_lines} "
+                "unparseable line(s); refusing to serve a partial bank as a "
+                "planning input"
+            )
         scored: List[Tuple[ExperienceRecord, float]] = []
         with self._lock:
             corpus = list(self._records)

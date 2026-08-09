@@ -190,7 +190,7 @@ def test_result_wrapper_violated_and_accessors():
     assert result.violated(alpha=0.05) == ["exposure"]
     assert result.is_violated(alpha=0.05) is True
     assert result.global_p_value() < 0.05
-    # "global" is the joint row, never returned as a violated covariate.
+    # "global" is the Bonferroni summary row, never a covariate itself.
     assert "global" not in result.violated()
 
 

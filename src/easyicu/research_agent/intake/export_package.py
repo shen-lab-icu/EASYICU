@@ -1304,10 +1304,16 @@ def _native_selection(
             )
         concepts = _declared_concepts(entry)
         if not concepts:
-            raise ExportPackageError(
-                "native manifest files require concept_ids",
-                code="manifest_concept_ids_invalid",
+            structural_placeholder = (
+                entry.get("availability") == "structurally_unavailable"
+                and entry.get("rows") == 0
             )
+            if not structural_placeholder:
+                raise ExportPackageError(
+                    "native manifest files require concept_ids unless the file "
+                    "is an explicit zero-row structural placeholder",
+                    code="manifest_concept_ids_invalid",
+                )
         raw_count = entry.get("concepts")
         if not isinstance(raw_count, int) or isinstance(raw_count, bool):
             raise ExportPackageError(

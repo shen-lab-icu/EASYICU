@@ -37,7 +37,7 @@ from datetime import datetime
 REPAIR_KEYS = ("repair", "rewrite")
 AUDIT_KEYS = ("audit",)
 INIT_KEYS = ("initial",)
-RECEIPT_SCHEMA_VERSIONS = {1, 2, 3, 4, 5, 6}
+RECEIPT_SCHEMA_VERSIONS = {1, 2, 3, 4, 5, 6, 7}
 REPAIR_AUTHORITY_BINDING_SCHEMA_V2 = "easyicu.repair_authority_binding/2"
 REPAIR_TRANSPORT_PROVIDER_SUFFIXES = ("patch", "full_rewrite")
 RUN_SESSION_START = "Research context built."
@@ -211,6 +211,57 @@ def _verify_initial_generation(
         raise BaselineError(f"receipt failed initial generation invalid: {path}")
 
 
+def _verify_initial_generations(
+    raw_entries: object,
+    *,
+    categories: list[str],
+    path: str,
+) -> None:
+    """Mirror the schema-v7 append-only generation-ledger checks."""
+
+    if not isinstance(raw_entries, list):
+        raise BaselineError(f"receipt initial-generation ledger invalid: {path}")
+    seen_transport_ids: set[str] = set()
+    previous_transport_number = 0
+    previous_terminal_history_len = 0
+    for index, entry in enumerate(raw_entries):
+        _verify_initial_generation(entry, categories=categories, path=path)
+        if not isinstance(entry, dict):
+            raise BaselineError(f"receipt initial-generation entry invalid: {path}")
+        transport_id = str(entry["provider_transport_id"])
+        transport_number = int(transport_id.removeprefix("initial_generation:"))
+        transport = entry["transport"]
+        reserved_history_len = int(entry["provider_history_len"])
+        if (
+            transport_id in seen_transport_ids
+            or transport_number <= 0
+            or transport_number <= previous_transport_number
+            or reserved_history_len < previous_terminal_history_len
+            or (
+                isinstance(transport, dict)
+                and transport.get("state") == "pending"
+                and index != len(raw_entries) - 1
+            )
+            or (
+                index != len(raw_entries) - 1
+                and (
+                    not isinstance(transport, dict)
+                    or transport.get("state") not in {"completed", "failed"}
+                )
+            )
+        ):
+            raise BaselineError(
+                f"receipt initial-generation epochs inconsistent: {path}"
+            )
+        seen_transport_ids.add(transport_id)
+        previous_transport_number = transport_number
+        if isinstance(transport, dict) and transport.get("state") in {
+            "completed",
+            "failed",
+        }:
+            previous_terminal_history_len = int(transport["provider_history_len"])
+
+
 def _categorize(cat: str) -> str:
     c = cat.lower()
     if any(k in c for k in AUDIT_KEYS):
@@ -267,7 +318,7 @@ def read_receipts(run_dir: str, inputs: dict) -> list[dict]:
         for c in cats:
             breakdown[_categorize(c)] += 1
         logical_repairs = d.get("logical_repairs", [])
-        if d.get("schema_version") in {3, 4, 5, 6}:
+        if d.get("schema_version") in {3, 4, 5, 6, 7}:
             if not isinstance(logical_repairs, list):
                 raise BaselineError(f"receipt logical repair ledger invalid: {p}")
             for index, entry in enumerate(logical_repairs, start=1):
@@ -312,7 +363,7 @@ def read_receipts(run_dir: str, inputs: dict) -> list[dict]:
                         f"receipt logical repair history inconsistent: {p}"
                     )
                 provider_category = _bound_repair_provider_category(binding, path=p)
-                if d.get("schema_version") in {5, 6}:
+                if d.get("schema_version") in {5, 6, 7}:
                     transport = entry.get("transport")
                     if not isinstance(transport, dict):
                         raise BaselineError(
@@ -358,7 +409,7 @@ def read_receipts(run_dir: str, inputs: dict) -> list[dict]:
                                 "provider_calls",
                             }
                             result_persistence = transport.get("result_persistence")
-                            if d.get("schema_version") == 6:
+                            if d.get("schema_version") in {6, 7}:
                                 completed_keys.add("result_persistence")
                             if result_persistence == "content_addressed":
                                 completed_keys.add("after_code_size_bytes")
@@ -370,7 +421,7 @@ def read_receipts(run_dir: str, inputs: dict) -> list[dict]:
                                 and transport["mode"]
                                 and _is_sha256_hex(transport.get("after_code_sha256"))
                                 and (
-                                    d.get("schema_version") != 6
+                                    d.get("schema_version") not in {6, 7}
                                     or result_persistence
                                     in {
                                         "content_addressed",
@@ -424,12 +475,27 @@ def read_receipts(run_dir: str, inputs: dict) -> list[dict]:
                 f"legacy receipt unexpectedly declares logical repairs: {p}"
             )
         if d.get("schema_version") == 6:
+            if d.get("initial_generations") is not None:
+                raise BaselineError(
+                    f"schema-v6 receipt declares generation ledger: {p}"
+                )
             _verify_initial_generation(
                 d.get("initial_generation"), categories=cats, path=p
             )
-        elif d.get("initial_generation") is not None:
+        elif d.get("schema_version") == 7:
+            if d.get("initial_generation") is not None:
+                raise BaselineError(
+                    f"schema-v7 receipt declares legacy initial generation: {p}"
+                )
+            _verify_initial_generations(
+                d.get("initial_generations"), categories=cats, path=p
+            )
+        elif (
+            d.get("initial_generation") is not None
+            or d.get("initial_generations") is not None
+        ):
             raise BaselineError(f"legacy receipt declares initial generation: {p}")
-        if d.get("schema_version") in {4, 5, 6}:
+        if d.get("schema_version") in {4, 5, 6, 7}:
             reservation = d.get("final_reservation_state")
             if not isinstance(reservation, dict):
                 raise BaselineError(f"receipt final reservation state invalid: {p}")

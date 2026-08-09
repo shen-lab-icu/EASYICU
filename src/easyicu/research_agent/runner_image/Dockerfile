@@ -25,7 +25,19 @@
 # * `PYTHONHASHSEED=0`            — best-effort reproducibility for
 #                                    set/dict ordering in artefacts.
 
-FROM python:3.11-slim
+# `python:3.11-slim` is a moving tag: the same Dockerfile builds a different
+# environment as the tag is republished, which defeats the point of a
+# reproducible analysis sandbox. BASE_IMAGE exists so a run that must be
+# reproducible pins the digest explicitly:
+#
+#   digest=$(docker buildx imagetools inspect python:3.11-slim \
+#              --format '{{.Manifest.Digest}}')
+#   docker build --build-arg BASE_IMAGE=python:3.11-slim@${digest} ...
+#
+# and records that digest next to requirements.lock. The tag default is kept so
+# a plain `docker build` still works; it is NOT a reproducible build.
+ARG BASE_IMAGE=python:3.11-slim
+FROM ${BASE_IMAGE}
 
 # Official PyPI remains the reproducible public default. Builders on a slow
 # route may override it without changing the image contract, for example:
@@ -36,7 +48,7 @@ ARG DEBIAN_SECURITY_MIRROR=http://deb.debian.org/debian-security
 
 LABEL org.opencontainers.image.title="easyicu-research-agent runner"
 LABEL org.opencontainers.image.description="Sandbox image for the EasyICU research-agent code runner (T3.1)."
-LABEL org.opencontainers.image.source="https://github.com/your-org/EASYICU"
+LABEL org.opencontainers.image.source="https://github.com/shen-lab-icu/EASYICU"
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \

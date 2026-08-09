@@ -46,12 +46,85 @@ def test_runtime_failure_classifier_does_not_relabel_code_errors() -> None:
 
 
 def test_timeout_is_not_relabelled_from_partial_table_one_log() -> None:
-    assert (
-        classify_runtime_failure(
-            run_log="A Planner-declared Table 1 group is empty",
-            timed_out=True,
-            step_id="02_table_one",
-            returncode=124,
-        )
-        is None
+    """A killed script may have emitted any prefix of any signature.
+
+    The classifier must attribute the timeout, never the half-written log it
+    left behind.
+    """
+
+    decision = classify_runtime_failure(
+        run_log="A Planner-declared Table 1 group is empty",
+        timed_out=True,
+        step_id="02_table_one",
+        returncode=124,
     )
+    assert decision is not None
+    assert decision.step_updates["runtime_failure_class"] == (
+        RuntimeFailureClass.EXECUTION_TIMEOUT.value
+    )
+    assert decision.step_updates["runtime_failure_class"] != (
+        RuntimeFailureClass.PLAN_DATA_CONTRACT.value
+    )
+
+
+def test_a_timeout_does_not_buy_a_coder_repair() -> None:
+    """The step is killed mid-run, so the repairer would read a truncated log.
+
+    Rewriting the script cannot shorten a computation the wall clock ended;
+    spending repair attempts on it re-runs the same overlong work until the
+    budget is gone. The timeout must terminate the step instead.
+    """
+
+    decision = classify_runtime_failure(
+        run_log="partial output, no traceback",
+        timed_out=True,
+        step_id="04_missingness_audit",
+        returncode=-9,
+        timeout_seconds=900.0,
+    )
+    assert decision is not None
+    assert decision.step_updates["llm_repair_used"] is False
+    assert decision.step_updates["runtime_repair_route"] == "fail_closed"
+    assert decision.step_updates["status"] == "execution_failed"
+    assert decision.finding.severity == "error"
+
+
+def test_the_timeout_finding_names_the_limit_that_was_hit() -> None:
+    """An operator deciding between a bigger budget and a deterministic
+    executor needs to know which wall clock ended the step."""
+
+    decision = classify_runtime_failure(
+        run_log="",
+        timed_out=True,
+        step_id="06_cox_model",
+        returncode=-9,
+        timeout_seconds=900.0,
+        deterministic_executor_used=False,
+    )
+    assert decision is not None
+    assert decision.finding.detail["timeout_seconds"] == 900.0
+    assert decision.finding.detail["deterministic_executor_used"] is False
+    assert decision.step_updates["execution_timeout_seconds"] == 900.0
+    assert decision.step_updates["timed_out"] is True
+
+
+def test_the_timeout_class_is_reported_separately_from_a_code_failure() -> None:
+    """`status="execution_failed"` alone cannot distinguish "the script raised"
+    from "the script ran out of time"; only the class can."""
+
+    timeout = classify_runtime_failure(
+        run_log="",
+        timed_out=True,
+        step_id="06_cox_model",
+        returncode=-9,
+    )
+    code_error = classify_runtime_failure(
+        run_log="NameError: name 'model_frame' is not defined",
+        timed_out=False,
+        step_id="06_cox_model",
+        returncode=1,
+    )
+    assert timeout is not None
+    assert timeout.finding.validator == "runtime_execution_timeout"
+    # A genuine code error still belongs to the Coder repair loop.
+    assert code_error is None

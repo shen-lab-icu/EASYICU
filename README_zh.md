@@ -8,7 +8,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Version](https://img.shields.io/badge/version-1.0.0-green.svg)](https://github.com/shen-lab-icu/easyicu)
 
-EasyICU 是一个面向重症监护室（ICU）数据分析的 Python 工具包。它统一接入 **6 个主流公开 ICU 数据库**，支持 **200+ 种标准化临床概念**的自动提取（Web 端目录共 **217 个** —— 204 个字典概念加上 13 个专用概念：10 个 KDIGO AKI 分期输出、2 个循环衰竭指标和 Sepsis-3 SOFA-1 诊断，全部都能通过同一个 `load_concepts(...)` 调用获取），并提供 **Web 可视化界面**，帮助用户完成队列定义、特征审阅、可视化分析与数据导出。
+EasyICU 是一个面向重症监护室（ICU）数据分析的 Python 工具包。它统一接入 **6 个主流公开 ICU 数据库**，支持 **200+ 种标准化临床概念**的自动提取（Web 端目录共 **224 个** —— 204 个字典概念加上 20 个专用概念：17 个 KDIGO AKI 分期与可判定性输出、2 个循环衰竭指标和 Sepsis-3 SOFA-1 诊断，全部都能通过同一个 `load_concepts(...)` 调用获取），并提供 **Web 可视化界面**，帮助用户完成队列定义、特征审阅、可视化分析与数据导出。
 
 ## 为什么是 EasyICU
 
@@ -370,7 +370,9 @@ sepsis = load_concepts(
 # 自动路由到对应的加载函数，对调用方完全透明。
 aki_and_circ = load_concepts(
     concepts=['aki', 'aki_stage', 'aki_stage_creat', 'aki_stage_uo',
-              'aki_stage_rrt', 'uo_rt_6hr', 'uo_rt_12hr', 'uo_rt_24hr',
+              'aki_stage_rrt', 'aki_assessable', 'aki_ascertainment',
+              'observation_window_coverage',
+              'uo_rt_6hr', 'uo_rt_12hr', 'uo_rt_24hr',
               'creat_low_past_48hr', 'creat_low_past_7day',
               'circ_failure', 'circ_event'],
     database='miiv',
@@ -393,11 +395,27 @@ all_features = load_concepts(
 )
 ```
 
+只有当 `aki_ascertainment == 'negative_complete'` 时，`aki_stage == 0`
+才表示可以确定的无 AKI；`partial` 或 `indeterminate` 行不能作为无 AKI 对照。
+
 > **关于全患者提取**：当你不传 `patient_ids` 和 `max_patients` 时，
 > EasyICU 会加载整个数据库的所有患者。在内存紧张（< 6 GB 可用）的机器上
 > 会自动分批到 subprocess。可以用环境变量
 > `EASYICU_BATCH_TIMEOUT_SEC`（默认 3600）限制每个 batch 的最大时长，
 > 子进程超时会被强制杀掉，避免父进程永远等下去。
+> 对 `extract_database(..., stream_output_batches=True)` 的磁盘导出，
+> 默认批量按**当前可用内存**连续计算：保留 25%（且至少保留 2 GiB），
+> 再把连续容量估计与本轮六库实测峰值结合，随后让每个模块根据首批进程树
+> 工作集调整后续批次（上限 67,000）。这不是固定 10,000 档：约 8 GiB
+> 可用时，当前首批约为 MIMIC-III 20,000、MIMIC-IV 37,000、eICU 25,000；
+> 数据异常稠密的 AUMC 则从 5,000 开始。可用内存低于 24 GiB 时，
+> MIMIC-III、MIMIC-IV 和 AUMC 必须先提供首批实测，不能直接 one-shot；
+> SIC/HiRID 等较低风险队列若保守峰值能放入预留后预算则仍可 one-shot。
+> 若只是高风险保护要求拆批，首批按均衡的一半开始，不制造极小尾批。该保护来自
+> 2026-08-03 全量证据：MIMIC-III one-shot 约 16.83 GiB、AUMC one-shot
+> 约 29.31 GiB，eICU 67,000-stay 的 `other_scores` 批约 15.6 GiB。
+> manifest 会记录模块及逐批峰值 RSS；Sepsis 标签派生复用相同外层批次，
+> 不再暗中固定切成 2,000-stay 小批。用户显式传入的 `batch_size` 始终优先。
 
 ### 专业模块
 

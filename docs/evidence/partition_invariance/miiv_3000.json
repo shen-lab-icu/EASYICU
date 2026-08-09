@@ -1,0 +1,159 @@
+{
+  "code_commit": "24711373acf39ae0c70ff216efaea7b646c058e8",
+  "code_tree_clean": true,
+  "comparison": "sha256 over the canonicalised frame (columns sorted, rows sorted, CSV rendering); equivalent to assert_frame_equal(check_exact=True) on the canonical ordering. NOT a byte comparison of stored files.",
+  "database": "miiv",
+  "kind": "sofa_partition_invariance_v1",
+  "pandas": "2.2.3",
+  "passed": true,
+  "platform": "macOS-15.7.1-arm64-arm-64bit-Mach-O",
+  "prepared_manifest_sha256": "78b9442ce0a13464187ae27b59c2ea086b1da920f61353f84d21707ab702e804",
+  "python": "3.13.5",
+  "requested_cohort": 3000,
+  "results": [
+    {
+      "cohort_id_sha256": "ca2ed463145437c38ac498c9ad796654501a1eeb9796d1b9adfd04eb63a7be54",
+      "cohort_size": 3000,
+      "concept": "sofa",
+      "configurations": [
+        {
+          "canonical_frame_sha256": "3266572dc7568d0e0a695fb4ec6af208eb2182122e98cdc3a1c228c2e8c13dd6",
+          "matches_reference": true,
+          "parameter": "chunk_size",
+          "rows": 706167,
+          "seconds": 31.29,
+          "value": 250
+        },
+        {
+          "canonical_frame_sha256": "3266572dc7568d0e0a695fb4ec6af208eb2182122e98cdc3a1c228c2e8c13dd6",
+          "matches_reference": true,
+          "parameter": "chunk_size",
+          "rows": 706167,
+          "seconds": 17.43,
+          "value": 500
+        },
+        {
+          "canonical_frame_sha256": "3266572dc7568d0e0a695fb4ec6af208eb2182122e98cdc3a1c228c2e8c13dd6",
+          "matches_reference": true,
+          "parameter": "chunk_size",
+          "rows": 706167,
+          "seconds": 9.05,
+          "value": 1000
+        },
+        {
+          "canonical_frame_sha256": "3266572dc7568d0e0a695fb4ec6af208eb2182122e98cdc3a1c228c2e8c13dd6",
+          "matches_reference": true,
+          "parameter": "chunk_size",
+          "rows": 706167,
+          "seconds": 6.02,
+          "value": 2000
+        },
+        {
+          "canonical_frame_sha256": "3266572dc7568d0e0a695fb4ec6af208eb2182122e98cdc3a1c228c2e8c13dd6",
+          "matches_reference": true,
+          "parameter": "chunk_size",
+          "rows": 706167,
+          "seconds": 3.95,
+          "value": 4000
+        },
+        {
+          "canonical_frame_sha256": "3266572dc7568d0e0a695fb4ec6af208eb2182122e98cdc3a1c228c2e8c13dd6",
+          "matches_reference": true,
+          "parameter": "parallel_workers",
+          "rows": 706167,
+          "seconds": 5.92,
+          "value": 1
+        },
+        {
+          "canonical_frame_sha256": "3266572dc7568d0e0a695fb4ec6af208eb2182122e98cdc3a1c228c2e8c13dd6",
+          "matches_reference": true,
+          "parameter": "parallel_workers",
+          "rows": 706167,
+          "seconds": 4.61,
+          "value": 4
+        }
+      ],
+      "passed": true,
+      "reference_canonical_frame_sha256": "3266572dc7568d0e0a695fb4ec6af208eb2182122e98cdc3a1c228c2e8c13dd6",
+      "reference_dtypes": {
+        "charttime": "float64",
+        "sofa": "float32",
+        "stay_id": "int64"
+      },
+      "reference_rows": 706167,
+      "reference_seconds": 7.91
+    },
+    {
+      "cohort_id_sha256": "ca2ed463145437c38ac498c9ad796654501a1eeb9796d1b9adfd04eb63a7be54",
+      "cohort_size": 3000,
+      "concept": "sofa2",
+      "configurations": [
+        {
+          "canonical_frame_sha256": "90dbaf09ec70e713c7050408620d9b93d0d1ec37d326278b01d517bf4c17850a",
+          "matches_reference": true,
+          "parameter": "chunk_size",
+          "rows": 634727,
+          "seconds": 114.22,
+          "value": 250
+        },
+        {
+          "canonical_frame_sha256": "90dbaf09ec70e713c7050408620d9b93d0d1ec37d326278b01d517bf4c17850a",
+          "matches_reference": true,
+          "parameter": "chunk_size",
+          "rows": 634727,
+          "seconds": 67.51,
+          "value": 500
+        },
+        {
+          "canonical_frame_sha256": "90dbaf09ec70e713c7050408620d9b93d0d1ec37d326278b01d517bf4c17850a",
+          "matches_reference": true,
+          "parameter": "chunk_size",
+          "rows": 634727,
+          "seconds": 52.2,
+          "value": 1000
+        },
+        {
+          "canonical_frame_sha256": "90dbaf09ec70e713c7050408620d9b93d0d1ec37d326278b01d517bf4c17850a",
+          "matches_reference": true,
+          "parameter": "chunk_size",
+          "rows": 634727,
+          "seconds": 42.16,
+          "value": 2000
+        },
+        {
+          "canonical_frame_sha256": "90dbaf09ec70e713c7050408620d9b93d0d1ec37d326278b01d517bf4c17850a",
+          "matches_reference": true,
+          "parameter": "chunk_size",
+          "rows": 634727,
+          "seconds": 22.29,
+          "value": 4000
+        },
+        {
+          "canonical_frame_sha256": "90dbaf09ec70e713c7050408620d9b93d0d1ec37d326278b01d517bf4c17850a",
+          "matches_reference": true,
+          "parameter": "parallel_workers",
+          "rows": 634727,
+          "seconds": 27.75,
+          "value": 1
+        },
+        {
+          "canonical_frame_sha256": "90dbaf09ec70e713c7050408620d9b93d0d1ec37d326278b01d517bf4c17850a",
+          "matches_reference": true,
+          "parameter": "parallel_workers",
+          "rows": 634727,
+          "seconds": 19.01,
+          "value": 4
+        }
+      ],
+      "passed": true,
+      "reference_canonical_frame_sha256": "90dbaf09ec70e713c7050408620d9b93d0d1ec37d326278b01d517bf4c17850a",
+      "reference_dtypes": {
+        "charttime": "float64",
+        "sofa2": "float32",
+        "stay_id": "int64"
+      },
+      "reference_rows": 634727,
+      "reference_seconds": 24.64
+    }
+  ]
+}

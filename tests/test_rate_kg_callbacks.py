@@ -100,6 +100,37 @@ def test_eicu_rate_kg_missing_weight_leaves_non_perkg_rate_missing():
     assert by_id.loc[3] == pytest.approx(2.0)
 
 
+def test_eicu_rate_kg_single_point_preserves_patientunitstayid():
+    """pandas 3 excludes the group key from one-row ``groupby.apply`` frames."""
+
+    callback = eicu_rate_kg_callback(ml_to_mcg=2000.0)
+    frame = pd.DataFrame(
+        {
+            "patientunitstayid": [101],
+            "infusionoffset": [60],
+            "drugrate": [2.5],
+            "drugname": ["Dobutamine (mcg/kg/min)"],
+            "patientweight": [70.0],
+        }
+    )
+
+    result = callback(
+        frame,
+        val_var="drugrate",
+        sub_var="drugname",
+        weight_var="patientweight",
+        concept_name="dobu_rate",
+    )
+
+    assert set(result.columns) == {
+        "patientunitstayid",
+        "infusionoffset",
+        "dobu_rate",
+    }
+    assert result["patientunitstayid"].tolist() == [101]
+    assert result["dobu_rate"].tolist() == [2.5]
+
+
 def test_aumc_rate_kg_missing_weight_drops_only_non_perkg_rows():
     frame = pd.DataFrame(
         {

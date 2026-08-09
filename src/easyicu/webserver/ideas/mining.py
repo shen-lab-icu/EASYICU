@@ -2767,6 +2767,19 @@ def _prior_art_review(prior_art_check: Optional[Dict[str, Any]]) -> Dict[str, An
     }
 
 
+#: Stable identifiers for the four conditions this gate can block on, paired
+#: with the sentence older seeds carry. The gate has always decided from typed
+#: conditions, but only emitted the sentence — so the UI regex-matched English
+#: prose to work out what the user should do about it. The code is the
+#: contract; the sentence stays for seeds already written to disk.
+EXECUTION_GATE_BLOCKERS: Dict[str, str] = {
+    "export_not_real": "prepare or select a real EasyICU export",
+    "required_concepts_missing": "re-extract or confirm missing required concepts",
+    "prior_art_not_reviewed": "run prior-art review before Agent execution",
+    "idea_not_recommended": "resolve idea feasibility before Agent execution",
+}
+
+
 def _execution_gate(
     idea: Dict[str, Any],
     pre_experiment: Dict[str, Any],
@@ -2777,11 +2790,11 @@ def _execution_gate(
         str(cid) for cid in pre_experiment.get("missing_required_concepts") or [] if cid
     ]
     prior = (prior_art_check or {}).get("prior_art") or {}
-    blockers: List[str] = []
+    codes: List[str] = []
     if export_status in {"", "blocked", "demo_only"} or "demo" in export_status:
-        blockers.append("prepare or select a real EasyICU export")
+        codes.append("export_not_real")
     elif export_status == "partial" or missing:
-        blockers.append("re-extract or confirm missing required concepts")
+        codes.append("required_concepts_missing")
     # A prior-art review only satisfies the gate when a search actually
     # completed: a blocked opt-in placeholder has search_performed=False, and
     # an attempted-but-failed search (status "search_failed") returned no
@@ -2790,15 +2803,17 @@ def _execution_gate(
         str(prior.get("status") or "") != "search_failed"
     )
     if not prior_reviewed:
-        blockers.append("run prior-art review before Agent execution")
+        codes.append("prior_art_not_reviewed")
     if idea.get("go_no_go") != "recommend":
-        blockers.append("resolve idea feasibility before Agent execution")
+        codes.append("idea_not_recommended")
+    blockers = [EXECUTION_GATE_BLOCKERS[code] for code in codes]
     return {
         "project_seed_allowed": True,
-        "agent_run_ready_after_human_confirmation": not blockers,
+        "agent_run_ready_after_human_confirmation": not codes,
         "reportable": False,
         "draft_unlocked": False,
         "blockers": blockers,
+        "blocker_codes": codes,
         "export_status": pre_experiment.get("status") or "blocked",
         "prior_art_status": prior.get("status") or "not_checked",
         "go_no_go": idea.get("go_no_go"),
@@ -3861,6 +3876,17 @@ def _extra_aliases(concept_id: str, label: str) -> set[str]:
         aliases.update({"blood pressure", "hypotension", "shock"})
     if concept_id == "lact":
         aliases.update({"lactate", "乳酸"})
+    if concept_id == "mech_vent":
+        aliases.update(
+            {
+                "mechanical ventilation",
+                "mechanically ventilated",
+                "invasive ventilation",
+                "noninvasive ventilation",
+                "non-invasive ventilation",
+                "机械通气",
+            }
+        )
     if concept_id == "death":
         aliases.update({"mortality", "death", "survival", "死亡", "病死率"})
     if concept_id == "sep3_sofa2":

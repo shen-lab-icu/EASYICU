@@ -43,7 +43,16 @@ def _step(
     return AnalysisStep(
         step_id=step_id,
         intent="Estimate the adjusted association.",
-        method="adjusted_association_models",
+        planned_analysis_role=(
+            "primary"
+            if not model_requirements or source_role == "primary"
+            else "auxiliary"
+        ),
+        method=(
+            "adjusted_association_models"
+            if model_requirements
+            else "logistic_regression"
+        ),
         expected_outputs=["table:adjusted_association_estimates"],
         model_requirements=model_requirements,
     )
@@ -498,7 +507,9 @@ def test_replanner_injects_methodological_principles(monkeypatch):
 
     # Sidestep the heavy ResearchContext rendering; we only assert the system
     # message the replanner builds, not the user prompt.
+    monkeypatch.setattr(A, "scoped_planner_context", lambda ctx: ctx)
     monkeypatch.setattr(A, "_format_context", lambda ctx, **_kwargs: "CTX")
+    monkeypatch.setattr(A, "planner_variable_catalog", lambda *_args: "CATALOG")
     monkeypatch.setattr(SR, "call_llm_with_structured_retry", _fake_retry)
 
     out = A.ReplannerAgent(llm=object()).run(

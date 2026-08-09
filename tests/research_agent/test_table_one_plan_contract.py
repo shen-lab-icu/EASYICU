@@ -26,6 +26,9 @@ from easyicu.research_agent.audits.validators import LLMConceptAuditor
 from easyicu.research_agent.methods.table_one import build_grouped_table_one
 from easyicu.research_agent.providers.mocks import ExternalCaptureMockLLMClient
 from easyicu.research_agent.providers.prompts import load_prompt_pack
+from easyicu.research_agent.execution.runners.table_one_executor import (
+    table_one_executor_code,
+)
 from easyicu.research_agent.repairs.patch import PATCH_FORMAT
 from easyicu.research_agent.repairs.reasons import (
     RepairPromptAuthority,
@@ -231,6 +234,27 @@ def test_fresh_planner_table_one_preserves_typed_design() -> None:
     assert plan.steps[0].table_one_spec is not None
     assert plan.steps[0].table_one_spec.group_by == "arm"
     assert plan.steps[0].table_one_spec.variables[0].test == ("mann_whitney_or_kruskal")
+
+
+def test_table_one_plan_rejects_outputs_without_a_closed_host_owner() -> None:
+    payload = _step(include_spec=True)
+    payload["expected_outputs"] = [
+        "table:table_one",
+        "statistic:locally_reconstructed_result",
+    ]
+
+    with pytest.raises(ValidationError, match="closed host-executable outputs"):
+        AnalysisStep.model_validate(payload)
+
+
+def test_table_one_without_measurement_pairs_emits_no_provenance_helper_call() -> None:
+    step = AnalysisStep.model_validate(_step(include_spec=True))
+
+    source = table_one_executor_code(step)
+
+    compile(source, "<table-one-executor>", "exec")
+    assert "measurement_provenance_receipt(" not in source
+    assert "measurement_checks = []" in source
 
 
 def test_planner_prompt_lists_exact_table_one_enums_and_rejects_shorthand() -> None:
@@ -699,24 +723,26 @@ def test_table_one_spec_must_bind_only_explicit_step_inputs() -> None:
         AnalysisStep.model_validate(payload)
 
 
-def test_plan_normalizer_keeps_only_closed_table_one_schema() -> None:
+def test_plan_normalizer_retries_unknown_table_one_science() -> None:
+    from easyicu.research_agent.agents.plan_payload import (
+        PlannerScientificProjectionError,
+    )
+
     payload = {
         "research_question": "Describe the cohort.",
         "steps": [_step(include_spec=True)],
     }
     payload["steps"][0]["table_one_spec"]["invented_policy"] = "ignore"
     payload["steps"][0]["table_one_spec"]["variables"][0]["invented"] = True
-    normalized, dropped = _normalise_plan_payload(payload)
-    spec = normalized["steps"][0]["table_one_spec"]
-    assert "invented_policy" not in spec
-    assert "invented" not in spec["variables"][0]
-    assert dropped["table_one_spec"] == [
-        "step[0]:invented_policy",
-        "step[0].variables[0]:invented",
-    ]
+    with pytest.raises(PlannerScientificProjectionError, match="invented_policy"):
+        _normalise_plan_payload(payload)
 
 
-def test_plan_normalizer_omits_empty_unsupported_consumption_contract() -> None:
+def test_plan_normalizer_retries_unsupported_consumption_contract_shape() -> None:
+    from easyicu.research_agent.agents.plan_payload import (
+        PlannerScientificProjectionError,
+    )
+
     payload = {
         "research_question": "Describe the cohort.",
         "steps": [
@@ -732,13 +758,8 @@ def test_plan_normalizer_omits_empty_unsupported_consumption_contract() -> None:
         ],
     }
 
-    normalized, dropped = _normalise_plan_payload(payload)
-
-    assert normalized["steps"][0]["input_consumption_contracts"] == []
-    assert any(
-        item.endswith(":empty_after_normalization")
-        for item in dropped["input_consumption_contracts"]
-    )
+    with pytest.raises(PlannerScientificProjectionError, match="input"):
+        _normalise_plan_payload(payload)
 
 
 def test_table_one_sdk_guidance_is_only_added_for_typed_table_one() -> None:

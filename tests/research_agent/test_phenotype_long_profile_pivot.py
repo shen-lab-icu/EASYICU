@@ -67,6 +67,37 @@ def _wide_profiles() -> pd.DataFrame:
     )
 
 
+def _canonical_phenotype_profiles() -> pd.DataFrame:
+    rows = []
+    medians = {
+        (0, "hr_mean"): 82.1,
+        (0, "map_mean"): 78.4,
+        (0, "lact_first"): 1.8,
+        (1, "hr_mean"): 96.2,
+        (1, "map_mean"): 64.7,
+        (1, "lact_first"): 4.3,
+    }
+    sizes = {0: 180, 1: 90}
+    for (cluster, feature), median in medians.items():
+        rows.append(
+            {
+                "representation": "primary",
+                "profile_status": "primary_solution",
+                "cluster": cluster,
+                "cluster_n": sizes[cluster],
+                "feature": feature,
+                "observed_n": sizes[cluster],
+                "imputed_n": 0,
+                "unavailable_n": 0,
+                "median": median,
+                "q25": median - 0.5,
+                "q75": median + 0.5,
+                "summary_scale": "raw_original_scale",
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 # --- pure pivot -------------------------------------------------------------
 
 
@@ -141,9 +172,115 @@ def test_renderer_on_long_table_uses_clinical_variables(tmp_path: Path):
     )
     assert fig is not None
     assert len(fig.panels) == 3
-    profiles = fig.source_frames["cluster_profiles"]
-    cols = set(profiles.columns)
-    # the heatmap's feature axis is the clinical variables, not stat columns
-    assert {"lactate", "creatinine", "map"} <= cols
-    assert "sd" not in cols and "median" not in cols
+    profiles = fig.source_frames["phenotype_profile_plot_data"]
+    # The source bundle records both the raw centroids and the exact z-scored
+    # values drawn in panels A/B, rather than treating the parent table as the
+    # final plot source.
+    assert {"lactate", "creatinine", "map"} <= set(profiles["feature"])
+    assert {"centroid_value", "standardised_value"} <= set(profiles.columns)
+    stability = fig.source_frames["phenotype_stability_plot_data"]
+    assert {"cluster_size", "overall_silhouette"} <= set(stability.columns)
     plt.close(fig.fig)
+
+
+def test_renderer_does_not_draw_unit_height_bars_when_sizes_are_missing(tmp_path: Path):
+    import matplotlib.pyplot as plt
+
+    evidence = EvidenceStore(tmp_path)
+    no_sizes = _wide_profiles().drop(columns=["n"])
+    _register(evidence, tmp_path, _PROFILE_NAMES[0], no_sizes)
+    rendered = render_phenotype_figure(
+        context=ResearchContext(
+            research_question="Identify sepsis subphenotypes by clustering.",
+            cohort={
+                "cohort_name": "c",
+                "database": "miiv",
+                "n_patients": 3,
+                "n_stays": 3,
+            },
+            variables=[],
+        ),
+        plan=AnalysisPlan(research_question="q", steps=[]),
+        evidence=evidence,
+        run_dir=tmp_path,
+    )
+
+    assert rendered is not None
+    stability_axis = rendered.fig.axes[2]
+    assert not stability_axis.patches
+    assert any(
+        text.get_text() == "Cluster sizes unavailable"
+        for text in stability_axis.texts
+    )
+    plt.close(rendered.fig)
+
+
+def test_renderer_accepts_canonical_phenotype_product_names(tmp_path: Path):
+    """The typed M3 products must reach the phenotyping renderer by exact name."""
+
+    import matplotlib.pyplot as plt
+
+    evidence = EvidenceStore(tmp_path)
+    _register(
+        evidence,
+        tmp_path,
+        "phenotype_profiles",
+        _canonical_phenotype_profiles(),
+    )
+    _register(
+        evidence,
+        tmp_path,
+        "cluster_stability",
+        pd.DataFrame(
+            {
+                "representation": ["primary"],
+                "metric": ["silhouette"],
+                "k": [2],
+                "estimate": [0.2774],
+            }
+        ),
+    )
+    context = ResearchContext(
+        research_question="Identify sepsis subphenotypes by clustering.",
+        cohort={
+            "cohort_name": "c",
+            "database": "miiv",
+            "n_patients": 270,
+            "n_stays": 270,
+        },
+        variables=[],
+    )
+
+    rendered = render_phenotype_figure(
+        context=context,
+        plan=AnalysisPlan(research_question="q", steps=[]),
+        evidence=evidence,
+        run_dir=tmp_path,
+    )
+
+    assert rendered is not None
+    assert [panel["role"] for panel in rendered.panels] == [
+        "phenotype_structure",
+        "phenotype_profile",
+        "stability",
+    ]
+    assert rendered.source_evidence_ids == [
+        "phenotype_profiles",
+        "cluster_stability",
+    ]
+    assert rendered.panels[2]["evidence_ids"] == [
+        "phenotype_profiles",
+        "cluster_stability",
+    ]
+    assert rendered.panels[2]["claim"] == (
+        "The qualified overall silhouette value is shown; cluster sizes were "
+        "unavailable from the registered profile evidence."
+    )
+    stability_source = rendered.source_frames["phenotype_stability_plot_data"]
+    assert stability_source["overall_silhouette"].tolist() == [0.2774, 0.2774]
+    assert any(
+        text.get_text() == "silhouette 0.28"
+        for axis in rendered.fig.axes
+        for text in axis.texts
+    )
+    plt.close(rendered.fig)

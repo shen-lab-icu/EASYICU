@@ -334,11 +334,47 @@ def table_one_spec_binding_findings(
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Name)
             and node.func.id in call_names
-            and len(node.args) >= 2
-            and isinstance(node.args[1], ast.Name)
         ):
             continue
-        spec_name = node.args[1].id
+        # Which spec is passed was checked here; whether one is passed at all
+        # was not, because the old entry condition required two arguments
+        # before it would look. A call that supplies none skipped the gate
+        # that exists to constrain it and died in the sandbox instead, on
+        # 3 of 124 recorded calls to this helper.
+        spec_argument: ast.expr | None = None
+        if len(node.args) >= 2:
+            spec_argument = node.args[1]
+        else:
+            for keyword in node.keywords:
+                if keyword.arg == "spec":
+                    spec_argument = keyword.value
+                    break
+        if spec_argument is None:
+            if any(keyword.arg is None for keyword in node.keywords):
+                # ``**mapping`` may carry it; the argument is not resolvable
+                # here and refusing it would block legal code.
+                continue
+            findings.append(
+                ValidationFinding(
+                    validator="mechanical_code_preflight",
+                    severity="error",
+                    message=(
+                        "The grouped Table 1 SDK call must be given the "
+                        "Planner-owned table_one_spec as its second argument; "
+                        "this call passes no spec at all."
+                    ),
+                    detail={
+                        "reason": "table_one_spec_not_passed",
+                        "helper_name": "build_grouped_table_one",
+                        "line": int(node.lineno),
+                        "expected_spec": planner_expected,
+                    },
+                )
+            )
+            continue
+        if not isinstance(spec_argument, ast.Name):
+            continue
+        spec_name = spec_argument.id
         sites = assignments.get(spec_name, [])
         if len(sites) != 1 or sites[0].lineno >= node.lineno:
             continue

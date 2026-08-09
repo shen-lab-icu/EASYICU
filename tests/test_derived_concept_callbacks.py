@@ -22,6 +22,7 @@ from easyicu.concept.callbacks import (
     CALLBACK_REGISTRY,
     ConceptCallbackContext,
     _callback_anion_gap,
+    _callback_bmi,
     _callback_pulse_pressure,
 )
 from easyicu.table import ICUTable
@@ -122,6 +123,45 @@ def test_anion_gap_filters_implausible_values():
 
 def test_anion_gap_registered_in_callback_registry():
     assert CALLBACK_REGISTRY.get("anion_gap") is _callback_anion_gap
+
+
+# ---------------------------------------------------------------------------
+# bmi
+# ---------------------------------------------------------------------------
+
+
+def test_bmi_empty_components_preserve_derived_value_schema():
+    """Structural non-availability must return a valid empty ICUTable."""
+    tables = {
+        "weight": ICUTable(
+            pd.DataFrame(
+                {
+                    "stay_id": pd.Series(dtype="int64"),
+                    "weight": pd.Series(dtype="float64"),
+                }
+            ),
+            id_columns=["stay_id"],
+            index_column=None,
+            value_column="weight",
+        ),
+        "height": ICUTable(
+            pd.DataFrame(
+                {
+                    "stay_id": pd.Series(dtype="int64"),
+                    "height": pd.Series(dtype="float64"),
+                }
+            ),
+            id_columns=["stay_id"],
+            index_column=None,
+            value_column="height",
+        ),
+    }
+
+    result = _callback_bmi(tables, _ctx("bmi"))
+
+    assert result.data.empty
+    assert result.value_column == "bmi"
+    assert list(result.data.columns) == ["stay_id", "bmi"]
 
 
 # ---------------------------------------------------------------------------

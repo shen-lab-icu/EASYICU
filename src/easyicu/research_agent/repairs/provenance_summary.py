@@ -994,6 +994,205 @@ def patch_unplanned_measurement_provenance_summary(
     return repaired
 
 
+def patch_unplanned_measurement_provenance_specs(
+    code: str,
+    *,
+    findings: Sequence[Any],
+) -> str:
+    """Remove rejected rows from one proven host-receipt specification loop."""
+
+    rejected: dict[str, int] = {}
+    planned_sets: set[tuple[str, ...]] = set()
+    for finding in findings:
+        validator, severity, _message, detail = _finding_parts(finding)
+        if (
+            validator != "step_summary_integrity"
+            or severity != "error"
+            or not isinstance(detail, dict)
+            or detail.get("issue") != "measurement_provenance_check_unplanned"
+        ):
+            continue
+        measured_column = detail.get("measured_column")
+        summary_path = detail.get("summary_path")
+        raw_planned = detail.get("planned_measured_columns")
+        if not (
+            isinstance(measured_column, str)
+            and measured_column.strip()
+            and isinstance(summary_path, str)
+            and summary_path.startswith("measurement_provenance_audit.checks.")
+            and summary_path.rsplit(".", 1)[-1].isdigit()
+            and isinstance(raw_planned, list)
+            and raw_planned
+            and all(isinstance(item, str) and item.strip() for item in raw_planned)
+        ):
+            return code
+        rejected[measured_column] = int(summary_path.rsplit(".", 1)[-1])
+        planned_sets.add(tuple(sorted(str(item) for item in raw_planned)))
+    if not rejected or len(planned_sets) != 1:
+        return code
+    planned = set(next(iter(planned_sets)))
+    if planned & set(rejected):
+        return code
+
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+    parents = {
+        child: parent
+        for parent in ast.walk(tree)
+        for child in ast.iter_child_nodes(parent)
+    }
+    candidates: list[tuple[ast.Assign, list[tuple[str, str]]]] = []
+    for assignment in ast.walk(tree):
+        if not (
+            isinstance(assignment, ast.Assign)
+            and len(assignment.targets) == 1
+            and isinstance(assignment.targets[0], ast.Name)
+            and isinstance(assignment.value, ast.List)
+        ):
+            continue
+        coordinates: list[tuple[str, str]] = []
+        for item in assignment.value.elts:
+            if not (
+                isinstance(item, (ast.Tuple, ast.List))
+                and len(item.elts) == 2
+                and all(
+                    isinstance(value, ast.Constant)
+                    and isinstance(value.value, str)
+                    and value.value
+                    for value in item.elts
+                )
+            ):
+                coordinates = []
+                break
+            coordinates.append((str(item.elts[0].value), str(item.elts[1].value)))
+        measured = [column for column, _count in coordinates]
+        if (
+            coordinates
+            and len(measured) == len(set(measured))
+            and set(measured) == planned | set(rejected)
+            and {
+                column: index
+                for index, column in enumerate(measured)
+                if column in rejected
+            }
+            == rejected
+        ):
+            candidates.append((assignment, coordinates))
+    if len(candidates) != 1:
+        return code
+
+    assignment, coordinates = candidates[0]
+    spec_name = assignment.targets[0].id
+    scope = _lexical_scope(assignment, parents)
+    spec_loads = [
+        node
+        for node in ast.walk(scope)
+        if isinstance(node, ast.Name)
+        and isinstance(node.ctx, ast.Load)
+        and node.id == spec_name
+    ]
+    loops = [
+        parent
+        for node in spec_loads
+        if isinstance((parent := parents.get(node)), ast.For)
+        and parent.iter is node
+    ]
+    if len(spec_loads) != 1 or len(loops) != 1:
+        return code
+    loop = loops[0]
+    if not (
+        isinstance(loop.target, (ast.Tuple, ast.List))
+        and len(loop.target.elts) == 2
+        and all(isinstance(item, ast.Name) for item in loop.target.elts)
+        and len(loop.body) == 2
+        and isinstance(loop.body[0], ast.Assign)
+        and len(loop.body[0].targets) == 1
+        and isinstance(loop.body[0].targets[0], ast.Name)
+        and isinstance(loop.body[0].value, ast.Call)
+        and isinstance(loop.body[0].value.func, ast.Name)
+        and loop.body[0].value.func.id == "measurement_provenance_receipt"
+        and isinstance(loop.body[1], ast.Expr)
+        and isinstance(loop.body[1].value, ast.Call)
+        and isinstance(loop.body[1].value.func, ast.Attribute)
+        and loop.body[1].value.func.attr == "append"
+        and isinstance(loop.body[1].value.func.value, ast.Name)
+        and len(loop.body[1].value.args) == 1
+        and isinstance(loop.body[1].value.args[0], ast.Name)
+        and loop.body[1].value.args[0].id == loop.body[0].targets[0].id
+    ):
+        return code
+    measured_name, count_name = (item.id for item in loop.target.elts)
+    keywords = {
+        keyword.arg: keyword.value
+        for keyword in loop.body[0].value.keywords
+        if keyword.arg is not None
+    }
+    if not (
+        set(keywords) == {"measured_column", "count_column"}
+        and isinstance(keywords["measured_column"], ast.Name)
+        and keywords["measured_column"].id == measured_name
+        and isinstance(keywords["count_column"], ast.Name)
+        and keywords["count_column"].id == count_name
+    ):
+        return code
+    checks_name = loop.body[1].value.func.value.id
+    checks_initializers = [
+        node
+        for node in ast.walk(scope)
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and node.targets[0].id == checks_name
+        and isinstance(node.value, ast.List)
+        and not node.value.elts
+        and node.lineno < loop.lineno
+    ]
+    def _is_target_envelope(node: ast.AST) -> bool:
+        if not isinstance(node, ast.Dict):
+            return False
+        fields = {
+            str(key.value): value
+            for key, value in zip(node.keys, node.values, strict=True)
+            if isinstance(key, ast.Constant) and isinstance(key.value, str)
+        }
+        source = fields.get("source")
+        checks = fields.get("checks")
+        return bool(
+            isinstance(source, ast.Constant)
+            and source.value == "COHORT_PARQUET"
+            and isinstance(checks, ast.Name)
+            and checks.id == checks_name
+        )
+
+    envelope_count = sum(_is_target_envelope(node) for node in ast.walk(scope))
+    if len(checks_initializers) != 1 or envelope_count != 1:
+        return code
+
+    kept = [
+        item
+        for item, (measured_column, _count_column) in zip(
+            assignment.value.elts, coordinates, strict=True
+        )
+        if measured_column not in rejected
+    ]
+    lines, starts = _source_offsets(code)
+    span = _node_span(assignment.value, lines=lines, starts=starts)
+    if span is None:
+        return code
+    repaired = (
+        code[: span[0]]
+        + ast.unparse(ast.List(elts=kept, ctx=ast.Load()))
+        + code[span[1] :]
+    )
+    try:
+        ast.parse(repaired)
+    except SyntaxError:
+        return code
+    return repaired
+
+
 def patch_late_measurement_provenance_receipt(
     code: str,
     *,
@@ -1992,10 +2191,97 @@ def patch_direct_host_receipt_source_guard(code: str, run_log: str) -> str:
     return repaired if repaired != without_false_guards else code
 
 
+def patch_closed_provenance_envelope_alias(code: str) -> str:
+    """Rename one proven closed provenance envelope to its canonical key."""
+
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+    parents = {
+        child: parent
+        for parent in ast.walk(tree)
+        for child in ast.iter_child_nodes(parent)
+    }
+
+    def _closed_envelope(value: ast.AST, *, scope: ast.AST) -> bool:
+        candidate = value
+        if isinstance(candidate, ast.Name):
+            assignments = [
+                node
+                for node in ast.walk(scope)
+                if isinstance(node, ast.Assign)
+                and _lexical_scope(node, parents) is scope
+                and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and node.targets[0].id == candidate.id
+            ]
+            if len(assignments) != 1:
+                return False
+            candidate = assignments[0].value
+        if not isinstance(candidate, ast.Dict):
+            return False
+        fields = {
+            str(key.value): item
+            for key, item in zip(candidate.keys, candidate.values, strict=True)
+            if isinstance(key, ast.Constant) and isinstance(key.value, str)
+        }
+        return bool(
+            len(fields) == len(candidate.keys) == 2
+            and set(fields) == {"source", "checks"}
+            and isinstance(fields["source"], ast.Constant)
+            and fields["source"].value == "COHORT_PARQUET"
+            and isinstance(fields["checks"], (ast.List, ast.Name, ast.Tuple))
+        )
+
+    aliases: list[ast.Constant] = []
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id == "step_summary"
+            and isinstance(node.value, ast.Dict)
+        ):
+            continue
+        entries = [
+            (key, value)
+            for key, value in zip(node.value.keys, node.value.values, strict=True)
+            if isinstance(key, ast.Constant) and isinstance(key.value, str)
+        ]
+        keys = [str(key.value) for key, _value in entries]
+        if "measurement_provenance_audit" in keys:
+            continue
+        scope = _lexical_scope(node, parents)
+        aliases.extend(
+            key
+            for key, value in entries
+            if key.value == "measurement_provenance"
+            and _closed_envelope(value, scope=scope)
+        )
+    if len(aliases) != 1:
+        return code
+    lines, starts = _source_offsets(code)
+    span = _node_span(aliases[0], lines=lines, starts=starts)
+    if span is None:
+        return code
+    repaired = (
+        code[: span[0]]
+        + '"measurement_provenance_audit"'
+        + code[span[1] :]
+    )
+    try:
+        ast.parse(repaired)
+    except SyntaxError:
+        return code
+    return repaired
+
+
 def patch_measurement_provenance_summary(code: str) -> str:
     """Apply one proven provenance-envelope normalization, fail-closed."""
 
     for patcher in (
+        patch_closed_provenance_envelope_alias,
         patch_table_one_left_provenance_source,
         patch_direct_host_provenance_summary,
         patch_nested_host_provenance_summary,
@@ -2014,6 +2300,12 @@ def patch_measurement_provenance_contract(
 ) -> str:
     """Normalize one validator-proven provenance contract representation."""
 
+    repaired = patch_unplanned_measurement_provenance_specs(
+        code,
+        findings=findings,
+    )
+    if repaired != code:
+        return repaired
     repaired = patch_unplanned_measurement_provenance_summary(
         code,
         findings=findings,
@@ -2023,6 +2315,7 @@ def patch_measurement_provenance_contract(
 
 __all__ = [
     "patch_audit_only_companion_value_selector",
+    "patch_closed_provenance_envelope_alias",
     "patch_companion_audit_frame_alignment",
     "patch_direct_host_provenance_summary",
     "patch_direct_host_receipt_source_guard",
@@ -2031,4 +2324,5 @@ __all__ = [
     "patch_nested_host_provenance_summary",
     "patch_late_measurement_provenance_receipt",
     "patch_unplanned_measurement_provenance_summary",
+    "patch_unplanned_measurement_provenance_specs",
 ]

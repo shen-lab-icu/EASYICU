@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import easyicu.research_agent.acquisition.foundation as df_mod
-from easyicu.research_agent.acquisition.catalog import AvailableCatalog, CatalogConcept
+from easyicu.research_agent.acquisition.catalog import (
+    AvailableCatalog,
+    CatalogConcept,
+    assess_coverage,
+)
 from easyicu.research_agent.acquisition.foundation import (
     DataFoundationAgent,
     _extract_json,
@@ -116,6 +120,58 @@ def test_acquire_blocks_when_outcome_missing(monkeypatch):
     assert res.blocked
     assert not called["materialize"]
     assert "outcome" in res.note.lower()
+
+
+def test_coverage_of_an_empty_request_reads_the_same_as_full_coverage():
+    """`sufficient` measures the request, so naming nothing always passes.
+
+    This pins the trap rather than the wish: ``missing`` is derived from
+    ``requested``, so an empty request and a fully covered one are the same
+    shape. Any caller reading this property as "the data can answer the
+    question" is reading something it does not measure.
+    """
+    empty = assess_coverage([], _catalog("lact"))
+    covered = assess_coverage(["lact"], _catalog("lact"))
+
+    assert empty.sufficient is True
+    assert empty.missing == []
+    assert (empty.sufficient, empty.missing) == (covered.sufficient, covered.missing)
+
+
+def test_acquire_blocks_when_an_outcome_is_required_but_none_is_named(monkeypatch):
+    """A caller that required an outcome may not be satisfied by silence.
+
+    ``require_outcome=True`` asserts this study has an outcome. Because an
+    empty ``outcome_concepts`` reads ``sufficient`` (see the test above),
+    checking coverage alone would let it through and materialise a cohort with
+    no outcome column while reporting success.
+    """
+    called = {"materialize": False}
+
+    def _fake_materialize(**_kwargs):
+        called["materialize"] = True
+        return {"parquet": "x.parquet", "provenance": "x.json"}
+
+    monkeypatch.setattr(
+        df_mod, "build_available_catalog", lambda _d: _catalog("lact", "sofa2")
+    )
+    import easyicu.research_agent.cohort.materializer as cm
+
+    monkeypatch.setattr(cm, "materialize_to_parquet", _fake_materialize)
+
+    res = acquire_universe_for_question(
+        export_dir="/nonexistent",
+        question="q",
+        llm=_stub('{"selected_concepts": ["lact"]}'),
+        output_dir="/tmp/x",
+        target_outcome="death",
+        outcome_concepts=[],
+        require_outcome=True,
+    )
+
+    assert res.blocked
+    assert not called["materialize"]
+    assert "named no outcome concept" in res.note
 
 
 def test_acquire_proceeds_on_available_subset_when_outcome_present(monkeypatch):

@@ -11,10 +11,12 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import threading
+from contextlib import contextmanager
 from functools import lru_cache
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Dict, Iterator, Literal, Optional
 
 # Framework-owned anchors stay deliberately small and generic. Disease- or
 # intervention-specific anchors such as "sepsis_onset" or "vent_start" are
@@ -46,6 +48,7 @@ Aggregation = Literal[
     "count",
     "sum",
 ]
+CohortSelectionMode = Literal["predicate_filtered", "all_input_rows"]
 PredicateOp = Literal[
     "==",
     "!=",
@@ -150,15 +153,21 @@ class CohortDefinition:
     exclusion: tuple[ConceptPredicate, ...] = ()
     derived_from_named: Optional[str] = None
     locked_at: str = "not_locked"
+    selection_mode: CohortSelectionMode = "predicate_filtered"
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        payload = {
             "name": self.name,
             "inclusion": [pred.to_dict() for pred in self.inclusion],
             "exclusion": [pred.to_dict() for pred in self.exclusion],
             "derived_from_named": self.derived_from_named,
             "locked_at": self.locked_at,
         }
+        # Preserve every legacy predicate-filtered authority digest. The new
+        # coordinate is serialized only for an explicit all-row decision.
+        if self.selection_mode != "predicate_filtered":
+            payload["selection_mode"] = self.selection_mode
+        return payload
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "CohortDefinition":
@@ -182,6 +191,9 @@ class CohortDefinition:
                 else None
             ),
             locked_at=str(data.get("locked_at") or "not_locked"),
+            selection_mode=str(
+                data.get("selection_mode") or "predicate_filtered"
+            ),  # type: ignore[arg-type]
         )
 
 
@@ -325,8 +337,32 @@ def validate_concept_predicate(predicate: ConceptPredicate) -> None:
 def validate_cohort_definition(definition: CohortDefinition) -> None:
     if not definition.name:
         raise CohortSchemaError("cohort.name is required")
+    if definition.selection_mode not in {"predicate_filtered", "all_input_rows"}:
+        raise CohortSchemaError("cohort.selection_mode is invalid")
+    if definition.selection_mode == "all_input_rows" and (
+        definition.inclusion or definition.exclusion
+    ):
+        raise CohortSchemaError(
+            "cohort.selection_mode='all_input_rows' requires empty inclusion "
+            "and exclusion predicates"
+        )
     for pred in [*definition.inclusion, *definition.exclusion]:
         validate_concept_predicate(pred)
+
+
+def cohort_definition_has_explicit_selection(
+    definition: CohortDefinition | None,
+) -> bool:
+    """Whether a plan selected all rows or supplied filtering predicates."""
+
+    return bool(
+        definition is not None
+        and (
+            definition.selection_mode == "all_input_rows"
+            or definition.inclusion
+            or definition.exclusion
+        )
+    )
 
 
 def expand_named_cohort(
@@ -352,21 +388,80 @@ def cohort_definition_sha(definition: CohortDefinition) -> str:
 
 # Pre-materialised cohort columns are registered per run so planning validation
 # can accept them without pretending they are packaged dictionary concepts.
+#
+# KNOWN DEBT -- the lock below does NOT make this safe for concurrent runs.
+# ``register_cohort_concept_ids`` is a permanent process-wide registration, so
+# two runs in one process accumulate each other's cohort columns and each will
+# validate a plan naming a column only the *other* run materialised.  The lock
+# fixes the scoped-replay race (interleaved snapshot/restore); it cannot fix
+# cross-run mixing, because there is only one set to mix into.  The real fix is
+# an explicit immutable registry threaded through planning validation rather
+# than this module-level global.
 _EXTRA_COHORT_CONCEPT_IDS: set[str] = set()
+#: Guards every mutation of the set above. Re-entrant so a nested scope in
+#: the same thread is not a deadlock.
+_EXTRA_COHORT_CONCEPT_IDS_LOCK = threading.RLock()
 
 
 def register_cohort_concept_ids(concept_ids: Any) -> None:
     """Allow ids backed by pre-materialised columns in CTAS validation."""
 
-    _EXTRA_COHORT_CONCEPT_IDS.update(str(c) for c in concept_ids)
+    with _EXTRA_COHORT_CONCEPT_IDS_LOCK:
+        _EXTRA_COHORT_CONCEPT_IDS.update(str(c) for c in concept_ids)
 
 
 def clear_cohort_concept_ids() -> None:
-    _EXTRA_COHORT_CONCEPT_IDS.clear()
+    with _EXTRA_COHORT_CONCEPT_IDS_LOCK:
+        _EXTRA_COHORT_CONCEPT_IDS.clear()
+
+
+@contextmanager
+def cohort_concept_id_scope(concept_ids: Any) -> Iterator[None]:
+    """Register ``concept_ids`` for the duration of the block, then restore.
+
+    ``register_cohort_concept_ids`` mutates process-global state and
+    ``clear_cohort_concept_ids`` empties it wholesale, so a caller that only
+    wants to ask a question ("would this plan validate if these columns
+    existed?") has no way to ask it without either leaking its answer into
+    every later validation or destroying a registration someone else owns.
+    This restores the exact prior set, including ids that were already present
+    before the block.
+
+    **The scope is mutually exclusive, and it has to be.** Two threads whose
+    snapshot-and-restore interleave restore each other's snapshots: thread A
+    snapshots, B snapshots (now including A's ids), A restores (dropping its
+    own), B restores (re-adding them permanently). The set is process-global,
+    so the only sound answer is that one scoped question runs at a time; the
+    lock is re-entrant so nesting in one thread still works. Callers that need
+    genuine parallelism want an explicit immutable registry passed down rather
+    than this shared set -- this makes the shared-state cost visible instead of
+    silently corrupting.
+    """
+
+    with _EXTRA_COHORT_CONCEPT_IDS_LOCK:
+        previous = set(_EXTRA_COHORT_CONCEPT_IDS)
+        _EXTRA_COHORT_CONCEPT_IDS.update(str(c) for c in concept_ids)
+        try:
+            yield
+        finally:
+            _EXTRA_COHORT_CONCEPT_IDS.clear()
+            _EXTRA_COHORT_CONCEPT_IDS.update(previous)
 
 
 def concept_id_exists(concept_id: str) -> bool:
-    return concept_id in known_concept_ids() or concept_id in _EXTRA_COHORT_CONCEPT_IDS
+    """Answer from a consistent view of the registry.
+
+    Guarding only the writers left the readers outside: a thread that never
+    enters a scope could still observe another thread's temporary ids, so a
+    hypothetical asked in one place became a real answer in another.  The read
+    takes the same lock, which also means a bare reader blocks for the duration
+    of a scope rather than seeing half of it.
+    """
+
+    if concept_id in known_concept_ids():
+        return True
+    with _EXTRA_COHORT_CONCEPT_IDS_LOCK:
+        return concept_id in _EXTRA_COHORT_CONCEPT_IDS
 
 
 @lru_cache(maxsize=1)

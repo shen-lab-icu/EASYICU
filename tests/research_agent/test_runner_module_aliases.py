@@ -11,6 +11,7 @@ import pytest
 
 
 RUNNER_MODULES = (
+    "cohort_summary_executor",
     "deterministic_descriptive",
     "deterministic_missingness",
     "deterministic_robustness",

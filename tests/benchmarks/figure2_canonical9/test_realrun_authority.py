@@ -25,6 +25,12 @@ from easyicu.research_agent.authority.execution_identity import (
     ExecutionIdentity,
     ExpectedExecutionIdentity,
 )
+from easyicu.research_agent.authority.provider_hard_stop import (
+    load_provider_hard_stop_ledger,
+)
+from easyicu.research_agent.know_how.registry import (
+    reviewable_card_content_sha256,
+)
 
 from benchmarks.figure2_canonical9.evaluator.input_freeze_v1 import (
     CanonicalInputFreezeError,
@@ -56,6 +62,11 @@ from benchmarks.figure2_canonical9.realrun_authority import (
     verify_realrun_authorization,
     verify_results_frozen_input_authority,
 )
+from benchmarks.figure2_canonical9.scientific_protocol_authority import (
+    REQUIRED_SCIENTIFIC_PROTOCOLS,
+    ScientificProtocolAuthority,
+    ScientificProtocolTaskBinding,
+)
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _REAL_V1 = _REPO_ROOT / "benchmarks/figure2_canonical9/canonical_input_freeze_v1.json"
@@ -75,7 +86,7 @@ def _execution_config():
 
     return build_canonical_execution_config(
         seed=7,
-        timeout_seconds=300.0,
+        timeout_seconds=900.0,
         standard_executor_timeout_seconds=3600.0,
     )
 
@@ -161,6 +172,50 @@ def _production_authority(
     return authority
 
 
+def _scientific_protocol_authority(
+    path: Path,
+) -> ScientificProtocolAuthority:
+    card_root = path.parent / "reviewed_protocols"
+    card_root.mkdir(exist_ok=True)
+    bindings: list[ScientificProtocolTaskBinding] = []
+    for task_id, card_id in REQUIRED_SCIENTIFIC_PROTOCOLS:
+        payload = json.loads(
+            (
+                _REPO_ROOT
+                / "src/easyicu/data/research_know_how"
+                / f"{card_id}.json"
+            ).read_text(encoding="utf-8")
+        )
+        payload["review_status"] = "clinical_reviewed"
+        payload["review_attestation"] = None
+        reviewed_content_sha256 = reviewable_card_content_sha256(payload)
+        payload["review_attestation"] = {
+            "reviewer_owner": "Synthetic clinical-and-methods test board",
+            "review_date": "2026-07-26",
+            "card_version": payload["version"],
+            "reviewed_content_sha256": reviewed_content_sha256,
+            "review_scope": ["clinical protocol", "statistical methods"],
+            "literature_search_cutoff": "2026-07-25",
+            "clinical_reviewed": True,
+            "methods_reviewed": True,
+        }
+        card_path = card_root / f"{task_id}.json"
+        card_path.write_text(json.dumps(payload), encoding="utf-8")
+        bindings.append(
+            ScientificProtocolTaskBinding(
+                task_id=task_id,
+                card_id=card_id,
+                card_version=payload["version"],
+                card_path=str(card_path),
+                card_file_sha256=_sha256_file(card_path),
+                reviewed_content_sha256=reviewed_content_sha256,
+            )
+        )
+    authority = ScientificProtocolAuthority.build(tasks=bindings)
+    path.write_text(authority.model_dump_json(), encoding="utf-8")
+    return authority
+
+
 def _frozen_identity(
     path: Path,
     *,
@@ -177,7 +232,20 @@ def _frozen_identity(
         network_policy="none",
         llm_seed=0,
         input_authority_sha256=input_authority,
-        provider_authorization={"clients": [{"authorization_mode": "operator_env"}]},
+        provider_authorization={
+            "schema_version": "easyicu.provider_authorization_manifest/2",
+            "reasoning_effort_profile": "provider_default",
+            "clients": [
+                {
+                    "provider": _PROVIDER,
+                    "model": _MODEL,
+                    "base_url": "https://openrouter.ai/api/v1",
+                    "destination": "external",
+                    "authorization_mode": "operator_env",
+                    "authorization_sha256": "c" * 64,
+                }
+            ],
+        },
         host_runner_authorized=False,
         code_version={"git_sha": _COMMIT, "git_dirty": git_dirty},
     )
@@ -187,10 +255,17 @@ def _frozen_identity(
 
 
 def _declaration(path: Path, *, jsonl_path: Path, jsonl_sha: str, **overrides):
+    protocol_path = path.parent / "scientific_protocol_authority.json"
+    protocol_digest = (
+        str(json.loads(protocol_path.read_text(encoding="utf-8"))["authority_digest"])
+        if protocol_path.is_file()
+        else "0" * 64
+    )
     base = dict(
         schema_version=OPERATOR_FREEZE_DECLARATION_SCHEMA,
         expected_execution_identity_sha256="0" * 64,
         input_authority_digest="0" * 64,
+        scientific_protocol_authority_digest=protocol_digest,
         input_freeze_manifest_sha256="0" * 64,
         rubric_sha256="0" * 64,
         code_commit_sha=_COMMIT,
@@ -253,6 +328,8 @@ def _authorized_setup(tmp_path: Path):
     jsonl_sha = _write_jsonl(jsonl_path, cohort_paths)
     prod_path = tmp_path / "prod_authority.json"
     authority = _production_authority(prod_path, cohort_paths)
+    protocol_path = tmp_path / "scientific_protocol_authority.json"
+    protocol_authority = _scientific_protocol_authority(protocol_path)
     id_path = tmp_path / "identity.json"
     _frozen_identity(id_path, input_authority=authority.authority_digest)
     rubric_path = tmp_path / "rubric.json"
@@ -265,6 +342,7 @@ def _authorized_setup(tmp_path: Path):
         jsonl_sha=jsonl_sha,
         expected_execution_identity_sha256=_sha256_file(id_path),
         input_authority_digest=authority.authority_digest,
+        scientific_protocol_authority_digest=protocol_authority.authority_digest,
         input_freeze_manifest_sha256=canonical_input_freeze_manifest_sha256(_REAL_V1),
         rubric_sha256=_sha256_file(rubric_path),
         output_root=str(out_root),
@@ -279,6 +357,7 @@ def _authorized_setup(tmp_path: Path):
         rubric_path=rubric_path,
         invocation=invocation,
         production_input_authority_path=prod_path,
+        scientific_protocol_authority_path=protocol_path,
         live_code_version=_CLEAN_LIVE,
     )
     return request, {
@@ -286,6 +365,8 @@ def _authorized_setup(tmp_path: Path):
         "jsonl_path": jsonl_path,
         "jsonl_sha": jsonl_sha,
         "prod_path": prod_path,
+        "protocol_path": protocol_path,
+        "protocol_authority": protocol_authority,
         "id_path": id_path,
         "rubric_path": rubric_path,
         "decl_path": decl_path,
@@ -337,6 +418,59 @@ def test_authorized_with_synthetic_production_authority(tmp_path) -> None:
     assert auth.status == "authorized", auth.issues
     assert auth.issues == ()
     assert auth.input_authority_digest is not None
+    assert auth.scientific_protocol_authority_digest is not None
+
+
+def test_missing_scientific_protocol_blocks_before_any_cohort_read(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    import benchmarks.figure2_canonical9.realrun_authority as authority_module
+
+    request, _ = _authorized_setup(tmp_path)
+    request = dataclasses.replace(
+        request,
+        scientific_protocol_authority_path=None,
+    )
+
+    def forbidden_cohort_read(*_args, **_kwargs):
+        raise AssertionError("cohort bytes must not be read before protocol approval")
+
+    monkeypatch.setattr(
+        authority_module,
+        "production_cohort_input_sha256",
+        forbidden_cohort_read,
+    )
+    auth = verify_realrun_authorization(request)
+
+    assert auth.status == "blocked"
+    assert _codes(auth) == {"SCIENTIFIC_PROTOCOL_AUTHORITY_ABSENT"}
+
+
+def test_scientific_protocol_tamper_blocks_before_production_input(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    import benchmarks.figure2_canonical9.realrun_authority as authority_module
+
+    request, paths = _authorized_setup(tmp_path)
+    card_path = Path(paths["protocol_authority"].tasks[0].card_path)
+    card_path.write_text(
+        card_path.read_text(encoding="utf-8") + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        authority_module,
+        "production_cohort_input_sha256",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("production input verification must not start")
+        ),
+    )
+
+    auth = verify_realrun_authorization(request)
+
+    assert auth.status == "blocked"
+    assert _codes(auth) == {"SCIENTIFIC_PROTOCOL_AUTHORITY_INVALID"}
 
 
 def test_structural_retrofit_source_never_gains_paper_authority(
@@ -880,6 +1014,8 @@ def _launcher_files(tmp_path, *, with_identity=True):
     jsonl_sha = _write_jsonl(jsonl_path, cohort_paths)
     id_path = tmp_path / "identity.json"
     authority = _production_authority(tmp_path / "prod.json", cohort_paths)
+    protocol_path = tmp_path / "scientific_protocol_authority.json"
+    protocol_authority = _scientific_protocol_authority(protocol_path)
     if with_identity:
         _frozen_identity(id_path, input_authority=authority.authority_digest)
     decl_path = tmp_path / "declaration.json"
@@ -891,6 +1027,7 @@ def _launcher_files(tmp_path, *, with_identity=True):
             _sha256_file(id_path) if with_identity else "0" * 64
         ),
         input_authority_digest=authority.authority_digest,
+        scientific_protocol_authority_digest=protocol_authority.authority_digest,
         input_freeze_manifest_sha256=canonical_input_freeze_manifest_sha256(_REAL_V1),
         rubric_sha256=_sha256_file(_REAL_RUBRIC),
         output_root=str(tmp_path / _BATCH_ID),
@@ -899,6 +1036,7 @@ def _launcher_files(tmp_path, *, with_identity=True):
         "jsonl_path": jsonl_path,
         "id_path": id_path,
         "decl_path": decl_path,
+        "protocol_path": protocol_path,
         "out_root": tmp_path / _BATCH_ID,
     }
 
@@ -1067,6 +1205,8 @@ def test_launcher_no_production_authority_blocks(tmp_path, monkeypatch, capsys):
             str(files["decl_path"]),
             "--figure2-expected-execution-identity",
             str(files["id_path"]),
+            "--figure2-scientific-protocol-authority",
+            str(files["protocol_path"]),
             "--ehrflowbench-jsonl",
             str(files["jsonl_path"]),
             "--out-root",
@@ -1096,6 +1236,8 @@ def test_launcher_naive_arm_blocks_at_gate(tmp_path, monkeypatch, capsys):
             str(files["id_path"]),
             "--figure2-production-input-authority",
             str(tmp_path / "prod.json"),
+            "--figure2-scientific-protocol-authority",
+            str(files["protocol_path"]),
             "--ehrflowbench-jsonl",
             str(files["jsonl_path"]),
             "--out-root",
@@ -1125,6 +1267,8 @@ def test_launcher_mock_provider_blocks_at_gate(tmp_path, monkeypatch, capsys):
             str(files["id_path"]),
             "--figure2-production-input-authority",
             str(tmp_path / "prod.json"),
+            "--figure2-scientific-protocol-authority",
+            str(files["protocol_path"]),
             "--ehrflowbench-jsonl",
             str(files["jsonl_path"]),
             "--out-root",
@@ -1154,6 +1298,8 @@ def test_launcher_wrong_output_root_blocks_at_gate(tmp_path, monkeypatch, capsys
             str(files["id_path"]),
             "--figure2-production-input-authority",
             str(tmp_path / "prod.json"),
+            "--figure2-scientific-protocol-authority",
+            str(files["protocol_path"]),
             "--ehrflowbench-jsonl",
             str(files["jsonl_path"]),
             "--out-root",
@@ -1453,7 +1599,7 @@ def test_preflight_rejects_unpaired_trajectory_authority(tmp_path) -> None:
 def _config_with(**overrides):
     return build_canonical_execution_config(
         seed=7,
-        timeout_seconds=300.0,
+        timeout_seconds=900.0,
         standard_executor_timeout_seconds=3600.0,
         **overrides,
     )
@@ -1473,7 +1619,7 @@ def test_stop_after_step_blocks(tmp_path) -> None:
 def test_config_seed_mismatch_blocks(tmp_path) -> None:
     request, _ = _authorized_setup(tmp_path)
     changed = build_canonical_execution_config(
-        seed=999, timeout_seconds=300.0, standard_executor_timeout_seconds=3600.0
+        seed=999, timeout_seconds=900.0, standard_executor_timeout_seconds=3600.0
     )
     auth = verify_realrun_authorization(
         _with_invocation(request, execution_config=changed)
@@ -1495,7 +1641,7 @@ def test_config_request_timeout_mismatch_blocks(tmp_path) -> None:
     request, _ = _authorized_setup(tmp_path)
     changed = build_canonical_execution_config(
         seed=7,
-        timeout_seconds=300.0,
+        timeout_seconds=900.0,
         standard_executor_timeout_seconds=3600.0,
         request_timeout_seconds=12.0,
     )
@@ -1520,7 +1666,7 @@ def test_config_mutable_case_selector_blocks_even_when_pinned(tmp_path) -> None:
     request, paths = _authorized_setup(tmp_path)
     changed = build_canonical_execution_config(
         seed=7,
-        timeout_seconds=300.0,
+        timeout_seconds=900.0,
         standard_executor_timeout_seconds=3600.0,
         case="mutable_fixture_name",
     )
@@ -1544,6 +1690,8 @@ def _launcher_config_argv(tmp_path, extra: list[str]) -> list[str]:
         str(files["id_path"]),
         "--figure2-production-input-authority",
         str(tmp_path / "prod.json"),
+        "--figure2-scientific-protocol-authority",
+        str(files["protocol_path"]),
         "--ehrflowbench-jsonl",
         str(files["jsonl_path"]),
         "--out-root",
@@ -1617,6 +1765,7 @@ def _binding(frozen, out_root: Path | None = None) -> RealRunBatchBinding:
         batch_id=_BATCH_ID,
         declaration_sha256="d" * 64,
         input_authority_digest="e" * 64,
+        scientific_protocol_authority_digest="f" * 64,
         frozen_input_by_task=frozen,
     )
     if out_root is not None:
@@ -1734,8 +1883,6 @@ def test_batch_ledger_rejects_tampered_receipt(tmp_path) -> None:
 
 def test_run_ehrflowbench_writes_receipt_and_ledger(tmp_path, monkeypatch) -> None:
     """Allowed path with a STUBBED runner/pipeline: receipt + 9-child ledger."""
-    import pandas as pd
-
     import tools.run_research_agent_bench as bench
 
     cohort_paths = _cohorts(tmp_path)
@@ -1747,9 +1894,11 @@ def test_run_ehrflowbench_writes_receipt_and_ledger(tmp_path, monkeypatch) -> No
     out_root = tmp_path / _BATCH_ID
     binding = _binding(frozen, out_root)
 
-    # Stub the heavy cohort I/O and the pipeline execution (no real Provider).
+    # Stub bounded cohort metadata and pipeline execution (no real Provider).
     monkeypatch.setattr(
-        pd, "read_parquet", lambda *a, **k: pd.DataFrame({"stay_id": [1], "x": [2]})
+        bench,
+        "_cohort_shape_without_materialization",
+        lambda path: (1, ["stay_id", "x"]),
     )
     monkeypatch.setattr(
         "easyicu.research_agent.intake.materialized_metadata."
@@ -1777,6 +1926,15 @@ def test_run_ehrflowbench_writes_receipt_and_ledger(tmp_path, monkeypatch) -> No
                 "execution_identity": identity,
                 "publication_ready": True,
                 "manuscript_ready": True,
+                "publication_artifacts_ready": True,
+                "execution_paper_eligible": True,
+                "paper_authorized": True,
+                "execution_complete": True,
+                "step_scientific_requirements_complete": True,
+                "required_step_count": 1,
+                "completed_step_count": 1,
+                "failed_step_ids": [],
+                "missing_step_ids": [],
                 "n_errors": 0,
                 "figure2_evaluation_attempt": {
                     "status": "valid",
@@ -1802,6 +1960,11 @@ def test_run_ehrflowbench_writes_receipt_and_ledger(tmp_path, monkeypatch) -> No
         provider=_PROVIDER,
         model=_MODEL,
         batch_binding=binding,
+        pipeline_options=bench._benchmark_pipeline_options(
+            max_total_steps=None,
+            disable_replanning=False,
+            max_code_repair_attempts=None,
+        ),
     )
 
     receipt = json.loads(
@@ -1813,6 +1976,11 @@ def test_run_ehrflowbench_writes_receipt_and_ledger(tmp_path, monkeypatch) -> No
     assert ledger["complete"] is True
     assert ledger["batch_id"] == _BATCH_ID
     assert len(ledger["children"]) == 9
+    progress = load_provider_hard_stop_ledger(
+        out_root / "figure2_batch_progress.json"
+    )
+    assert progress["terminal"] is True
+    assert [task["status"] for task in progress["tasks"]] == ["completed"] * 9
     canary = json.loads((out_root / "figure2_canary_gate.json").read_text())
     assert canary["status"] == "passed"
     assert canary["task_id"] == FIGURE2_TASK_IDS[0]
@@ -1822,11 +1990,152 @@ def test_run_ehrflowbench_writes_receipt_and_ledger(tmp_path, monkeypatch) -> No
         assert child["manifest_sha256"]
 
 
+def test_incomplete_batch_ledger_downgrades_acceptance_before_write(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No accepted terminal artifact may survive a failed batch binding."""
+
+    import tools.run_research_agent_bench as bench
+    from benchmarks.figure2_canonical9 import realrun_authority
+    from benchmarks.figure2_canonical9.evaluator import acceptance
+
+    cohort_paths = _cohorts(tmp_path)
+    jsonl_path = tmp_path / "canonical.jsonl"
+    _write_jsonl(jsonl_path, cohort_paths)
+    frozen = {
+        task_id: production_cohort_input_sha256(cohort_paths[task_id])
+        for task_id in FIGURE2_TASK_IDS
+    }
+    out_root = tmp_path / _BATCH_ID
+    binding = _binding(frozen, out_root)
+
+    monkeypatch.setattr(
+        bench,
+        "_cohort_shape_without_materialization",
+        lambda path: (1, ["stay_id", "x"]),
+    )
+    monkeypatch.setattr(
+        "easyicu.research_agent.intake.materialized_metadata."
+        "load_verified_materialized_cohort_authority",
+        lambda *a, **k: object(),
+    )
+
+    def fake_item(*, item, out_root, **kwargs):
+        run_id = f"run_{item.key}"
+        workdir = Path(out_root) / item.key / "aware" / run_id
+        workdir.mkdir(parents=True, exist_ok=True)
+        identity = _manifest_identity(
+            kwargs["pipeline_options"]["execution_input_authority_sha256"]
+        )
+        (workdir / "manifest.json").write_text(
+            json.dumps({"run_id": run_id, "execution_identity": identity}),
+            encoding="utf-8",
+        )
+        return {
+            "item_key": item.key,
+            "aware": {
+                "arm": "aware",
+                "status": "ok",
+                "run_id": run_id,
+                "workdir": str(workdir),
+                "execution_identity": identity,
+                "publication_ready": True,
+                "manuscript_ready": True,
+                "publication_artifacts_ready": True,
+                "execution_paper_eligible": True,
+                "paper_authorized": True,
+                "execution_complete": True,
+                "step_scientific_requirements_complete": True,
+                "required_step_count": 1,
+                "completed_step_count": 1,
+                "failed_step_ids": [],
+                "missing_step_ids": [],
+                "n_errors": 0,
+                "figure2_evaluation_attempt": {
+                    "status": "valid",
+                    "envelope": {
+                        "scorecard": {
+                            "scorecard_canonical_json": json.dumps(
+                                {"tristate": "gate_reportable"}
+                            )
+                        }
+                    },
+                },
+            },
+        }
+
+    monkeypatch.setattr(bench, "_run_one_item_from_cohort", fake_item)
+    monkeypatch.setattr(bench, "_aggregate", lambda _scores: {"aware": {}})
+    monkeypatch.setattr(bench, "_render_markdown", lambda **_kwargs: "fixture\n")
+    safety_calls: list[str] = []
+    monkeypatch.setattr(
+        bench,
+        "_ensure_formal_figure2_safety_and_rescore",
+        lambda **kwargs: safety_calls.append(str(kwargs["item"].key)),
+    )
+    accepted = acceptance.Figure2PaperAcceptance(
+        schema_version=acceptance.FIGURE2_PAPER_ACCEPTANCE_SCHEMA,
+        status="accepted",
+        results_sha256="0" * 64,
+        expected_execution_identity_sha256="1" * 64,
+        expected_execution_identity_freeze_sha256="2" * 64,
+        expected_task_ids=tuple(FIGURE2_TASK_IDS),
+        observed_task_ids=tuple(FIGURE2_TASK_IDS),
+        verified_tasks=tuple(
+            acceptance.VerifiedFigure2Task(
+                task_id=task_id,
+                run_id=f"run_{task_id}",
+                attempt_sha256=hashlib.sha256(task_id.encode()).hexdigest(),
+                tristate="gate_reportable",
+            )
+            for task_id in FIGURE2_TASK_IDS
+        ),
+    )
+    monkeypatch.setattr(
+        acceptance,
+        "evaluate_figure2_paper_acceptance",
+        lambda *a, **k: accepted,
+    )
+    monkeypatch.setattr(
+        realrun_authority,
+        "build_batch_ledger",
+        lambda *a, **k: {
+            "schema_version": "fixture",
+            "complete": False,
+            "children": [],
+        },
+    )
+
+    exit_code = bench._run_ehrflowbench_jsonl(
+        jsonl_path=jsonl_path,
+        out_root=out_root,
+        seed=7,
+        arms=["aware"],
+        provider=_PROVIDER,
+        model=_MODEL,
+        batch_binding=binding,
+        pipeline_options=bench._benchmark_pipeline_options(
+            max_total_steps=None,
+            disable_replanning=False,
+            max_code_repair_attempts=None,
+        ),
+    )
+
+    assert exit_code == 2
+    assert safety_calls == list(FIGURE2_TASK_IDS)
+    terminal = json.loads(
+        (out_root / "figure2_paper_acceptance.json").read_text(encoding="utf-8")
+    )
+    assert terminal["status"] == "invalid"
+    assert "BATCH_LEDGER_INVALID" in {
+        issue["code"] for issue in terminal["issues"]
+    }
+
+
 def test_formal_batch_does_not_start_e2_when_e1_canary_is_diagnostic(
     tmp_path, monkeypatch
 ) -> None:
-    import pandas as pd
-
     import tools.run_research_agent_bench as bench
 
     cohort_paths = _cohorts(tmp_path)
@@ -1839,7 +2148,9 @@ def test_formal_batch_does_not_start_e2_when_e1_canary_is_diagnostic(
     out_root = tmp_path / _BATCH_ID
     binding = _binding(frozen, out_root)
     monkeypatch.setattr(
-        pd, "read_parquet", lambda *a, **k: pd.DataFrame({"stay_id": [1], "x": [2]})
+        bench,
+        "_cohort_shape_without_materialization",
+        lambda path: (1, ["stay_id", "x"]),
     )
     monkeypatch.setattr(
         "easyicu.research_agent.intake.materialized_metadata."
@@ -1876,6 +2187,11 @@ def test_formal_batch_does_not_start_e2_when_e1_canary_is_diagnostic(
             provider=_PROVIDER,
             model=_MODEL,
             batch_binding=binding,
+            pipeline_options=bench._benchmark_pipeline_options(
+                max_total_steps=None,
+                disable_replanning=False,
+                max_code_repair_attempts=None,
+            ),
         )
         == 2
     )
@@ -1897,6 +2213,9 @@ def test_formal_canary_rejects_valid_but_analysis_only_paper_score() -> None:
         "aware": {
             "publication_ready": True,
             "manuscript_ready": True,
+            "publication_artifacts_ready": True,
+            "execution_paper_eligible": True,
+            "paper_authorized": True,
             "n_errors": 0,
             "figure2_evaluation_attempt": {
                 "status": "valid",
@@ -1904,6 +2223,69 @@ def test_formal_canary_rejects_valid_but_analysis_only_paper_score() -> None:
                     "scorecard": {
                         "scorecard_canonical_json": json.dumps(
                             {"tristate": "analysis_only"}
+                        )
+                    }
+                },
+            },
+        }
+    }
+
+    assert bench._figure2_canary_passed(score) is False
+
+
+def test_formal_canary_requires_e1_scientific_receipt_for_closure_protocol() -> None:
+    import tools.run_research_agent_bench as bench
+
+    score = {
+        "protocol_version": (
+            "easyicu_evaluation_protocol_suite/v2+"
+            "e1_scientific_closure/20260728-v1"
+        ),
+        "aware": {
+            "publication_ready": True,
+            "manuscript_ready": True,
+            "publication_artifacts_ready": True,
+            "execution_paper_eligible": True,
+            "paper_authorized": True,
+            "n_errors": 0,
+            "figure2_evaluation_attempt": {
+                "status": "valid",
+                "envelope": {
+                    "scorecard": {
+                        "scorecard_canonical_json": json.dumps(
+                            {"tristate": "gate_reportable"}
+                        )
+                    }
+                },
+            },
+        },
+    }
+
+    assert bench._figure2_canary_passed(score) is False
+    score["aware"]["scientific_acceptance"] = {
+        "status": "accepted",
+        "issues": [],
+    }
+    assert bench._figure2_canary_passed(score) is True
+
+
+def test_formal_canary_rejects_artifact_ready_but_unauthorized_run() -> None:
+    import tools.run_research_agent_bench as bench
+
+    score = {
+        "aware": {
+            "publication_ready": True,
+            "manuscript_ready": True,
+            "publication_artifacts_ready": True,
+            "execution_paper_eligible": False,
+            "paper_authorized": False,
+            "n_errors": 0,
+            "figure2_evaluation_attempt": {
+                "status": "valid",
+                "envelope": {
+                    "scorecard": {
+                        "scorecard_canonical_json": json.dumps(
+                            {"tristate": "gate_reportable"}
                         )
                     }
                 },
@@ -1942,6 +2324,8 @@ def test_end_to_end_gate_authorizes_and_hands_batch_binding(
         submission_profile_ref=profile_ref, tasks=tasks
     )
     prod_path.write_text(authority.model_dump_json(), encoding="utf-8")
+    protocol_path = tmp_path / "scientific_protocol_authority.json"
+    protocol_authority = _scientific_protocol_authority(protocol_path)
 
     id_path = tmp_path / "identity.json"
     _frozen_identity(
@@ -1959,6 +2343,7 @@ def test_end_to_end_gate_authorizes_and_hands_batch_binding(
         submission_profile_ref=profile_ref,
         expected_execution_identity_sha256=_sha256_file(id_path),
         input_authority_digest=authority.authority_digest,
+        scientific_protocol_authority_digest=protocol_authority.authority_digest,
         input_freeze_manifest_sha256=canonical_input_freeze_manifest_sha256(_REAL_V1),
         rubric_sha256=_sha256_file(_REAL_RUBRIC),
         output_root=str(out_root),
@@ -1989,6 +2374,8 @@ def test_end_to_end_gate_authorizes_and_hands_batch_binding(
             str(id_path),
             "--figure2-production-input-authority",
             str(prod_path),
+            "--figure2-scientific-protocol-authority",
+            str(protocol_path),
             "--ehrflowbench-jsonl",
             str(jsonl_path),
             "--out-root",
@@ -2013,6 +2400,10 @@ def test_end_to_end_gate_authorizes_and_hands_batch_binding(
     assert binding is not None
     assert binding.batch_id == _BATCH_ID
     assert binding.declaration_sha256 == _sha256_file(decl_path)
+    assert (
+        binding.scientific_protocol_authority_digest
+        == protocol_authority.authority_digest
+    )
     assert set(binding.frozen_input_by_task) == set(FIGURE2_TASK_IDS)
     assert binding.frozen_input_by_task[FIGURE2_TASK_IDS[0]] == tasks[0].input_sha256
     assert binding.batch_root == out_root
@@ -2047,6 +2438,8 @@ def test_gate_does_not_reopen_production_authority_after_verification(
         submission_profile_ref=profile_ref, tasks=tasks
     )
     production_path.write_text(production.model_dump_json(), encoding="utf-8")
+    protocol_path = tmp_path / "scientific_protocol_authority.json"
+    protocol_authority = _scientific_protocol_authority(protocol_path)
     identity_path = tmp_path / "identity.json"
     _frozen_identity(
         identity_path,
@@ -2063,6 +2456,7 @@ def test_gate_does_not_reopen_production_authority_after_verification(
         submission_profile_ref=profile_ref,
         expected_execution_identity_sha256=_sha256_file(identity_path),
         input_authority_digest=production.authority_digest,
+        scientific_protocol_authority_digest=protocol_authority.authority_digest,
         input_freeze_manifest_sha256=canonical_input_freeze_manifest_sha256(_REAL_V1),
         rubric_sha256=_sha256_file(_REAL_RUBRIC),
         output_root=str(out_root),
@@ -2097,6 +2491,8 @@ def test_gate_does_not_reopen_production_authority_after_verification(
             str(identity_path),
             "--figure2-production-input-authority",
             str(production_path),
+            "--figure2-scientific-protocol-authority",
+            str(protocol_path),
             "--ehrflowbench-jsonl",
             str(jsonl_path),
             "--out-root",

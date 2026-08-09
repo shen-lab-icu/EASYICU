@@ -31,15 +31,19 @@
 默认 EXTRACTION_ROOT = full6_20260717。退出码 1 = 发现 BUG。
 """
 from __future__ import annotations
-import os, sys
+
+import os
+import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "src"))
 
-import pyarrow.parquet as pq
-from easyicu.scores.comorbidity import _NO_ICD_DATABASES
-from easyicu.scores.microbiology import _NO_MICRO_DATABASES
-from easyicu.scores.outcomes import _FOLLOWUP_DATABASES
+# This standalone audit must also run from an uninstalled source checkout.
+# Imports therefore follow the explicit source-root bootstrap above.
+import pyarrow.parquet as pq  # noqa: E402
+from easyicu.scores.comorbidity import _NO_ICD_DATABASES  # noqa: E402
+from easyicu.scores.microbiology import _NO_MICRO_DATABASES  # noqa: E402
+from easyicu.scores.outcomes import _FOLLOWUP_DATABASES  # noqa: E402
 
 DEFAULT_ROOT = "/Volumes/外置硬盘/easyicu_data/phd_thesis_module_reextract/full6_20260717"
 
@@ -50,9 +54,18 @@ ALL_DBS = {"aumc", "eicu", "hirid", "miiv", "mimic", "sic"}
 SPECIAL_GROUPS = {
     "KDIGO": {
         "module": "renal",
-        "concepts": ["aki", "aki_stage", "aki_stage_creat", "aki_stage_uo",
-                     "aki_stage_rrt", "uo_rt_6hr", "uo_rt_12hr", "uo_rt_24hr",
-                     "creat_low_past_48hr", "creat_low_past_7day"],
+        "concepts": [
+            "aki",
+            "aki_stage",
+            "aki_stage_creat",
+            "aki_stage_uo",
+            "aki_stage_rrt",
+            "uo_rt_6hr",
+            "uo_rt_12hr",
+            "uo_rt_24hr",
+            "creat_low_past_48hr",
+            "creat_low_past_7day",
+        ],
         "excluded_dbs": set(),  # KDIGO 无 loader 排除 => 6 库都应产出
     },
     "CIRC": {

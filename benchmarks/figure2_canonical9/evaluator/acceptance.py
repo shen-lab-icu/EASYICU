@@ -43,7 +43,7 @@ class VerifiedFigure2Task(_StrictFrozenModel):
     task_id: str
     run_id: str
     attempt_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    tristate: str
+    tristate: Literal["diagnostic_only", "analysis_only", "gate_reportable"]
 
 
 class Figure2PaperAcceptance(_StrictFrozenModel):
@@ -78,6 +78,12 @@ class Figure2PaperAcceptance(_StrictFrozenModel):
                 raise ValueError("accepted batch contradicts coverage findings")
             if tuple(row.task_id for row in self.verified_tasks) != exact:
                 raise ValueError("accepted batch lacks exact replay-verified coverage")
+            if any(
+                row.tristate != "gate_reportable" for row in self.verified_tasks
+            ):
+                raise ValueError(
+                    "accepted batch contains a task that is not gate-reportable"
+                )
         elif not self.issues:
             raise ValueError("invalid batch must contain at least one issue")
         return self
@@ -459,14 +465,24 @@ def evaluate_figure2_paper_acceptance(
                 )
             )
             continue
-        verified.append(
-            VerifiedFigure2Task(
-                task_id=task_id,
-                run_id=run_id,
-                attempt_sha256=hashlib.sha256(attempt_bytes).hexdigest(),
-                tristate=envelope.scorecard.tristate,
-            )
+        verified_task = VerifiedFigure2Task(
+            task_id=task_id,
+            run_id=run_id,
+            attempt_sha256=hashlib.sha256(attempt_bytes).hexdigest(),
+            tristate=envelope.scorecard.tristate,
         )
+        verified.append(verified_task)
+        if verified_task.tristate != "gate_reportable":
+            issues.append(
+                _issue(
+                    "TASK_NOT_GATE_REPORTABLE",
+                    (
+                        "deterministic replay produced "
+                        f"{verified_task.tristate!r}, not 'gate_reportable'"
+                    ),
+                    task_id=task_id,
+                )
+            )
 
     status: Literal["accepted", "invalid"] = "accepted" if not issues else "invalid"
     return Figure2PaperAcceptance(

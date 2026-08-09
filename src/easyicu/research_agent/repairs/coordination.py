@@ -50,6 +50,36 @@ from ..authority.provider_budget import (
 
 REPAIR_AUTHORITY_BINDING_SCHEMA_VERSION = "easyicu.repair_authority_binding/2"
 
+#: Repair classes raised by the LAST gate a step can fail -- the concept audit,
+#: which reads the code only after it has run.  Every other class (runtime,
+#: contract, compatibility, visual, critic_resume) is discovered earlier and
+#: draws from the same pool, so the terminal gate is the only one that can be
+#: starved by a failure that came before it.  See
+#: :meth:`StepRepairBudget.effective_limit`.
+TERMINAL_GATE_REPAIR_CLASSES = frozenset({"concept", "post_mutation_concept"})
+
+#: The stages whose failures cannot be known until everything before them has
+#: already had its chance to spend the pool.  Each gets ONE repair of its own,
+#: once, on top of the shared allowance.
+#:
+#: * the concept audit -- it reads the code only after it has run;
+#: * execution itself -- a traceback exists only once the script runs, and
+#:   every pre-execution gate (contract, compatibility, visual, and the audit)
+#:   draws from the same pool first.
+#:
+#: MEASURED over every recorded run: 89 steps ended ``execution_failed`` and 20
+#: of them -- across 7 of the 9 tasks -- had spent ZERO runtime repairs while
+#: provider calls remained, the pool having gone to ``contract`` (11),
+#: ``post_mutation_concept`` (5) and ``concept`` (3+1).  A runtime repair is
+#: worth attempting: of the 211 steps that ever spent one, 90 (43 %) finished
+#: ``ok`` -- a better rate than the concept gate's 38 %.  A traceback is the
+#: most specific repair signal the pipeline produces, and it was the one most
+#: often unaffordable.
+TERMINAL_STAGE_REPAIR_CLASSES: Tuple[frozenset, ...] = (
+    TERMINAL_GATE_REPAIR_CLASSES,
+    frozenset({"runtime"}),
+)
+
 
 def resume_deterministic_repair_candidate(
     *,
@@ -250,6 +280,7 @@ class StepRepairBudget:
                 provider_snapshot["logical_repair_transport_states"]
             )
         self._provider_receipt_relative_path = provider_receipt_relative_path
+        self._semantic_escalation_recorder: Optional[Callable[[Any], None]] = None
 
     @property
     def llm_repair_attempts(self) -> int:
@@ -258,6 +289,19 @@ class StepRepairBudget:
     @property
     def provider_budget(self) -> StepProviderCallBudget:
         return self._provider_budget
+
+    def bind_semantic_escalation_recorder(
+        self, recorder: Callable[[Any], None]
+    ) -> None:
+        """Attach the step-scoped sink for prohibited scientific rewrites."""
+
+        self._semantic_escalation_recorder = recorder
+
+    def record_semantic_escalation(self, escalation: Any) -> None:
+        """Forward one prohibited rewrite to the bound execution sink."""
+
+        if self._semantic_escalation_recorder is not None:
+            self._semantic_escalation_recorder(escalation)
 
     def sync_provider(self) -> None:
         """Project the provider-budget snapshot into the step record."""
@@ -268,6 +312,10 @@ class StepRepairBudget:
             "coder_generation_repair_concept_audit_and_analyzer"
         )
         step_record["step_provider_call_budget"] = snapshot["limit"]
+        step_record["step_provider_call_base_budget"] = snapshot["base_limit"]
+        step_record["step_provider_call_reaudit_extensions"] = snapshot[
+            "reserved_category_extension_count"
+        ]
         step_record["step_provider_call_attempts"] = snapshot["used"]
         step_record["step_provider_call_remaining"] = snapshot["remaining"]
         step_record["step_provider_call_budget_exhausted"] = snapshot["exhausted"]
@@ -294,14 +342,63 @@ class StepRepairBudget:
             else None
         )
 
-    def logical_available(self) -> bool:
+    def effective_limit(self, repair_class: Optional[str] = None) -> int:
+        """Return the logical allowance visible to ``repair_class``.
+
+        The concept audit is the LAST gate a step can fail and the only one
+        whose finding cannot be known before the code runs.  It nevertheless
+        drew from the same flat pool as every earlier class, so a step could
+        spend its whole allowance on runtime or contract failures and then be
+        refused at a gate it was never given one chance to answer.
+
+        MEASURED over every recorded run: 80 steps ended
+        ``blocked_by_concept_audit``; 30 of them -- across 7 of the 9 tasks --
+        had spent ZERO concept-class repairs, the pool having gone to
+        ``runtime`` (14), ``contract`` (6+3), ``compatibility`` (2) and others.
+        28 of those 30 still had unspent provider calls.  A concept repair is
+        worth attempting: of the 171 steps that ever spent one, 65 (38 %)
+        finished ``ok``.
+
+        The reserve is ADDITIVE, not a partition of the existing pool.  The
+        strict alternative -- holding one of the two back -- was measured and
+        rejected: 40 steps that currently finish ``ok`` spent two non-concept
+        repairs and would have lost one.
+
+        This mirrors the rule the provider-call budget already applies one
+        level down (``reserved_final_category = "concept_audit"``); the logical
+        allowance simply never had it.
+        """
+
+        limit = self._max_llm_repairs
+        normalized = str(repair_class or "").strip()
+        stage = next(
+            (item for item in TERMINAL_STAGE_REPAIR_CLASSES if normalized in item),
+            None,
+        )
+        if stage is None:
+            return limit
+        spent = [
+            str(item).strip() for item in self._provider_budget.logical_repair_classes
+        ]
+        if any(item in stage for item in spent):
+            return limit
+        # One repair for this stage, whenever it is reached. Expressed against
+        # the attempts already made rather than as a fixed "+1" so that each
+        # stage's reserve is independent: a step that has already spent its
+        # concept reserve must still be able to answer a traceback, and vice
+        # versa. Bounded by construction -- a stage that has been paid takes
+        # the branch above and never gets a second.
+        return max(limit, len(spent) + 1)
+
+    def logical_available(self, repair_class: Optional[str] = None) -> bool:
+        limit = self.effective_limit(repair_class)
         next_attempt_id = self._provider_budget.next_logical_repair_attempt_id()
         durable_attempts = int(
             self._provider_budget.snapshot()["logical_repair_attempts"]
         )
         if next_attempt_id <= durable_attempts:
-            return next_attempt_id <= self._max_llm_repairs
-        return max(self._llm_repair_attempts, durable_attempts) < self._max_llm_repairs
+            return next_attempt_id <= limit
+        return max(self._llm_repair_attempts, durable_attempts) < limit
 
     @property
     def next_attempt_id(self) -> int:
@@ -320,8 +417,8 @@ class StepRepairBudget:
             self.sync_provider()
         return available
 
-    def available(self) -> bool:
-        return self.logical_available() and self.provider_available()
+    def available(self, repair_class: Optional[str] = None) -> bool:
+        return self.logical_available(repair_class) and self.provider_available()
 
     def consume(
         self,
@@ -329,11 +426,11 @@ class StepRepairBudget:
         *,
         authority_binding: Optional[RepairAuthorityBinding] = None,
     ) -> bool:
-        if not self.logical_available():
+        normalized_class = str(repair_class).strip()
+        if not self.logical_available(normalized_class):
             self._step_record["step_llm_repair_budget_exhausted"] = True
             self._step_record["step_llm_repair_budget"] = self._max_llm_repairs
             return False
-        normalized_class = str(repair_class).strip()
         expected_attempt_id = self.next_attempt_id
         if authority_binding is not None:
             if authority_binding.attempt_id != expected_attempt_id:
@@ -350,7 +447,7 @@ class StepRepairBudget:
         )
         attempt_id = self._provider_budget.reserve_logical_repair(
             normalized_class,
-            max_repairs=self._max_llm_repairs,
+            max_repairs=self.effective_limit(normalized_class),
             binding=(
                 authority_binding.payload() if authority_binding is not None else None
             ),
@@ -359,7 +456,7 @@ class StepRepairBudget:
             ),
         )
         if attempt_id is None:
-            if not self.logical_available():
+            if not self.logical_available(normalized_class):
                 self._step_record["step_llm_repair_budget_exhausted"] = True
                 self._step_record["step_llm_repair_budget"] = self._max_llm_repairs
             else:
@@ -370,6 +467,19 @@ class StepRepairBudget:
         self._llm_repair_attempts = max(self._llm_repair_attempts, attempt_id)
         self._step_record["step_llm_repair_attempts"] = self._llm_repair_attempts
         self._step_record["step_llm_repair_budget"] = self._max_llm_repairs
+        if attempt_id > self._max_llm_repairs:
+            # Otherwise the record reads "budget 2, attempts 3" with nothing
+            # saying why. The reserve is a host decision and belongs in the
+            # manifest beside the allowance it extends.
+            self._step_record.setdefault("step_llm_repair_terminal_gate_reserve", [])
+            reserves = self._step_record["step_llm_repair_terminal_gate_reserve"]
+            if isinstance(reserves, list):
+                reserves.append(normalized_class)
+            else:  # a pre-existing scalar record from an earlier run
+                self._step_record["step_llm_repair_terminal_gate_reserve"] = [
+                    reserves,
+                    normalized_class,
+                ]
         if not resumed_unpaid_attempt:
             self._step_record.setdefault("step_llm_repair_classes", []).append(
                 normalized_class
@@ -380,6 +490,23 @@ class StepRepairBudget:
                 )
         self.sync_provider()
         return True
+
+
+class PatchTransportUnavailable(Exception):
+    """The minimal patch could not be *posed* -- not answered wrongly.
+
+    The distinction decides who pays. A patch the provider answered badly is
+    evidence about the code and rightly spends a repair. A patch the host
+    could not even assemble is evidence about the host, and the full-rewrite
+    transport beside it is still available.
+
+    Measured 2026-07-29: a real E1 primary step lost its last repair to
+    ``CoderPromptBudgetError`` with ``provider_calls: 0``. The preceding repair
+    had produced a 30,105-byte script, so the *patch* prompt built around it
+    crossed its 30,000-byte envelope. Nothing was sent, nothing was answered,
+    and the step died reported as ``repair_failed`` -- pointing at the science
+    rather than at the prompt that was never built.
+    """
 
 
 @dataclass(frozen=True)
@@ -455,6 +582,9 @@ class RepairCoordinator:
         patch_call: Callable[[], str],
         full_rewrite_call: Callable[[str], str],
         patch_preflight: Optional[Callable[[], None]] = None,
+        patch_candidate_rejection_reason: Optional[
+            Callable[[str], Optional[str]]
+        ] = None,
         full_rewrite_preflight: Optional[Callable[[str], None]] = None,
         logical_repair_attempt_id: Optional[int] = None,
         persist_result: Optional[Callable[[str, str], object]] = None,
@@ -476,6 +606,7 @@ class RepairCoordinator:
                 patch_call=patch_call,
                 full_rewrite_call=full_rewrite_call,
                 patch_preflight=patch_preflight,
+                patch_candidate_rejection_reason=patch_candidate_rejection_reason,
                 full_rewrite_preflight=full_rewrite_preflight,
             )
             finalized_code = self._finalize_script(result.code)
@@ -535,31 +666,61 @@ class RepairCoordinator:
         patch_call: Callable[[], str],
         full_rewrite_call: Callable[[str], str],
         patch_preflight: Optional[Callable[[], None]],
+        patch_candidate_rejection_reason: Optional[Callable[[str], Optional[str]]],
         full_rewrite_preflight: Optional[Callable[[str], None]],
     ) -> RepairTransportResult:
         calls_before = self._provider_budget.used if self._provider_budget else 0
         repaired: str
         mode: str
 
+        # Three ways to have no minimal patch, one answer. The patch may be
+        # unaffordable (below), unassemblable (``PatchTransportUnavailable``),
+        # or unusable once answered (``CodePatchError`` further down). Each
+        # falls through to the full-rewrite transport, which carries its own
+        # preflight and its own envelope. Until 2026-07-29 the middle case was
+        # the odd one out and killed the attempt outright: a real E1 primary
+        # step lost its last repair to a prompt that was never built, and was
+        # then reported as ``repair_failed`` -- naming the science instead of
+        # the host.
+        skip_patch_reason: Optional[str] = None
         if self._must_skip_patch():
-            rewrite_reason = (
+            skip_patch_reason = (
                 "minimal patch skipped because only one non-audit provider "
                 "call remained while the mandatory final audit stayed reserved"
             )
+        elif patch_preflight is not None:
+            try:
+                patch_preflight()
+            except PatchTransportUnavailable as preflight_error:
+                skip_patch_reason = str(preflight_error)
+
+        if skip_patch_reason is not None:
             if full_rewrite_preflight is not None:
-                full_rewrite_preflight(rewrite_reason)
+                full_rewrite_preflight(skip_patch_reason)
             raw = self._call(
                 "full_rewrite",
-                lambda: full_rewrite_call(rewrite_reason),
+                lambda: full_rewrite_call(skip_patch_reason),
             )
             repaired, mode = self._parse_full_rewrite(code=code, raw=raw)
         else:
-            if patch_preflight is not None:
-                patch_preflight()
             raw_patch = self._call("patch", patch_call)
             try:
                 repaired = apply_code_patch(code, raw_patch)
-                mode = "minimal_patch"
+                fallback_reason = (
+                    patch_candidate_rejection_reason(repaired)
+                    if patch_candidate_rejection_reason is not None
+                    else None
+                )
+                if fallback_reason:
+                    if full_rewrite_preflight is not None:
+                        full_rewrite_preflight(fallback_reason)
+                    raw = self._call(
+                        "full_rewrite",
+                        lambda: full_rewrite_call(fallback_reason),
+                    )
+                    repaired, mode = self._parse_full_rewrite(code=code, raw=raw)
+                else:
+                    mode = "minimal_patch"
             except CodePatchError as patch_error:
                 # Patch transport sees only selected code blocks. A provider
                 # response that ignores PATCH_FORMAT therefore has no authority
@@ -598,6 +759,7 @@ def authorized_deterministic_concept_repair(
     step: Any,
     source: str,
     context: Optional[Any] = None,
+    on_semantic_escalation: Optional[Callable[[Any], None]] = None,
 ) -> Tuple[str, List[str]]:
     """Return an all-or-nothing centrally authorized mechanical repair."""
 
@@ -606,6 +768,8 @@ def authorized_deterministic_concept_repair(
         error_messages,
         repair_reasons=repair_reasons,
         repair_findings=repair_findings,
+        step=step,
+        on_semantic_escalation=on_semantic_escalation,
     )
     if context is not None:
         binary_guarded = patch_observed_binary_primary_exposure_guard(
@@ -634,6 +798,7 @@ def authorized_deterministic_concept_repair(
 
 __all__ = [
     "REPAIR_AUTHORITY_BINDING_SCHEMA_VERSION",
+    "PatchTransportUnavailable",
     "RepairAuthorityBinding",
     "RepairCoordinator",
     "RepairTransportResult",

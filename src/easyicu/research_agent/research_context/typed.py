@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence, Union
 
@@ -26,13 +27,17 @@ from easyicu.concept.metadata_projection import (
     is_range_preserving_projection,
 )
 
-from ..intake.materialized_metadata import MaterializedCohortAuthorityRef
-from ..intake.materialized_metadata import VerifiedMaterializedCohortAuthority
+from ..intake.materialized_metadata import (
+    MaterializedCohortAuthorityRef,
+    MaterializedMetadataError,
+    VerifiedMaterializedCohortAuthority,
+)
 from ..intake.materialized_trajectory import (
     MaterializedTrajectoryAuthorityRef,
     TrajectoryConceptBinding,
     VerifiedMaterializedTrajectoryAuthority,
 )
+from ..contracts.cohort_receipt import COHORT_RECEIPT_COLUMN_FIELDS
 from ..icu_rules import ICU_RULES
 from .implementation_identity import metadata_implementation_identity
 from ..schema import ConceptDescriptor, ResearchContext
@@ -150,6 +155,11 @@ def descriptor_physical_updates(
     parsed = ColumnMetadataBinding.from_dict(binding.binding)
     metadata = parsed.metadata
     value_like = metadata.role.value in {"value", "numeric_aggregate"}
+    time_like = metadata.role.value in {
+        "first_observation_time",
+        "last_observation_time",
+        "event_time",
+    }
     plausible = binding.analysis_plausibility_range
     valid_range = None
     if (
@@ -160,7 +170,11 @@ def descriptor_physical_updates(
         valid_range = [plausible["minimum"], plausible["maximum"]]
     lineage = metadata.source_lineage
     updates: Dict[str, Any] = {
-        "unit": metadata.canonical_unit if value_like else None,
+        "unit": (
+            metadata.time_unit
+            if time_like
+            else metadata.canonical_unit if value_like else None
+        ),
         "valid_range": valid_range,
         "source_concept": metadata.source_concept,
         "derived_from_concepts": list(metadata.derived_from_concepts),
@@ -471,6 +485,23 @@ class ResearchContextV2(ResearchContext):
                         "context descriptor physical field does not match typed "
                         f"column binding: {column}.{field_name}"
                     )
+        if self.endpoint is not None:
+            # The receipt for the endpoint declaration. A declaration is only
+            # worth trusting if the columns it names exist in the cohort that
+            # was actually verified -- otherwise it is prose with a type
+            # annotation, and a downstream consumer resolving the columns would
+            # be back to guessing. Fail closed here, at declaration time,
+            # rather than at the step that first tries to read the column.
+            absent = [
+                column
+                for column in self.endpoint.declared_columns()
+                if column not in set(cohort.cohort_columns)
+            ]
+            if absent:
+                raise ValueError(
+                    "endpoint declaration names columns absent from the typed "
+                    "cohort: " + ", ".join(sorted(absent))
+                )
         return self
 
 
@@ -798,10 +829,217 @@ def materialized_input_prompt_projection(
     return result
 
 
+def _closed_observed_levels(
+    domain: Optional[Mapping[str, Any]],
+) -> Optional[List[Any]]:
+    """Return a small exact observed domain, or ``None`` when it is unsafe."""
+
+    if domain is None:
+        return None
+    observed_levels = domain.get("levels")
+    n_unique = domain.get("n_unique")
+    if not (
+        isinstance(observed_levels, list)
+        and 1 <= len(observed_levels) <= 8
+        and isinstance(n_unique, int)
+        and not isinstance(n_unique, bool)
+        and n_unique == len(observed_levels)
+    ):
+        return None
+    try:
+        encoded_levels = [
+            (
+                type(value).__name__,
+                json.dumps(
+                    value,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                ),
+            )
+            for value in observed_levels
+            if value is not None and isinstance(value, (bool, int, float, str))
+        ]
+    except (TypeError, ValueError):
+        return None
+    if len(encoded_levels) != len(observed_levels) or len(set(encoded_levels)) != len(
+        encoded_levels
+    ):
+        return None
+    return list(observed_levels)
+
+
+def _legacy_raw_input_contract(variable: ConceptDescriptor) -> Dict[str, Any]:
+    """Project a V1 descriptor into an executable, step-sealed contract.
+
+    V1 contexts do not carry a materialized sidecar, but their descriptors are
+    still host-generated from the exact in-memory cohort and are sealed in the
+    run input.  Persisting this bounded projection keeps legacy/offline runs
+    executable without letting generated code rediscover policy from the whole
+    ResearchContext.
+    """
+
+    fact: Dict[str, Any] = {
+        "column": variable.name,
+        "dtype": variable.dtype,
+    }
+    if variable.unit:
+        fact["unit"] = variable.unit
+    if variable.valid_range is not None:
+        bounds = list(variable.valid_range)
+        if len(bounds) != 2 or any(
+            isinstance(bound, bool)
+            or not isinstance(bound, (int, float))
+            or not math.isfinite(float(bound))
+            for bound in bounds
+        ):
+            raise ValueError(
+                f"legacy descriptor {variable.name!r} has an invalid valid_range"
+            )
+        minimum, maximum = bounds
+        if float(minimum) > float(maximum):
+            raise ValueError(
+                f"legacy descriptor {variable.name!r} has a reversed valid_range"
+            )
+        fact["analysis_plausibility_range"] = {
+            "minimum": minimum,
+            "maximum": maximum,
+        }
+        fact["plausibility_policy"] = {
+            "range_policy": "flag_only",
+            "out_of_range_action": "retain_and_flag",
+        }
+    _apply_domain(fact, variable)
+    return fact
+
+
+def _apply_domain(fact: Dict[str, Any], variable: ConceptDescriptor) -> None:
+    """Publish a DECLARED domain when one exists, an observed one otherwise.
+
+    ``ordinal_levels`` is a declaration: ``icu_rules`` fixes SOFA components at
+    0-4 and KDIGO stage at 0-3 by construction, and 687 of 4,318 recorded
+    context variables already carry it.  This layer ignored it and re-derived a
+    level set from whatever the cohort happened to contain -- so the host held
+    the codebook and published a guess.
+
+    The difference is not cosmetic.  An observed set cannot contain a level with
+    zero cases, which is exactly what a stage-stratified table has to show; the
+    2026-07-30 note that introduced the observed fallback names "not displaying
+    the zero-count one" as part of the defect it was fixing, and deriving the
+    levels from data structurally cannot deliver it.  Measured on the recorded
+    runs: 327 contracts published an ordinal-score domain taken from
+    observation, and every one of those concepts has a declaration available.
+
+    The concept dictionary is the second declaration.  A ``fct_cncpt`` states
+    its own closed factor -- ``adm`` is ``['med','surg','other']`` -- and that
+    is a codebook, not a sample.  Reading it also makes a mapping defect
+    visible instead of blessing it: MIMIC-IV's service table contains ``EYE``,
+    the dictionary's own ``apply_map`` for ``adm`` has no entry for it, and the
+    raw code passed straight through.  All 201 recorded contexts observed
+    ``['EYE','med','other','surg']`` on a concept that declares three levels,
+    and publishing the observation labelled the leak legal.  Whether ``EYE``
+    belongs in ``surg`` or ``other`` is a clinical mapping decision and is NOT
+    made here; this only stops the host asserting it is already legal.
+
+    The observed fallback stays for concepts with neither declaration -- 702
+    binary 0/1 flags on the recorded runs -- and keeps saying so in
+    ``allowed_values_basis``.
+    """
+
+    observed = _closed_observed_levels(variable.observed_domain)
+    declared, basis = _declared_domain(variable)
+    if declared is not None:
+        fact["allowed_values"] = list(declared)
+        fact["allowed_values_basis"] = basis
+        if observed is not None:
+            # Keep the observation visible rather than replacing it: a declared
+            # level this cohort never saw, and an observed value the codebook
+            # does not declare, are both real reportable facts, and a consumer
+            # can only see either by comparing the two.
+            fact["observed_values"] = observed
+        return
+    if observed is not None:
+        fact["allowed_values"] = observed
+        fact["allowed_values_basis"] = "sealed_research_context_observed_domain"
+
+
+_CONCEPT_LEVELS_CACHE: Dict[str, Optional[List[Any]]] = {}
+
+
+def _dictionary_declared_levels(source_concept: Optional[str]) -> Optional[List[Any]]:
+    """Return the concept dictionary's own closed factor levels, if it has one."""
+
+    if not source_concept:
+        return None
+    if source_concept in _CONCEPT_LEVELS_CACHE:
+        return _CONCEPT_LEVELS_CACHE[source_concept]
+    levels: Optional[List[Any]] = None
+    try:  # local import to avoid import-time cost / cycles, as icu_rules does
+        from ...concept.loader import load_dictionary
+
+        definition = load_dictionary().get(source_concept)
+        raw = getattr(definition, "levels", None)
+        if isinstance(raw, (list, tuple)) and raw:
+            levels = list(raw)
+    except Exception:
+        levels = None
+    _CONCEPT_LEVELS_CACHE[source_concept] = levels
+    return levels
+
+
+#: Representation transforms whose column still holds the SOURCE CONCEPT'S OWN
+#: VALUES, and is therefore described by that concept's declared levels.
+#:
+#: Everything else is a different quantity derived from those values -- a count
+#: of them, a flag that any were seen, the time of the first one, a numeric
+#: summary -- and the concept's level set says nothing about its domain.
+#:
+#: MEASURED over every recorded resolved-input contract, which is where this
+#: enumeration comes from rather than from judgement: 13 distinct
+#: (physical_role, representation_transform) pairs exist, and exactly one --
+#: ``stay_level_unique_value`` -- carries the value itself. The rest are
+#: ``window_nonnull_count`` (a count), ``window_measurement_status`` /
+#: ``window_presence_max`` / ``whole_stay_any_truthy`` (0-1 flags),
+#: ``window_first_time`` / ``window_last_time`` / ``first_truthy_event_time``
+#: (timestamps) and ``window_numeric_first|max|mean|min`` (numeric summaries).
+_VALUE_PRESERVING_TRANSFORMS = frozenset({"stay_level_unique_value"})
+
+
+def _transform_preserves_concept_values(transform: Any) -> bool:
+    """Whether a column under this transform still holds the concept's values.
+
+    An unknown transform answers False. A new derived representation must say
+    it preserves the value domain before it inherits one -- the failure this
+    guards is a contract nothing can satisfy, so ambiguity fails closed.
+    """
+
+    return str(transform or "") in _VALUE_PRESERVING_TRANSFORMS
+
+
+def _declared_domain(
+    variable: ConceptDescriptor,
+) -> tuple[Optional[List[Any]], Optional[str]]:
+    """Return the highest-authority declared domain for one descriptor.
+
+    Order is authority, not convenience: the host's own ICU rules fix a score's
+    range by construction, so they outrank the dictionary; the dictionary
+    outranks anything derived from this cohort's rows.
+    """
+
+    ordinal = getattr(variable, "ordinal_levels", None)
+    if ordinal:
+        return list(ordinal), "declared_ordinal_levels"
+    levels = _dictionary_declared_levels(getattr(variable, "source_concept", None))
+    if levels:
+        return levels, "declared_concept_dictionary_levels"
+    return None, None
+
+
 def resolved_raw_input_contracts(
     context: ResearchContextAuthority,
     planner_declared_inputs: Sequence[str],
-) -> Optional[Dict[str, Any]]:
+) -> Dict[str, Any]:
     """Return exact executable metadata for Planner-declared raw columns.
 
     The outbound prompt projection is explanatory transport, while generated
@@ -810,20 +1048,56 @@ def resolved_raw_input_contracts(
     rediscover a range policy or closed domain by scanning the broader
     ResearchContext.  Typed ``kind:name`` products remain under the manifest's
     existing ``inputs`` authority and are intentionally excluded here.
+
+    A repeated name is normalized away rather than rejected.  Every contract
+    here is a pure function of the name -- both branches below resolve it from
+    ``name`` alone and store it in a name-keyed dict -- so a second occurrence
+    produces a byte-identical entry and cannot make the manifest ambiguous.
+    ``raw_contract_inputs_for_step`` already applies exactly this rule to the
+    cohort predicate columns it appends (``if resolved_column not in names``),
+    so rejecting the Planner's own repeat made one call chain treat the same
+    fact as harmless in one line and fatal four lines later.
     """
 
-    if not isinstance(context, ResearchContextV2):
-        return None
-    context = ResearchContextV2.model_validate(context.model_dump(mode="python"))
-    raw_names = [
-        str(value).strip()
-        for value in planner_declared_inputs
-        if isinstance(value, str) and str(value).strip() and ":" not in str(value)
-    ]
-    if len(raw_names) != len(set(raw_names)):
-        raise ValueError("Planner-declared raw inputs must be unique")
-    cohort = context.materialized_inputs.cohort
+    raw_names = list(
+        dict.fromkeys(
+            str(value).strip()
+            for value in planner_declared_inputs
+            if isinstance(value, str) and str(value).strip() and ":" not in str(value)
+        )
+    )
+    variables = {variable.name: variable for variable in context.variables}
     contracts: Dict[str, Any] = {}
+    if not isinstance(context, ResearchContextV2):
+        for name in raw_names:
+            variable = variables.get(name)
+            if variable is None:
+                raise ValueError(
+                    f"Planner-declared raw input {name!r} lacks a context descriptor"
+                )
+            contracts[name] = _legacy_raw_input_contract(variable)
+        payload: Dict[str, Any] = {
+            "schema_version": "easyicu.resolved_raw_input_contracts/1",
+            "authority_scope": ("host_generated_sealed_research_context_constraints"),
+            "scientific_ownership": (
+                "Planner retains cohort, exposure, outcome, method, covariates, "
+                "and estimand decisions"
+            ),
+            "contracts": contracts,
+        }
+        canonical = json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+        payload["contracts_sha256"] = hashlib.sha256(canonical).hexdigest()
+        return payload
+
+    context = ResearchContextV2.model_validate(context.model_dump(mode="python"))
+    cohort = context.materialized_inputs.cohort
+    variables = {variable.name: variable for variable in context.variables}
     for name in raw_names:
         binding = cohort.column_bindings.get(name)
         if binding is None:
@@ -834,6 +1108,53 @@ def resolved_raw_input_contracts(
             **_column_prompt_fact(name, binding),
             "binding_sha256": binding.binding_sha256,
         }
+        variable = variables.get(name)
+        domain = (
+            variable.observed_domain
+            if variable is not None and isinstance(variable.observed_domain, Mapping)
+            else None
+        )
+        observed_levels = _closed_observed_levels(domain)
+        # Same order of authority as ``_apply_domain``: a declaration outranks
+        # an observation, and outranks it here too -- this is the manifest the
+        # sandbox actually executes against, so a guess winning on this path
+        # would undo the fix on the other one.
+        declared_levels, declared_basis = (
+            _declared_domain(variable) if variable is not None else (None, None)
+        )
+        if declared_basis == "declared_concept_dictionary_levels" and not (
+            _transform_preserves_concept_values(fact.get("representation_transform"))
+        ):
+            # A CONCEPT'S LEVELS DESCRIBE ITS VALUES, NOT A COUNT OF THEM.
+            #
+            # This fallback borrows the source concept's declared levels when
+            # nothing else fixed a domain. For the concept's own column that is
+            # right; for a companion derived from it, it publishes a contract
+            # the column cannot satisfy. h1 (2026-08-03) died on exactly that:
+            # ``mech_vent_n`` is ``physical_role=count`` /
+            # ``window_nonnull_count`` / int64, holding 20-25 observations per
+            # stay, and it was handed ``['invasive', 'noninvasive']`` --
+            # 92,398 of 92,398 rows outside their own declared domain, and the
+            # generated code raised, correctly, on what it had been told.
+            #
+            # The sibling ``mech_vent_measured`` escaped only by accident: its
+            # metadata already declared ``[0, 1]``, so this fallback never ran
+            # for it. The count had no metadata domain, so it took the
+            # concept's.
+            #
+            # Only the ORDINAL branch is left alone: those levels come from the
+            # host's own ICU rules, and a max over ordinal stages is still a
+            # stage. The dictionary branch is the one that borrows a
+            # categorical value domain, so it is the one gated.
+            declared_levels, declared_basis = None, None
+        if "allowed_values" not in fact and declared_levels:
+            fact["allowed_values"] = list(declared_levels)
+            fact["allowed_values_basis"] = declared_basis
+            if observed_levels is not None:
+                fact["observed_values"] = observed_levels
+        elif "allowed_values" not in fact and observed_levels is not None:
+            fact["allowed_values"] = observed_levels
+            fact["allowed_values_basis"] = "sealed_research_context_observed_domain"
         if binding.analysis_plausibility_range is not None:
             fact["plausibility_policy"] = {
                 "range_policy": "flag_only",
@@ -860,6 +1181,68 @@ def resolved_raw_input_contracts(
     ).encode("utf-8")
     payload["contracts_sha256"] = hashlib.sha256(canonical).hexdigest()
     return payload
+
+
+def raw_contract_inputs_for_step(
+    *,
+    planner_declared_inputs: Sequence[str],
+    primary_cohort_execution_receipt: Optional[Mapping[str, Any]],
+) -> tuple[str, ...]:
+    """Add only host-resolved cohort predicates to exact Planner inputs.
+
+    A predicate coordinate is whichever column the host's mask actually read.
+    For a predicate the host narrowed to an event-time window that is two
+    columns, not one, so the event-time column is authorized on the same
+    footing as ``resolved_column``: the Coder is asked to reproduce that
+    predicate's counts, and it cannot do so from a column it has no contract
+    for. Rows without the field are unrefined and add nothing.
+    """
+
+    names = [str(value) for value in planner_declared_inputs]
+    if primary_cohort_execution_receipt is None:
+        return tuple(names)
+    flow = primary_cohort_execution_receipt.get("ordered_predicate_flow")
+    if not isinstance(flow, list):
+        raise MaterializedMetadataError(
+            "primary cohort execution receipt lacks ordered predicate flow"
+        )
+    for row in flow:
+        if not isinstance(row, Mapping):
+            raise MaterializedMetadataError(
+                "primary cohort execution receipt contains an invalid predicate"
+            )
+        for field, reason in COHORT_RECEIPT_COLUMN_FIELDS:
+            column = row.get(field)
+            if column is None:
+                continue
+            if not (isinstance(column, str) and column.strip() and ":" not in column):
+                raise MaterializedMetadataError(
+                    f"primary cohort execution receipt has an invalid {reason}"
+                )
+            if column not in names:
+                names.append(column)
+    return tuple(names)
+
+
+def resolved_raw_input_contracts_for_step(
+    *,
+    coder_base_context: ResearchContextAuthority,
+    coder_context: ResearchContextAuthority,
+    planner_declared_inputs: Sequence[str],
+    primary_cohort_execution_receipt: Optional[Mapping[str, Any]],
+) -> Dict[str, Any]:
+    """Resolve exact step receipt columns without widening the Coder prompt."""
+
+    contract_inputs = raw_contract_inputs_for_step(
+        planner_declared_inputs=planner_declared_inputs,
+        primary_cohort_execution_receipt=primary_cohort_execution_receipt,
+    )
+    authority_context = (
+        coder_base_context
+        if primary_cohort_execution_receipt is not None
+        else coder_context
+    )
+    return resolved_raw_input_contracts(authority_context, contract_inputs)
 
 
 def materialized_input_prompt_attachment(
@@ -1195,5 +1578,7 @@ __all__ = [
     "parse_research_context",
     "parse_research_context_json",
     "project_research_context_variables",
+    "raw_contract_inputs_for_step",
     "resolved_raw_input_contracts",
+    "resolved_raw_input_contracts_for_step",
 ]
