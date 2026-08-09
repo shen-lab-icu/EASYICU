@@ -1,0 +1,12 @@
+{
+  "source": "SOFA-2 Table 2 cardiovascular thresholds and footnotes i-l/n, DOI:10.1001/jama.2025.20516",
+  "inputs": {
+    "map": [75, 65, 75, 75, 75, 75, 75],
+    "norepi60": [0, 0, 0.1, 0.3, 0, 0, 0],
+    "dopa60": [0, 0, 5, 0, 50, 0, 0],
+    "dobu60": [0, 0, 0, 1, 1, 0, 0],
+    "ecmo": [false, false, false, false, false, true, true],
+    "ecmo_indication": [null, null, null, null, null, "cardiovascular", "respiratory"]
+  },
+  "expected": [0, 1, 3, 4, 2, 4, 0]
+}

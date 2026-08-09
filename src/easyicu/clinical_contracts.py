@@ -47,7 +47,8 @@ class ClinicalConceptContract:
     status: str
     canonical_definition: bool
     requires_explicit_opt_in: bool
-    golden_vector: str
+    spec_golden_vectors: tuple[str, ...]
+    runtime_golden_vectors: tuple[str, ...]
     test_vector_version: str
     validation_status: str
     validated_against: tuple[str, ...]
@@ -62,8 +63,23 @@ class ClinicalConceptContract:
     ascertainment_limitations: tuple[str, ...]
     database_conformance: Mapping[str, str]
 
+    @property
+    def golden_vector(self) -> str:
+        """Deprecated singular-vector compatibility surface."""
+
+        vectors = self.spec_golden_vectors or self.runtime_golden_vectors
+        return vectors[0] if vectors else ""
+
     @classmethod
     def from_mapping(cls, contract_id: str, payload: Mapping[str, Any]) -> "ClinicalConceptContract":
+        def vector_paths(key: str) -> tuple[str, ...]:
+            raw = payload.get(key)
+            if raw is None and payload.get("golden_vector"):
+                raw = payload["golden_vector"]
+            if isinstance(raw, str):
+                return (raw,)
+            return tuple(str(item) for item in (raw or ()))
+
         return cls(
             contract_id=contract_id,
             concepts=tuple(str(item) for item in payload.get("concepts", ())),
@@ -74,7 +90,8 @@ class ClinicalConceptContract:
             status=str(payload.get("status") or ""),
             canonical_definition=bool(payload.get("canonical_definition")),
             requires_explicit_opt_in=bool(payload.get("requires_explicit_opt_in")),
-            golden_vector=str(payload.get("golden_vector") or ""),
+            spec_golden_vectors=vector_paths("spec_golden_vectors"),
+            runtime_golden_vectors=vector_paths("runtime_golden_vectors"),
             test_vector_version=str(payload.get("test_vector_version") or ""),
             validation_status=str(payload.get("validation_status") or ""),
             validated_against=tuple(
@@ -146,8 +163,20 @@ def validate_clinical_contracts(
             findings.append(f"{contract_id}:concepts_missing")
         if not contract.definition or not contract.version or not contract.source_id:
             findings.append(f"{contract_id}:definition_provenance_incomplete")
-        if not contract.golden_vector or not (repo_root / contract.golden_vector).is_file():
-            findings.append(f"{contract_id}:golden_vector_missing")
+        if not contract.spec_golden_vectors:
+            findings.append(f"{contract_id}:spec_golden_vectors_missing")
+        for vector_path in contract.spec_golden_vectors:
+            if not (repo_root / vector_path).is_file():
+                findings.append(
+                    f"{contract_id}:spec_golden_vector_missing:{vector_path}"
+                )
+        if not contract.runtime_golden_vectors:
+            findings.append(f"{contract_id}:runtime_golden_vectors_missing")
+        for vector_path in contract.runtime_golden_vectors:
+            if not (repo_root / vector_path).is_file():
+                findings.append(
+                    f"{contract_id}:runtime_golden_vector_missing:{vector_path}"
+                )
         if (
             not contract.test_vector_version
             or not contract.validation_status
@@ -170,6 +199,10 @@ def validate_clinical_contracts(
                 findings.append(f"{contract_id}:concept_missing:{concept_id}")
             elif definition.clinical_contract_id != contract_id:
                 findings.append(f"{contract_id}:concept_binding_mismatch:{concept_id}")
+            elif definition.canonical_definition != contract.canonical_definition:
+                findings.append(
+                    f"{contract_id}:canonical_definition_mismatch:{concept_id}"
+                )
 
     for contract_id, contract in contracts.items():
         dependency_contracts = [
@@ -224,14 +257,15 @@ def validate_clinical_contracts(
                         f"{contract_id}:runtime_input_unresolvable:{input_name}"
                     )
 
-            fixture_path = repo_root / contract.golden_vector
-            if fixture_path.is_file():
-                fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
-                fixture_inputs = set((fixture.get("inputs") or {}).keys())
-                for input_name in fixture_inputs - declared_inputs:
-                    findings.append(
-                        f"{contract_id}:golden_input_unowned:{input_name}"
-                    )
+            for vector_path in contract.runtime_golden_vectors:
+                fixture_path = repo_root / vector_path
+                if fixture_path.is_file():
+                    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+                    fixture_inputs = set((fixture.get("inputs") or {}).keys())
+                    for input_name in fixture_inputs - declared_inputs:
+                        findings.append(
+                            f"{contract_id}:runtime_golden_input_unowned:{input_name}"
+                        )
     if aggregate is not None:
         if aggregate.production_executor != "easyicu.concept.ConceptResolver.load_concepts":
             findings.append("sofa2_aggregate_2025:production_executor_unbound")
@@ -255,14 +289,16 @@ def validate_clinical_contracts(
                     findings.append(
                         f"sofa2_aggregate_2025:runtime_input_unresolvable:{input_name}"
                     )
-            fixture_path = repo_root / aggregate.golden_vector
-            if fixture_path.is_file():
-                fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
-                fixture_inputs = set((fixture.get("components") or {}).keys())
-                for input_name in fixture_inputs - declared_inputs:
-                    findings.append(
-                        f"sofa2_aggregate_2025:golden_input_unowned:{input_name}"
-                    )
+            for vector_path in aggregate.runtime_golden_vectors:
+                fixture_path = repo_root / vector_path
+                if fixture_path.is_file():
+                    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+                    fixture_inputs = set((fixture.get("components") or {}).keys())
+                    for input_name in fixture_inputs - declared_inputs:
+                        findings.append(
+                            "sofa2_aggregate_2025:"
+                            f"runtime_golden_input_unowned:{input_name}"
+                        )
 
     for concept_id, definition in dictionary.items():
         if definition.clinical_status and not definition.clinical_contract_id:
@@ -282,10 +318,10 @@ def render_clinical_conformance_matrix_markdown() -> str:
         "",
         "_Generated from `easyicu/data/clinical-contracts.json`. `mapping_only` means extraction wiring is covered; it does not claim that a database-specific clinical result has an independent gold-standard validation._",
         "",
-        "| Contract | Concepts | Definition/version | Source | Status | Validation | Golden vector | Production binding | Dependencies / limitations | "
+        "| Contract | Concepts | Definition/version | Source | Status | Validation | Spec vectors | Runtime vectors | Production binding | Dependencies / limitations | "
         + " | ".join(_DATABASES)
         + " |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | " + " | ".join("---" for _ in _DATABASES) + " |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | " + " | ".join("---" for _ in _DATABASES) + " |",
     ]
     for contract in contracts.values():
         source = contract.source_id + (f" ({contract.source_table})" if contract.source_table else "")
@@ -296,7 +332,8 @@ def render_clinical_conformance_matrix_markdown() -> str:
             source,
             contract.status,
             contract.validation_status,
-            f"`{contract.golden_vector}`",
+            ", ".join(f"`{item}`" for item in contract.spec_golden_vectors),
+            ", ".join(f"`{item}`" for item in contract.runtime_golden_vectors),
             " → ".join(
                 f"`{item}`"
                 for item in (contract.production_executor, contract.production_callback)

@@ -937,6 +937,8 @@ def sofa2_cardio(
 
 def sofa2_cns(
     gcs: pd.Series,
+    delirium_tx_proxy: Optional[pd.Series] = None,
+    delirium_tx_evidence: Optional[pd.Series] = None,
     delirium_tx: Optional[pd.Series] = None,
     delirium_positive: Optional[pd.Series] = None,
     motor_response: Optional[pd.Series] = None,
@@ -948,6 +950,60 @@ def sofa2_cns(
 
     return canonical(
         gcs,
+        delirium_tx_proxy=delirium_tx_proxy,
+        delirium_tx_evidence=delirium_tx_evidence,
+        delirium_tx=delirium_tx,
+        delirium_positive=delirium_positive,
+        motor_response=motor_response,
+        sedated_gcs=sedated_gcs,
+        pre_sedation_gcs=pre_sedation_gcs,
+        sedated=sedated,
+    )
+
+
+def sofa2_cns_proxy_sensitivity(
+    gcs: pd.Series,
+    delirium_tx_proxy: Optional[pd.Series] = None,
+    delirium_tx_evidence: Optional[pd.Series] = None,
+    delirium_tx: Optional[pd.Series] = None,
+    delirium_positive: Optional[pd.Series] = None,
+    motor_response: Optional[pd.Series] = None,
+    sedated_gcs: Optional[pd.Series] = None,
+    pre_sedation_gcs: Optional[pd.Series] = None,
+    sedated: Optional[pd.Series] = None,
+) -> pd.Series:
+    from .scores.sofa2 import sofa2_cns_proxy_sensitivity as canonical
+
+    return canonical(
+        gcs,
+        delirium_tx_proxy=delirium_tx_proxy,
+        delirium_tx_evidence=delirium_tx_evidence,
+        delirium_tx=delirium_tx,
+        delirium_positive=delirium_positive,
+        motor_response=motor_response,
+        sedated_gcs=sedated_gcs,
+        pre_sedation_gcs=pre_sedation_gcs,
+        sedated=sedated,
+    )
+
+
+def sofa2_cns_ascertainment(
+    gcs: pd.Series,
+    delirium_tx_proxy: Optional[pd.Series] = None,
+    delirium_tx_evidence: Optional[pd.Series] = None,
+    delirium_tx: Optional[pd.Series] = None,
+    delirium_positive: Optional[pd.Series] = None,
+    motor_response: Optional[pd.Series] = None,
+    sedated_gcs: Optional[pd.Series] = None,
+    pre_sedation_gcs: Optional[pd.Series] = None,
+    sedated: Optional[pd.Series] = None,
+) -> pd.Series:
+    from .scores.sofa2 import sofa2_cns_ascertainment as canonical
+
+    return canonical(
+        gcs,
+        delirium_tx_proxy=delirium_tx_proxy,
+        delirium_tx_evidence=delirium_tx_evidence,
         delirium_tx=delirium_tx,
         delirium_positive=delirium_positive,
         motor_response=motor_response,

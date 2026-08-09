@@ -250,6 +250,8 @@ _EXPORT_GROUPS: Final[dict[str, tuple[str, ...]]] = {
         "sofa2_liver",
         "sofa2_cardio",
         "sofa2_cns",
+        "sofa2_cns_proxy_sensitivity",
+        "sofa2_cns_ascertainment",
         "sofa2_renal",
     ),
     "easyicu.table": (

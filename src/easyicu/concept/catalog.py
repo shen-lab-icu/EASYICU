@@ -191,6 +191,8 @@ CONCEPT_DICTIONARY = {
     'sofa2_liver': ('SOFA-2 Liver', 'SOFA-2肝脏评分', '0-4'),
     'sofa2_cardio': ('SOFA-2 Cardiovascular', 'SOFA-2心血管评分', '0-4'),
     'sofa2_cns': ('SOFA-2 Central Nervous System', 'SOFA-2神经评分', '0-4'),
+    'sofa2_cns_proxy_sensitivity': ('SOFA-2 CNS Proxy Sensitivity', 'SOFA-2神经代理敏感性评分', '0-4'),
+    'sofa2_cns_ascertainment': ('SOFA-2 CNS Ascertainment', 'SOFA-2神经评估完整性', 'state'),
     'sofa2_renal': ('SOFA-2 Renal', 'SOFA-2肾脏评分', '0-4'),
 
     # Sepsis 诊断
@@ -287,7 +289,9 @@ CONCEPT_DICTIONARY = {
     # 神经系统 SOFA-2 扩展
     'motor_response': ('GCS Motor Response', 'GCS运动反应', '1-6'),
     'delirium_positive': ('Delirium Positive (CAM-ICU)', '谵妄阳性（CAM-ICU）', 'boolean'),
-    'delirium_tx': ('Delirium Treatment', '谵妄治疗', 'boolean'),
+    'delirium_tx': ('Delirium Treatment Proxy (Deprecated Alias)', '谵妄治疗药物代理（已弃用别名）', 'boolean'),
+    'delirium_tx_proxy': ('Candidate Delirium-treatment Drug Exposure', '候选谵妄治疗药物暴露', 'boolean'),
+    'delirium_tx_evidence': ('Attributable Delirium-treatment Evidence', '可归因谵妄治疗证据', 'state'),
 
     # 人口统计 (扩展)
     'adm': ('Admission Type', '入院类型', ''),
@@ -361,12 +365,17 @@ CONCEPT_DICTIONARY = {
 # 特征详细描述（英文和中文）
 CONCEPT_DESCRIPTIONS = {
     # SOFA-2
-    'sofa2': ('Total SOFA-2 score (2025 new standard), sum of 6 organ systems (0-24)', 'SOFA-2总分（2025年新标准），6个器官系统评分之和（0-24分）'),
+    'sofa2': ('Conservative database implementation of the canonical SOFA-2 score; CNS treatment points require attributable evidence', '标准SOFA-2的保守型数据库实现；神经系统治疗加分需可归因证据'),
     'sofa2_resp': ('Respiratory: PaO2/FiO2 (or SpO2/FiO2 if unavailable), scores 3-4 require advanced respiratory support (IMV/NIV/HFNC) or ECMO', '呼吸系统：基于氧合指数，3-4分需要高级呼吸支持（IMV/NIV/HFNC）或ECMO'),
     'sofa2_coag': ('Coagulation: platelet count with updated thresholds (≤50→4, ≤80→3, ≤100→2, ≤150→1)', '凝血系统：基于血小板计数，使用更新的阈值（≤50→4分，≤80→3分，≤100→2分，≤150→1分）'),
     'sofa2_liver': ('Liver: bilirubin with relaxed 1-point threshold (>1.2 mg/dL instead of >1.9)', '肝脏：基于胆红素，1分阈值放宽（>1.2 mg/dL，原为>1.9）'),
     'sofa2_cardio': ('Cardiovascular: combined NE+Epi dose, other vasopressors/inotropes, or mechanical circulatory support (IABP/LVAD/Impella)', '心血管：基于去甲肾+肾上腺素联合剂量、其他血管活性药物或机械循环支持'),
-    'sofa2_cns': ('Neurological: GCS score; drugs required to treat delirium add 1 point if GCS=15', '神经系统：基于GCS评分；GCS=15时，需使用药物治疗谵妄才计1分'),
+    'sofa2_cns': ('Conservative CNS score: GCS thresholds are canonical; GCS=15 gains one point only with confirmed attributable delirium-treatment evidence', '保守型神经评分：GCS阈值与标准一致；GCS=15仅在谵妄治疗归因证据已确认时加1分'),
+    'sofa2_cns_proxy_sensitivity': ('Explicit sensitivity score that also counts candidate delirium-treatment medication exposure at GCS=15', '显式敏感性评分：GCS=15时也计入候选谵妄治疗药物暴露'),
+    'sofa2_cns_ascertainment': ('CNS ascertainment receipt distinguishing complete, proxy-only, proxy-source-complete negative, and unavailable states', '神经评估回执：区分完整、仅代理、代理源可评估阴性和不可用'),
+    'delirium_tx_proxy': ('Candidate medication exposure only; indication is unknown and must not be read as confirmed delirium treatment', '仅表示候选药物暴露；适应证未知，不得视为谵妄治疗已确认'),
+    'delirium_tx_evidence': ('Four-state attributable evidence: confirmed, proxy_only, not_detected, or unavailable', '四态可归因证据：已确认、仅代理、未检出或不可用'),
+    'delirium_tx': ('Deprecated compatibility alias of delirium_tx_proxy; never confirmation', 'delirium_tx_proxy 的已弃用兼容别名；不表示已确认'),
     'sofa2_renal': ('Renal: creatinine and urine output (6h/12h/24h windows), score 4 for RRT or meeting RRT criteria', '肾脏：基于肌酐和尿量（6h/12h/24h窗口），接受RRT或满足RRT标准则为4分'),
 
     # Sepsis
@@ -484,7 +493,7 @@ def _get_patient_id_table_files(database: str) -> list:
 # 全局特征分组定义 - 供侧边栏和数据字典共用
 # 使用英文key，并提供双语显示名称
 CONCEPT_GROUPS_INTERNAL = {
-    'sofa2_score': ['sofa2', 'sofa2_resp', 'sofa2_coag', 'sofa2_liver', 'sofa2_cardio', 'sofa2_cns', 'sofa2_renal'],
+    'sofa2_score': ['sofa2', 'sofa2_resp', 'sofa2_coag', 'sofa2_liver', 'sofa2_cardio', 'sofa2_cns', 'sofa2_cns_proxy_sensitivity', 'sofa2_cns_ascertainment', 'sofa2_renal'],
     'sofa1_score': ['sofa', 'sofa_resp', 'sofa_coag', 'sofa_liver', 'sofa_cardio', 'sofa_cns', 'sofa_renal'],
     'sepsis3_sofa2': ['sep3_sofa2'],  # 🔧 共享概念移到单独的 sepsis_shared 模块
     'sepsis3_sofa1': ['sep3_sofa1'],  # 🔧 共享概念移到单独的 sepsis_shared 模块
@@ -511,7 +520,7 @@ CONCEPT_GROUPS_INTERNAL = {
               'fluid_balance', 'fluid_balance_cumulative', 'total_input_ml',
               # 衍生肾功能指数 (Tier 1, 2026-06-22)
               'bun_creatinine_ratio', 'egfr'],
-    'neurological': ['avpu', 'egcs', 'gcs', 'mgcs', 'rass', 'tgcs', 'vgcs', 'sedated_gcs', 'motor_response', 'delirium_positive', 'delirium_tx', 'icp'],
+    'neurological': ['avpu', 'egcs', 'gcs', 'mgcs', 'rass', 'tgcs', 'vgcs', 'sedated_gcs', 'motor_response', 'delirium_positive', 'delirium_tx_proxy', 'delirium_tx_evidence', 'delirium_tx', 'icp'],
     'circulatory': ['mech_circ_support', 'circ_failure', 'circ_event', 'pap_sys', 'pap_dia', 'pap_mean', 'co', 'svo2', 'scvo2', 'pawp'],  # 🔧 添加循环衰竭特征 + 肺动脉压/心输出量 + 静脉血氧/楔压 (2026-07-04)
     'demographics': ['age', 'bmi', 'height', 'sex', 'weight', 'adm'],
     'other_scores': ['qsofa', 'sirs', 'mews', 'news', 'apache_iv', 'apache_iv_pred_hosp_mort', 'saps3', 'charlson', 'elixhauser'],

@@ -998,6 +998,8 @@ _SOFA2_TRIGGER_CONCEPTS = frozenset(
         "sofa2_liver",
         "sofa2_cardio",
         "sofa2_cns",
+        "sofa2_cns_proxy_sensitivity",
+        "sofa2_cns_ascertainment",
         "sofa2_renal",
         "uo_6h",
         "uo_12h",
@@ -1011,6 +1013,8 @@ _SOFA2_TRIGGER_CONCEPTS = frozenset(
         "mech_circ_support",
         "other_vaso",
         "delirium_tx",
+        "delirium_tx_proxy",
+        "delirium_tx_evidence",
         "motor_response",
         "delirium_positive",
     }

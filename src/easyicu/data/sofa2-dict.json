@@ -28,9 +28,9 @@
    "sofa2_cns",
    "sofa2_renal"
   ],
-  "description": "SOFA-2 (2025) aggregate score",
+  "description": "Conservative database implementation of the canonical SOFA-2 (2025) aggregate; CNS delirium-treatment points require attributable confirmation",
   "clinical_status": "source_bound_golden",
-  "canonical_definition": true,
+  "canonical_definition": false,
   "requires_explicit_opt_in": false,
   "definition_source": "JAMA 2025 SOFA-2 Table 2",
   "definition_version": "2025",
@@ -124,20 +124,57 @@
  "sofa2_cns": {
   "concepts": [
    "gcs",
-   "delirium_tx",
+   "delirium_tx_proxy",
+   "delirium_tx_evidence",
    "delirium_positive",
    "motor_response",
    "sedated_gcs"
   ],
-  "description": "SOFA-2 brain component (GCS 15/13-14/9-12/6-8/3-5; drugs required to treat delirium → 1pt even if GCS=15; positive CAM alone does not score)",
+  "description": "Conservative database implementation of the canonical SOFA-2 brain component; GCS thresholds are canonical, while the GCS=15 delirium-treatment point requires confirmed attributable evidence and candidate exposure alone remains 0",
   "clinical_status": "source_bound_golden",
-  "canonical_definition": true,
+  "canonical_definition": false,
   "requires_explicit_opt_in": false,
   "definition_source": "JAMA 2025 SOFA-2 Table 2",
   "definition_version": "2025",
   "clinical_contract_id": "sofa2_cns_2025",
   "category": "outcome",
   "callback": "sofa2_cns",
+  "class_name": "rec_cncpt"
+ },
+ "sofa2_cns_proxy_sensitivity": {
+  "concepts": [
+   "gcs",
+   "delirium_tx_proxy",
+   "delirium_tx_evidence",
+   "delirium_positive",
+   "motor_response",
+   "sedated_gcs"
+  ],
+  "description": "Explicit SOFA-2 CNS sensitivity analysis in which candidate delirium-treatment medication exposure can contribute the GCS=15 point",
+  "canonical_definition": false,
+  "requires_explicit_opt_in": true,
+  "definition_source": "JAMA 2025 SOFA-2 Table 2 + database proxy sensitivity adaptation",
+  "definition_version": "2025-proxy-sensitivity-v1",
+  "category": "outcome",
+  "callback": "sofa2_cns_proxy_sensitivity",
+  "class_name": "rec_cncpt"
+ },
+ "sofa2_cns_ascertainment": {
+  "concepts": [
+   "gcs",
+   "delirium_tx_proxy",
+   "delirium_tx_evidence",
+   "delirium_positive",
+   "motor_response",
+   "sedated_gcs"
+  ],
+  "description": "SOFA-2 CNS ascertainment receipt: complete, proxy_only, complete_for_proxy_source, or unavailable",
+  "canonical_definition": false,
+  "requires_explicit_opt_in": false,
+  "definition_source": "EasyICU SOFA-2 evidence contract",
+  "definition_version": "2025-ascertainment-v1",
+  "category": "outcome",
+  "callback": "sofa2_cns_ascertainment",
   "class_name": "rec_cncpt"
  },
  "sofa2_renal": {
@@ -888,8 +925,28 @@
   }
  },
  "delirium_tx": {
+  "concepts": "delirium_tx_proxy",
+  "class_name": "rec_cncpt",
+  "description": "Deprecated compatibility alias for delirium_tx_proxy; candidate medication exposure only and never confirmation of delirium treatment",
+  "category": "neurology",
+  "callback": "delirium_tx_alias"
+ },
+ "delirium_tx_evidence": {
+  "concepts": "delirium_tx_proxy",
+  "class_name": "rec_cncpt",
+  "levels": [
+   "confirmed",
+   "proxy_only",
+   "not_detected",
+   "unavailable"
+  ],
+  "description": "Four-state attributable delirium-treatment evidence. Current medication-only mappings can emit proxy_only but cannot infer not_detected without verified source and time coverage.",
+  "category": "neurology",
+  "callback": "delirium_tx_evidence"
+ },
+ "delirium_tx_proxy": {
   "class_name": "lgl_cncpt",
-  "description": "Delirium treatment per PADIS Guidelines (antipsychotics: haloperidol, quetiapine, olanzapine, risperidone, ziprasidone, aripiprazole) - validated: Haloperidol IV (4251 stays), prescriptions: haloperidol (16219), quetiapine (14883), olanzapine (13571), risperidone (3847), ziprasidone (672), aripiprazole (2849)",
+  "description": "Candidate exposure to medications that may be used for delirium. Indication is not established, so this proxy must not be treated as confirmed delirium treatment.",
   "category": "neurology",
   "sources": {
    "miiv": [
